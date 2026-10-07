@@ -73,6 +73,14 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   its clone (deepsec only fails on net-new findings, so reused state could look
   clean). Pi reacts `:secure:` only when deepsec exits 0. On a thread that isn't
   a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
+  `followup` (`followup.ts`) nags the DRI of every PR the factory opens: whoever
+  started the board thread on its `pi/<thread>` branch. It pings them in the PR's
+  thread 1h after it opens, then at doubling gaps (2h, 4h, … 64h: 7 pings), and
+  closes the PR a week after it opened if no one acts. A message from the DRI in
+  the PR's thread or the source thread restarts the cycle; merged or closed stops
+  it. It's an A2 side contract (`vboard-factory-followups`) on the board's store
+  and queue, so the scheduler route serves it too. A2 timers can't be canceled:
+  each carries its cycle, and a stale one does nothing.
   Each message to Pi extends its sandbox session to at least 45m, so a long run
   late in a session isn't cut off.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,

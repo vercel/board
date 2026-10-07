@@ -13,6 +13,7 @@ import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { fromSecurity, security } from "./security";
+import { followups } from "./followup";
 import { shipit } from "./shipit";
 import { renderForSlack } from "./render";
 
@@ -37,19 +38,29 @@ const slackCredentials = connectSlackAdapter("slack/vboard-factory");
 const slackAdapter = createSlackAdapter(slackCredentials);
 const slackToken = slackCredentials.botToken;
 
-export const { GET, POST, scheduler } = board({
-  store: env
-    ? redisHttp({
-        url: process.env.KV_REST_API_URL!,
-        token: process.env.KV_REST_API_TOKEN!,
-        // One Redis serves every environment: a preview never touches production's log.
-        keyPrefix: env === "production" ? "vboard-factory" : `vboard-factory:${env}`,
-      })
-    : undefined,
+const store = env
+  ? redisHttp({
+      url: process.env.KV_REST_API_URL!,
+      token: process.env.KV_REST_API_TOKEN!,
+      // One Redis serves every environment: a preview never touches production's log.
+      keyPrefix: env === "production" ? "vboard-factory" : `vboard-factory:${env}`,
+    })
+  : undefined;
+const queue = vercelQueues({ topic: "vboard-factory" });
+
+// Follow-ups on the factory's own PRs (followup.ts): its timers share the board's store and queue.
+const followup = followups({
+  store,
+  scheduler: queue,
+  client: (key) => factory.client("followup", { key }),
+});
+
+const factory = board({
+  store,
   // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
   // Every deployment shares it: a file's ID is random, and only its board can name it.
   blob: env ? vercelBlob() : undefined,
-  scheduler: vercelQueues({ topic: "vboard-factory" }),
+  scheduler: queue,
   sync: {
     slack: slack({
       adapter: slackAdapter,
@@ -76,6 +87,7 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
+    followup: followup.watcher,
     security: security({ tellPi }),
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
@@ -174,3 +186,7 @@ export const { GET, POST, scheduler } = board({
     },
   },
 });
+
+export const { GET, POST } = factory;
+/** The A2 scheduler's callback (app/api/a2/scheduler): the board's servers and the follow-ups'. */
+export const scheduler = queue.handler(...factory.servers, followup.server);
