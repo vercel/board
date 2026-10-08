@@ -284,6 +284,19 @@ readSource(key: string, target: string, opts?: { limit?: number }): Promise<Sour
 `readSource` reads a platform channel, thread, or message permalink without
 syncing or storing it. Both need full access.
 
+### stuck and redrive
+
+```ts
+stuck(): Promise<StuckEvent[]>
+redrive(session: string, index: number, action: 'retry' | 'skip'): Promise<{ redriven: boolean }>
+```
+
+`stuck` returns the events that failed 10 times and stopped their thread,
+oldest first in each session: `{ session, index, type, lane, thread, root,
+external, attempts, failures, error, failedAt }`. `redrive` retries one with a
+fresh 10 tries, or skips it; `redriven` is false when it wasn't stuck. Both
+need full access. See [the log](./04-log.md#stuck-events).
+
 ## Live
 
 ### events

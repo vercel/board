@@ -1,4 +1,4 @@
-import type { BoardEventView, MessageView, ScheduleView, SourceRead } from '../api/routes.ts'
+import type { BoardEventView, MessageView, ScheduleView, SourceRead, StuckEvent } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -110,6 +110,13 @@ const until = (iso: string, now: number) => {
   const ms = Date.parse(iso) - now
   if (ms <= 0) return 'due'
   return `in ${span(ms < 60_000 ? Math.ceil(ms / 1000) * 1000 : Math.ceil(ms / 60_000) * 60_000)}`
+}
+
+/** A stuck event: its ref (what `stuck retry` takes), what it holds up, and why it stopped. */
+export function formatStuck(event: StuckEvent, now = Date.now()): string {
+  const where = event.root !== null ? `#${event.root}` : (event.thread ?? event.external ?? event.lane ?? 'no lane')
+  const error = (event.error ?? 'no error recorded').split('\n')[0]!.slice(0, 200)
+  return `${event.session}#${event.index}  ${event.type}  ${where}  failed ${event.failures}× · stopped ${ago(event.failedAt, now)} ago\n    ${error}`
 }
 
 /** One schedule: what it sends, when, where, and how it stops. */

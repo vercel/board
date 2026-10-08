@@ -76,7 +76,7 @@
   "peerDependencies": {
     "@vercel/blob": "^2.8.0",
     "chat": "^4.41.1",
-    "experimental-a2": "^0.17.0"
+    "experimental-a2": "^0.18.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
@@ -90,7 +90,7 @@
     "@vercel/blob": "^2.8.0",
     "ai": "^7.0.130",
     "chat": "^4.41.1",
-    "experimental-a2": "0.17.0",
+    "experimental-a2": "0.18.0",
     "lucide-react": "^1.49.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

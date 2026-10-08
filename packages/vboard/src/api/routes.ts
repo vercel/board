@@ -138,6 +138,12 @@ export const InboxQuery = z.object({
   channel: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
+/** A stuck event to retry (with a fresh 10 tries) or skip (so its thread goes on), as `vb stuck` lists it. */
+export const RedriveBody = z.object({
+  session: z.string().min(1).max(300),
+  index: z.number().int().min(1),
+  action: z.enum(['retry', 'skip']),
+})
 
 /**
  * What to read from a platform without syncing it: a channel (`#name` or an ID),
@@ -290,6 +296,27 @@ export type InboxEntry = {
   raw: unknown
 }
 
+/**
+ * An event that failed 10 times and stopped: A2 dead-lettered it, and nothing after it on its lane
+ * (its thread's) runs until it's retried or skipped. As `GET /stuck` returns it.
+ */
+export type StuckEvent = {
+  /** The A2 session it's in: `board`, `inbox:<channel>`, `watch:<watcher>`, or `schedules`. */
+  session: string
+  index: number
+  type: string
+  lane: string | null
+  /** The board thread it holds up, when there is one, and its root. */
+  thread: string | null
+  root: number | null
+  /** The platform thread, for an inbox event that never reached the board. */
+  external: string | null
+  attempts: number
+  failures: number
+  error: string | null
+  failedAt: string
+}
+
 /** The route table: method, path, and the schemas that validate input. */
 export const routes = {
   discovery: { method: 'GET', path: '/' },
@@ -312,6 +339,10 @@ export const routes = {
   /** Anyone may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
+  /** Events that stopped their thread: full access only. */
+  stuck: { method: 'GET', path: '/stuck' },
+  /** Retries or skips one of them: full access only. */
+  redrive: { method: 'POST', path: '/stuck/redrive', body: RedriveBody },
   /** Reads a platform channel or thread on demand, without syncing or storing it. Full access only. */
   sourceRead: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },
   webhook: { method: 'POST', path: '/webhooks/:key' },

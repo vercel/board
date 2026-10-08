@@ -623,6 +623,15 @@ describe('cli', () => {
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)
     expect((await vb(['inspect', '--port', 'nope'])).code).toBe(2)
+    expect((await vb(['stuck', 'retry'])).code).toBe(2)
+    expect((await vb(['stuck', 'redo', 'board#1'])).code).toBe(2)
+    expect((await vb(['stuck', 'skip', 'board'])).code).toBe(2)
+  })
+
+  it("says when nothing is stuck, and when what it's asked to redrive isn't", async () => {
+    expect(await vb(['stuck'])).toMatchObject({ code: 0, stdout: 'nothing is stuck\n' })
+    expect(await vb(['stuck', 'skip', 'board#1'])).toMatchObject({ code: 0, stdout: "board#1 isn't stuck\n" })
+    expect(await vb(['stuck', 'retry', 'nowhere#1'])).toMatchObject({ code: 1, stderr: 'error: no session nowhere on this board\n' })
   })
 
   it('serves the inspector until Ctrl-C', async () => {

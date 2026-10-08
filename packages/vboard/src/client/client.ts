@@ -7,6 +7,7 @@ import type {
   EventsQueryInput,
   FiltersInput,
   InboxEntry,
+  StuckEvent,
   SourceRead,
   Me,
   MessagesPage,
@@ -306,6 +307,14 @@ export function createBoardClient(options: ClientOptions) {
     /** Raw platform events for a sync entry, newest first. */
     inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
       (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
+    /** Events that failed 10 times and stopped their thread, oldest first. Full access only. */
+    stuck: async () => (await call<{ stuck: StuckEvent[] }>('GET', '/stuck')).stuck,
+    /**
+     * Retries a stuck event with a fresh 10 tries, or skips it so its thread goes on. `redriven` is
+     * false when it wasn't stuck (anymore). Full access only.
+     */
+    redrive: (session: string, index: number, action: 'retry' | 'skip') =>
+      call<{ redriven: boolean }>('POST', '/stuck/redrive', { body: { session, index, action } }),
     /**
      * Reads a platform channel (`#name`, an ID), thread (`C0123:1727000000.123456`),
      * or message permalink on demand, without syncing or storing it. Full access only.

@@ -120,6 +120,22 @@ A schedule's ID is the index of its `schedule.created` event (`s12`).
 | `schedule.due` | (server) `id`, `n`, `at`: an A2 timer saying send `n` is due |
 | `schedule.fired` | (server) `id`, `n`, `message`, `next`: send `n` was posted as `message`; the next is due at `next`, or never |
 
+### Stuck events
+
+Handlers run on lanes, one per thread, so a thread's events run in order. When
+one keeps failing, A2 gives up on it after 10 tries: it's dead-lettered, and
+nothing after it on its lane runs. vboard keeps that rare. A delivery that keeps
+failing is recorded as `message.sync_failed`, and a watcher gives up on its
+event, so neither stops its thread. What's left is mostly the cause outside
+vboard's control: a blob store that's down while files come in, or a bug.
+
+`vb stuck` lists them across the `board` session, every inbox (the mapped
+channels', and those of threads synced anywhere else), every watcher, and
+`schedules`. `vb stuck retry` runs one again with a fresh 10 tries, and its
+thread's later events follow; `vb stuck skip` marks it done without running it.
+Both are one atomic A2 operation (`session.redrive()`), and the board logs who
+did which.
+
 ## Reducers
 
 Every read folds the `board` session through these. `vboard/contract` exports

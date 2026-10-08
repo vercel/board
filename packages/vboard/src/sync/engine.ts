@@ -856,6 +856,19 @@ export function createSyncEngine(options: {
       }))
   }
 
+  /** Every inbox that can hold events: the mapped channels', and those of threads synced anywhere else. */
+  async function inboxChannels(): Promise<string[]> {
+    const channels = new Set<string>()
+    for (const key of Object.keys(entries)) for (const channel of (await mappings(key)).keys()) channels.add(channel)
+    const { state: sync } = await bound().session.state(syncReducer)
+    for (const thread of Object.keys(sync.byExternalThread)) {
+      const key = thread.slice(0, thread.indexOf(':'))
+      const channel = entries[key]?.inboxChannel(key, thread)
+      if (channel) channels.add(channel)
+    }
+    return [...channels]
+  }
+
   /** The status for what a platform wouldn't read: the caller's mistake, missing, refused, or the platform failing. */
   const unreadableStatus = (code: string) => {
     if (code === 'unsupported' || code === 'invalid_target') return 400
@@ -888,6 +901,7 @@ export function createSyncEngine(options: {
     findByEmail,
     handleWebhook,
     readInbox,
+    inboxChannels,
     typing,
   }
 }

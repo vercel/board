@@ -42,8 +42,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.17.0
-        version: 0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
+        specifier: 0.18.0
+        version: 0.18.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
       geist:
         specifier: ^1.7.2
         version: 1.7.2(next@16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
@@ -130,8 +130,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.17.0
-        version: 0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
+        specifier: 0.18.0
+        version: 0.18.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
       next:
         specifier: ^16.3.8
         version: 16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -210,8 +210,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.17.0
-        version: 0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
+        specifier: 0.18.0
+        version: 0.18.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
       lucide-react:
         specifier: ^1.49.0
         version: 1.49.0(@types/react@19.3.0)(react@19.3.0)
@@ -1771,18 +1771,25 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  experimental-a2@0.17.0:
-    resolution: {integrity: sha512-oZNUBuKJ9Lhb92uEUQxSoUWpUq1ABkJW3K2u6+aooFrufIP/AV1TgjfEOYGWLJejnWaSRLs63f5l1ddItzWW8Q==}
+  experimental-a2@0.18.0:
+    resolution: {integrity: sha512-fyh322kVNhY5RfGqkkTU+IWkHkT/TGvZsj3ND7AsW1jb4IiyN1+1545TMYQ5dgCF/nZwgypktm5OVxjverJ4Hw==}
     engines: {node: '>=22.13'}
     peerDependencies:
+      '@earendil-works/pi-ai': ^1.0.2
+      '@earendil-works/pi-coding-agent': ^1.0.2
       '@opentelemetry/api': ^1.9.0
       '@upstash/qstash': ^2.11.0
       '@vercel/queue': '*'
       ai: ^7.0.0
       ioredis: ^5.4.0
+      libfx: ^0.0.12
       pg: ^8.11.0
       react: ^19.0.0
     peerDependenciesMeta:
+      '@earendil-works/pi-ai':
+        optional: true
+      '@earendil-works/pi-coding-agent':
+        optional: true
       '@opentelemetry/api':
         optional: true
       '@upstash/qstash':
@@ -1792,6 +1799,8 @@ packages:
       ai:
         optional: true
       ioredis:
+        optional: true
+      libfx:
         optional: true
       pg:
         optional: true
@@ -4290,7 +4299,7 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  experimental-a2@0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0):
+  experimental-a2@0.18.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0):
     optionalDependencies:
       '@vercel/queue': 0.7.0
       ai: 7.0.130(zod@4.6.5)

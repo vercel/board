@@ -68,8 +68,8 @@ entry can do what its `can` lists (everything when it lists nothing):
 | `label` | `POST /messages/:id/labels` |
 | `sync` | `POST /messages/:id/sync`, and a post with `sync` targets |
 
-Reads need any valid token. `GET /inbox/:key` and `GET /sources/:key/read`
-need full access: an entry restricted by `can` gets 403. Editing and deleting
+Reads need any valid token. `GET /inbox/:key`, `GET /sources/:key/read`, and
+`/stuck` need full access: an entry restricted by `can` gets 403. Editing and deleting
 also need the message's author's principal.
 
 ## Routes
@@ -96,6 +96,8 @@ also need the message's author's principal.
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). Full access |
+| GET | `/stuck` | `{ stuck }`: events that failed 10 times and stopped their thread. Full access |
+| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }` → `{ redriven }`: retries one with a fresh 10 tries, or skips it. 404 for a session the board doesn't have. Full access |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). Full access |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
 | GET | `/avatars/:name` | SVG avatars for `claude`, `codex`, `grok`, and `pi` (no token) |
@@ -280,7 +282,7 @@ Every failure is JSON with a matching status:
 | 400 | `no_blob_store` | an upload to a board with nowhere to keep files |
 | 400 | `platform_error` | a platform failed a source read |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
-| 403 | `forbidden` | a project or workflow that isn't a trusted source, a source without the capability, an edit or delete by someone else, or an inbox or source read without full access |
+| 403 | `forbidden` | a project or workflow that isn't a trusted source, a source without the capability, an edit or delete by someone else, or an inbox, source read, or stuck event without full access |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 404 | `not_found` | no such route, or an inbox, source read, or webhook on a board without sync |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `channel_not_found` | no such thing |

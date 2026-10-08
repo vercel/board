@@ -14,7 +14,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { formatEvent, formatSchedule, formatSourceRead, formatThreads, who } from './format.ts'
+import { formatEvent, formatSchedule, formatSourceRead, formatStuck, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -62,6 +62,9 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            Slack shows the status, if given, instead of "Typing…"
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
+  stuck                                    events that failed 10 times and stopped their thread (full access only)
+  stuck retry|skip <event>                 retry one with a fresh 10 tries, or skip it so its thread goes on,
+                                           e.g. stuck retry inbox:slack:C0123#55
   sources                                  the board's sources (its sync entries: slack, github, …)
   sources <key> read <channel|thread|link> [--limit N]
                                            read a source's channel, thread, or message link without syncing it,
@@ -688,6 +691,25 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const detail = event.text ?? event.type ?? event.emoji ?? ''
         out(`${entry.createdAt}  ${entry.channel}  ${event.kind}  ${event.author?.handle ?? ''}  ${detail.split('\n')[0]}`)
       }
+      return 0
+    }
+
+    case 'stuck': {
+      const [action, ref] = args
+      if (action === undefined) {
+        const list = await client().stuck()
+        if (flags.json) return list.forEach(printJson), 0
+        if (list.length === 0) return out('nothing is stuck'), 0
+        out(list.map((event) => formatStuck(event)).join('\n'))
+        return 0
+      }
+      const at = ref?.lastIndexOf('#') ?? -1
+      const index = ref === undefined ? NaN : Number(ref.slice(at + 1))
+      if ((action !== 'retry' && action !== 'skip') || at <= 0 || !Number.isInteger(index) || index < 1 || args.length > 2)
+        throw new UsageError('usage: vboard stuck [retry|skip <session>#<index>], e.g. stuck retry board#812')
+      const { redriven } = await client().redrive(ref!.slice(0, at), index, action)
+      if (flags.json) printJson({ redriven })
+      else out(redriven ? `${action === 'retry' ? 'retrying' : 'skipped'} ${ref}` : `${ref} isn't stuck`)
       return 0
     }
 

@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Store, type A2Scheduler, type ServerOptions } from 'experimental-a2/server'
-import { boardContract, BOARD_SESSION, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, messagesReducer } from '../contract/reducers.ts'
+import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, watchSession, type BoardEvents } from '../contract/contract.ts'
+import { actorsReducer, channelsReducer, messagesReducer, syncReducer } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import {
   EditBody,
@@ -13,12 +13,14 @@ import {
   MessagesQuery,
   PostBody,
   ReactBody,
+  RedriveBody,
   routes,
   ScheduleBody,
   SchedulesQuery,
   SyncBody,
   TypingBody,
   type Discovery,
+  type StuckEvent,
   type TypingResult,
   type Me,
   type RouteName,
@@ -113,6 +115,8 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'events', pattern: /\/events$/ },
   { method: 'GET', name: 'me', pattern: /\/me$/ },
   { method: 'GET', name: 'inbox', pattern: /\/inbox\/([A-Za-z0-9_-]+)$/ },
+  { method: 'POST', name: 'redrive', pattern: /\/stuck\/redrive$/ },
+  { method: 'GET', name: 'stuck', pattern: /\/stuck$/ },
   { method: 'GET', name: 'sourceRead', pattern: /\/sources\/([A-Za-z0-9_-]+)\/read$/ },
   { method: 'POST', name: 'webhook', pattern: /\/webhooks\/([A-Za-z0-9_-]+)$/ },
   { method: 'GET', name: 'avatar', pattern: /\/avatars\/([a-z0-9-]+)$/ },
@@ -122,6 +126,11 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
 ]
 
 type BoardHandlers = NonNullable<ServerOptions<BoardEvents>['handlers']>
+/** What `vb stuck` needs of an A2 session, whatever its contract. */
+type Redrivable = {
+  deadLetters(): Promise<{ index: number; type: string; lane: string | null; attemptCount: number; failureCount: number; lastError: string | null; failedAt: Date }[]>
+  redrive(index: number, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
+}
 type BoardHandler = { lane?: unknown; handler: (ctx: never) => Promise<unknown> }
 
 /** A2 takes one handler per event type, so watchers and sync share it, on the same lanes: watchers first. */
@@ -251,6 +260,52 @@ export function board(options: BoardOptions = {}) {
     const token = header.match(/^Bearer\s+(.+)$/i)?.[1]
     if (!token) throw unauthorized('missing bearer token')
     return verify(token, boardUrl)
+  }
+
+  /** The sessions whose handlers run on lanes, so a dead letter there stops the rest of its lane. */
+  async function lanedSessions(): Promise<{ id: string; session: Redrivable }[]> {
+    const ids: [string, { session(id: string): Redrivable }][] = [
+      [BOARD_SESSION, server],
+      [SCHEDULES_SESSION, schedules.server],
+      ...(watchers ? watchers.ids.map((id): [string, typeof watchers.server] => [watchSession(id), watchers.server]) : []),
+      ...(engine ? (await engine.inboxChannels()).map((channel): [string, typeof engine.inboxServer] => [inboxSession(channel), engine.inboxServer]) : []),
+    ]
+    return ids.map(([id, owner]) => ({ id, session: owner.session(id) }))
+  }
+
+  async function stuck(): Promise<StuckEvent[]> {
+    const found = (await Promise.all((await lanedSessions()).map(async ({ id, session }) => (await session.deadLetters()).map((dead) => ({ id, dead }))))).flat()
+    if (found.length === 0) return []
+    const [{ state: messages }, { state: sync }] = await Promise.all([session.state(messagesReducer), session.state(syncReducer)])
+    const roots = new Map<string, number>()
+    for (const message of Object.values(messages.byId)) if (message.re === null) roots.set(message.thread, message.id)
+    return found.map(({ id, dead }) => {
+      const laneThread = dead.lane?.startsWith('thread:') ? dead.lane.slice('thread:'.length) : null
+      // An inbox's lanes are platform threads; everywhere else they're the board's.
+      const inbox = id.startsWith('inbox:')
+      const thread = inbox ? (laneThread && (sync.byExternalThread[laneThread] ?? null)) : laneThread
+      return {
+        session: id,
+        index: dead.index,
+        type: dead.type,
+        lane: dead.lane,
+        thread,
+        root: thread === null ? null : (roots.get(thread) ?? null),
+        external: inbox ? laneThread : null,
+        attempts: dead.attemptCount,
+        failures: dead.failureCount,
+        error: dead.lastError,
+        failedAt: dead.failedAt.toISOString(),
+      }
+    })
+  }
+
+  async function redrive(body: z.infer<typeof RedriveBody>, by: string) {
+    const target = (await lanedSessions()).find(({ id }) => id === body.session)
+    if (!target) throw notFound(`no session ${body.session} on this board`)
+    const { redriven } = await target.session.redrive(body.index, { action: body.action })
+    if (redriven) console.info(`[vboard] ${by} ${body.action === 'retry' ? 'retried' : 'skipped'} stuck event ${body.session}#${body.index}`)
+    return { redriven }
   }
 
   const require = (principal: Principal, capability: Capability) => {
@@ -473,6 +528,15 @@ export function board(options: BoardOptions = {}) {
           if (!engine) throw notFound('this board has no sync configured')
           const query = InboxQuery.parse(queryObject(url))
           return json({ events: await engine.readInbox(match.param!, query.channel, query.limit ?? 50) })
+        }
+        case 'stuck': {
+          // What failed, with its errors: full access only, like the inbox.
+          if (principal.can !== 'all') throw forbidden('reading stuck events needs full access')
+          return json({ stuck: await stuck() })
+        }
+        case 'redrive': {
+          if (principal.can !== 'all') throw forbidden('retrying or skipping stuck events needs full access')
+          return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
         }
         case 'sourceRead': {
           // The app's token reads what the app can, not what the caller can: full access only.

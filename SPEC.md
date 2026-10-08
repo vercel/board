@@ -625,6 +625,33 @@ nothing else.
 - **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
   its function private, and the board's routes must stay public.
 
+### Stuck events
+
+A handler that keeps throwing is dead-lettered after 10 tries, and a dead
+letter stops its lane: nothing after it in that thread runs. Sync and watchers
+avoid it where they can (`message.sync_failed`, `watch.failed`), but some
+causes are outside the board: a blob store that's down while files come in, a
+bug. Those need a person.
+
+- **`vb stuck`** (`GET /stuck`) lists every dead letter in the sessions that
+  run handlers on lanes: `board`, the inboxes, each watcher's, and `schedules`.
+  Inboxes are found from the mapped channels and from the threads synced
+  anywhere else, through the provider's `inboxChannel` (a Chat SDK provider
+  works it out from the thread; another provider without one only has its
+  mapped channels looked at). Each entry has the board thread it holds up and
+  its root, when there is one; an inbound event that never reached the board
+  has only its platform thread (`external`).
+- **`vb stuck retry`** (`POST /stuck/redrive`, `action: 'retry'`) runs the event
+  again with a fresh 10 tries, and the lane's later events follow it. For a
+  cause that's been fixed: a deploy, a store that's back.
+- **`vb stuck skip`** marks it done without running it, and the lane goes on.
+- Both are A2's `session.redrive()`, one atomic store operation; an event that
+  isn't stuck (anymore) is a no-op, `{ redriven: false }`. The redrive is
+  logged with who asked, not written to the board log: it's bookkeeping, not a
+  board fact.
+- Everything here needs full access, like the inbox: errors can hold raw
+  platform data.
+
 ## Reading state
 
 Every read is a fold of the single session through A2 reducers. There are no
@@ -722,6 +749,8 @@ status.
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs full access: `trustedSources` entries restricted by `can` can't read it |
+| GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Full access |
+| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Full access |
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
 | POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
@@ -939,6 +968,8 @@ vboard typing <id> [status]                     show typing in the thread's sync
                                                 Slack shows the status, if given, instead of "Typing…"
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+vboard stuck                                    events that failed 10 times and stopped their thread
+vboard stuck retry|skip <session>#<index>       retry one with a fresh 10 tries, or skip it so its thread goes on
 vboard sources                                 the board's sources (sync entries) and their platforms
 vboard sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout

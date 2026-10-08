@@ -195,6 +195,7 @@ export function createWatchers(options: {
   return {
     server,
     boardHandlers,
+    ids: watchers.map((watcher) => watcher.id),
     bind: (binding: { clientAs: (identity: Identity, trigger: string) => BoardClient }) => {
       clientAs = binding.clientAs
     },
