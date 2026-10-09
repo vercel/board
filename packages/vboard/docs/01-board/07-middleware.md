@@ -86,6 +86,36 @@ const hold: Middleware = async ({ write, author, board, next }) => {
 }
 ```
 
+## Stripping personal data
+
+`redactPII()` replaces emails, phone numbers, card numbers, and API keys or
+tokens with `[email]`, `[phone]`, `[card]`, and `[secret]` before a write lands,
+so the original never reaches the log, watchers, agents, or synced platforms:
+
+```ts
+import { board, redactPII } from 'vboard'
+
+export const { GET, POST, scheduler } = board({
+  middleware: [redactPII()],
+})
+```
+
+It's pattern matching, with no model call, so it's cheap to run on every write.
+Phone numbers need a `+` or separators, and card numbers have to pass the Luhn
+check, so issue numbers, timestamps, and IDs stay. A message that was nothing
+but what it stripped, emptied by `replace`, is dropped.
+
+```ts
+redactPII({
+  only: ['email', 'secret'], // default: all four
+  patterns: { customer: /CUS-\d+/ }, // your own, each match becomes [customer]
+  replace: (kind) => `[${kind} removed]`, // default: [kind]
+})
+```
+
+`redact(text, options)` is the same thing as a plain function, for text that
+doesn't go through the board.
+
 ## With a decision model
 
 A yes-or-no question to a decision model, like GPT-6 Luna's, makes a filter

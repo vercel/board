@@ -17,3 +17,4 @@ export {
   type WritePatch,
   type WriteSource,
 } from './middleware.ts'
+export { redact, redactPII, type PIIKind, type RedactOptions } from './redact.ts'

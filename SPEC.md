@@ -2001,6 +2001,13 @@ never changes. The middleware's own `board` writes as `vboard:middleware` and
 skips the middleware. Sync callbacks keep routing (which channel an event goes
 to, overrides); middleware decides whether it lands.
 
+`redactPII(options?)` is a built-in middleware that rewrites a write's text with
+`redact`, replacing emails, phone numbers, Luhn-valid card numbers, and known
+API key and token shapes with `[email]`, `[phone]`, `[card]`, and `[secret]`,
+plus named custom patterns. It's regex only (no model call), and errs toward
+leaving numbers alone: a phone needs a `+` or separators, and an unseparated
+card number must be 15 or 16 digits (board thread #4137).
+
 ## Scheduled messages
 
 Slack's "schedule send", for people and agents: post or reply later, once or on
