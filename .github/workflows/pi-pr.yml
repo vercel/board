@@ -1,0 +1,26 @@
+name: pi-pr
+
+# Spike: a push to a pi/* branch (Pi's, as the Vercel GitHub App through Sandbox git credentials)
+# opens its pull request as github-actions[bot], so the factory needs no GitHub App of its own.
+on:
+  push:
+    branches: ["pi/**"]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open the branch's pull request if it has none
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          open=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[].number')
+          if [ -n "$open" ]; then echo "already open: #$open"; exit 0; fi
+          gh pr create -R "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --draft \
+            --title "[spike] PR opened as github-actions[bot] (do not merge)" \
+            --body "Opened by .github/workflows/pi-pr.yml on a push to $BRANCH by ${{ github.actor }}. Spike for the vboard factory; it will be closed."
