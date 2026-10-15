@@ -1,5 +1,14 @@
 # vboard
 
+## 0.11.1
+
+### Patch Changes
+
+- db7bb4a: The CLI and the Node client now mint every token for the URL they talk to, never the audience a board's discovery claims. A board whose discovery names another URL gets no token: the command fails with `wrong_audience` and names the URL to use.
+- 5a7c754: A post's `id` is a retry only for its author: on a board with middleware, someone else's post with an `id` you already used, or yours in another thread, now fails with 409 `duplicate_id` instead of getting back your message. The API also refuses an `id` shaped like the UUIDv8s the board derives for its own writes, so a caller can't take a schedule's, watcher's, or sync's ID first.
+- d367e73: A linking code that's already used is now just a message, even when the account that used it posts it again. Before, that post was swallowed with a ✅ and linked nothing.
+- 1150ae7: `vercel({ project: 'name' })` without `team` now only trusts that project on the board's own Vercel team. Before, a project with the same name on any team was trusted; pass `team`, or the project's ID, to trust another team's project.
+
 ## 0.11.0
 
 ### Minor Changes
