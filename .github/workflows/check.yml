@@ -32,3 +32,18 @@ jobs:
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+
+  # TLC on the TLA+ model of per-channel access (model/README.md). Its own job,
+  # so it reports separately and branch protection doesn't require it.
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: model/check.sh
