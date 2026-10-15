@@ -5,7 +5,7 @@ import {
   type JWTPayload,
   type JWTVerifyGetKey,
 } from 'jose'
-import { compileAccess, FULL_ACCESS, type Access, type Can } from './access.ts'
+import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can } from './access.ts'
 import { unauthorized, forbidden } from './errors.ts'
 
 /** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
@@ -20,9 +20,32 @@ export type Principal = {
   /** What it may do in each channel, narrowed by `x-board-scope` when a proxy sent one. */
   access: Access
   expiresAt: Date | null
+  /** The verified token's claims, so its access can be worked out again later, as a schedule's sends do. Absent for people and the board's own code. */
+  facts?: TokenFacts
+  /** The `x-board-scope` it was narrowed by. */
+  scope?: string
 }
 
 type Claims = JWTPayload & Record<string, unknown>
+
+/** What a verified token said: its issuer and its claims, never the token itself. */
+export type TokenFacts = {
+  issuer: 'vercel' | 'github' | 'oidc'
+  iss: string
+  claims: Readonly<Record<string, string | number | boolean>>
+}
+
+const REGISTERED = new Set(['aud', 'exp', 'iat', 'nbf', 'jti'])
+
+/** The claims rules can match on: plain values, bounded, as a schedule stores them. */
+function factsOf(issuer: TokenFacts['issuer'], iss: string, claims: Claims): TokenFacts {
+  const kept: Record<string, string | number | boolean> = {}
+  for (const [name, value] of Object.entries(claims)) {
+    if (REGISTERED.has(name) || Object.keys(kept).length >= 64) continue
+    if (typeof value === 'number' || typeof value === 'boolean' || (typeof value === 'string' && value.length <= 1000)) kept[name] = value
+  }
+  return { issuer, iss, claims: kept }
+}
 
 /** What a rule may compare claims to: the board's own Vercel team and project, when they're known. */
 export type MatchContext = { teamId: string | null; projectId: string | null }
@@ -210,7 +233,7 @@ export function createVerifier(options: {
   }
 
   /** `platformToken`: the board's own OIDC token, which Vercel sends with each request. */
-  return async function verify(token: string, audience: string, platformToken?: string): Promise<Principal> {
+  async function verify(token: string, audience: string, platformToken?: string): Promise<Principal> {
     let iss: string
     try {
       iss = String(decodeJwt(token).iss ?? '')
@@ -238,9 +261,16 @@ export function createVerifier(options: {
       if ((error as { status?: number }).status === 401) throw error
       throw unauthorized(`invalid token: ${(error as Error).message}`)
     }
-    const expiresAt = claims.exp ? new Date(claims.exp * 1000) : null
+    const facts = factsOf(isOidc ? 'oidc' : isGitHub ? 'github' : 'vercel', iss, claims)
+    return principalOf(facts, claims.exp ? new Date(claims.exp * 1000) : null, platformToken)
+  }
 
-    if (isOidc) {
+  /** Who verified claims are, and what the rules give them now: a 401 or 403 when they're not in access. */
+  async function principalOf(facts: TokenFacts, expiresAt: Date | null, platformToken?: string): Promise<Principal> {
+    const { issuer, iss } = facts
+    const claims = facts.claims as Claims
+    if (issuer === 'oidc') {
+      if (!oidcIssuers.has(iss)) throw unauthorized(`untrusted issuer: ${iss}`)
       const access = ruleFor('oidc', claims, { teamId: null, projectId: null }, iss)
       if (!access) throw forbidden(`this token from ${iss} isn't in access`)
       if (typeof claims.sub !== 'string' || claims.sub === '') throw unauthorized(`token from ${iss} without sub`)
@@ -250,10 +280,11 @@ export function createVerifier(options: {
         handle: claims.sub.slice(0, 128),
         access,
         expiresAt,
+        facts,
       }
     }
 
-    if (isGitHub) {
+    if (issuer === 'github') {
       const access = ruleFor('github', claims, { teamId: null, projectId: null })
       if (!access) throw forbidden(`workflow isn't in access: ${String(claims.repository)}`)
       return {
@@ -262,6 +293,7 @@ export function createVerifier(options: {
         handle: String(claims.repository),
         access,
         expiresAt,
+        facts,
       }
     }
 
@@ -285,15 +317,49 @@ export function createVerifier(options: {
       ? ((await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)))
       : null
     const access = ruleFor('vercel', claims, { teamId, projectId: ownProject })
-    if (access) return deployment(claims, project, environment, access, expiresAt)
+    if (access) return deployment(facts, project, environment, access, expiresAt)
     // The board's own production is the board; its previews run any branch's code.
-    if (own && environment === 'production') return deployment(claims, project, environment, FULL_ACCESS, expiresAt)
+    if (own && environment === 'production') return deployment(facts, project, environment, FULL_ACCESS, expiresAt)
     if (own)
       throw forbidden(
         `this project's ${environment || 'unnamed'} deployments aren't in access: add vercelProject({ project: 'self', environments: ['${environment}'], can })`,
       )
     throw forbidden(`project isn't in access: ${project || String(claims.project_id)}`)
   }
+
+  /**
+   * What a principal may do under the rules as they are now, narrowed by its
+   * scope: people and the board's own code everything, a token whatever the
+   * first rule matching its claims gives, and null once none does.
+   */
+  async function accessNow(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null> {
+    let access: Access = FULL_ACCESS
+    if (principal.kind !== 'person' && !principal.id.startsWith('vboard:')) {
+      const facts = principal.facts ?? factsFromId(principal.id)
+      if (!facts) return null
+      try {
+        access = (await principalOf(facts, null)).access
+      } catch (error) {
+        const status = (error as { status?: number }).status
+        if (status === 401 || status === 403) return null
+        throw error
+      }
+    }
+    return principal.scope === undefined ? access : access.narrow(parseScope(principal.scope))
+  }
+
+  return { verify, accessNow }
+}
+
+/**
+ * What a principal's ID still says, for one stored before the board kept
+ * claims: a deployment's project ID and environment. A workflow's ID names
+ * neither its repository nor its run, so it says nothing, and a rule that
+ * needs more than the ID no longer matches.
+ */
+function factsFromId(id: string): TokenFacts | null {
+  const deployment = id.match(/^vercel:project:([^:]+):([^:]+)$/)
+  return deployment ? { issuer: 'vercel', iss: '', claims: { project_id: deployment[1]!, environment: deployment[2]! } } : null
 }
 
 const LOCAL_SUB = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/
@@ -317,15 +383,16 @@ async function localPerson(token: string, local: NonNullable<AuthOptions['local'
 }
 
 const deployment = (
-  claims: Claims,
+  facts: TokenFacts,
   project: string,
   environment: string,
   access: Access,
   expiresAt: Date | null,
 ): Principal => ({
-  id: `vercel:project:${String(claims.project_id)}:${environment}`,
+  id: `vercel:project:${String(facts.claims.project_id)}:${environment}`,
   kind: 'deployment',
   handle: environment === 'production' ? project : `${project}@${environment}`,
   access,
   expiresAt,
+  facts,
 })

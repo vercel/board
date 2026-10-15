@@ -108,13 +108,15 @@ export function actorSeen(seen: Actor, known: ActorsState) {
  * Resolves prose mentions to actor IDs. Each `@handle` must name exactly one
  * actor the board has seen; `@[actor-id]` names one directly. `lenient` is for
  * platform text: a mention that doesn't resolve stays plain text, and the rest
- * still count.
+ * still count. Without `candidates`, an ambiguous mention doesn't list who it
+ * could be: a caller that can't read every channel can't list actors either.
  */
 export function resolveMentions(
   text: string,
   known: ActorsState,
   pending?: Actor,
   lenient = false,
+  candidates = true,
 ): string[] {
   const resolved: string[] = []
   const add = (id: string) => {
@@ -133,6 +135,7 @@ export function resolveMentions(
     if (pending && pending.handle.toLowerCase() === token.handle) ids.add(pending.id)
     if (ids.size === 1) add([...ids][0]!)
     else if (ids.size === 0) fail(badRequest(`unknown mention @${token.handle}`, 'unknown_mention'))
+    else if (!candidates) fail(badRequest(`ambiguous mention @${token.handle}: use @[actor-id]`, 'ambiguous_mention'))
     else {
       const options = [...ids]
         .map((id) => `@[${id}] (${known.byId[id]?.name ?? pending?.name ?? id})`)

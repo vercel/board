@@ -319,10 +319,27 @@ export const watchSession = (id: string) => `watch:${id}`
 /** Epoch milliseconds. */
 const Millis = z.number().int().nonnegative()
 
-/** Who a schedule posts as: the identity that created it, as the board resolved it then. */
+/**
+ * Who a schedule posts as: the identity that created it, as the board resolved
+ * it then. A token's verified claims (`facts`) and the scope it was narrowed by
+ * let each send work out its access again, under the rules as they are then.
+ * Schedules from before they were kept have neither.
+ */
 export const ScheduleIdentity = z.object({
   author: Author,
-  principal: z.object({ id: z.string().min(1), kind: z.enum(['person', 'deployment', 'workflow', 'external']), handle: Handle }),
+  principal: z.object({
+    id: z.string().min(1),
+    kind: z.enum(['person', 'deployment', 'workflow', 'external']),
+    handle: Handle,
+    facts: z
+      .object({
+        issuer: z.enum(['vercel', 'github', 'oidc']),
+        iss: z.string().max(1000),
+        claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
+      })
+      .optional(),
+    scope: z.string().max(4000).optional(),
+  }),
   actor: z.object({ id: ActorId, kind: SeenActorKind, handle: Handle, name: z.string().min(1).max(128), avatar: z.string().nullable() }),
 })
 
@@ -356,9 +373,10 @@ export const schedulesContract = contract({
       by: Author,
       /**
        * `canceled`: someone canceled it; `thread_deleted`: the thread it replies in is gone;
-       * `dropped`: the board's middleware dropped a send, so it would drop the rest.
+       * `dropped`: the board's middleware dropped a send, so it would drop the rest;
+       * `revoked`: its creator can no longer post there.
        */
-      reason: z.enum(['canceled', 'thread_deleted', 'dropped']),
+      reason: z.enum(['canceled', 'thread_deleted', 'dropped', 'revoked']),
     }),
     /** (server) A timer: send `n` is due at `at`. */
     'schedule.due': z.object({ id: z.number().int().positive(), n: z.number().int().nonnegative(), at: Millis }),

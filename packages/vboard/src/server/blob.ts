@@ -70,10 +70,13 @@ function mediaType(type: string | null): string {
 
 const noBlob = () => badRequest('this board has no blob store for attachments: pass `blob` to `board()`', 'no_blob_store')
 
-/** Stores an upload under a fresh ID, with its metadata beside it. */
+/**
+ * Stores an upload under a fresh ID, with its metadata beside it. `uploadedBy`
+ * is the principal that sent it, who can read it before any message carries it.
+ */
 export async function writeUpload(
   blob: BlobStore | null,
-  input: { data: Uint8Array; name: string | null; type: string | null },
+  input: { data: Uint8Array; name: string | null; type: string | null; uploadedBy?: string },
 ): Promise<AttachmentType> {
   if (!blob) throw noBlob()
   if (input.data.byteLength === 0) throw badRequest('the file is empty')
@@ -86,7 +89,8 @@ export async function writeUpload(
     size: input.data.byteLength,
   }
   await blob.put(dataKey(attachment.id), input.data, attachment.type)
-  await blob.put(metaKey(attachment.id), new TextEncoder().encode(JSON.stringify(attachment)), 'application/json')
+  const meta = input.uploadedBy === undefined ? attachment : { ...attachment, uploadedBy: input.uploadedBy }
+  await blob.put(metaKey(attachment.id), new TextEncoder().encode(JSON.stringify(meta)), 'application/json')
   return attachment
 }
 
@@ -94,19 +98,26 @@ async function bytes(data: ReadableStream<Uint8Array> | Uint8Array): Promise<Uin
   return data instanceof Uint8Array ? data : new Uint8Array(await new Response(data).arrayBuffer())
 }
 
-/** An upload's metadata, as the board recorded it: never what a request says. */
-export async function readAttachment(blob: BlobStore | null, id: string): Promise<AttachmentType> {
+export const attachmentNotFound = (id: string) => notFound(`no attachment: ${id}`, 'attachment_not_found')
+
+/**
+ * An upload's metadata, as the board recorded it, never what a request says,
+ * and who uploaded it: null for files the board imported itself, or stored
+ * before it recorded that.
+ */
+export async function readUpload(blob: BlobStore | null, id: string): Promise<{ attachment: AttachmentType; uploadedBy: string | null }> {
   if (!blob) throw noBlob()
   const found = Attachment.shape.id.safeParse(id).success ? await blob.get(metaKey(id)) : null
-  if (!found) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
-  return Attachment.parse(JSON.parse(new TextDecoder().decode(await bytes(found.data))))
+  if (!found) throw attachmentNotFound(id)
+  const meta = JSON.parse(new TextDecoder().decode(await bytes(found.data))) as { uploadedBy?: unknown }
+  return { attachment: Attachment.parse(meta), uploadedBy: typeof meta.uploadedBy === 'string' ? meta.uploadedBy : null }
 }
 
 /** An attachment's bytes. */
 export async function readAttachmentData(blob: BlobStore | null, id: string): Promise<Uint8Array> {
   if (!blob) throw noBlob()
   const found = await blob.get(dataKey(id))
-  if (!found) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
+  if (!found) throw attachmentNotFound(id)
   return bytes(found.data)
 }
 
@@ -114,10 +125,10 @@ export async function readAttachmentData(blob: BlobStore | null, id: string): Pr
  * The file, sandboxed: it can't run as a page on the board's origin, and only
  * types a browser can't execute display inline.
  */
-export async function attachmentResponse(blob: BlobStore | null, id: string): Promise<Response> {
-  const attachment = await readAttachment(blob, id)
+export async function attachmentResponse(blob: BlobStore | null, attachment: AttachmentType): Promise<Response> {
+  const { id } = attachment
   const found = await blob!.get(dataKey(id))
-  if (!found) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
+  if (!found) throw attachmentNotFound(id)
   const disposition = INLINE.test(attachment.type) ? 'inline' : 'attachment'
   const body = found.data instanceof Uint8Array ? new Blob([found.data as Uint8Array<ArrayBuffer>]) : found.data
   return new Response(body, {

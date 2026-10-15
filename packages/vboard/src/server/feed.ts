@@ -1,6 +1,7 @@
 import type { z } from 'zod'
 import type { ActorView, Filters, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
-import type { BoardEvent } from '../contract/contract.ts'
+import type { BoardEvent, Link } from '../contract/contract.ts'
+import type { Access } from './access.ts'
 import {
   foldActors,
   foldMessages,
@@ -33,9 +34,24 @@ export function actorView(actors: ActorsState, id: string): ActorView | null {
   return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(person ? { person } : {}) }
 }
 
-export function view(message: Message, actors: ActorsState): MessageView {
+/** Who's reading a view, for what links show: a link to a board message they can't read shows nothing of it. */
+export type Reader = { access: Access; messages: MessagesState }
+
+/** Links as `reader` may see them. The log keeps each snapshot; it's hidden when it's read. */
+export function readableLinks(links: Link[], reader: Reader | undefined): Link[] {
+  if (!reader || reader.access.readsAll) return links
+  return links.map((link) => {
+    const linked = link.message === null ? undefined : reader.messages.byId[link.message]
+    return linked && !reader.access.readable(linked.channel)
+      ? { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
+      : link
+  })
+}
+
+export function view(message: Message, actors: ActorsState, reader?: Reader): MessageView {
   return {
     ...message,
+    links: readableLinks(message.links, reader),
     labels: { ...message.labels },
     reactions: Object.fromEntries(
       Object.entries(message.reactions).map(([emoji, ids]) => [emoji, [...ids]]),
@@ -93,12 +109,14 @@ const hasLabel = (labels: Record<string, string>, [key, values]: LabelFilter) =>
  * Compiles filters once; handles resolve against the actors known at that
  * moment. A label matches on the message or its thread's root, where sync puts
  * labels, so `pr=…` means the PR's whole conversation. `messages` is the live
- * state for that lookup.
+ * state for that lookup. A message in a channel `access` can't read never
+ * matches, whatever the filters say.
  */
 export function compileFilter(
   filters: ParsedFilters,
-  context: { me: string | null; actors: ActorsState; messages?: MessagesState },
+  context: { me: string | null; actors: ActorsState; messages?: MessagesState; access: Access },
 ): (message: Message | undefined) => boolean {
+  const { access } = context
   const text = filters.text?.toLowerCase()
   const labels = filters.label ?? []
   const channel = filters.channel
@@ -112,7 +130,7 @@ export function compileFilter(
         ? new Set(context.me === null ? [] : [context.me, ...linkedTo(context.actors, context.me)])
         : whoIs(filters.mentions, context.actors).actors
   return (message) => {
-    if (!message) return false
+    if (!message || !access.readable(message.channel)) return false
     if (channel !== undefined) {
       if (subtree !== null) {
         if (message.channel !== subtree && !message.channel.startsWith(`${subtree}/`)) return false
@@ -151,17 +169,18 @@ export function foldEvent(messages: MessagesState, actors: ActorsState, event: B
 }
 
 /** An event as subscribers receive it, with its message as it is afterwards. */
-export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState): BoardEventView {
+export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState, reader?: Reader): BoardEventView {
   const by = (event.payload as { by?: { actor?: string } }).by?.actor
   const actor = by ? actors.byId[by] : undefined
+  const { links } = event.payload as { links?: Link[] }
   // `type` and `payload` come from the same event, so they still match; TypeScript
   // can't follow that through a union, and this is the one place views are made.
   return {
     index: event.index,
     type: event.type,
     createdAt: iso(event.createdAt),
-    payload: event.payload,
-    ...(after ? { message: view(after, actors) } : {}),
+    payload: links ? { ...event.payload, links: readableLinks(links, reader) } : event.payload,
+    ...(after ? { message: view(after, actors, reader) } : {}),
     ...(actor ? { actor: { id: actor.id, ...actorView(actors, actor.id)! } } : {}),
   } as BoardEventView
 }
@@ -172,6 +191,10 @@ export type FeedItem = { index: number; view: BoardEventView | null }
  * Folds events one at a time from a known state and decides what a subscriber
  * sees. A label or reaction change is delivered when its message matched the
  * filter before *or* after it, so subscribers see messages leave a view too.
+ *
+ * It's the one choke point for `/events` (tail, wait, and poll): an event about
+ * a message shows only where `access` reads its channel, and one about no
+ * message (who's who, a thread's sync) only to a reader of every channel.
  */
 export class FeedProjection {
   private readonly messages: MessagesState
@@ -179,6 +202,7 @@ export class FeedProjection {
   private readonly match: (message: Message | undefined) => boolean
   private readonly criteria: boolean
   private readonly all: boolean
+  private readonly access: Access
 
   constructor(
     messages: MessagesState,
@@ -186,20 +210,24 @@ export class FeedProjection {
     match: (message: Message | undefined) => boolean,
     criteria: boolean,
     all: boolean,
+    access: Access,
   ) {
     this.messages = messages
     this.actors = actors
     this.match = match
     this.criteria = criteria
     this.all = all
+    this.access = access
   }
 
   step(event: BoardEvent): FeedItem {
     const { id, before, after } = foldEvent(this.messages, this.actors, event)
+    const message = after ?? before
+    const readable = id === null ? this.access.readsAll : message !== undefined && this.access.readable(message.channel)
     const hidden = HIDDEN.has(event.type) && !this.all
-    const visible = !hidden && (this.criteria ? this.match(before) || this.match(after) : id !== null || this.all)
+    const visible = readable && !hidden && (this.criteria ? this.match(before) || this.match(after) : id !== null || this.all)
     if (!visible) return { index: event.index, view: null }
-    return { index: event.index, view: eventView(event, after, this.actors) }
+    return { index: event.index, view: eventView(event, after, this.actors, { access: this.access, messages: this.messages }) }
   }
 }
 
@@ -232,6 +260,8 @@ export type FeedOptions = {
   all: boolean
   me: string | null
   actors: ActorsState
+  /** What the subscriber may read; an open stream keeps what it had when it opened. */
+  access: Access
 }
 
 /** The starting state and index: `after`, or the current head when omitted. */
@@ -245,9 +275,10 @@ function projection(options: FeedOptions, messages: MessagesState) {
   return new FeedProjection(
     messages,
     options.actors,
-    compileFilter(options.filters, { me: options.me, actors: options.actors, messages }),
+    compileFilter(options.filters, { me: options.me, actors: options.actors, messages, access: options.access }),
     hasCriteria(options.filters),
     options.all,
+    options.access,
   )
 }
 

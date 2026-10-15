@@ -13,7 +13,7 @@ import {
 } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
-import { FULL_ACCESS } from './access.ts'
+import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
@@ -90,8 +90,99 @@ async function withEmailMentions(ctx: WriteContext, text: string): Promise<{ tex
 const knownWith = (actors: ActorsState, found: Actor[]): ActorsState =>
   found.length === 0 ? actors : { ...actors, byId: { ...actors.byId, ...Object.fromEntries(found.map((a) => [a.id, a])) } }
 
+const messageNotFound = (id: number) => () => notFound(`message not found: #${id}`, 'message_not_found')
+
+/**
+ * A message the board looked up and the caller may act on with `permission`,
+ * proved against its own channel. A message they can't read answers 404, as if
+ * it didn't exist: IDs are sequential, so a 403 would confirm it does.
+ */
+export async function authorizeMessage<P extends Permission>(
+  ctx: WriteContext,
+  access: Access,
+  permission: P,
+  id: number,
+): Promise<{ message: Message; proof: Proof<P> }> {
+  const { state } = await ctx.session.state(messagesReducer)
+  const message = state.byId[id]
+  if (!message) throw messageNotFound(id)()
+  return { message, proof: authorize(access, permission, message.channel, messageNotFound(id)) }
+}
+
+/**
+ * Your own message, to edit or delete: `post` in its channel, and no `read`,
+ * so a write-only source can fix what it wrote. Someone else's answers 404
+ * where you can't read it, and 403 where you can.
+ */
+export async function authorizeOwn(
+  ctx: WriteContext,
+  principal: Principal,
+  id: number,
+  verb: 'edit' | 'delete',
+): Promise<{ message: Message; proof: Proof<'post'> }> {
+  const { state } = await ctx.session.state(messagesReducer)
+  const message = state.byId[id]
+  if (!message) throw messageNotFound(id)()
+  if (message.by.principal !== principal.id) {
+    if (!principal.access.readable(message.channel)) throw messageNotFound(id)()
+    throw forbidden(`only the author can ${verb} a message`)
+  }
+  return { message, proof: authorize(principal.access, 'post', message.channel) }
+}
+
+/** What a post was proved for: `post` where it lands, and `label` and `sync` when it carries them. */
+export type PostProofs = { post: Proof<'post'>; label?: Proof<'label'>; sync?: Proof<'sync'> }
+
+const hasLabels = (labels: Labels | undefined) => Object.keys(labels ?? {}).length > 0
+
+/**
+ * Proofs for a post. A root lands in the channel it names, which the caller
+ * needn't read: write-only is `['post']`. A reply lands in its root's channel,
+ * looked up here and never taken from the request, and needs `read` there too,
+ * since addressing a thread you can't see would confirm it exists.
+ */
+export async function authorizePost(
+  ctx: WriteContext,
+  access: Access,
+  input: { channel?: string | undefined; re?: number | null | undefined; labels?: Labels | undefined; sync?: string[] | undefined },
+): Promise<PostProofs> {
+  let channel: string
+  let post: Proof<'post'>
+  if (input.re !== undefined && input.re !== null) {
+    const { message } = await authorizeMessage(ctx, access, 'read', input.re)
+    channel = message.channel
+    post = authorize(access, 'post', channel)
+  } else {
+    if (!input.channel) throw badRequest('a post needs a channel')
+    channel = input.channel
+    post = authorize(access, 'post', channel)
+  }
+  return {
+    post,
+    ...(hasLabels(input.labels) ? { label: authorize(access, 'label', channel) } : {}),
+    ...(input.sync?.length ? { sync: authorize(access, 'sync', channel) } : {}),
+  }
+}
+
+/**
+ * Spends a proof on its target: a write checked against one channel can't land
+ * in another. A mismatch is the board's own bug, never the caller's.
+ */
+function spend(proof: Proof | undefined, permission: Permission, target: { channel: string }) {
+  if (!proof || proof.permission !== permission || proof.channel !== target.channel)
+    throw new Error(`a ${permission} write in ${target.channel} needs a proof for that channel`)
+}
+
+/** Full-access proofs for the board's own code (sync, schedules on its behalf), checked against the target like any other. */
+export const trusted = {
+  message: <P extends Permission>(ctx: WriteContext, permission: P, id: number) => authorizeMessage(ctx, FULL_ACCESS, permission, id),
+  post: (ctx: WriteContext, input: Parameters<typeof authorizePost>[2]) => authorizePost(ctx, FULL_ACCESS, input),
+}
+
 export type PostInput = WriteOrigin & {
   identity: Identity
+  /** From `authorizePost`. */
+  proofs: PostProofs
   channel?: string | undefined
   re?: number | undefined
   text: string
@@ -132,6 +223,9 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
     if (!channel) throw badRequest('a post needs a channel')
     thread = id!
   }
+  spend(input.proofs.post, 'post', { channel })
+  if (hasLabels(input.labels)) spend(input.proofs.label, 'label', { channel })
+  if (input.sync?.length) spend(input.proofs.sync, 'sync', { channel })
 
   const chain = middlewareFor(ctx, input)
   if (chain && id !== undefined) {
@@ -187,7 +281,13 @@ async function commitPost(
   const seen = actorSeen(identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const mentions = resolveMentions(text, knownWith(actors, found), seen ? identity.actor : undefined, input.lenientMentions ?? false)
+  const mentions = resolveMentions(
+    text,
+    knownWith(actors, found),
+    seen ? identity.actor : undefined,
+    input.lenientMentions ?? false,
+    identity.principal.access.readsAll,
+  )
   const synced = await Promise.all(
     targets.map(async ({ target, kind, cause }) => ({
       type: 'thread.synced' as const,
@@ -234,17 +334,26 @@ export const channelOf = (externalThread: string) => {
   return colon === -1 ? externalThread : externalThread.slice(0, at + 1 + colon)
 }
 
-async function liveMessage(ctx: WriteContext, id: number): Promise<Message> {
+/** The message a by-ID write targets, as the board has it, once its proof is for the message's channel. */
+async function liveMessage<P extends Permission>(ctx: WriteContext, id: number, permission: P, proof: Proof<P>): Promise<Message> {
   const { state } = await ctx.session.state(messagesReducer)
   const message = state.byId[id]
-  if (!message) throw notFound(`message not found: #${id}`, 'message_not_found')
+  if (!message) throw messageNotFound(id)()
+  spend(proof, permission, message)
   return message
 }
 
-export type EditInput = WriteOrigin & { identity: Identity; id: number; text: string; from?: string | null; asAuthor?: boolean }
+export type EditInput = WriteOrigin & {
+  identity: Identity
+  proof: Proof<'post'>
+  id: number
+  text: string
+  from?: string | null
+  asAuthor?: boolean
+}
 
 export async function writeEdit(ctx: WriteContext, input: EditInput) {
-  const message = await liveMessage(ctx, input.id)
+  const message = await liveMessage(ctx, input.id, 'post', input.proof)
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
@@ -268,7 +377,13 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
   const seen = actorSeen(input.identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const mentions = resolveMentions(text, knownWith(actors, found), seen ? input.identity.actor : undefined, input.from != null)
+  const mentions = resolveMentions(
+    text,
+    knownWith(actors, found),
+    seen ? input.identity.actor : undefined,
+    input.from != null,
+    input.identity.principal.access.readsAll,
+  )
   await ctx.session.append(...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
@@ -283,8 +398,11 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
 }
 
 /** A message's links, replaced: a platform edit or unfurl changed what it links to. */
-export async function writeLinks(ctx: WriteContext, input: { identity: Identity; id: number; links: Link[]; from: string | null }) {
-  const message = await liveMessage(ctx, input.id)
+export async function writeLinks(
+  ctx: WriteContext,
+  input: { identity: Identity; proof: Proof<'post'>; id: number; links: Link[]; from: string | null },
+) {
+  const message = await liveMessage(ctx, input.id, 'post', input.proof)
   if (message.deleted) return
   await ctx.session.append({
     type: 'message.linked',
@@ -294,9 +412,9 @@ export async function writeLinks(ctx: WriteContext, input: { identity: Identity;
 
 export async function writeDelete(
   ctx: WriteContext,
-  input: { identity: Identity; id: number; from?: string | null; asAuthor?: boolean },
+  input: { identity: Identity; proof: Proof<'post'>; id: number; from?: string | null; asAuthor?: boolean },
 ) {
-  const message = await liveMessage(ctx, input.id)
+  const message = await liveMessage(ctx, input.id, 'post', input.proof)
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can delete a message')
   if (message.deleted) return
@@ -308,9 +426,9 @@ export async function writeDelete(
 
 export async function writeReaction(
   ctx: WriteContext,
-  input: { identity: Identity; id: number; emoji: string; remove?: boolean; from?: string | null },
+  input: { identity: Identity; proof: Proof<'react'>; id: number; emoji: string; remove?: boolean; from?: string | null },
 ) {
-  const message = await liveMessage(ctx, input.id)
+  const message = await liveMessage(ctx, input.id, 'react', input.proof)
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
@@ -328,9 +446,9 @@ export async function writeReaction(
 
 export async function writeLabels(
   ctx: WriteContext,
-  input: { identity: Identity; id: number; set?: Labels | undefined; unset?: string[] | undefined },
+  input: { identity: Identity; proof: Proof<'label'>; id: number; set?: Labels | undefined; unset?: string[] | undefined },
 ) {
-  const message = await liveMessage(ctx, input.id)
+  const message = await liveMessage(ctx, input.id, 'label', input.proof)
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
@@ -349,9 +467,9 @@ export async function writeLabels(
 /** Attaches a thread to an external target. Attaching twice is a no-op. */
 export async function writeAttach(
   ctx: WriteContext,
-  input: { identity: Identity; id: number; target: string },
+  input: { identity: Identity; proof: Proof<'sync'>; id: number; target: string },
 ) {
-  const message = await liveMessage(ctx, input.id)
+  const message = await liveMessage(ctx, input.id, 'sync', input.proof)
   const { target, kind } = await ctx.normalizeTarget(input.target)
   const { state: sync } = await ctx.session.state(syncReducer)
   if (sync.threads[message.thread]?.targets.includes(target)) return { target, attached: false }

@@ -9,12 +9,13 @@ import {
   type ScheduleEvents,
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
-import { FULL_ACCESS } from './access.ts'
+import { authorize, compileAccess, type Access } from './access.ts'
+import type { Principal } from './auth.ts'
 import { actorsReducer, messagesReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
-import { deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
+import { authorizePost, deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
 import { DroppedError } from './middleware.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
@@ -46,16 +47,19 @@ export type Schedule = {
   next: number | null
   /** The last message it posted. */
   last: number | null
-  canceled: { by: Author; reason: 'canceled' | 'thread_deleted' | 'dropped' } | null
+  canceled: { by: Author; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
 }
 
 export type SchedulesState = { byId: Record<string, Schedule> }
+
+/** Until a send works out its creator's access again, a stored identity may do nothing. */
+const NOTHING = compileAccess([])
 
 const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Identity => {
   const { author, principal, actor } = as.payload.as
   return {
     author,
-    principal: { ...principal, access: FULL_ACCESS, expiresAt: null },
+    principal: { ...principal, access: NOTHING, expiresAt: null },
     actor: { ...actor, kind: actorKind(actor.kind) },
   }
 }
@@ -143,12 +147,19 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
 
 const SYSTEM = deploymentIdentity('vboard:schedule', 'schedule')
 
+/** A refusal (a 403, or a 404 for a thread the creator can no longer read) as null; anything else still throws. */
+const refused = (error: unknown): null => {
+  if (error instanceof HttpError && (error.status === 403 || error.status === 404)) return null
+  throw error
+}
+
 /**
  * Scheduled messages: `schedule.created` arms the first send as an A2 timer, and
  * each `schedule.due` posts as the schedule's creator, then arms the next.
  */
 export function createSchedules(options: { store?: A2Store | undefined; scheduler?: A2Scheduler | undefined }) {
   let writes: WriteContext | null = null
+  let accessNow: ((principal: Principal) => Promise<Access | null>) | null = null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
   async function arm(ctx: HandlerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
@@ -157,7 +168,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   }
 
   async function due(ctx: HandlerContext<ScheduleEvents, 'schedule.due'>) {
-    if (!writes) throw new Error('schedules used before the board bound them')
+    if (!writes || !accessNow) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
     const { state } = await ctx.session.state(schedulesReducer)
     const schedule = state.byId[id]
@@ -176,13 +187,23 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         return
       }
     }
+    // Each send has its creator's access under the rules as they are now, never what it had then.
+    const access = await accessNow(schedule.as.principal)
+    const target = schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }
+    const proofs = access && (await authorizePost(writes, access, { ...target, labels: schedule.labels }).catch(refused))
+    if (!access || !proofs) {
+      console.info(`[vboard] schedule s${id}'s creator can no longer post it in ${schedule.channel}`)
+      await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'revoked' } })
+      return
+    }
     // A retry after the post landed gets the same event ID, so A2 hands back the message it already posted.
     let posted: number
     try {
       posted = (
       await writePost(writes, {
         via: { kind: 'schedule', id },
-        identity: schedule.as,
+        identity: { ...schedule.as, principal: { ...schedule.as.principal, access } },
+        proofs,
         id: await idempotentId('vboard-schedule', String(id), String(n)),
         ...(schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }),
         text: schedule.text,
@@ -226,13 +247,15 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   })
   const session = server.session(SCHEDULES_SESSION)
 
-  async function list(query: SchedulesQueryOutput & { root?: number }) {
+  /** `visible`: which schedules the caller may see. */
+  async function list(query: SchedulesQueryOutput & { root?: number }, visible: (schedule: Schedule) => boolean = () => true) {
     if (!writes) throw new Error('schedules used before the board bound them')
     const [{ state }, { state: actors }] = await Promise.all([
       session.state(schedulesReducer),
       writes.session.state(actorsReducer),
     ])
     return Object.values(state.byId)
+      .filter(visible)
       .filter((s) => (query.all ? true : s.next !== null))
       .filter((s) => (query.root === undefined ? true : s.re === query.root))
       .filter((s) => (query.channel === undefined ? true : s.channel === query.channel))
@@ -244,8 +267,9 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   return {
     server,
     session,
-    bind: (binding: { writes: WriteContext }) => {
+    bind: (binding: { writes: WriteContext; accessNow: (principal: Principal) => Promise<Access | null> }) => {
       writes = binding.writes
+      accessNow = binding.accessNow
     },
     list,
     /** The pending schedules that reply in the thread rooted at `root`. */
@@ -268,7 +292,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       // Mentions fail now, where the person scheduling sees it, not at send time.
       const { state: known } = await writes.session.state(actorsReducer)
       const withoutEmails = replaceMentions(body.text, (t) => (t.kind === 'actor' && t.actor.includes('@') ? t.actor : null))
-      resolveMentions(withoutEmails, known, identity.actor)
+      resolveMentions(withoutEmails, known, identity.actor, false, identity.principal.access.readsAll)
 
       let channel = body.channel
       let re: number | null = null
@@ -294,7 +318,13 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
           times: body.times ?? null,
           as: {
             author: identity.author,
-            principal: { id: identity.principal.id, kind: identity.principal.kind, handle: identity.principal.handle },
+            principal: {
+              id: identity.principal.id,
+              kind: identity.principal.kind,
+              handle: identity.principal.handle,
+              ...(identity.principal.facts ? { facts: identity.principal.facts } : {}),
+              ...(identity.principal.scope !== undefined ? { scope: identity.principal.scope } : {}),
+            },
             actor: identity.actor,
           },
         },
@@ -304,12 +334,18 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       return scheduleView(state.byId[row!.index]!, actors)
     },
 
-    /** Anyone may cancel: the board has no per-person permissions. Canceling twice is a no-op. */
+    /**
+     * Its creator may cancel it, and so may `manage` in its channel. Anyone else
+     * gets 403 where they can read it, and 404 where they can't. Canceling twice
+     * is a no-op.
+     */
     async cancel(identity: Identity, id: number): Promise<{ schedule: ScheduleView; canceled: boolean }> {
       if (!writes) throw new Error('schedules used before the board bound them')
       const { state } = await session.state(schedulesReducer)
       const schedule = state.byId[id]
-      if (!schedule) throw notFound(`schedule not found: s${id}`, 'schedule_not_found')
+      const missing = () => notFound(`schedule not found: s${id}`, 'schedule_not_found')
+      if (!schedule) throw missing()
+      if (schedule.as.principal.id !== identity.principal.id) authorize(identity.principal.access, 'manage', schedule.channel, missing)
       const canceled = schedule.next !== null
       if (canceled) await session.append({ type: 'schedule.canceled', payload: { id, by: identity.author, reason: 'canceled' } })
       const { state: after } = await session.state(schedulesReducer)

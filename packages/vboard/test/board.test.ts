@@ -138,8 +138,9 @@ describe('auth', () => {
     const posted = await call('POST', '/messages', { channel: 'errors-www', text: 'deploy failed' })
     expect(posted.status).toBe(201)
     expect(posted.body.message.by.principal).toBe('github:repo:123456')
+    // `['post']` is write-only: what it can't read answers as if it didn't exist.
     const react = await call('POST', `/messages/${posted.body.message.id}/reactions`, { emoji: 'eyes' })
-    expect(react.status).toBe(403)
+    expect(react.status).toBe(404)
 
     const otherWorkflow = caller(fetch, await workflowToken({ workflow_ref: 'basehub-ai/www/.github/workflows/evil.yml@refs/heads/x' }))
     expect((await otherWorkflow('GET', '/me')).status).toBe(403)

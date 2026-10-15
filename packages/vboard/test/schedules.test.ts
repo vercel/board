@@ -75,7 +75,7 @@ describe('scheduled messages', () => {
     expect((await julian('GET', '/schedules?all=1')).body.schedules[0].state).toBe('done')
   })
 
-  it('repeat until canceled when they have no stop, and anyone may cancel', async () => {
+  it('repeat until canceled when they have no stop, and manage may cancel any of them', async () => {
     const { julian, pi, root, replies, advance } = await setup()
     const { body } = await julian('POST', '/schedules', { re: root.id, text: 'still monitoring?', every: '30m' })
     for (let i = 0; i < 5; i++) await advance(30 * MINUTE)

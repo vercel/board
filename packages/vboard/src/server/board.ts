@@ -35,16 +35,19 @@ import { createSyncEngine } from '../sync/engine.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { VERSION } from '../version.ts'
 import { createVerifier, type AccessRule, type AuthOptions, type Principal } from './auth.ts'
-import { authorize, parseScope, type Permission } from './access.ts'
+import { parseScope } from './access.ts'
 import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
-import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
+import { attachmentNotFound, attachmentResponse, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
 import { createSchedules } from './schedules.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
+  authorizeMessage,
+  authorizeOwn,
+  authorizePost,
   writeAttach,
   writeDelete,
   writeEdit,
@@ -273,7 +276,7 @@ export function board(options: BoardOptions = {}) {
     middleware: options.middleware ?? [],
     middlewareClient: () => clientAs(MIDDLEWARE_IDENTITY, null, { via: { kind: 'middleware' } }),
   }
-  const verify = createVerifier({
+  const { verify, accessNow } = createVerifier({
     projectId: () => ownProjectId(options.project),
     teamId: () => ownTeamId(options.project),
     access: options.access ?? [],
@@ -290,7 +293,7 @@ export function board(options: BoardOptions = {}) {
     const scope = request.headers.get('x-board-scope')
     if (scope === null) return principal
     try {
-      return { ...principal, access: principal.access.narrow(parseScope(scope)) }
+      return { ...principal, access: principal.access.narrow(parseScope(scope)), scope }
     } catch (error) {
       throw badRequest((error as Error).message, 'invalid_scope')
     }
@@ -342,20 +345,32 @@ export function board(options: BoardOptions = {}) {
     return { redriven }
   }
 
-  /**
-   * `permission` in `channel` when the route knows it (a root post's is its own),
-   * and otherwise in some channel: a reply's or a target's channel is only known
-   * once the write looks it up.
-   */
-  const require = (principal: Principal, permission: Permission, channel?: string) => {
-    if (channel !== undefined) authorize(principal.access, permission, channel)
-    else if (!principal.access.anywhere(permission)) throw forbidden(`this token can't ${permission} anywhere`)
-  }
-
   /** The board's own bookkeeping spans every channel, so it needs `manage` in all of them. */
   const requireManage = (principal: Principal, what: string) => {
     if (!principal.access.everywhere('manage')) throw forbidden(`${what} needs manage on every channel`)
   }
+
+  /**
+   * Whether `principal` may have a file: one it uploaded, or one a message it
+   * can read carries. A deleted message drops its files, so it no longer counts.
+   */
+  async function attachmentReadable(principal: Principal, id: string, uploadedBy: string | null) {
+    if (principal.access.readsAll || uploadedBy === principal.id) return true
+    const { state } = await session.state(messagesReducer)
+    return Object.values(state.byId).some(
+      (message) => message.attachments.some((file) => file.id === id) && principal.access.readable(message.channel),
+    )
+  }
+
+  /** Files a write carries, as the board stored them: each one the caller may have, or 404 as if it didn't exist. */
+  const attachmentsFor = (principal: Principal, ids: readonly string[] | undefined) =>
+    Promise.all(
+      [...new Set(ids ?? [])].map(async (id) => {
+        const { attachment, uploadedBy } = await readUpload(blob, id)
+        if (!(await attachmentReadable(principal, id, uploadedBy))) throw attachmentNotFound(id)
+        return attachment
+      }),
+    )
 
   /**
    * A client for inbound functions: in-process, writing as `identity`, its posts idempotent
@@ -380,7 +395,7 @@ export function board(options: BoardOptions = {}) {
   }
 
   engine?.bind({ session, writes, clientAs })
-  schedules.bind({ writes })
+  schedules.bind({ writes, accessNow })
   watchers?.bind({ clientAs })
 
   async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
@@ -440,12 +455,28 @@ export function board(options: BoardOptions = {}) {
         }
         case 'channels': {
           const { state, index } = await session.state(channelsReducer)
-          const channels = Object.values(state).sort((a, b) => a.path.localeCompare(b.path))
+          const channels = Object.values(state)
+            .filter((channel) => principal.access.readable(channel.path))
+            .sort((a, b) => a.path.localeCompare(b.path))
           return json({ channels, cursor: index })
         }
         case 'actors': {
           const { state, index } = await session.state(actorsReducer)
+          // A reader of every channel sees everyone; anyone else, who wrote, was mentioned, or reacted where they read, and themselves.
+          let seen: ((id: string) => boolean) | null = null
+          if (!principal.access.readsAll) {
+            const { state: messages } = await session.state(messagesReducer)
+            const ids = new Set([actor.id])
+            for (const message of Object.values(messages.byId)) {
+              if (!principal.access.readable(message.channel)) continue
+              ids.add(message.by.actor)
+              for (const id of message.mentions) ids.add(id)
+              for (const reactors of Object.values(message.reactions)) for (const id of reactors) ids.add(id)
+            }
+            seen = (id) => ids.has(id)
+          }
           const actors = Object.values(state.byId)
+            .filter((a) => seen === null || seen(a.id))
             .sort((a, b) => a.handle.localeCompare(b.handle))
             .map((a) => {
               const person = personView(state, a.id)
@@ -496,7 +527,7 @@ export function board(options: BoardOptions = {}) {
             session.state(messagesReducer),
             session.state(actorsReducer),
           ])
-          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
+          const matches = compileFilter(query, { me: actor.id, actors, messages: state, access: principal.access })
           let found = Object.values(state.byId)
             .filter(matches)
             .sort((a, b) => a.id - b.id)
@@ -506,7 +537,8 @@ export function board(options: BoardOptions = {}) {
             query.after !== undefined
               ? found.filter((m) => m.id > query.after!).slice(0, limit)
               : found.slice(-limit)
-          return json({ messages: found.map((m) => view(m, actors)), cursor: index })
+          const reader = { access: principal.access, messages: state }
+          return json({ messages: found.map((m) => view(m, actors, reader)), cursor: index })
         }
         case 'threads': {
           const query = ThreadsQuery.parse(queryObject(url))
@@ -514,7 +546,8 @@ export function board(options: BoardOptions = {}) {
             session.state(messagesReducer),
             session.state(actorsReducer),
           ])
-          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
+          const matches = compileFilter(query, { me: actor.id, actors, messages: state, access: principal.access })
+          const reader = { access: principal.access, messages: state }
           const roots = new Set<number>()
           for (const message of Object.values(state.byId)) if (matches(message)) roots.add(message.re ?? message.id)
           let found = [...roots].map((id) => {
@@ -526,7 +559,7 @@ export function board(options: BoardOptions = {}) {
           const limit = query.limit ?? 50
           found = query.after !== undefined ? found.filter((t) => t.at > query.after!).slice(0, limit) : found.slice(-limit)
           return json({
-            threads: found.map((t) => ({ message: view(t.root, actors), replies: t.replies, last: t.last && view(t.last, actors) })),
+            threads: found.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
             cursor: index,
           })
         }
@@ -536,21 +569,23 @@ export function board(options: BoardOptions = {}) {
             session.state(actorsReducer),
           ])
           const message = state.byId[match.id!]
-          if (!message) throw notFound(`message not found: #${match.id}`, 'message_not_found')
+          if (!message || !principal.access.readable(message.channel))
+            throw notFound(`message not found: #${match.id}`, 'message_not_found')
           const root = message.re === null ? message : state.byId[message.re]!
-          const replies = (state.replies[root.id] ?? []).map((id) => view(state.byId[id]!, actors))
-          return json({ message: view(root, actors), replies, cursor: index, schedules: await schedules.forThread(root.id) })
+          const reader = { access: principal.access, messages: state }
+          const replies = (state.replies[root.id] ?? []).map((id) => view(state.byId[id]!, actors, reader))
+          return json({ message: view(root, actors, reader), replies, cursor: index, schedules: await schedules.forThread(root.id) })
         }
         case 'post': {
           const body = PostBody.parse(await readJson(request))
-          require(principal, 'post', body.channel)
-          if (body.sync?.length) require(principal, 'sync', body.channel)
+          const proofs = await authorizePost(writes, principal.access, body)
           if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
             throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
-          const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
+          const attachments = await attachmentsFor(principal, body.attachments)
           const message = await writePost(writes, {
             attachments,
             identity,
+            proofs,
             channel: body.channel,
             re: body.re,
             text: body.text,
@@ -564,50 +599,47 @@ export function board(options: BoardOptions = {}) {
         }
         case 'schedule': {
           const body = ScheduleBody.parse(await readJson(request))
-          require(principal, 'post', body.channel)
-          const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
+          // Checked now, where the caller sees it, and again at every send.
+          await authorizePost(writes, principal.access, body)
+          const attachments = await attachmentsFor(principal, body.attachments)
           return json({ schedule: await schedules.create(identity, body, attachments) }, 201)
         }
         case 'schedules': {
           const query = SchedulesQuery.parse(queryObject(url))
           let root: number | undefined
-          if (query.re !== undefined) {
-            const { state } = await session.state(messagesReducer)
-            const message = state.byId[query.re]
-            if (!message) throw notFound(`message not found: #${query.re}`, 'message_not_found')
-            root = message.re ?? message.id
-          }
-          return json({ schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }) })
+          if (query.re !== undefined) root = (await authorizeMessage(writes, principal.access, 'read', query.re)).message.re ?? query.re
+          const visible = (schedule: { channel: string; as: { principal: { id: string } } }) =>
+            principal.access.readable(schedule.channel) || schedule.as.principal.id === principal.id
+          return json({ schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) })
         }
-        case 'cancelSchedule': {
-          require(principal, 'post')
+        case 'cancelSchedule':
           return json(await schedules.cancel(identity, match.id!))
-        }
         case 'edit': {
-          require(principal, 'post')
+          const { proof } = await authorizeOwn(writes, principal, match.id!, 'edit')
           const body = EditBody.parse(await readJson(request))
-          await writeEdit(writes, { identity, id: match.id!, text: body.text, ...origin })
+          await writeEdit(writes, { identity, proof, id: match.id!, text: body.text, ...origin })
           return json({ ok: true })
         }
         case 'delete': {
-          require(principal, 'post')
-          await writeDelete(writes, { identity, id: match.id! })
+          const { proof } = await authorizeOwn(writes, principal, match.id!, 'delete')
+          await writeDelete(writes, { identity, proof, id: match.id! })
           return json({ ok: true })
         }
         case 'react': {
-          require(principal, 'react')
+          const { proof } = await authorizeMessage(writes, principal.access, 'react', match.id!)
           const body = ReactBody.parse(await readJson(request))
-          await writeReaction(writes, { identity, id: match.id!, emoji: body.emoji, remove: body.remove })
+          await writeReaction(writes, { identity, proof, id: match.id!, emoji: body.emoji, remove: body.remove })
           return json({ ok: true })
         }
         case 'label': {
-          require(principal, 'label')
+          const { proof } = await authorizeMessage(writes, principal.access, 'label', match.id!)
           const body = LabelBody.parse(await readJson(request))
-          await writeLabels(writes, { identity, id: match.id!, set: body.set, unset: body.unset })
+          await writeLabels(writes, { identity, proof, id: match.id!, set: body.set, unset: body.unset })
           return json({ ok: true })
         }
         case 'upload': {
-          require(principal, 'post')
+          // A file is no use until a post carries it, so uploading needs `post` somewhere.
+          if (!principal.access.anywhere('post')) throw forbidden("this token can't post anywhere, so it can't upload")
           const name = request.headers.get('x-board-filename')
           let decoded: string | null = null
           try {
@@ -619,21 +651,24 @@ export function board(options: BoardOptions = {}) {
             data: await readCapped(request, ATTACHMENT_BYTES_MAX),
             name: decoded,
             type: request.headers.get('content-type'),
+            uploadedBy: principal.id,
           })
           return json({ attachment }, 201)
         }
-        case 'attachment':
-          return await attachmentResponse(blob, match.param!)
+        case 'attachment': {
+          const { attachment, uploadedBy } = await readUpload(blob, match.param!)
+          if (!(await attachmentReadable(principal, attachment.id, uploadedBy))) throw attachmentNotFound(attachment.id)
+          return await attachmentResponse(blob, attachment)
+        }
         case 'sync': {
-          require(principal, 'sync')
+          const { proof } = await authorizeMessage(writes, principal.access, 'sync', match.id!)
           const body = SyncBody.parse(await readJson(request))
-          return json(await writeAttach(writes, { identity, id: match.id!, target: body.target }))
+          return json(await writeAttach(writes, { identity, proof, id: match.id!, target: body.target }))
         }
         case 'typing': {
-          require(principal, 'post')
-          const { state } = await session.state(messagesReducer)
-          const message = state.byId[match.id!]
-          if (!message || message.deleted) throw notFound(`message not found: #${match.id}`, 'message_not_found')
+          // Typing is a reply about to come: `post` and `read` where the thread is.
+          const { message } = await authorizeMessage(writes, principal.access, 'post', match.id!)
+          if (message.deleted) throw notFound(`message not found: #${match.id}`, 'message_not_found')
           const { status } = TypingBody.parse(await readJson(request)) ?? {}
           const body: TypingResult = { targets: engine ? await engine.typing(message.thread, status) : [] }
           return json(body)
@@ -667,7 +702,7 @@ export function board(options: BoardOptions = {}) {
           const after =
             query.after ?? (Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : undefined)
           const { state: actors } = await session.state(actorsReducer)
-          const feedOptions = { session, after, filters: query, all: query.all ?? false, me: actor.id, actors }
+          const feedOptions = { session, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
           if ((request.headers.get('accept') ?? '').includes('text/event-stream'))
             return sse(feedOptions, request.signal, streamMaxMs)
           return json(await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal))

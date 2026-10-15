@@ -213,7 +213,7 @@ export type ScheduleView = {
   /** The last message it posted. */
   last: number | null
   state: 'pending' | 'done' | 'canceled'
-  canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' } | null
+  canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
   by: { actor: string; principal: string; profile: string | null; session: string | null }
   author: ActorView
   createdAt: string

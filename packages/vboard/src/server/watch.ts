@@ -5,6 +5,7 @@ import { parseWatchTail } from '../api/tail.ts'
 import type { BoardClient } from '../client/client.ts'
 import { watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
+import { FULL_ACCESS } from './access.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 
@@ -164,7 +165,7 @@ export function createWatchers(options: {
     for (const watcher of watchers) {
       if (by === watcher.identity.actor.id) continue
       if (RECEIPTS.has(event.type) && !watcher.all) continue
-      const match = compileFilter(watcher.filters, { me: null, actors, messages })
+      const match = compileFilter(watcher.filters, { me: null, actors, messages, access: FULL_ACCESS })
       if (watcher.enters ? !entered(match, before, after, messages) : !(watcher.criteria ? match(before) || match(after) : id !== null))
         continue
       view ??= eventView(event, after, actors)
