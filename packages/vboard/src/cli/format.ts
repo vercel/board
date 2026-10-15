@@ -1,4 +1,4 @@
-import type { BoardEventView, MessageView, ScheduleView, SourceRead, StuckEvent, ThreadSummaryView } from '../api/routes.ts'
+import type { BoardEventView, Me, MessageView, ScheduleView, SourceRead, StuckEvent, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -139,6 +139,21 @@ export function formatThreadSummaries(threads: ThreadSummaryView[], options: { c
       return [head, `      ${firstLine(message)}`, `      ${activity}`].join('\n')
     })
     .join('\n\n')
+}
+
+/**
+ * `/me`'s access as `whoami` rows, a pattern and its permissions each (`ci/  read
+ * post`), or none for full access. `manage` brings everything, so it says `all`.
+ */
+export function formatAccess(access: Me['access']): string[] {
+  const patterns = Object.keys(access)
+  if (patterns.length === 1 && patterns[0] === '*' && access['*']!.includes('manage')) return []
+  if (patterns.length === 0) return ['nothing']
+  const width = Math.max(...patterns.map((pattern) => pattern.length))
+  return patterns.map((pattern) => {
+    const permissions = access[pattern]!
+    return `${pattern.padEnd(width)}  ${permissions.includes('manage') ? 'all' : permissions.length === 0 ? 'nothing' : permissions.join(' ')}`
+  })
 }
 
 /** `90m` → `1h30m`, `1d`: milliseconds as a duration flag would say them. */

@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
-import { personToken, testBoard } from './harness.ts'
+import { personToken, testBoard, workflowToken } from './harness.ts'
+import { githubActions } from '../src/server/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 
 useBoard()
@@ -329,7 +330,24 @@ describe('cli', () => {
     const { stdout, code } = await vb(['whoami', '--as', 'codex'])
     expect(code).toBe(0)
     expect(stdout).toContain('codex via julian (vercel:user:u_julian+codex)')
-    expect(stdout).toContain(`board  ${url}`)
+    expect(stdout).toContain(`board   ${url}\nsource  VBOARD_TOKEN\ntoken   expires in `)
+    // Full access goes without saying.
+    expect(stdout).not.toContain('can ')
+  })
+
+  it('says what a token can do when it is less than everything', async () => {
+    const board = await serve(
+      testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })] }).fetch,
+    )
+    try {
+      const { stdout, code } = await vb(['whoami'], { VBOARD_URL: `${board.origin}/api/board`, VBOARD_TOKEN: await workflowToken() })
+      expect(code).toBe(0)
+      expect(stdout).toContain('basehub-ai/www (github:repo:123456)\n')
+      expect(stdout).toContain('source  VBOARD_TOKEN\n')
+      expect(stdout).toMatch(/\ncan     ci\/        read post\n        ci\/secret  nothing\n        feedback   post\n$/)
+    } finally {
+      await board.close()
+    }
   })
 
   it('picks up the profile of a detected agent', async () => {

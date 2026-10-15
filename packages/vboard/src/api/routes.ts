@@ -12,6 +12,7 @@ import {
 } from '../contract/schemas.ts'
 import type { BoardEvent } from '../contract/contract.ts'
 import type { Actor, Channel, Message } from '../contract/reducers.ts'
+import type { AccessSummary } from '../server/access.ts'
 
 const id = z.coerce.number().int().positive()
 const repeated = z
@@ -264,6 +265,8 @@ export type Me = {
   profile: string | null
   session: string | null
   expiresAt: string | null
+  /** What you may do in each channel pattern, implications included: `{ '*': [...every permission] }` is full access. */
+  access: AccessSummary
 }
 
 /** A platform account linked to you, as `GET /identity` lists it. */

@@ -36,6 +36,7 @@ import type { IdentityChallenge, LinkedAccount } from '../api/routes.ts'
 import { actorSeen } from '../server/actors.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
+import { FULL_ACCESS } from '../server/access.ts'
 import type { BoardSession } from '../server/board.ts'
 import { badRequest, forbidden, HttpError, notFound } from '../server/errors.ts'
 import {
@@ -231,7 +232,7 @@ export function createSyncEngine(options: {
   // --- inbound: inbox → board -------------------------------------------------------
 
   const externalIdentity = (author: { id: string; handle: string; name: string; avatar: string | null }): Identity => {
-    const principal: Principal = { id: author.id, kind: 'external', handle: author.handle, can: 'all', expiresAt: null }
+    const principal: Principal = { id: author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
     return {
       principal,
       author: { actor: author.id, principal: author.id, profile: null, session: null },

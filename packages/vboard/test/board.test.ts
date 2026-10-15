@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubActions, vercel } from '../src/server/index.ts'
+import { githubActions, vercelProject } from '../src/server/index.ts'
 import {
   BOARD_URL,
   caller,
@@ -119,18 +119,18 @@ describe('auth', () => {
     expect(await claude.text()).toContain('<path') // the mark, not a letter
   })
 
-  it('rejects other projects unless trusted', async () => {
+  it('rejects other projects unless access lists them', async () => {
     const call = caller(testBoard().fetch, await deploymentToken())
     expect((await call('GET', '/me')).status).toBe(403)
 
-    const trusted = testBoard({ trustedSources: [vercel({ project: 'marketing' })] })
+    const trusted = testBoard({ access: [vercelProject({ project: 'marketing', can: 'all' })] })
     const { body } = await caller(trusted.fetch, await deploymentToken())('GET', '/me')
     expect(body).toMatchObject({ actor: 'vercel:project:prj_marketing:production', handle: 'marketing' })
   })
 
-  it('limits a trusted workflow to what `can` allows', async () => {
+  it('limits a workflow to what `can` allows', async () => {
     const { fetch } = testBoard({
-      trustedSources: [
+      access: [
         githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] }),
       ],
     })

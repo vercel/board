@@ -60,6 +60,8 @@ export type ClientOptions = {
   handle?: Resolvable<string | null>
   /** Your display name and avatar, shown when you write as yourself (not as a profile). */
   person?: Resolvable<{ name?: string | null; avatar?: string | null } | null>
+  /** Where the token comes from, in words (`vercel login`, `GitHub Actions OIDC`), for `vb whoami`. */
+  source?: Resolvable<string | null>
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
@@ -247,6 +249,8 @@ export function createBoardClient(options: ClientOptions) {
       }),
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
+    /** Which credential this client sends, in words, or null when it was handed a token. It makes no request of its own. */
+    source: async () => (options.source === undefined ? null : await resolve(options.source)),
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
     actors: async () => (await call<{ actors: (Actor & { person?: ActorView['person'] })[] }>('GET', '/actors')).actors,
 

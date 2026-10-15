@@ -266,28 +266,38 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
     }))
 
   let cached: Cached | null = null
+  let source: string | null = null
   let person: Promise<Cached> | null = null
+  // `source` says which of these it picked, for `vb whoami`.
   const mint = async (): Promise<Cached> => {
     if (process.env.VBOARD_TOKEN) {
       const token = process.env.VBOARD_TOKEN
+      source = 'VBOARD_TOKEN'
       return { token, expiresAt: expiry(token) }
     }
     const local = localToken(url)
-    if (local) return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
+    if (local) {
+      source = 'vb serve'
+      return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
+    }
     const discovered = await discover()
     const audience = url
     if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
       const token = await githubActionsToken(audience)
+      source = 'GitHub Actions OIDC'
       return { token, expiresAt: expiry(token) }
     }
     if (process.env.VERCEL === '1') {
       const token = await getVercelOidcToken({ audience })
+      source = 'Vercel OIDC'
       return { token, expiresAt: expiry(token) }
     }
     person ??= personToken(audience, discovered).finally(() => {
       person = null
     })
-    return person
+    const minted = await person
+    source = 'vercel login'
+    return minted
   }
   const token = async () => {
     if (!cached || cached.expiresAt - 60_000 < Date.now()) cached = await mint()
@@ -328,6 +338,14 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
             if (options.token !== undefined) return null
             await token()
             return cached ? { name: cached.name ?? null, avatar: cached.avatar ?? null } : null
+          },
+    source:
+      options.source !== undefined
+        ? options.source
+        : async () => {
+            if (options.token !== undefined) return null
+            await token()
+            return source
           },
     ...(options.headers !== undefined ? { headers: options.headers } : {}),
     fetch: doFetch,

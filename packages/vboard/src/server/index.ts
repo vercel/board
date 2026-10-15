@@ -2,13 +2,14 @@ export { board, type BoardOptions } from './board.ts'
 export { type Watcher, type WatcherContext } from './watch.ts'
 export { memoryBlob, fsBlob, type BlobStore } from './blob.ts'
 export {
-  vercel,
+  vercelProject,
   githubActions,
-  type Capability,
-  type TrustedSource,
+  oidc,
+  type AccessRule,
   type AuthOptions,
   type IssuerConfig,
 } from './auth.ts'
+export { type Permission, type ChannelPattern, type Grant, type Can, type AccessSummary } from './access.ts'
 export {
   DroppedError,
   type Middleware,

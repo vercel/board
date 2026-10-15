@@ -51,7 +51,7 @@ function setup() {
   }
   const s = fakePlatform('slack', withSlackClient(web, false))
   const board = testBoard({
-    trustedSources: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
+    access: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
     sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient, channels: { C1: 'firehose' } }) },
   })
   const webhook = (body: unknown) =>
@@ -148,12 +148,12 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     expect((await julian('GET', '/inbox/slack?channel=CKIT')).body.events ?? []).toEqual([])
   })
 
-  it('needs full access, since the app reads more than the caller may', async () => {
+  it('needs manage, since the app reads more than the caller may', async () => {
     const { board } = setup()
     const workflow = caller(board.fetch, await workflowToken())
     const denied = await read(workflow, '#project-vercel-kit')
     expect(denied.status).toBe(403)
-    expect(denied.body.error.message).toContain('full access')
+    expect(denied.body.error.message).toContain('needs manage on every channel')
   })
 
   it('prints a channel with how to open each thread', () => {

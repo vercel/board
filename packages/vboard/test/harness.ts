@@ -7,6 +7,8 @@ export const PROJECT_ID = 'prj_board'
 export const TEAM_ID = 'team_test'
 export const VERCEL_ISS = 'https://oidc.vercel.com/test'
 export const GITHUB_ISS = 'https://token.actions.githubusercontent.com'
+/** Some other OIDC issuer, for `oidc()`. */
+export const OIDC_ISS = 'https://gitlab.test'
 
 const { publicKey, privateKey } = await generateKeyPair('RS256')
 const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'RS256' }
@@ -16,6 +18,7 @@ const jwks = createLocalJWKSet({ keys: [jwk] })
 export const testAuth = {
   vercel: { issuer: VERCEL_ISS, jwks },
   github: { issuer: GITHUB_ISS, jwks },
+  oidc: { [OIDC_ISS]: jwks },
 }
 
 /** A board on a memory store whose tokens come from a local test issuer. */
@@ -82,6 +85,10 @@ export const workflowToken = (claims: Record<string, unknown> = {}) =>
     },
     GITHUB_ISS,
   )
+
+/** A token from another OIDC issuer, GitLab's shape by default. */
+export const oidcToken = (claims: Record<string, unknown> = {}, issuer = OIDC_ISS) =>
+  sign({ sub: 'project_path:acme/api:ref_type:branch:ref:main', project_path: 'acme/api', ref: 'main', ...claims }, issuer)
 
 /** Calls the board in-process, like a client would over HTTP. */
 export function caller(handler: (request: Request) => Promise<Response>, token: string, headers: Record<string, string> = {}) {

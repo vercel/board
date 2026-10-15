@@ -5,32 +5,36 @@ import {
   type JWTPayload,
   type JWTVerifyGetKey,
 } from 'jose'
+import { compileAccess, FULL_ACCESS, type Access, type Can } from './access.ts'
 import { unauthorized, forbidden } from './errors.ts'
-
-export type Capability = 'post' | 'react' | 'label' | 'sync'
 
 /** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
 export type PrincipalKind = 'person' | 'deployment' | 'workflow' | 'external'
 
 export type Principal = {
-  /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`. */
+  /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`, `oidc:<issuer>:<sub>`. */
   id: string
   kind: PrincipalKind
   /** The default handle; a person's is replaced by the handle their CLI sends. */
   handle: string
-  can: 'all' | ReadonlySet<Capability>
+  /** What it may do in each channel, narrowed by `x-board-scope` when a proxy sent one. */
+  access: Access
   expiresAt: Date | null
 }
 
 type Claims = JWTPayload & Record<string, unknown>
 
-/** What a rule may compare claims to: the board's own Vercel team, when it's known. */
-export type MatchContext = { teamId: string | null }
+/** What a rule may compare claims to: the board's own Vercel team and project, when they're known. */
+export type MatchContext = { teamId: string | null; projectId: string | null }
 
-export type TrustedSource = {
-  issuer: 'vercel' | 'github'
+/** One entry in `board({ access })`: who it matches, and what they may do. The first entry that matches decides. */
+export type AccessRule = {
+  /** `vercel` and `github` are their platforms' issuers; `oidc` is the exact `url`. */
+  issuer: 'vercel' | 'github' | 'oidc'
+  /** For `oidc`: the issuer URL, pinned in code. */
+  url?: string
   matches(claims: Claims, context: MatchContext): boolean
-  can?: readonly Capability[]
+  access: Access
 }
 
 const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) =>
@@ -38,32 +42,39 @@ const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) 
   (typeof value === 'string' && (typeof allowed === 'string' ? [allowed] : allowed).includes(value))
 
 /**
- * Trust another Vercel project's deployments. Matches project by name or ID.
- * A name is only unique within a team, so without `team` it means the board's
- * own team, and matches nothing when that isn't known. An ID is unique on
- * Vercel, so it matches on any team.
+ * A Vercel project's deployments, by name or ID. A name is only unique within
+ * a team, so without `team` it means the board's own team, and matches nothing
+ * when that isn't known. An ID is unique on Vercel, so it matches on any team.
+ * `'self'` is the board's own project: its production deployment has full
+ * access unless a rule says otherwise, and its preview and custom environments
+ * have none unless one lists them. Its development tokens are people, which no
+ * rule changes.
  */
-export function vercel(options: {
+export function vercelProject(options: {
   project: string
   team?: string
   environments?: readonly string[]
-  can?: readonly Capability[]
-}): TrustedSource {
+  can: Can
+}): AccessRule {
+  if (options.project === 'self' && options.team !== undefined)
+    throw new Error("vercelProject({ project: 'self' }) is the board's own project: drop team")
   return {
     issuer: 'vercel',
-    can: options.can,
-    matches: (claims, { teamId }) =>
-      (claims.project_id === options.project ||
-        (claims.project === options.project &&
-          (options.team === undefined
-            ? teamId !== null && claims.owner_id === teamId
-            : claims.owner === options.team || claims.owner_id === options.team))) &&
+    access: compileAccess(options.can),
+    matches: (claims, { teamId, projectId }) =>
+      (options.project === 'self'
+        ? projectId !== null && claims.project_id === projectId
+        : claims.project_id === options.project ||
+          (claims.project === options.project &&
+            (options.team === undefined
+              ? teamId !== null && claims.owner_id === teamId
+              : claims.owner === options.team || claims.owner_id === options.team))) &&
       oneOf(claims.environment, options.environments),
   }
 }
 
 /**
- * Trust a GitHub Actions workflow. A `pull_request` run's token carries
+ * A GitHub Actions workflow. A `pull_request` run's token carries
  * `ref: refs/pull/<n>/merge`, so match those on `event` and `workflow`, not `ref`.
  */
 export function githubActions(options: {
@@ -71,11 +82,11 @@ export function githubActions(options: {
   event?: string | readonly string[]
   workflow?: string
   ref?: string
-  can?: readonly Capability[]
-}): TrustedSource {
+  can: Can
+}): AccessRule {
   return {
     issuer: 'github',
-    can: options.can,
+    access: compileAccess(options.can),
     matches: (claims) =>
       claims.repository === options.repository &&
       oneOf(claims.event_name, options.event) &&
@@ -83,6 +94,38 @@ export function githubActions(options: {
       (options.workflow === undefined ||
         (typeof claims.workflow_ref === 'string' &&
           claims.workflow_ref.startsWith(`${options.repository}/${options.workflow}@`))),
+  }
+}
+
+/**
+ * Any OIDC issuer's tokens: GitLab, Buildkite, a cloud's workload identity.
+ * The issuer is pinned here, and only issuers some rule names are trusted or
+ * have their keys fetched. Every listed claim must match exactly (a list is
+ * any of its values), and there must be at least one, since an issuer signs
+ * tokens for everyone it serves. The principal is `oidc:<issuer host and path>:<sub>`.
+ */
+export function oidc(options: {
+  issuer: string
+  claims: Readonly<Record<string, string | readonly string[]>>
+  can: Can
+}): AccessRule {
+  let url: URL
+  try {
+    url = new URL(options.issuer)
+  } catch {
+    throw new Error(`oidc: issuer must be a URL, got ${options.issuer}`)
+  }
+  if (url.protocol !== 'https:' || url.search || url.hash)
+    throw new Error(`oidc: issuer must be an https URL with no query, got ${options.issuer}`)
+  if (VERCEL_ISSUER.test(options.issuer)) throw new Error('oidc: use vercelProject() for Vercel tokens')
+  if (options.issuer === GITHUB_ISSUER) throw new Error('oidc: use githubActions() for GitHub Actions tokens')
+  const required = Object.entries(options.claims)
+  if (required.length === 0) throw new Error(`oidc: name at least one claim to match for ${options.issuer}`)
+  return {
+    issuer: 'oidc',
+    url: options.issuer,
+    access: compileAccess(options.can),
+    matches: (claims) => required.every(([name, allowed]) => oneOf(claims[name], allowed)),
   }
 }
 
@@ -97,6 +140,8 @@ export type IssuerConfig = {
 export type AuthOptions = {
   vercel?: IssuerConfig
   github?: IssuerConfig
+  /** Keys for `oidc()` issuers, by issuer URL, instead of their published JWKS. It trusts no issuer by itself. */
+  oidc?: Readonly<Record<string, JWTVerifyGetKey>>
   /**
    * A local board's own issuer (`vb serve`): its tokens' `sub` is a person on
    * this machine, `local:user:<sub>`, with full access. Its keys are never
@@ -116,7 +161,7 @@ const remoteKeys = new Map<string, JWTVerifyGetKey>()
 async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
   const cached = remoteKeys.get(iss)
   if (cached) return cached
-  const response = await fetch(`${iss}/.well-known/openid-configuration`)
+  const response = await fetch(`${iss.replace(/\/+$/, '')}/.well-known/openid-configuration`)
   if (!response.ok) throw unauthorized(`cannot load keys for issuer ${iss}`)
   const { jwks_uri } = (await response.json()) as { jwks_uri: string }
   const keys = createRemoteJWKSet(new URL(jwks_uri))
@@ -124,27 +169,28 @@ async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
   return keys
 }
 
+/** `gitlab.com`, `example.com/oidc`: an issuer as a principal names it. */
+const issuerName = (iss: string) => {
+  const url = new URL(iss)
+  return `${url.host}${url.pathname.replace(/\/+$/, '')}`
+}
+
 export function createVerifier(options: {
   projectId: () => Promise<string | null>
   /** The board's team from config or the environment; the platform's token is the fallback. */
   teamId: () => Promise<string | null>
-  trustedSources: readonly TrustedSource[]
+  access: readonly AccessRule[]
   auth?: AuthOptions
 }) {
   const vercelIssuer = options.auth?.vercel ?? { issuer: VERCEL_ISSUER }
   const githubIssuer = options.auth?.github ?? { issuer: GITHUB_ISSUER }
+  // The only issuers past Vercel's and GitHub's whose tokens are verified, or whose keys are fetched.
+  const oidcIssuers = new Set(options.access.flatMap((rule) => (rule.issuer === 'oidc' ? [rule.url!] : [])))
 
-  const fromSource = (
-    issuer: TrustedSource['issuer'],
-    claims: Claims,
-    context: MatchContext,
-  ): ReadonlySet<Capability> | 'all' | null => {
-    const source = options.trustedSources.find(
-      (candidate) => candidate.issuer === issuer && candidate.matches(claims, context),
-    )
-    if (!source) return null
-    return source.can ? new Set(source.can) : 'all'
-  }
+  const ruleFor = (issuer: AccessRule['issuer'], claims: Claims, context: MatchContext, url?: string): Access | null =>
+    options.access.find(
+      (rule) => rule.issuer === issuer && (url === undefined || rule.url === url) && rule.matches(claims, context),
+    )?.access ?? null
 
   let platformTeam: string | null = null
   /**
@@ -177,12 +223,14 @@ export function createVerifier(options: {
 
     const isVercel = issuerMatches(iss, vercelIssuer.issuer)
     const isGitHub = !isVercel && issuerMatches(iss, githubIssuer.issuer)
-    if (!isVercel && !isGitHub) throw unauthorized(`untrusted issuer: ${iss || '(none)'}`)
-    const config = isVercel ? vercelIssuer : githubIssuer
+    const isOidc = !isVercel && !isGitHub && oidcIssuers.has(iss)
+    if (!isVercel && !isGitHub && !isOidc) throw unauthorized(`untrusted issuer: ${iss || '(none)'}`)
 
     let claims: Claims
     try {
-      const keys = config.jwks ?? (await keysFor(iss))
+      const keys = isOidc
+        ? (options.auth?.oidc?.[iss] ?? (await keysFor(iss)))
+        : ((isVercel ? vercelIssuer : githubIssuer).jwks ?? (await keysFor(iss)))
       ;({ payload: claims } = (await jwtVerify(token, keys, { issuer: iss, audience })) as {
         payload: Claims
       })
@@ -192,14 +240,27 @@ export function createVerifier(options: {
     }
     const expiresAt = claims.exp ? new Date(claims.exp * 1000) : null
 
+    if (isOidc) {
+      const access = ruleFor('oidc', claims, { teamId: null, projectId: null }, iss)
+      if (!access) throw forbidden(`this token from ${iss} isn't in access`)
+      if (typeof claims.sub !== 'string' || claims.sub === '') throw unauthorized(`token from ${iss} without sub`)
+      return {
+        id: `oidc:${issuerName(iss)}:${claims.sub}`,
+        kind: 'workflow',
+        handle: claims.sub.slice(0, 128),
+        access,
+        expiresAt,
+      }
+    }
+
     if (isGitHub) {
-      const can = fromSource('github', claims, { teamId: null })
-      if (!can) throw forbidden(`workflow is not a trusted source: ${String(claims.repository)}`)
+      const access = ruleFor('github', claims, { teamId: null, projectId: null })
+      if (!access) throw forbidden(`workflow isn't in access: ${String(claims.repository)}`)
       return {
         id: `github:repo:${String(claims.repository_id)}`,
         kind: 'workflow',
         handle: String(claims.repository),
-        can,
+        access,
         expiresAt,
       }
     }
@@ -207,27 +268,31 @@ export function createVerifier(options: {
     const environment = String(claims.environment ?? '')
     const project = String(claims.project ?? '')
     const ownProject = (await options.projectId()) ?? null
-    if (ownProject !== null && claims.project_id === ownProject) {
-      if (environment === 'development') {
-        // A development token minted with someone's Vercel login carries their user ID.
-        if (typeof claims.user_id !== 'string')
-          throw unauthorized('development token without user_id')
-        return {
-          id: `vercel:user:${claims.user_id}`,
-          kind: 'person',
-          handle: `user-${claims.user_id.slice(0, 6).toLowerCase()}`,
-          can: 'all',
-          expiresAt,
-        }
+    const own = ownProject !== null && claims.project_id === ownProject
+    if (own && environment === 'development') {
+      // A development token minted with someone's Vercel login carries their user ID.
+      if (typeof claims.user_id !== 'string')
+        throw unauthorized('development token without user_id')
+      return {
+        id: `vercel:user:${claims.user_id}`,
+        kind: 'person',
+        handle: `user-${claims.user_id.slice(0, 6).toLowerCase()}`,
+        access: FULL_ACCESS,
+        expiresAt,
       }
-      return deployment(claims, project, environment, 'all', expiresAt)
     }
-    const teamId = options.trustedSources.some((source) => source.issuer === 'vercel')
+    const teamId = options.access.some((rule) => rule.issuer === 'vercel')
       ? ((await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)))
       : null
-    const can = fromSource('vercel', claims, { teamId })
-    if (!can) throw forbidden(`project is not a trusted source: ${project || String(claims.project_id)}`)
-    return deployment(claims, project, environment, can, expiresAt)
+    const access = ruleFor('vercel', claims, { teamId, projectId: ownProject })
+    if (access) return deployment(claims, project, environment, access, expiresAt)
+    // The board's own production is the board; its previews run any branch's code.
+    if (own && environment === 'production') return deployment(claims, project, environment, FULL_ACCESS, expiresAt)
+    if (own)
+      throw forbidden(
+        `this project's ${environment || 'unnamed'} deployments aren't in access: add vercelProject({ project: 'self', environments: ['${environment}'], can })`,
+      )
+    throw forbidden(`project isn't in access: ${project || String(claims.project_id)}`)
   }
 }
 
@@ -246,7 +311,7 @@ async function localPerson(token: string, local: NonNullable<AuthOptions['local'
     id: `local:user:${sub}`,
     kind: 'person',
     handle: sub,
-    can: 'all',
+    access: FULL_ACCESS,
     expiresAt: claims.exp ? new Date(claims.exp * 1000) : null,
   }
 }
@@ -255,15 +320,12 @@ const deployment = (
   claims: Claims,
   project: string,
   environment: string,
-  can: Principal['can'],
+  access: Access,
   expiresAt: Date | null,
 ): Principal => ({
   id: `vercel:project:${String(claims.project_id)}:${environment}`,
   kind: 'deployment',
   handle: environment === 'production' ? project : `${project}@${environment}`,
-  can,
+  access,
   expiresAt,
 })
-
-export const allows = (principal: Principal, capability: Capability) =>
-  principal.can === 'all' || principal.can.has(capability)

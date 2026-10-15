@@ -13,6 +13,7 @@ import {
 } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
+import { FULL_ACCESS } from './access.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
@@ -25,10 +26,10 @@ import { runMiddleware, type Middleware, type WriteSource } from './middleware.t
 /** Who a write is attributed to. */
 export type Identity = { principal: Principal; author: Author; actor: Actor }
 
-/** A piece of the board's own deployment, writing as `actor` with all capabilities. */
+/** A piece of the board's own deployment, writing as `actor` with full access. */
 export function deploymentIdentity(actor: string, handle: string): Identity {
   return {
-    principal: { id: actor, kind: 'deployment', handle, can: 'all', expiresAt: null },
+    principal: { id: actor, kind: 'deployment', handle, access: FULL_ACCESS, expiresAt: null },
     author: { actor, principal: actor, profile: null, session: null },
     actor: { id: actor, kind: 'deployment', handle, name: handle, avatar: null },
   }

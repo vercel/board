@@ -9,6 +9,7 @@ import {
   type ScheduleEvents,
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
+import { FULL_ACCESS } from './access.ts'
 import { actorsReducer, messagesReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
@@ -54,7 +55,7 @@ const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Identity 
   const { author, principal, actor } = as.payload.as
   return {
     author,
-    principal: { ...principal, can: 'all', expiresAt: null },
+    principal: { ...principal, access: FULL_ACCESS, expiresAt: null },
     actor: { ...actor, kind: actorKind(actor.kind) },
   }
 }

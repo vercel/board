@@ -34,14 +34,8 @@ import { createBoardClient, type BoardClient } from '../client/client.ts'
 import { createSyncEngine } from '../sync/engine.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { VERSION } from '../version.ts'
-import {
-  allows,
-  createVerifier,
-  type AuthOptions,
-  type Capability,
-  type Principal,
-  type TrustedSource,
-} from './auth.ts'
+import { createVerifier, type AccessRule, type AuthOptions, type Principal } from './auth.ts'
+import { authorize, parseScope, type Permission } from './access.ts'
 import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
 import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
@@ -69,8 +63,12 @@ export type BoardOptions = {
   store?: A2Store
   /** Required for sync in production, and for scheduled messages. Mount the board's `scheduler` as `POST` in its own route. */
   scheduler?: A2Scheduler
-  /** Machines outside this project that may call the board. */
-  trustedSources?: readonly TrustedSource[]
+  /**
+   * Who may call the board besides its people and its own production, and what
+   * they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`.
+   * The first rule that matches a token decides.
+   */
+  access?: readonly AccessRule[]
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
   sync?: Record<string, SyncProvider>
   /**
@@ -278,7 +276,7 @@ export function board(options: BoardOptions = {}) {
   const verify = createVerifier({
     projectId: () => ownProjectId(options.project),
     teamId: () => ownTeamId(options.project),
-    trustedSources: options.trustedSources ?? [],
+    access: options.access ?? [],
     ...(options.auth ? { auth: options.auth } : {}),
   })
   const streamMaxMs = options.streamMaxMs ?? 280_000
@@ -287,7 +285,15 @@ export function board(options: BoardOptions = {}) {
     const header = request.headers.get('authorization') ?? ''
     const token = header.match(/^Bearer\s+(.+)$/i)?.[1]
     if (!token) throw unauthorized('missing bearer token')
-    return verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
+    const principal = await verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
+    // Set by a proxy that holds the credential (Pi's sandbox); it only narrows.
+    const scope = request.headers.get('x-board-scope')
+    if (scope === null) return principal
+    try {
+      return { ...principal, access: principal.access.narrow(parseScope(scope)) }
+    } catch (error) {
+      throw badRequest((error as Error).message, 'invalid_scope')
+    }
   }
 
   /** The sessions whose handlers run on lanes, so a dead letter there stops the rest of its lane. */
@@ -336,8 +342,19 @@ export function board(options: BoardOptions = {}) {
     return { redriven }
   }
 
-  const require = (principal: Principal, capability: Capability) => {
-    if (!allows(principal, capability)) throw forbidden(`this source may not ${capability}`)
+  /**
+   * `permission` in `channel` when the route knows it (a root post's is its own),
+   * and otherwise in some channel: a reply's or a target's channel is only known
+   * once the write looks it up.
+   */
+  const require = (principal: Principal, permission: Permission, channel?: string) => {
+    if (channel !== undefined) authorize(principal.access, permission, channel)
+    else if (!principal.access.anywhere(permission)) throw forbidden(`this token can't ${permission} anywhere`)
+  }
+
+  /** The board's own bookkeeping spans every channel, so it needs `manage` in all of them. */
+  const requireManage = (principal: Principal, what: string) => {
+    if (!principal.access.everywhere('manage')) throw forbidden(`${what} needs manage on every channel`)
   }
 
   /**
@@ -417,6 +434,7 @@ export function board(options: BoardOptions = {}) {
             profile: author.profile,
             session: author.session,
             expiresAt: principal.expiresAt?.toISOString() ?? null,
+            access: principal.access.summary(),
           }
           return json(body)
         }
@@ -524,9 +542,9 @@ export function board(options: BoardOptions = {}) {
           return json({ message: view(root, actors), replies, cursor: index, schedules: await schedules.forThread(root.id) })
         }
         case 'post': {
-          require(principal, 'post')
           const body = PostBody.parse(await readJson(request))
-          if (body.sync?.length) require(principal, 'sync')
+          require(principal, 'post', body.channel)
+          if (body.sync?.length) require(principal, 'sync', body.channel)
           if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
             throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
@@ -545,8 +563,8 @@ export function board(options: BoardOptions = {}) {
           return json({ message }, 201)
         }
         case 'schedule': {
-          require(principal, 'post')
           const body = ScheduleBody.parse(await readJson(request))
+          require(principal, 'post', body.channel)
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
           return json({ schedule: await schedules.create(identity, body, attachments) }, 201)
         }
@@ -621,24 +639,24 @@ export function board(options: BoardOptions = {}) {
           return json(body)
         }
         case 'inbox': {
-          // Raw platform payloads: full access only.
-          if (principal.can !== 'all') throw forbidden('reading the inbox needs full access')
+          // Raw platform payloads, from every channel.
+          requireManage(principal, 'reading the inbox')
           if (!engine) throw notFound('this board has no sync configured')
           const query = InboxQuery.parse(queryObject(url))
           return json({ events: await engine.readInbox(match.param!, query.channel, query.limit ?? 50) })
         }
         case 'stuck': {
-          // What failed, with its errors: full access only, like the inbox.
-          if (principal.can !== 'all') throw forbidden('reading stuck events needs full access')
+          // What failed, with its errors, like the inbox.
+          requireManage(principal, 'reading stuck events')
           return json({ stuck: await stuck() })
         }
         case 'redrive': {
-          if (principal.can !== 'all') throw forbidden('retrying or skipping stuck events needs full access')
+          requireManage(principal, 'retrying or skipping stuck events')
           return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
         }
         case 'sourceRead': {
-          // The app's token reads what the app can, not what the caller can: full access only.
-          if (principal.can !== 'all') throw forbidden('reading a source needs full access')
+          // The app's token reads what the app can, not what the caller can.
+          requireManage(principal, 'reading a source')
           if (!engine) throw notFound('this board has no sync configured')
           const query = SourceReadQuery.parse(queryObject(url))
           return json(await engine.readSource(match.param!, query.target, query.limit ?? 50))

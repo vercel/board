@@ -21,7 +21,7 @@ function setup() {
   const board = testBoard({
     blob,
     sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
-    trustedSources: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
+    access: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
   })
   s.served.set('https://files.slack.test/shot.png', new Uint8Array([1, 2, 3]))
   const webhook = (body: unknown) =>
@@ -104,13 +104,13 @@ describe('stuck events', () => {
     expect((await julian('GET', '/stuck')).body.stuck[0]).toMatchObject({ session: 'inbox:slack:C9', root: root.message.id })
   })
 
-  it('needs full access, and only redrives sessions the board has', async () => {
+  it('needs manage, and only redrives sessions the board has', async () => {
     const { board } = setup()
     const workflow = caller(board.fetch, await workflowToken())
     for (const [method, path, body] of [['GET', '/stuck'], ['POST', '/stuck/redrive', { session: 'board', index: 1, action: 'skip' }]] as const) {
       const denied = await workflow(method, path, body)
       expect(denied.status).toBe(403)
-      expect(denied.body.error.message).toContain('full access')
+      expect(denied.body.error.message).toContain('needs manage on every channel')
     }
     const julian = caller(board.fetch, await personToken())
     expect((await julian('POST', '/stuck/redrive', { session: 'elsewhere', index: 1, action: 'skip' })).status).toBe(404)
