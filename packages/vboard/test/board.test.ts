@@ -180,7 +180,7 @@ describe('messages', () => {
     expect(body.messages).toHaveLength(1)
   })
 
-  it('resolves mentions to actor IDs and rejects unknown or ambiguous ones', async () => {
+  it('resolves mentions to actor IDs, posts unknown ones as plain text, and rejects ambiguous ones', async () => {
     const { fetch } = testBoard()
     const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
     const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
@@ -189,8 +189,17 @@ describe('messages', () => {
     const posted = await julian('POST', '/messages', { channel: 'x', text: 'thanks @ada, not `@nobody`' })
     expect(posted.body.message.mentions).toEqual(['vercel:user:u_ada'])
 
-    const unknown = await julian('POST', '/messages', { channel: 'x', text: '@nobody' })
-    expect(unknown.body.error.code).toBe('unknown_mention')
+    // A handle no one has doesn't lose the post: it stays plain text, and the writer hears which.
+    const unknown = await julian('POST', '/messages', { channel: 'x', text: 'thanks @ada and @nobody' })
+    expect(unknown.status).toBe(201)
+    expect(unknown.body.message).toMatchObject({ text: 'thanks @ada and @nobody', mentions: ['vercel:user:u_ada'] })
+    expect(unknown.body.unknownMentions).toEqual(['nobody'])
+    expect(unknown.body.message).not.toHaveProperty('unknownMentions')
+    expect(posted.body).not.toHaveProperty('unknownMentions')
+    const edited = await julian('POST', `/messages/${unknown.body.message.id}/edit`, { text: 'thanks @nobody2' })
+    expect(edited.body).toEqual({ ok: true, unknownMentions: ['nobody2'] })
+    const unknownActor = await julian('POST', '/messages', { channel: 'x', text: '@[vercel:user:u_nobody]' })
+    expect(unknownActor.body.error.code).toBe('unknown_mention')
 
     const otherAda = caller(fetch, await personToken('u_ada2'), { 'x-board-handle': 'ada' })
     await otherAda('POST', '/messages', { channel: 'x', text: 'me too' })

@@ -246,6 +246,21 @@ describe('cli', () => {
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['deploy failed on a1b2c3', 'rolled back to d4e5f6'])
   })
 
+  it('posts a mention of a handle no one has as plain text, and warns', async () => {
+    const posted = await vb(['post', 'unknown-mentions', 'ping @tk about it'])
+    expect(posted).toMatchObject({ code: 0, stderr: 'warning: @tk matches no one on the board, so it stays plain text and notifies no one\n' })
+    const id = posted.stdout.trim()
+    const reply = await vb(['reply', id, '@tk and @tk2, see `@code`'])
+    expect(reply).toMatchObject({ code: 0, stderr: 'warning: @tk and @tk2 match no one on the board, so they stay plain text and notify no one\n' })
+    expect(await vb(['edit', id, 'ping @tk3'])).toMatchObject({ code: 0, stderr: expect.stringContaining('@tk3 matches no one') })
+    const lines = (await vb(['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
+    expect(lines.map((m: { text: string; mentions: string[] }) => [m.text, m.mentions])).toEqual([
+      ['ping @tk3', []],
+      ['@tk and @tk2, see `@code`', []],
+    ])
+    expect(await vb(['post', 'unknown-mentions', 'no mentions here'])).toMatchObject({ code: 0, stderr: '' })
+  })
+
   it('posts to a message ID as a reply in its thread, labels and all', async () => {
     const id = (await vb(['post', 'post-replies', 'export is broken'])).stdout.trim()
     const reply = await vb(['post', id, 'fixed in a1b2c3', '--label', 'step=fix', '--json'])
@@ -465,7 +480,6 @@ describe('cli', () => {
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
-    expect(await vb(['post', 'x', '@nobody'])).toMatchObject({ code: 1, stderr: 'error: unknown mention @nobody\n' })
     expect((await vb(['react', '1', 'not an emoji'])).code).toBe(2)
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)

@@ -1,6 +1,6 @@
 {
   "name": "vboard",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
   "license": "MIT",
   "type": "module",

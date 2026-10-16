@@ -217,7 +217,13 @@ export type PostInput = WriteOrigin & {
   schedule?: { id: number; n: number }
 }
 
-export async function writePost(ctx: WriteContext, input: PostInput) {
+/**
+ * A post as it landed. `unknownMentions` lists the handles in it that matched
+ * nobody and stayed plain text; it's for the writer, never stored.
+ */
+export type Posted = MessageView & { unknownMentions?: string[] }
+
+export async function writePost(ctx: WriteContext, input: PostInput): Promise<Posted> {
   const { identity } = input
   const sent = input.text
   let channel = input.channel
@@ -300,7 +306,7 @@ async function commitPost(
   const seen = actorSeen(identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const mentions = resolveMentions(
+  const { mentions, unknown } = resolveMentions(
     text,
     knownWith(actors, found),
     seen ? identity.actor : undefined,
@@ -343,17 +349,22 @@ async function commitPost(
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
   const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
-  return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
+  return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent, unknown)
 }
 
 /**
  * A post's view for its writer. One that can't read the channel gets back the
- * text it sent and no mentions: the board resolved its handles and emails to
- * actor IDs, which `/actors` doesn't show it. The board keeps them, so the
- * mentions still notify.
+ * text it sent, no mentions, and no `unknownMentions`: the board resolved its
+ * handles and emails to actor IDs, which `/actors` doesn't show it, and which
+ * handles matched no one would say which ones exist. The board keeps the
+ * mentions, so they still notify.
  */
-const shownTo = (shown: MessageView, access: Access, sent: string): MessageView =>
-  access.readable(shown.channel) ? shown : { ...shown, text: sent, mentions: [] }
+const shownTo = (shown: MessageView, access: Access, sent: string, unknown: string[] = []): Posted =>
+  !access.readable(shown.channel)
+    ? { ...shown, text: sent, mentions: [] }
+    : unknown.length
+      ? { ...shown, unknownMentions: unknown }
+      : shown
 
 /** The writer, as the reader of the view its write returns. Only a link to a board message needs the messages state. */
 async function readerFor(ctx: WriteContext, access: Access, message: Message): Promise<Reader> {
@@ -397,7 +408,7 @@ export type EditInput = WriteOrigin & {
   asAuthor?: boolean
 }
 
-export async function writeEdit(ctx: WriteContext, input: EditInput) {
+export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ unknownMentions?: string[] }> {
   const message = spent(input.authorized, 'post')
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
@@ -417,12 +428,12 @@ export async function writeEdit(ctx: WriteContext, input: EditInput) {
   )
 }
 
-async function commitEdit(ctx: WriteContext, input: EditInput, message: Message) {
+async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<{ unknownMentions?: string[] }> {
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const mentions = resolveMentions(
+  const { mentions, unknown } = resolveMentions(
     text,
     knownWith(actors, found),
     seen ? input.identity.actor : undefined,
@@ -440,6 +451,8 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
       from: input.from ?? null,
     },
   })
+  // As on a post: which handles matched no one is only for a caller that reads the channel.
+  return unknown.length && input.identity.principal.access.readable(message.channel) ? { unknownMentions: unknown } : {}
 }
 
 /** A message's links, replaced: a platform edit or unfurl changed what it links to. */

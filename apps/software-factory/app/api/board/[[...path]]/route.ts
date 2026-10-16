@@ -2,9 +2,8 @@ import { board } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { github } from "vboard/adapter-github";
 import { vercelBlob } from "vboard/adapter-vercel-blob";
-import { redisHttp } from "experimental-a2/store-redis-http";
-import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { byAgent, byPi, byWatcher, taskMessage, tellPi } from "./agent";
+import { queues, store } from "./a2";
+import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { isPiKind, PI_KINDS, piTask, scheduled, scheduledThread } from "./kinds";
 import { security } from "./security";
@@ -18,28 +17,19 @@ import { boardOnly, unseenPr } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 
-// The software factory: vboard running on its own repo and Vercel's Slack. Locally
-// there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
-// files in .a2/attachments.
+// The software factory: vboard running on its own repo and Vercel's Slack. Its log is
+// in `a2.ts`; locally there's no VERCEL_ENV, so attachments are files in .a2/attachments.
 const env = process.env.VERCEL_ENV;
 
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
-export const { GET, POST, scheduler } = board({
-  store: env
-    ? redisHttp({
-        url: process.env.KV_REST_API_URL!,
-        token: process.env.KV_REST_API_TOKEN!,
-        // One Redis serves every environment: a preview never touches production's log.
-        // `-2` since A2 0.17 changed its Redis layout; the log under `vboard-factory` was copied over.
-        keyPrefix: env === "production" ? "vboard-factory-2" : `vboard-factory-2:${env}`,
-      })
-    : undefined,
+const factory = board({
+  store,
   // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
   // Every deployment shares it: a file's ID is random, and only its board can name it.
   blob: env ? vercelBlob() : undefined,
-  scheduler: vercelQueues({ topic: "vboard-factory" }),
+  scheduler: queues,
   sync: {
     // Connect connectors: vboard builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.
@@ -202,3 +192,7 @@ export const { GET, POST, scheduler } = board({
     },
   },
 });
+
+export const { GET, POST } = factory;
+// The board's queue also delivers the refreshes of Pi's tokens.
+export const scheduler = queues.handler(...factory.servers, piTokens.server);

@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GITHUB_TOKEN, byAgent, byPi, byWatcher, piAvatar, piName, sourceLink, startOrSay, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
+// Pi posts as the factory's production deployment.
+process.env.VERCEL_PROJECT_ID = "prj_factory";
+
 test("sourceLink: a Slack thread's permalink, a GitHub issue or PR, or nothing", () => {
   assert.deepEqual(sourceLink({ thread: "slack:C0C6MNT9LLC:1791394851.272189" }), {
     platform: "Slack",
@@ -49,11 +52,31 @@ test("piName: each thread's Pi has a name of its own", () => {
 
 test("byPi: the thread's own Pi, by its name or the old `pi`, and no other thread's", () => {
   const session = "thread-1956";
-  assert.ok(byPi(1956, { profile: piName(1956), session }));
-  assert.ok(byPi(1956, { profile: "pi", session }));
-  assert.ok(!byPi(1956, { profile: piName(1957), session }));
-  assert.ok(!byPi(1956, { profile: piName(1956), session: "thread-1957" }));
-  assert.ok(!byPi(1956, { profile: null, session: null }));
+  const principal = "vercel:project:prj_factory:production";
+  assert.ok(byPi(1956, { principal, profile: piName(1956), session }));
+  assert.ok(byPi(1956, { principal, profile: "pi", session }));
+  assert.ok(!byPi(1956, { principal, profile: piName(1957), session }));
+  assert.ok(!byPi(1956, { principal, profile: piName(1956), session: "thread-1957" }));
+  assert.ok(!byPi(1956, { principal, profile: null, session: null }));
+});
+
+test("byPi: only the factory's production deployment, since anyone who can write sends a profile and session", () => {
+  const pi = { profile: piName(1956), session: "thread-1956" };
+  for (const principal of [
+    "vercel:user:abc123",
+    "vercel:project:prj_factory:preview",
+    "vercel:project:prj_other:production",
+    "github:repo:1",
+    "slack:user:U1",
+  ]) {
+    assert.ok(!byPi(1956, { principal, ...pi }), principal);
+  }
+  delete process.env.VERCEL_PROJECT_ID;
+  try {
+    assert.ok(!byPi(1956, { principal: "vercel:project:undefined:production", ...pi }), "no project, no Pi");
+  } finally {
+    process.env.VERCEL_PROJECT_ID = "prj_factory";
+  }
 });
 
 test("piAvatar: a PNG generated from each Pi's name", () => {

@@ -372,8 +372,12 @@ board({
   caller can't read comes back with the text it sent and no mentions: the
   board resolves handles and emails to actor IDs, which `/actors` hides from
   that caller. The board stores the resolved text and mentions, so they still
-  notify. An unknown handle is still `unknown_mention` for anyone, so a
-  write-only caller can tell whether a handle exists, but not whose it is.
+  notify. Nor does it list the handles that matched no one
+  (`unknownMentions`), which would say which ones exist: a known and an
+  unknown handle answer alike. Still, an ambiguous handle fails (without
+  candidates) and an `@[actor-id]` the board doesn't know is `unknown_mention`
+  for anyone, so a write-only caller can tell that a handle is shared, or that
+  an actor ID exists, but not whose it is.
 - Only the principal that wrote a message may edit or delete it. A person can
   edit their own profiles' messages. A principal ID is coarser than access (a
   repo's workflows share one), so where a caller can't read, its own is only
@@ -460,7 +464,9 @@ only their own accounts.
   1. Extract the tokens from the prose.
   2. Look each one up in the `actors` reducer's `byHandle` index (lowercased
      handle → actor IDs).
-  3. Exactly one match resolves. Zero is `error: unknown mention @x`. More than
+  3. Exactly one match resolves. Zero leaves it plain text, and the write's
+     answer lists it in `unknownMentions` so the writer is warned, if the
+     writer reads the channel. More than
      one is `error: ambiguous mention @x`, listing the actor IDs to use with
      `@[…]`.
   4. Store the actor IDs on the event. Edits resolve again.
@@ -2264,7 +2270,9 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   claims keep the board's own team as the board knew it then (`team`), so a
   rule naming a project without its team still matches in the scheduler's own
   function, which never sees a request to learn it from.
-- **Mentions** are checked when you schedule, so a typo fails then; at send
+- **Mentions** are checked when you schedule: a handle that matches no one is
+  reported then (`unknownMentions`, to a creator that reads the channel), and
+  an ambiguous one fails then. At send
   time, one that's become ambiguous stays plain text.
 - **Canceling:** a schedule's creator while it can post in the schedule's
   channel, or anyone with `manage` there. A principal ID is coarser than

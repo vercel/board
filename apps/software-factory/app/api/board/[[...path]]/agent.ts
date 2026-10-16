@@ -3,7 +3,9 @@ import type { WatcherContext } from "vboard";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import vboard from "vboard/package.json" with { type: "json" };
+import { queues, store } from "./a2.ts";
 import { CONNECTOR, REPO } from "./github.ts";
+import { expiresAt, tokenRefreshes } from "./tokens.ts";
 
 // Pi, the coding agent, working on a board thread from its own Vercel Sandbox: the
 // `pi` CLI with `vb`, `gh`, and git, like a developer at a terminal. Each thread gets
@@ -109,9 +111,16 @@ export function piName(thread: number) {
 export const piAvatar = (thread: number) =>
   `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(piName(thread))}`;
 
-/** Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). */
-export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
-  (by.profile === piName(thread) || by.profile === "pi") && by.session === piSession(thread);
+/**
+ * Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). Every Pi
+ * posts as the factory's production deployment, whose OIDC token its network policy adds; its profile and session
+ * are headers anyone who can write may send, so they only say which thread's Pi it is.
+ */
+export const byPi = (thread: number, by: { principal: string; profile: string | null; session: string | null }) =>
+  !!process.env.VERCEL_PROJECT_ID &&
+  by.principal === `vercel:project:${process.env.VERCEL_PROJECT_ID}:production` &&
+  (by.profile === piName(thread) || by.profile === "pi") &&
+  by.session === piSession(thread);
 
 /**
  * Whether a message is one of the board's watchers' own notes (a crosspost, `:security:`'s answer, or saying Pi
@@ -351,14 +360,43 @@ type PiMessage = {
   message: string;
 };
 
-async function deliver({ task, thread, key, message }: PiMessage) {
-  const [{ Sandbox }, { getToken }, { getVercelOidcToken }] = await Promise.all([
-    import("@vercel/sandbox"),
-    import("@vercel/connect"),
-    import("@vercel/oidc"),
+/** A thread's sandbox. */
+const piSandbox = (thread: number) => `pi-${thread}`;
+
+/** Puts fresh tokens in a running sandbox's network policy, and says when they die. */
+async function giveTokens(sandbox: Sandbox, thread: number) {
+  const [{ getToken }, { getVercelOidcToken }] = await Promise.all([import("@vercel/connect"), import("@vercel/oidc")]);
+  const [gateway, board, github] = await Promise.all([
+    getVercelOidcToken(),
+    getVercelOidcToken({ audience: BOARD }),
+    getToken(CONNECTOR, GITHUB_TOKEN),
   ]);
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }, bypass) });
+  // GitHub's lasts the session (GITHUB_TOKEN); the OIDC ones, only as long as this function's.
+  return {
+    tokensEnd: Math.min(expiresAt(gateway), expiresAt(board)),
+    sessionEnd: sandbox.expiresAt?.getTime() ?? Date.now() + SANDBOX_MS,
+  };
+}
+
+/** Pi's OIDC tokens can die before its session does (`tokens.ts`), so these give it new ones first. */
+export const piTokens = tokenRefreshes({
+  store,
+  scheduler: queues,
+  give: async (thread) => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const sandbox = await Sandbox.get({ name: piSandbox(thread) });
+    // A stopped sandbox gets new tokens with its next message.
+    if (sandbox.status !== "running") return null;
+    return giveTokens(sandbox, thread);
+  },
+});
+
+async function deliver({ task, thread, key, message }: PiMessage) {
+  const { Sandbox } = await import("@vercel/sandbox");
   const settings = {
-    name: `pi-${thread}`,
+    name: piSandbox(thread),
     runtime: "node24",
     timeout: SANDBOX_MS,
     persistent: true,
@@ -382,17 +420,12 @@ async function deliver({ task, thread, key, message }: PiMessage) {
   // Every turn, so a sandbox picks up a new pinned vb; before the policy, so no credential is in place yet.
   await sh(sandbox, SETUP);
   await sandbox.writeFiles(await piFiles());
-  // Fresh tokens with every message, so a thread can pick up again days later.
-  const [gateway, board, github] = await Promise.all([
-    getVercelOidcToken(),
-    getVercelOidcToken({ audience: BOARD }),
-    getToken(CONNECTOR, GITHUB_TOKEN),
-  ]);
-  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }, bypass) });
   // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
   const extend = extension(sandbox.expiresAt, Date.now());
   if (extend > 0) await sandbox.extendTimeout(extend);
+  // Fresh tokens with every message, so a thread can pick up again days later, and again before they die if
+  // that's before the session ends.
+  await piTokens.later(thread, await giveTokens(sandbox, thread));
   await sandbox.runCommand({
     cmd: "bash",
     args: ["-c", TELL],

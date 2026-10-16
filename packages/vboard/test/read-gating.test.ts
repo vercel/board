@@ -107,9 +107,26 @@ describe('a write-only source', () => {
     const first = await guardedFront('POST', '/messages', { channel: 'feedback', text: 'thanks @julian' })
     const again = await guardedFront('POST', '/messages', { channel: 'feedback', text: 'thanks @julian', id: first.body.message.thread })
     expect(again.body.message).toMatchObject({ id: first.body.message.id, text: 'thanks @julian', mentions: [] })
-    // A handle no one has is still an error, as for anyone.
+    // A handle no one has posts as plain text, as for anyone, but without the warning
+    // that would tell it apart from one that exists.
     const unknown = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @nobody' })
-    expect(unknown).toMatchObject({ status: 400, body: { error: { code: 'unknown_mention' } } })
+    expect(unknown).toMatchObject({ status: 201, body: { message: { text: 'thanks @nobody', mentions: [] } } })
+    expect(unknown.body).not.toHaveProperty('unknownMentions')
+    const edited = await front('POST', `/messages/${unknown.body.message.id}/edit`, { text: 'thanks @nobody2' })
+    expect(edited.body).toEqual({ ok: true })
+    // A caller that reads the channel is told.
+    const told = await julian('POST', '/messages', { channel: 'feedback', text: 'thanks @nobody' })
+    expect(told.body.unknownMentions).toEqual(['nobody'])
+  })
+
+  it('doesn’t tell a write-only scheduler which handles match no one', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [intake] })
+    const front = caller(board.fetch, await deploymentToken())
+    const scheduled = await front('POST', '/schedules', { channel: 'feedback', text: 'thanks @nobody', in: '1h' })
+    expect(scheduled.status).toBe(201)
+    expect(scheduled.body).not.toHaveProperty('unknownMentions')
+    const told = await caller(board.fetch, await personToken())('POST', '/schedules', { channel: 'feedback', text: 'thanks @nobody', in: '1h' })
+    expect(told.body.unknownMentions).toEqual(['nobody'])
   })
 
   it('doesn’t list who an ambiguous mention could be', async () => {

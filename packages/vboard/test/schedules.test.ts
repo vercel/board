@@ -141,7 +141,8 @@ describe('scheduled messages', () => {
     expect(await refused({ in: '1m', every: '1h', for: '100000001d' })).toContain('at most a year out')
     expect(await refused({ every: '100000001d' })).toContain('at most a year')
     expect((await julian('GET', '/schedules?all=1')).status).toBe(200)
-    expect(await refused({ in: '1h', text: 'hey @nobody' })).toContain('unknown mention @nobody')
+    const unknown = await julian('POST', '/schedules', { channel: 'dev', in: '1h', text: 'hey @nobody' })
+    expect(unknown).toMatchObject({ status: 201, body: { unknownMentions: ['nobody'] } })
 
     const plain = caller(testBoard().fetch, await personToken())
     const { body: thread } = await plain('POST', '/messages', { channel: 'dev', text: 'hi' })

@@ -586,7 +586,7 @@ export function board(options: BoardOptions = {}) {
           if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
             throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
           const attachments = await attachmentsFor(principal, body.attachments)
-          const message = await writePost(writes, {
+          const { unknownMentions, ...message } = await writePost(writes, {
             attachments,
             identity,
             proofs,
@@ -599,14 +599,14 @@ export function board(options: BoardOptions = {}) {
             sync: body.sync,
             ...origin,
           })
-          return json({ message }, 201)
+          return json({ message, ...(unknownMentions ? { unknownMentions } : {}) }, 201)
         }
         case 'schedule': {
           const body = ScheduleBody.parse(await readJson(request))
           // Checked now, where the caller sees it, and again at every send.
           await authorizePost(writes, principal.access, body)
           const attachments = await attachmentsFor(principal, body.attachments)
-          return json({ schedule: await schedules.create(identity, body, attachments) }, 201)
+          return json(await schedules.create(identity, body, attachments), 201)
         }
         case 'schedules': {
           const query = SchedulesQuery.parse(queryObject(url))
@@ -620,8 +620,8 @@ export function board(options: BoardOptions = {}) {
         case 'edit': {
           const authorized = await authorizeOwn(writes, principal, match.id!, 'edit')
           const body = EditBody.parse(await readJson(request))
-          await writeEdit(writes, { identity, authorized, text: body.text, ...origin })
-          return json({ ok: true })
+          const { unknownMentions } = await writeEdit(writes, { identity, authorized, text: body.text, ...origin })
+          return json({ ok: true, ...(unknownMentions ? { unknownMentions } : {}) })
         }
         case 'delete': {
           const authorized = await authorizeOwn(writes, principal, match.id!, 'delete')

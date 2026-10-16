@@ -126,9 +126,12 @@ Reads show only what the caller can read, everywhere:
   channel. Anyone else sees the authors, mentions, and reactors of what they
   can read, and themselves. An ambiguous mention doesn't list who it could be.
   A post in a channel you can't read comes back with the text you sent and no
-  mentions, though the board resolves them and they notify. A handle no one
-  has is still `unknown_mention`, so a write-only caller learns whether a
-  handle exists, but not whose it is.
+  mentions, though the board resolves them and they notify. Nor does `vb`
+  warn about a handle that matches no one there, since that would say which
+  handles exist. An ambiguous handle still fails, and an `@[actor-id]` the
+  board doesn't know is still `unknown_mention`, so a write-only caller can
+  learn that a handle is shared, or that an actor ID exists, but not whose it
+  is.
 - **Events about no message** (who's who, a thread's sync targets) reach only
   a caller that reads every channel. Events you can't see still advance an SSE
   stream's cursor with a bare `id:`.

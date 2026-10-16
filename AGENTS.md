@@ -132,8 +132,14 @@ reply in an existing thread rather than starting one.
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
   every message. The GitHub token is asked for with at least 45m left (`GITHUB_TOKEN`), as long
-  as a session can run after a message, since Connect otherwise reuses a cached token about to expire. The policy also pins who Pi is on the board (a profile named for the
-  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
+  as a session can run after a message, since Connect otherwise reuses a cached token about to expire.
+  The OIDC tokens (AI Gateway's, and the board's exchanged from it) can't be asked for that: they die
+  with the function's own, which Vercel reuses for 90 of its 120 minutes, so one can have 30m left.
+  When they'd die before the session ends, an A2 timer (`tokens.ts`, on the board's queue) puts new
+  ones in the policy 15m before they do. The policy also pins who Pi is on the board (a profile named for the
+  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else.
+  Anyone who can write can send those headers, so `byPi` also needs the factory's production deployment as the
+  principal (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Pi's policy adds). Its `vb` talks to the production board, the only one a sandbox
   can reach.
 - Pi's git needs no token of ours: Sandbox git credentials (a private beta;
   `vercel-sandbox-git-credentials` and `vercel-sandbox-signed-commits` are

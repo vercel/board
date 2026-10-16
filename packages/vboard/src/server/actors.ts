@@ -105,11 +105,14 @@ export function actorSeen(seen: Actor, known: ActorsState) {
 }
 
 /**
- * Resolves prose mentions to actor IDs. Each `@handle` must name exactly one
- * actor the board has seen; `@[actor-id]` names one directly. `lenient` is for
- * platform text: a mention that doesn't resolve stays plain text, and the rest
- * still count. Without `candidates`, an ambiguous mention doesn't list who it
- * could be: a caller that can't read every channel can't list actors either.
+ * Resolves prose mentions to actor IDs. A `@handle` names the one actor the board
+ * has seen with it; `@[actor-id]` names one directly. A handle nobody has stays
+ * plain text and comes back in `unknown`, so the writer can be told. A handle
+ * several actors share, or an `@[actor-id]` the board doesn't know, fails the
+ * write. `lenient` is for platform text: no mention fails it, and one that
+ * doesn't resolve stays plain text. Without `candidates`, an ambiguous mention
+ * doesn't list who it could be: a caller that can't read every channel can't
+ * list actors either.
  */
 export function resolveMentions(
   text: string,
@@ -117,8 +120,9 @@ export function resolveMentions(
   pending?: Actor,
   lenient = false,
   candidates = true,
-): string[] {
+): { mentions: string[]; unknown: string[] } {
   const resolved: string[] = []
+  const unknown: string[] = []
   const add = (id: string) => {
     if (!resolved.includes(id)) resolved.push(id)
   }
@@ -134,7 +138,7 @@ export function resolveMentions(
     const ids = new Set(known.byHandle[token.handle] ?? [])
     if (pending && pending.handle.toLowerCase() === token.handle) ids.add(pending.id)
     if (ids.size === 1) add([...ids][0]!)
-    else if (ids.size === 0) fail(badRequest(`unknown mention @${token.handle}`, 'unknown_mention'))
+    else if (ids.size === 0) unknown.push(token.handle)
     else if (!candidates) fail(badRequest(`ambiguous mention @${token.handle}: use @[actor-id]`, 'ambiguous_mention'))
     else {
       const options = [...ids]
@@ -143,5 +147,5 @@ export function resolveMentions(
       fail(badRequest(`ambiguous mention @${token.handle}: use ${options}`, 'ambiguous_mention'))
     }
   }
-  return resolved
+  return { mentions: resolved, unknown: lenient ? [] : unknown }
 }

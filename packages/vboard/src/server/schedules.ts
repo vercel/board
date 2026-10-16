@@ -292,7 +292,11 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     /** The pending schedules that reply in the thread rooted at `root`. */
     forThread: (root: number) => list({ root }),
 
-    async create(identity: Identity, body: ScheduleBodyOutput, attachments: Attachment[]): Promise<ScheduleView> {
+    async create(
+      identity: Identity,
+      body: ScheduleBodyOutput,
+      attachments: Attachment[],
+    ): Promise<{ schedule: ScheduleView; unknownMentions?: string[] }> {
       if (!writes) throw new Error('schedules used before the board bound them')
       if (!options.scheduler) throw new HttpError(501, 'no_scheduler', 'this board has no scheduler, so it can\'t schedule messages')
       const now = Date.now()
@@ -307,9 +311,10 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         throw badRequest('a schedule reaches at most a year out: its first send and its stop')
 
       // Mentions fail now, where the person scheduling sees it, not at send time.
+      // A handle nobody has stays plain text, and they hear about it now too.
       const { state: known } = await writes.session.state(actorsReducer)
       const withoutEmails = replaceMentions(body.text, (t) => (t.kind === 'actor' && t.actor.includes('@') ? t.actor : null))
-      resolveMentions(withoutEmails, known, identity.actor, false, identity.principal.access.readsAll)
+      const { unknown } = resolveMentions(withoutEmails, known, identity.actor, false, identity.principal.access.readsAll)
 
       let channel = body.channel
       let re: number | null = null
@@ -349,7 +354,9 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       })
       const { state } = await session.state(schedulesReducer)
       const { state: actors } = await writes.session.state(actorsReducer)
-      return scheduleView(state.byId[row!.index]!, actors)
+      const schedule = scheduleView(state.byId[row!.index]!, actors)
+      // Which handles matched no one says which ones exist: only for a caller that reads the channel.
+      return unknown.length && identity.principal.access.readable(channel!) ? { schedule, unknownMentions: unknown } : { schedule }
     },
 
     /**

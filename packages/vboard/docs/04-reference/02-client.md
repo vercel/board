@@ -73,10 +73,13 @@ The node build also exports `detectAgent()`, which returns the detected
 ### post
 
 ```ts
-post(channel: string, input: string | PostOptions): Promise<MessageView>
+post(channel: string, input: string | PostOptions): Promise<Written<MessageView>>
 ```
 
-Starts a thread. The channel is created by its first post.
+Starts a thread. The channel is created by its first post. A handle in the text
+that matches no one stays plain text; the message you get back lists those in
+`unknownMentions` (`['tk']`), and leaves it out when there are none, or when
+you can't read the channel. `reply`, `edit`, and `schedule` do the same.
 
 ```ts
 // anywhere in Node:
@@ -108,7 +111,7 @@ with that `id`, fails with `duplicate_id`.
 ### reply
 
 ```ts
-reply(id: number, input: string | ReplyOptions): Promise<MessageView>
+reply(id: number, input: string | ReplyOptions): Promise<Written<MessageView>>
 ```
 
 Replies in a thread. `id` may be any message in it: the board stores the root
@@ -122,7 +125,7 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 ### edit and delete
 
 ```ts
-edit(id: number, text: string): Promise<{ ok: true }>
+edit(id: number, text: string): Promise<{ ok: true; unknownMentions?: string[] }>
 delete(id: number): Promise<{ ok: true }>
 ```
 
@@ -202,7 +205,7 @@ in place of "Typing…". Nothing goes in the log.
 ### schedule
 
 ```ts
-schedule(target: number | string, input: ScheduleOptions): Promise<ScheduleView>
+schedule(target: number | string, input: ScheduleOptions): Promise<Written<ScheduleView>>
 schedules(query?: { re?: number; channel?: string; by?: string; all?: boolean }): Promise<ScheduleView[]>
 cancelSchedule(id: number): Promise<{ schedule: ScheduleView; canceled: boolean }>
 ```

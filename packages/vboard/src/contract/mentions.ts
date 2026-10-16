@@ -49,10 +49,11 @@ export function extractMentions(text: string): MentionToken[] {
 }
 
 /**
- * Rewrites each mention in prose with `replace`; one it returns null for stays as written.
+ * Rewrites each mention in prose with `replace`, which also gets the mention as
+ * written; one it returns null for stays as written.
  * Code is left alone, as in `extractMentions`.
  */
-export function replaceMentions(text: string, replace: (token: MentionToken) => string | null): string {
+export function replaceMentions(text: string, replace: (token: MentionToken, written: string) => string | null): string {
   const prose = proseOnly(text)
   const found: { index: number; length: number; token: MentionToken }[] = []
   for (const match of prose.matchAll(EXACT))
@@ -62,7 +63,8 @@ export function replaceMentions(text: string, replace: (token: MentionToken) => 
   let out = ''
   let at = 0
   for (const { index, length, token } of found.sort((a, b) => a.index - b.index)) {
-    out += text.slice(at, index) + (replace(token) ?? text.slice(index, index + length))
+    const written = text.slice(index, index + length)
+    out += text.slice(at, index) + (replace(token, written) ?? written)
     at = index + length
   }
   return out + text.slice(at)

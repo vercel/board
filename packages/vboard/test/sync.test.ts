@@ -214,6 +214,11 @@ describe('sync', () => {
     await vi.waitFor(() => expect(g.posts).toHaveLength(1))
     expect(g.posts[0]!.text).toContain(`📎 proof.png (3 B, on the board: #${proof.id})`)
     expect(g.posts[0]!.text).not.toContain('"files"')
+
+    // A handle no one on the board has stays plain text, and GitHub can't make it ping its login.
+    await julian('POST', '/messages', { re: pr!.id, text: 'cc @TK, not `@tk`' })
+    await vi.waitFor(() => expect(g.posts).toHaveLength(2))
+    expect(g.posts[1]!.text).toContain('cc @\u2060TK, not `@tk`')
   })
 
   it('brings files posted in Slack onto the board, fetched through the adapter', async () => {
