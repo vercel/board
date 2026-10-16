@@ -100,6 +100,13 @@ describe('a write-only source', () => {
     // A retry of the same post shows the same.
     const retried = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @julian', id: posted.body.message.thread })
     expect(retried.body.message).toMatchObject({ id: posted.body.message.id, mentions: [] })
+    // So does a retry that middleware answers from what landed.
+    const guarded = testBoard({ access: [intake], middleware: [async ({ next }) => next()] })
+    await caller(guarded.fetch, await personToken(), { 'x-board-handle': 'julian' })('POST', '/messages', { channel: 'dev', text: 'hi' })
+    const guardedFront = caller(guarded.fetch, await deploymentToken())
+    const first = await guardedFront('POST', '/messages', { channel: 'feedback', text: 'thanks @julian' })
+    const again = await guardedFront('POST', '/messages', { channel: 'feedback', text: 'thanks @julian', id: first.body.message.thread })
+    expect(again.body.message).toMatchObject({ id: first.body.message.id, text: 'thanks @julian', mentions: [] })
     // A handle no one has is still an error, as for anyone.
     const unknown = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @nobody' })
     expect(unknown).toMatchObject({ status: 400, body: { error: { code: 'unknown_mention' } } })

@@ -176,6 +176,7 @@ describe('oidc()', () => {
   it('refuses a rule that would match everyone, or another helper’s issuer', () => {
     expect(() => oidc({ issuer: OIDC_ISS, claims: {}, can: 'all' })).toThrow('name at least one claim')
     expect(() => oidc({ issuer: 'http://gitlab.test', claims: { a: 'b' }, can: 'all' })).toThrow('https URL')
+    expect(() => oidc({ issuer: 'https://ci:secret@gitlab.test', claims: { a: 'b' }, can: 'all' })).toThrow('no query or credentials')
     expect(() => oidc({ issuer: 'https://oidc.vercel.com/acme', claims: { a: 'b' }, can: 'all' })).toThrow('use vercelProject()')
     expect(() => oidc({ issuer: 'https://token.actions.githubusercontent.com', claims: { a: 'b' }, can: 'all' })).toThrow('use githubActions()')
     expect(() => oidc({ issuer: OIDC_ISS, claims: { a: 'b' }, can: { 'ci/*': ['post'] } })).toThrow('write ci/ for ci and its subtree')
