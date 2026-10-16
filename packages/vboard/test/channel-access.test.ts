@@ -9,24 +9,57 @@ const own = (environment: string) => deploymentToken('board', PROJECT_ID, enviro
 afterEach(() => vi.restoreAllMocks())
 
 describe("the board's own project", () => {
-  it('gives its people and its production everything', async () => {
-    const { fetch } = testBoard()
+  afterEach(() => vi.unstubAllEnvs())
+  /** A board running in `environment`, as Vercel tells it; none outside Vercel. */
+  const runningIn = (environment: string | null, options: Parameters<typeof testBoard>[0] = {}) => {
+    vi.stubEnv('VERCEL_TARGET_ENV', '')
+    vi.stubEnv('VERCEL_ENV', environment ?? '')
+    return testBoard(options)
+  }
+  const refusal = (here: string, environment: string) =>
+    `this board runs in ${here}, so its project's ${environment} deployments need a rule: add vercelProject({ project: 'self', environments: ['${environment}'], can })`
+
+  it('gives its people and its production everything on a production board', async () => {
+    const { fetch } = runningIn('production')
     expect((await caller(fetch, await personToken())('GET', '/me')).body.access).toEqual({ '*': ALL })
     expect((await caller(fetch, await own('production'))('GET', '/me')).body.access).toEqual({ '*': ALL })
   })
 
-  it('gives its previews and custom environments nothing unless access lists them', async () => {
+  it('refuses its previews and custom environments on a production board unless access lists them', async () => {
+    const { fetch } = runningIn('production')
     for (const environment of ['preview', 'staging']) {
-      const denied = await caller(testBoard().fetch, await own(environment))('GET', '/me')
-      expect(denied.status).toBe(403)
-      expect(denied.body.error.message).toBe(
-        `this project's ${environment} deployments aren't in access: add vercelProject({ project: 'self', environments: ['${environment}'], can })`,
-      )
+      const denied = await caller(fetch, await own(environment))('GET', '/me')
+      expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('production', environment) } } })
     }
   })
 
-  it("lists them with project: 'self'", async () => {
-    const { fetch } = testBoard({ access: [vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } })] })
+  it('lets a preview board call itself, and refuses its production', async () => {
+    const { fetch } = runningIn('preview')
+    expect((await caller(fetch, await own('preview'))('GET', '/me')).body.access).toEqual({ '*': ALL })
+    const denied = await caller(fetch, await own('production'))('GET', '/me')
+    expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('preview', 'production') } } })
+  })
+
+  it('knows a custom environment by its target, not as a preview', async () => {
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('VERCEL_TARGET_ENV', 'staging')
+    const { fetch } = testBoard()
+    expect((await caller(fetch, await own('staging'))('GET', '/me')).body.access).toEqual({ '*': ALL })
+    const denied = await caller(fetch, await own('preview'))('GET', '/me')
+    expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('staging', 'preview') } } })
+  })
+
+  it('lets only its people in outside Vercel', async () => {
+    const { fetch } = runningIn(null)
+    expect((await caller(fetch, await personToken())('GET', '/me')).body.access).toEqual({ '*': ALL })
+    const denied = await caller(fetch, await own('production'))('GET', '/me')
+    expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('no Vercel environment', 'production') } } })
+  })
+
+  it("lists other environments with project: 'self'", async () => {
+    const { fetch } = runningIn('production', {
+      access: [vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } })],
+    })
     const preview = caller(fetch, await own('preview'))
     const me = await preview('GET', '/me')
     expect(me.body).toMatchObject({ principal: `vercel:project:${PROJECT_ID}:preview`, access: { 'dev/': ['read'] } })
@@ -36,9 +69,11 @@ describe("the board's own project", () => {
     expect((await caller(fetch, await own('production'))('GET', '/me')).body.access).toEqual({ '*': ALL })
   })
 
-  it('narrows its production when a rule matches it', async () => {
-    const { fetch } = testBoard({ access: [vercelProject({ project: 'self', environments: ['production'], can: { 'dev/': ['read', 'post'] } })] })
-    expect((await caller(fetch, await own('production'))('GET', '/me')).body.access).toEqual({ 'dev/': ['read', 'post'] })
+  it('narrows its own environment when a rule matches it', async () => {
+    const { fetch } = runningIn('preview', {
+      access: [vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read', 'post'] } })],
+    })
+    expect((await caller(fetch, await own('preview'))('GET', '/me')).body.access).toEqual({ 'dev/': ['read', 'post'] })
     // A person is a person, whatever the rules say.
     expect((await caller(fetch, await personToken())('GET', '/me')).body.access).toEqual({ '*': ALL })
   })

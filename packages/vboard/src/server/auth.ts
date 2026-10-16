@@ -68,10 +68,10 @@ const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) 
  * A Vercel project's deployments, by name or ID. A name is only unique within
  * a team, so without `team` it means the board's own team, and matches nothing
  * when that isn't known. An ID is unique on Vercel, so it matches on any team.
- * `'self'` is the board's own project: its production deployment has full
- * access unless a rule says otherwise, and its preview and custom environments
- * have none unless one lists them. Its development tokens are people, which no
- * rule changes.
+ * `'self'` is the board's own project: its deployments in the environment the
+ * board runs in have full access unless a rule says otherwise, and its other
+ * environments have none unless one lists them. Its development tokens are
+ * people, which no rule changes.
  */
 export function vercelProject(options: {
   project: string
@@ -318,11 +318,13 @@ export function createVerifier(options: {
       : null
     const access = ruleFor('vercel', claims, { teamId, projectId: ownProject })
     if (access) return deployment(facts, project, environment, access, expiresAt)
-    // The board's own production is the board; its previews run any branch's code.
-    if (own && environment === 'production') return deployment(facts, project, environment, FULL_ACCESS, expiresAt)
+    // A deployment in the board's own environment runs the board's code. A
+    // preview runs any branch's, so a production board doesn't trust them.
+    const here = boardEnvironment()
+    if (own && here !== null && environment === here) return deployment(facts, project, environment, FULL_ACCESS, expiresAt)
     if (own)
       throw forbidden(
-        `this project's ${environment || 'unnamed'} deployments aren't in access: add vercelProject({ project: 'self', environments: ['${environment}'], can })`,
+        `this board runs in ${here ?? 'no Vercel environment'}, so its project's ${environment || 'unnamed'} deployments need a rule: add vercelProject({ project: 'self', environments: ['${environment}'], can })`,
       )
     throw forbidden(`project isn't in access: ${project || String(claims.project_id)}`)
   }
@@ -351,6 +353,14 @@ export function createVerifier(options: {
 
   return { verify, accessNow }
 }
+
+/**
+ * The Vercel environment the board runs in: `production`, `preview`, or a
+ * custom environment's name. `VERCEL_TARGET_ENV` names custom environments,
+ * where `VERCEL_ENV` says `preview`. Null outside Vercel, where only people
+ * get in without a rule.
+ */
+const boardEnvironment = (): string | null => process.env.VERCEL_TARGET_ENV || process.env.VERCEL_ENV || null
 
 /**
  * What a principal's ID still says, for one stored before the board kept

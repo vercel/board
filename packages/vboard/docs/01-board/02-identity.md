@@ -65,8 +65,10 @@ error: your Vercel account can't access this board's project: ask for access to 
   The board knows its own project from the `project` option,
   `VERCEL_PROJECT_ID`, or `.vercel/project.json`. A `development` token from
   it is a person and must carry `user_id`. Any other environment is the
-  deployment itself: production can do everything, and previews nothing
-  unless [`access`](./08-access.md) lists them.
+  deployment itself: in the environment the board runs in, it can do
+  everything, and in any other, nothing unless [`access`](./08-access.md)
+  lists it. So a production board refuses its previews, and a preview board
+  accepts its own.
 - **GitHub Actions tokens, other Vercel projects, and other issuers** are
   accepted only when they match a rule in [`access`](./08-access.md), which
   also says what they may do in each channel.
@@ -161,7 +163,7 @@ for other issuers, and what a caller sees.
 
 ## Authorization
 
-- **People and the board's own production can do everything.** There are no
+- **People and the board's own deployments in its environment can do everything.** There are no
   roles or member lists, and nothing restricts the project's own people.
   Content that needs privacy from them needs a second board.
 - **Everyone else can do what `access` gives them, channel by channel,** and

@@ -44,8 +44,8 @@ vboard post errors-www "deploy failed on a1b2c3"
    second board, mount a second route.
 2. **Every request carries an OIDC token.** People get theirs from their
    `vercel login`, and machines get theirs from their platform. The board
-   trusts its own project's people and production, plus whatever `access`
-   lists, and `access` says what each may do in each channel.
+   trusts its own project's people and its deployments in the environment the
+   board runs in, plus whatever `access` lists, and `access` says what each may do in each channel.
 3. **Every event records who wrote it**: a verified principal, plus an
    optional profile, such as an agent acting for a person.
 4. **A thread syncs with a set of external threads.** A message written in the
@@ -231,9 +231,12 @@ talking to.
   - The board knows its own project: `project_id` is compared to
     `VERCEL_PROJECT_ID`, or to `board({ project })` in local development.
   - A `development` token from it is a person and must carry `user_id`. Any
-    other environment is the deployment itself: production gets everything
-    unless a rule matches it, and preview and custom environments get nothing
-    unless one does.
+    other environment is the deployment itself. The one the board runs in
+    (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
+    matches it, and any other gets nothing unless one does: a production board
+    refuses its previews, which run any branch's code, and a preview board
+    accepts its own previews. Outside Vercel no environment is the board's, so
+    only people get in without a rule.
 - **GitHub tokens:** verify against `https://token.actions.githubusercontent.com`.
   A GitHub token is accepted only if it matches an `access` rule.
 - **Tokens from other Vercel projects** are accepted only if they match an
@@ -340,7 +343,7 @@ board({
 
 - A reply needs `post` and `read` in its root's channel: addressing a thread
   you can't read would confirm it exists.
-- People, the board's own production, and the board's own code (watchers, sync,
+- People, the board's own deployments in its environment, and the board's own code (watchers, sync,
   middleware, `board.client()`, schedules' system writes) can do everything.
 - `x-board-scope: dev/=read,post;ci/=read`, set by a proxy that holds the
   credential, is intersected with the principal's access, so it only narrows.

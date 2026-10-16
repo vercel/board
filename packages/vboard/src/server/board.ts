@@ -67,7 +67,8 @@ export type BoardOptions = {
   /** Required for sync in production, and for scheduled messages. Mount the board's `scheduler` as `POST` in its own route. */
   scheduler?: A2Scheduler
   /**
-   * Who may call the board besides its people and its own production, and what
+   * Who may call the board besides its people and its own deployments in the
+   * environment it runs in (a production board's previews need a rule), and what
    * they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`.
    * The first rule that matches a token decides.
    */

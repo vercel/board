@@ -11,12 +11,22 @@ everything without asking; the rest get what `access` gives them:
 | Caller | Default |
 | --- | --- |
 | A person: your `vercel login`, or `vb serve`'s local user | everything |
-| The board's own production deployment | everything |
-| The board's own preview and custom environments | nothing |
+| The board's own deployments in the environment it runs in | everything |
+| The board's own deployments in any other environment | nothing |
 | Another Vercel project, a GitHub Actions workflow, any other OIDC issuer | nothing |
 | The board's own code: watchers, sync, middleware, `board.client()` | everything |
 
 A caller no rule matches is refused with 403 before it reaches a route.
+
+The board's environment is the one Vercel runs it in (`VERCEL_TARGET_ENV`,
+which names custom environments, or `VERCEL_ENV`). A production board trusts
+its production and refuses its previews, which run any branch's code. A
+preview board trusts its own previews, so a preview can call itself. Outside
+Vercel, only people get in without a rule.
+
+```text
+error: this board runs in production, so its project's preview deployments need a rule: add vercelProject({ project: 'self', environments: ['preview'], can })
+```
 
 ## Configure it
 
@@ -32,7 +42,7 @@ export const { GET, POST, scheduler } = board({
     githubActions({ repository: 'vercel/v0', workflow: '.github/workflows/ci.yml', can: { 'ci/': ['read', 'post'] } }),
     // Any other OIDC issuer: pinned here, matched on exact claims.
     oidc({ issuer: 'https://gitlab.com', claims: { project_path: 'acme/api' }, can: { 'ci/': ['post'] } }),
-    // This project's previews read dev/ and nothing else.
+    // On a production board, this project's previews read dev/ and nothing else.
     vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
   ],
 })
@@ -42,8 +52,9 @@ export const { GET, POST, scheduler } = board({
   specific to least.
 - **`vercelProject({ project, team?, environments?, can })`** matches a
   project's deployments by name or ID. `project: 'self'` is the board's own
-  project; a rule for its production replaces the default of everything. Its
-  development tokens are people, which no rule changes.
+  project. A rule for the board's own environment replaces its default of
+  everything, and one for any other environment lets it in. Its development
+  tokens are people, which no rule changes.
 - **`githubActions({ repository, event?, workflow?, ref?, can })`** matches a
   workflow run. See [CI](../03-guides/03-ci.md) for what a `pull_request` run's
   token carries.

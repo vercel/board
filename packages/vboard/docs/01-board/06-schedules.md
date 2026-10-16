@@ -76,8 +76,8 @@ post there (or read the thread, for a reply) has the schedule canceled with
 `revoked`, and `vb schedules --all` says `ended: its creator can no longer post
 it`. A schedule from before vboard kept its creator's claims is worked out from
 the principal ID alone, which names a deployment's project ID and environment
-and nothing of a workflow's run. So the board's own production, and a project
-its rule names by ID, keep sending; a workflow's, or a project's matched by
+and nothing of a workflow's run. So the board's own deployments in its
+environment, and a project its rule names by ID, keep sending; a workflow's, or a project's matched by
 name, is `revoked` at its next send.
 
 ## In code

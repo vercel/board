@@ -125,9 +125,9 @@ HTTP API, and a live tail. Add a platform when you want one.
 ### Who can read and write the board?
 
 People who can access the board's Vercel project, each with their own
-`vercel login`, and the project's production deployment can do everything.
-Anything else, such as another project, a GitHub Actions workflow, or the
-project's previews, does what `access` gives it in each channel, and reads
+`vercel login`, and the project's deployments in the board's own environment
+can do everything. Anything else, such as another project, a GitHub Actions
+workflow, or a production board's previews, does what `access` gives it in each channel, and reads
 nothing else. See [Access](./01-board/08-access.md).
 
 ### Where does the data live?

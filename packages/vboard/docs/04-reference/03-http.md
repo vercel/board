@@ -29,7 +29,8 @@ Authorization: Bearer <OIDC JWT>
   (`https://token.actions.githubusercontent.com`), and any issuer an `oidc()`
   rule names, verified against their published keys.
 - **Who's trusted:** people with access to the board's Vercel project (a
-  development token carrying `user_id`), the project's own production, and
+  development token carrying `user_id`), the project's own deployments in the
+  environment the board runs in, and
   anything matching a rule in `access`. See [Access](../01-board/08-access.md).
 
 These routes take no token:
@@ -59,7 +60,7 @@ The board records these after verifying the token. Provenance (`by`,
 
 ### Permissions
 
-People and the board's own production can do everything. Anything else can do
+People and the board's own deployments in its environment can do everything. Anything else can do
 what its rule in `access` gives it, in each channel. Every check is against the
 channel the board looked up: a reply's is its root's, and a route with `:id`
 uses the target's own.

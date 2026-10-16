@@ -98,6 +98,7 @@ const read = async (call: ReturnType<typeof caller>, query: string) => (await ca
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('linking accounts with a one-time code', () => {
@@ -266,6 +267,7 @@ describe('linking accounts with a one-time code', () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const ada = caller(board.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    vi.stubEnv('VERCEL_ENV', 'production')
     const deployment = caller(board.fetch, await deploymentToken('board', 'prj_board'))
     await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'from Slack', user: 'U_JULIAN', name: 'jb' })
     const { code } = (await julian('POST', '/identity/link', { sync: 'slack' })).body
@@ -273,7 +275,7 @@ describe('linking accounts with a one-time code', () => {
     // Julian never wrote on the board: their principal ID still names them.
     await vi.waitFor(async () => expect((await read(julian, 'by=vercel:user:u_julian')).map((m) => m.text)).toEqual(['from Slack']))
 
-    expect((await deployment('POST', '/identity/link', { sync: 'slack' })).status).toBe(403)
+    expect((await deployment('POST', '/identity/link', { sync: 'slack' })).body.error.message).toBe('only people link platform accounts')
     expect((await ada('POST', '/identity/unlink', { actor: '@jb' })).body.error.code).toBe('not_linked')
     expect((await julian('POST', '/identity/unlink', { actor: '@jb' })).body).toEqual({ ok: true, actor: 'slack:user:U_JULIAN' })
     expect((await julian('GET', '/identity')).body.links).toEqual([])
