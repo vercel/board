@@ -42,7 +42,7 @@ import { attachmentNotFound, attachmentResponse, defaultBlob, readUpload, writeU
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
-import { createSchedules } from './schedules.ts'
+import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
   authorizeMessage,
@@ -608,8 +608,7 @@ export function board(options: BoardOptions = {}) {
           const query = SchedulesQuery.parse(queryObject(url))
           let root: number | undefined
           if (query.re !== undefined) root = (await authorizeMessage(writes, principal.access, 'read', query.re)).message.re ?? query.re
-          const visible = (schedule: { channel: string; as: { principal: { id: string } } }) =>
-            principal.access.readable(schedule.channel) || schedule.as.principal.id === principal.id
+          const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
           return json({ schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) })
         }
         case 'cancelSchedule':

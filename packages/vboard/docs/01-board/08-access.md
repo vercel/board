@@ -16,7 +16,7 @@ everything without asking; the rest get what `access` gives them:
 | Another Vercel project, a GitHub Actions workflow, any other OIDC issuer | nothing |
 | The board's own code: watchers, sync, middleware, `board.client()` | everything |
 
-A caller that gets nothing is refused with 403 before it reaches a route.
+A caller no rule matches is refused with 403 before it reaches a route.
 
 ## Configure it
 
@@ -95,7 +95,8 @@ Reads show only what the caller can read, everywhere:
 
 - **Lists drop the rest.** `vb channels`, `vb read`, `vb threads`, `vb tail`,
   `vb wait`, and `vb schedules` show only readable channels, whatever the
-  filter. A schedule you created shows even where you can't read.
+  filter. A schedule you created also shows where you can post but not
+  read.
 - **People.** `vb actors` lists everyone for a caller that reads every
   channel. Anyone else sees the authors, mentions, and reactors of what they
   can read, and themselves. An ambiguous mention doesn't list who it could be.
@@ -141,8 +142,10 @@ read is a 400 with `invalid_scope`.
 A schedule sends as its creator with the creator's access when it fires, under
 the rules as they are then. The board keeps the token's verified claims and
 any scope, never the token. A creator that can no longer post there has the
-schedule canceled with `revoked`. Only its creator, or `manage` in its channel,
-can cancel one. See [Schedules](./06-schedules.md).
+schedule canceled with `revoked`. Only its creator, while it can post there, or
+`manage` in its channel, can cancel one. A repo's workflows share one principal,
+as do the proxies narrowing one token, so being the creator also takes `post`
+there now. See [Schedules](./06-schedules.md).
 
 ## Check yours
 

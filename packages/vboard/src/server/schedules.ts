@@ -9,7 +9,7 @@ import {
   type ScheduleEvents,
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
-import { authorize, compileAccess, type Access } from './access.ts'
+import { authorize, type Access } from './access.ts'
 import type { Principal } from './auth.ts'
 import { actorsReducer, messagesReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
@@ -39,7 +39,8 @@ export type Schedule = {
   every: number | null
   until: number | null
   times: number | null
-  as: Identity
+  /** Its creator, as plain data: A2 snapshots state, and each send works out the access again. */
+  as: Omit<Identity, 'principal'> & { principal: Omit<Principal, 'access'> }
   createdAt: string
   /** Sends posted so far. */
   sent: number
@@ -52,14 +53,11 @@ export type Schedule = {
 
 export type SchedulesState = { byId: Record<string, Schedule> }
 
-/** Until a send works out its creator's access again, a stored identity may do nothing. */
-const NOTHING = compileAccess([])
-
-const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Identity => {
+const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Schedule['as'] => {
   const { author, principal, actor } = as.payload.as
   return {
     author,
-    principal: { ...principal, access: NOTHING, expiresAt: null },
+    principal: { ...principal, expiresAt: null },
     actor: { ...actor, kind: actorKind(actor.kind) },
   }
 }
@@ -120,6 +118,15 @@ export function nextSend(schedule: Pick<Schedule, 'every' | 'until' | 'times'>, 
   return schedule.until !== null && next > schedule.until ? null : next
 }
 
+/**
+ * Whether `principal` is the schedule's creator, as far as seeing and canceling
+ * it where it can't read goes. A principal ID is coarser than access (a repo's
+ * workflows share one, and so do the proxies narrowing one token with
+ * `x-board-scope`), so it also needs `post` there now, as it would to create it.
+ */
+export const createdBy = (schedule: Schedule, principal: Pick<Principal, 'id' | 'access'>) =>
+  schedule.as.principal.id === principal.id && principal.access.can('post', schedule.channel)
+
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
   return {
@@ -147,6 +154,9 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
 
 const SYSTEM = deploymentIdentity('vboard:schedule', 'schedule')
 
+/** The board's `accessNow`: a stored creator's access under the rules as they are now, or null. */
+type AccessNow = (principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>) => Promise<Access | null>
+
 /** A refusal (a 403, or a 404 for a thread the creator can no longer read) as null; anything else still throws. */
 const refused = (error: unknown): null => {
   if (error instanceof HttpError && (error.status === 403 || error.status === 404)) return null
@@ -159,7 +169,7 @@ const refused = (error: unknown): null => {
  */
 export function createSchedules(options: { store?: A2Store | undefined; scheduler?: A2Scheduler | undefined }) {
   let writes: WriteContext | null = null
-  let accessNow: ((principal: Principal) => Promise<Access | null>) | null = null
+  let accessNow: AccessNow | null = null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
   async function arm(ctx: HandlerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
@@ -267,7 +277,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   return {
     server,
     session,
-    bind: (binding: { writes: WriteContext; accessNow: (principal: Principal) => Promise<Access | null> }) => {
+    bind: (binding: { writes: WriteContext; accessNow: AccessNow }) => {
       writes = binding.writes
       accessNow = binding.accessNow
     },
@@ -335,9 +345,9 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     },
 
     /**
-     * Its creator may cancel it, and so may `manage` in its channel. Anyone else
-     * gets 403 where they can read it, and 404 where they can't. Canceling twice
-     * is a no-op.
+     * Its creator may cancel it while they can post there, and so may `manage`
+     * in its channel. Anyone else gets 403 where they can read it, and 404
+     * where they can't. Canceling twice is a no-op.
      */
     async cancel(identity: Identity, id: number): Promise<{ schedule: ScheduleView; canceled: boolean }> {
       if (!writes) throw new Error('schedules used before the board bound them')
@@ -345,7 +355,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       const schedule = state.byId[id]
       const missing = () => notFound(`schedule not found: s${id}`, 'schedule_not_found')
       if (!schedule) throw missing()
-      if (schedule.as.principal.id !== identity.principal.id) authorize(identity.principal.access, 'manage', schedule.channel, missing)
+      if (!createdBy(schedule, identity.principal)) authorize(identity.principal.access, 'manage', schedule.channel, missing)
       const canceled = schedule.next !== null
       if (canceled) await session.append({ type: 'schedule.canceled', payload: { id, by: identity.author, reason: 'canceled' } })
       const { state: after } = await session.state(schedulesReducer)

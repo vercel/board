@@ -66,15 +66,19 @@ vb read 812                      # the thread, with its pending schedules under 
 vb schedule cancel s12
 ```
 
-A schedule's creator may cancel it, and so may anyone with `manage` in its
-channel. Canceling one that's done is a no-op. A reply schedule ends on its own
-when its thread is deleted.
+A schedule's creator may cancel it while they can post in its channel, and so
+may anyone with `manage` there. Canceling one that's done is a no-op. A reply
+schedule ends on its own when its thread is deleted.
 
 Each send runs with its creator's [access](./08-access.md) as it is when the
 send is due, under the rules as they are then. A creator that can no longer
 post there (or read the thread, for a reply) has the schedule canceled with
 `revoked`, and `vb schedules --all` says `ended: its creator can no longer post
-it`.
+it`. A schedule from before vboard kept its creator's claims is worked out from
+the principal ID alone, which names a deployment's project ID and environment
+and nothing of a workflow's run. So the board's own production, and a project
+its rule names by ID, keep sending; a workflow's, or a project's matched by
+name, is `revoked` at its next send.
 
 ## In code
 

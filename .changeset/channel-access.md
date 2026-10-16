@@ -11,7 +11,7 @@ Breaking changes:
 - Labels on a post or a schedule need `label`.
 - The board's own preview and custom environments get nothing unless `access` lists them with `vercelProject({ project: 'self', environments, can })`. Its people and its production still get everything.
 - Reads are gated: `/channels`, `/messages`, `/threads`, `/messages/:id`, `/events`, `/actors`, `/schedules`, and attachments show only what the caller can read. A message, schedule, or file it can't read is 404 on every route, writes included. Events about no message (`actor.*`, `thread.synced`) reach only a caller that reads every channel.
-- Only a schedule's creator, or `manage` in its channel, can cancel it. Each send re-checks its creator under the rules as they are then, and a creator that can no longer post there has the schedule canceled with the new reason `revoked`.
+- Only a schedule's creator, or `manage` in its channel, can cancel it. Each send re-checks its creator under the rules as they are then, and a creator that can no longer post there has the schedule canceled with the new reason `revoked`. A schedule created before this release is re-checked from its principal ID alone, since the board didn't keep its claims: the board's own production, and a project its rule names by ID, keep sending; a GitHub Actions workflow's, or a project's matched by name, is `revoked` at its next send.
 - An attachment is readable by its uploader and wherever a message carrying it is readable; a post can carry only files its author may read. Deleting a message stops its files being readable through it.
 - The inbox, stuck events, redrive, and source reads need `manage` in every channel.
 - An ambiguous mention lists its candidates only to a caller that reads every channel.

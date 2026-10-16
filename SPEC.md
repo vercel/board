@@ -2238,7 +2238,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   creator that no longer has it has the schedule canceled with `revoked`.
 - **Mentions** are checked when you schedule, so a typo fails then; at send
   time, one that's become ambiguous stays plain text.
-- **Canceling:** a schedule's creator, or anyone with `manage` in its channel.
+- **Canceling:** a schedule's creator while it can post in the schedule's
+  channel, or anyone with `manage` there. A principal ID is coarser than
+  access (a repo's workflows share one, as do proxies narrowing one token with
+  `x-board-scope`), so the creator check also takes `post`.
   A reply schedule ends by itself when its thread is deleted.
 - **How it runs:** `schedule.created` arms the first send as an A2 timer
   (`session.schedule`) carrying `schedule.due { id, n, at }`. That handler, on

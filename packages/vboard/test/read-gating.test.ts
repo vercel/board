@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
+import { foldSchedules } from '../src/server/schedules.ts'
 import { githubActions, vercelProject } from '../src/server/index.ts'
 import type { MessagesState } from '../src/contract/reducers.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard, workflowToken } from './harness.ts'
@@ -192,5 +193,28 @@ describe('schedules', () => {
     expect((await ci('POST', `/schedules/${mine}/cancel`)).body).toMatchObject({ canceled: true })
     expect(await ci('POST', `/schedules/${theirs}/cancel`)).toMatchObject({ status: 403, body: { error: { message: "this token can't manage ci" } } })
     expect((await julian('POST', `/schedules/${theirs}/cancel`)).body).toMatchObject({ canceled: true })
+  })
+
+  it('are their creator’s only where it can post: one token narrowed two ways is two callers', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const dev = caller(board.fetch, await personToken(), { 'x-board-scope': 'dev/=post' })
+    const ci = caller(board.fetch, await personToken(), { 'x-board-scope': 'ci/=read,post' })
+    const id = (await dev('POST', '/schedules', { channel: 'dev', text: 'in dev', in: '1h' })).body.schedule.id
+    expect((await dev('GET', '/schedules')).body.schedules).toMatchObject([{ id, text: 'in dev' }])
+    expect((await ci('GET', '/schedules')).body.schedules).toEqual([])
+    expect((await ci('POST', `/schedules/${id}/cancel`)).status).toBe(404)
+    expect((await dev('POST', `/schedules/${id}/cancel`)).body).toMatchObject({ canceled: true })
+  })
+
+  it('keep plain data in their state, which A2 clones and snapshots', () => {
+    const as = {
+      author: { actor: 'github:repo:123456', principal: 'github:repo:123456', profile: null, session: null },
+      principal: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'basehub-ai/www', scope: 'ci=post' },
+      actor: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'basehub-ai/www', name: 'basehub-ai/www', avatar: null },
+    }
+    const payload = { channel: 'ci', re: null, text: 'nightly', labels: {}, noSync: false, first: T0, every: null, until: null, times: null, as }
+    const event = { index: 1, type: 'schedule.created', createdAt: T0, payload } as unknown as Parameters<typeof foldSchedules>[1]
+    const state = foldSchedules({ byId: {} }, event)
+    expect(structuredClone(state)).toEqual(state)
   })
 })
