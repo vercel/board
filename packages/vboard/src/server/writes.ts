@@ -144,11 +144,11 @@ const hasLabels = (labels: Labels | undefined) => Object.keys(labels ?? {}).leng
 export async function authorizePost(
   ctx: WriteContext,
   access: Access,
-  input: { channel?: string | undefined; re?: number | null | undefined; labels?: Labels | undefined; sync?: string[] | undefined },
+  input: { channel?: string | undefined; re?: number | undefined; labels?: Labels | undefined; sync?: string[] | undefined },
 ): Promise<PostProofs> {
   let channel: string
   let post: Proof<'post'>
-  if (input.re !== undefined && input.re !== null) {
+  if (input.re !== undefined) {
     const { message } = await authorizeMessage(ctx, access, 'read', input.re)
     channel = message.channel
     post = authorize(access, 'post', channel)
@@ -173,7 +173,7 @@ function spend(proof: Proof | undefined, permission: Permission, target: { chann
     throw new Error(`a ${permission} write in ${target.channel} needs a proof for that channel`)
 }
 
-/** Full-access proofs for the board's own code (sync, schedules on its behalf), checked against the target like any other. */
+/** Full-access proofs for the board's own code (sync), still checked against the channel each write lands in. */
 export const trusted = {
   message: <P extends Permission>(ctx: WriteContext, permission: P, id: number) => authorizeMessage(ctx, FULL_ACCESS, permission, id),
   post: (ctx: WriteContext, input: Parameters<typeof authorizePost>[2]) => authorizePost(ctx, FULL_ACCESS, input),

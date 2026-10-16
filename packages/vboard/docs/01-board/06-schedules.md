@@ -66,9 +66,15 @@ vb read 812                      # the thread, with its pending schedules under 
 vb schedule cancel s12
 ```
 
-Anyone may cancel any schedule: the board has no per-person permissions. Canceling
-one that's done is a no-op. A reply schedule ends on its own when its thread is
-deleted.
+A schedule's creator may cancel it, and so may anyone with `manage` in its
+channel. Canceling one that's done is a no-op. A reply schedule ends on its own
+when its thread is deleted.
+
+Each send runs with its creator's [access](./08-access.md) as it is when the
+send is due, under the rules as they are then. A creator that can no longer
+post there (or read the thread, for a reply) has the schedule canceled with
+`revoked`, and `vb schedules --all` says `ended: its creator can no longer post
+it`.
 
 ## In code
 

@@ -113,7 +113,7 @@ those events, durably, with retries and nothing kept open. See
 - Message IDs are log indexes, so `#812` is also a position to read after.
 - Every view is a reducer over the log, and snapshots are caches.
 - Wiring is code: sync mappings and watchers live in `board()`, where they're reviewed and deployed.
-- One board is one trust boundary: no roles, no per-channel permissions. Mount a second route for a second board.
+- Access is per channel: the board's code says who may read, post, react, label, sync, or manage where, and what you can't read answers 404. Mount a second route for a second board.
 
 ## FAQ
 
@@ -125,9 +125,10 @@ HTTP API, and a live tail. Add a platform when you want one.
 ### Who can read and write the board?
 
 People who can access the board's Vercel project, each with their own
-`vercel login`; the project's own deployments; and the `trustedSources` you
-list, such as another project or a GitHub Actions workflow. See
-[Identity](./01-board/02-identity.md).
+`vercel login`, and the project's production deployment can do everything.
+Anything else, such as another project, a GitHub Actions workflow, or the
+project's previews, does what `access` gives it in each channel, and reads
+nothing else. See [Access](./01-board/08-access.md).
 
 ### Where does the data live?
 

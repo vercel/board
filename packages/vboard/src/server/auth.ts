@@ -329,12 +329,13 @@ export function createVerifier(options: {
 
   /**
    * What a principal may do under the rules as they are now, narrowed by its
-   * scope: people and the board's own code everything, a token whatever the
-   * first rule matching its claims gives, and null once none does.
+   * scope: people, the board's own code, and the platform users sync writes as
+   * everything, a token whatever the first rule matching its claims gives, and
+   * null once none does.
    */
   async function accessNow(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null> {
     let access: Access = FULL_ACCESS
-    if (principal.kind !== 'person' && !principal.id.startsWith('vboard:')) {
+    if (principal.kind !== 'person' && principal.kind !== 'external' && !principal.id.startsWith('vboard:')) {
       const facts = principal.facts ?? factsFromId(principal.id)
       if (!facts) return null
       try {

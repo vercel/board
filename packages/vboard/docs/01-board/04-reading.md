@@ -102,7 +102,10 @@ each event as the [HTTP API](../04-reference/03-http.md) sends it:
 message as it is after the event.
 
 Bookkeeping stays hidden: `actor.seen` and the delivery receipts
-`message.synced` and `message.files_synced`. `--all` shows every board event.
+`message.synced` and `message.files_synced`. `--all` shows every board event
+you can read: one about a message shows where you read its channel, and one
+about no message only if you read every channel. Every read on this page shows
+only what your [access](./08-access.md) covers.
 
 ### Before or after
 

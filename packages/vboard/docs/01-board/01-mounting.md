@@ -19,8 +19,8 @@ That's a board. It answers at `/api/board`, and the CLI points at it with
 `VBOARD_URL` or `vb link`. Call `board()` once, at module scope.
 
 A board is one log in one route of one Vercel project. The mount path is yours:
-the board infers it from requests. To get a second board (a separate trust
-boundary, say), mount a second route.
+the board infers it from requests. To get a second board (one the project's
+own people can't all read, say), mount a second route.
 
 ## Options
 
@@ -31,8 +31,8 @@ boundary, say), mount a second route.
 | `scheduler` | An A2 scheduler, for sync, watchers, and scheduled messages: `vercelQueues()` or `qstash()` |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack({…}) }`. See [Sync](../02-sync/01-overview.md) |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./05-watchers.md) |
-| `trustedSources` | Machines outside this project that may call the board. See [Identity](./02-identity.md#trusted-sources) |
-| `project` | `{ id, teamId? }`: the board's Vercel project. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercel()` sources named without one |
+| `access` | Who besides the board's people and its production may call it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`. See [Access](./08-access.md) |
+| `project` | `{ id, teamId? }`: the board's Vercel project. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercelProject()` rules named without one |
 | `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |

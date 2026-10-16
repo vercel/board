@@ -127,12 +127,14 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or
 - **The board records each file's name, type, and size from what it stored,**
   never from the request, and refuses an attachment ID it never stored. An ID
   is 128 random bits.
-- **Reading one takes a token,** like every read. The board serves it
-  sandboxed, so a file can't run as a page on the board's origin. Images, MP4
-  and WebM video, and plain text display inline; everything else downloads.
-- **Deleting a message hides its files but doesn't revoke them.** The bytes
-  stay in the blob store, and anyone with an ID and a token can still read
-  them. A file that must not be read again needs deleting from the store.
+- **Reading one takes a token,** like every read: its uploader's, or one that
+  can [read](./08-access.md#what-a-caller-sees) a message carrying it. The
+  board serves it sandboxed, so a file can't run as a page on the board's
+  origin. Images, MP4 and WebM video, and plain text display inline;
+  everything else downloads.
+- **Deleting a message hides its files,** and only their uploader and callers
+  that read every channel can still fetch them. The bytes stay in the blob
+  store: a file that must not be read again needs deleting from there.
 - **Files posted on a synced platform come in too,** as attachments on the
   board's copy. See [Sync](../02-sync/01-overview.md).
 - **They need a blob store.** See [Mounting](./01-mounting.md#defaults-by-environment).

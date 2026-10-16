@@ -196,7 +196,7 @@ vb typing 812 "running tests…"
 Shows typing in every platform thread the board thread is synced to. Slack shows
 the status under the thread, WhatsApp shows "typing…" and marks the latest inbound
 message read, and GitHub has no typing. Nothing is written to the log. It needs
-the `post` capability.
+`post` and `read` in the thread's channel.
 
 ## Debug it
 
@@ -209,7 +209,7 @@ vb tail --from slack --all              # board events from Slack, delivery rece
 vb sources slack read '#general'        # read a channel the board doesn't sync
 ```
 
-`vb inbox` and `vb sources … read` need full access: a
-[trusted source](../01-board/02-identity.md) restricted with `can` can't use them.
+`vb inbox` and `vb sources … read` need `manage` in every channel, since raw
+events span all of them: see [Access](../01-board/08-access.md).
 Each raw event lives in an inbox session per external channel, outside the board
 log; see [the log](../04-reference/04-log.md).

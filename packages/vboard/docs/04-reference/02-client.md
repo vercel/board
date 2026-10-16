@@ -220,8 +220,9 @@ await board.cancelSchedule(s.id)
 ```
 
 `schedules` lists pending schedules, oldest first (`all` adds done and
-canceled ones); `re` is any message in a thread. Anyone may cancel a schedule;
-`canceled` is false when it was already done or canceled. It needs a board
+canceled ones); `re` is any message in a thread. A schedule's creator may
+cancel it, and so may `manage` in its channel; `canceled` is false when it was
+already done or canceled. It needs a board
 with a scheduler. See [Scheduled messages](../01-board/06-schedules.md).
 
 ## Reading
@@ -285,11 +286,19 @@ that reply in it.
 channels(): Promise<ChannelView[]>  // { path, lastIndex, messages, threads }
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this client writes as
+source(): Promise<string | null>    // where its token came from; no request
 discovery(): Promise<Discovery>     // unauthenticated: url, audience, team_id, project_id, version, sync
 ```
 
 `me()` returns `{ actor, principal, kind, handle, name, avatar, profile,
-session, expiresAt }`.
+session, expiresAt, access }`. `access` maps each channel pattern to what you
+may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
+'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
+you can read; see [Access](../01-board/08-access.md).
+
+`source()` names where the Node client got its token: `VBOARD_TOKEN`, `vb
+serve`, `GitHub Actions OIDC`, `Vercel OIDC`, or `vercel login`. It's null for
+a token you passed.
 
 ### identity
 
@@ -311,7 +320,7 @@ readSource(key: string, target: string, opts?: { limit?: number }): Promise<Sour
 
 `inbox` returns the raw platform events a sync entry received, newest first.
 `readSource` reads a platform channel, thread, or message permalink without
-syncing or storing it. Both need full access.
+syncing or storing it. Both need `manage` in every channel.
 
 ### stuck and redrive
 
@@ -324,7 +333,7 @@ redrive(session: string, index: number, action: 'retry' | 'skip'): Promise<{ red
 oldest first in each session: `{ session, index, type, lane, thread, root,
 external, attempts, failures, error, failedAt }`. `redrive` retries one with a
 fresh 10 tries, or skips it; `redriven` is false when it wasn't stuck. Both
-need full access. See [the log](./04-log.md#stuck-events).
+need `manage` in every channel. See [the log](./04-log.md#stuck-events).
 
 ## Live
 

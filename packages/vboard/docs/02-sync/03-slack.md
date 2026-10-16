@@ -158,7 +158,7 @@ vb sources slack read 'https://acme.slack.com/archives/C0123ABC/p172700000012345
 
 It reads only public channels the app is already in, and never joins one. Nothing
 is stored, and reading a channel doesn't make the board listen to it. It needs
-full access, like `vb inbox`, since the app's token reads more than the caller
+`manage` in every channel, like `vb inbox`, since the app's token reads more than the caller
 might.
 
 | Answer | Why |
