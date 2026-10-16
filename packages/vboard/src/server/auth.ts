@@ -70,6 +70,13 @@ export type AccessRule = {
 /** A token no rule matches, and the rule that would let it in. */
 const notInAccess = (rule: string) => forbidden(`this token can't use this board: add ${rule} to access`)
 
+/** A rule's `can`, compiled. A rule without one says which rule and what to write. */
+function accessOf(rule: string, can: Can | undefined): Access {
+  if (can === undefined || can === null)
+    throw new Error(`${rule} needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'`)
+  return compileAccess(can)
+}
+
 const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) =>
   allowed === undefined ||
   (typeof value === 'string' && (typeof allowed === 'string' ? [allowed] : allowed).includes(value))
@@ -93,7 +100,7 @@ export function vercelProject(options: {
     throw new Error("vercelProject({ project: 'self' }) is the board's own project: drop team")
   return {
     issuer: 'vercel',
-    access: compileAccess(options.can),
+    access: accessOf(`vercelProject({ project: '${options.project}' })`, options.can),
     matches: (claims, { teamId, projectId }) =>
       (options.project === 'self'
         ? projectId !== null && claims.project_id === projectId
@@ -119,7 +126,7 @@ export function githubActions(options: {
 }): AccessRule {
   return {
     issuer: 'github',
-    access: compileAccess(options.can),
+    access: accessOf(`githubActions({ repository: '${options.repository}' })`, options.can),
     matches: (claims) =>
       claims.repository === options.repository &&
       oneOf(claims.event_name, options.event) &&
@@ -135,7 +142,8 @@ export function githubActions(options: {
  * The issuer is pinned here, and only issuers some rule names are trusted or
  * have their keys fetched. Every listed claim must match exactly (a list is
  * any of its values), and there must be at least one, since an issuer signs
- * tokens for everyone it serves. The principal is `oidc:<issuer host and path>:<sub>`.
+ * tokens for everyone it serves. The principal is `oidc:<issuer host and path>:<sub>`,
+ * with any `:` or `%` in the issuer part percent-encoded, so it ends at the first `:`.
  */
 export function oidc(options: {
   issuer: string
@@ -148,8 +156,8 @@ export function oidc(options: {
   } catch {
     throw new Error(`oidc: issuer must be a URL, got ${options.issuer}`)
   }
-  if (url.protocol !== 'https:' || url.search || url.hash)
-    throw new Error(`oidc: issuer must be an https URL with no query, got ${options.issuer}`)
+  if (url.protocol !== 'https:' || url.search || url.hash || url.username || url.password)
+    throw new Error(`oidc: issuer must be an https URL with no query or credentials, got ${options.issuer}`)
   if (VERCEL_ISSUER.test(options.issuer)) throw new Error('oidc: use vercelProject() for Vercel tokens')
   if (options.issuer === GITHUB_ISSUER) throw new Error('oidc: use githubActions() for GitHub Actions tokens')
   const required = Object.entries(options.claims)
@@ -163,7 +171,7 @@ export function oidc(options: {
   return {
     issuer: 'oidc',
     url: options.issuer,
-    access: compileAccess(options.can),
+    access: accessOf(`oidc({ issuer: '${options.issuer}' })`, options.can),
     matches: (claims) => required.every(([name, allowed]) => oneOf(claims[name], allowed)),
   }
 }
@@ -208,10 +216,16 @@ async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
   return keys
 }
 
-/** `gitlab.com`, `example.com/oidc`: an issuer as a principal names it. */
+/**
+ * `gitlab.com`, `example.com/oidc`, `ci.test%3A8443`: an issuer as a principal
+ * names it. A `:` (a port) and a `%` are percent-encoded, so the name has no `:`
+ * and the `sub` after it can hold anything. Issuers that differ only in what the
+ * URL normalizes (a trailing slash, the host's case) share a name, so the board
+ * refuses to trust two of them.
+ */
 const issuerName = (iss: string) => {
   const url = new URL(iss)
-  return `${url.host}${url.pathname.replace(/\/+$/, '')}`
+  return `${url.host}${url.pathname.replace(/\/+$/, '')}`.replace(/[%:]/g, (char) => (char === '%' ? '%25' : '%3A'))
 }
 
 export function createVerifier(options: {
@@ -225,6 +239,14 @@ export function createVerifier(options: {
   const githubIssuer = options.auth?.github ?? { issuer: GITHUB_ISSUER }
   // The only issuers past Vercel's and GitHub's whose tokens are verified, or whose keys are fetched.
   const oidcIssuers = new Set(options.access.flatMap((rule) => (rule.issuer === 'oidc' ? [rule.url!] : [])))
+  const named = new Map<string, string>()
+  for (const iss of oidcIssuers) {
+    const name = issuerName(iss)
+    const other = named.get(name)
+    if (other !== undefined)
+      throw new Error(`access: oidc issuers ${other} and ${iss} name the same principals, oidc:${name}:<sub>: pin one of them`)
+    named.set(name, iss)
+  }
 
   const ruleFor = (issuer: AccessRule['issuer'], claims: Claims, context: MatchContext, url?: string): Access | null =>
     options.access.find(

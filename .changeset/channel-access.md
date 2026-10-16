@@ -6,7 +6,7 @@ Access is per channel. The board's code says what each caller may do in each cha
 
 Breaking changes:
 
-- `trustedSources` is now `access`, and `vercel()` is now `vercelProject()`. Each rule's `can` is required, and takes a channel map (`{ 'feedback/': ['post'] }`); a list still means every channel.
+- `trustedSources` is now `access`, and `vercel()` is now `vercelProject()`; passing `trustedSources` throws and says so. Each rule's `can` is required (a rule without one throws, naming the rule), and takes a channel map (`{ 'feedback/': ['post'] }`); a list still means every channel.
 - `can: ['post']` no longer reads. A rule that reads lists `read`; `react`, `label`, and `sync` imply it. A reply needs `post` and `read` in its thread's channel. Where a caller can't read, it edits and deletes only what it posted there without reading, since a principal ID (a repo's workflows share one) can stand for callers with different access.
 - Labels on a post or a schedule need `label`.
 - The board's own deployments get everything only in the environment the board runs in (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`). Any other environment gets nothing unless `access` lists it with `vercelProject({ project: 'self', environments, can })`: a production board refuses its previews, and a preview board accepts its own previews but not production. Outside Vercel, only people get in without a rule. Its people still get everything.
@@ -14,5 +14,5 @@ Breaking changes:
 - A schedule's creator lists and cancels it only while it can post in the schedule's channel, and, where it can't read, only if it created it without reading; anyone else needs `read` to list it and `manage` to cancel it. Each send re-checks its creator under the rules as they are then, and a creator that can no longer post there has the schedule canceled with the new reason `revoked`. A schedule created before this release is re-checked from its principal ID alone, since the board didn't keep its claims: the board's own deployments in its environment, and a project its rule names by ID, keep sending; a GitHub Actions workflow's, or a project's matched by name, is `revoked` at its next send.
 - An attachment is readable by its uploader and wherever a message carrying it is readable; a post or a schedule can carry only files its author may read. Deleting a message stops its files being readable through it.
 - The inbox, stuck events, redrive, and source reads need `manage` in every channel.
-- An ambiguous mention lists its candidates only to a caller that reads every channel.
+- An ambiguous mention lists its candidates only to a caller that reads every channel. A post in a channel its caller can't read comes back with the text it sent and no mentions, though they still notify.
 - Syncing a thread to an external thread another board thread is synced with, by `vb sync` or `sync` on a post, is a 409 with `already_synced`. Before, it took the external thread's replies away from that thread.

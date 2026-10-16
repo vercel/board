@@ -1,4 +1,4 @@
-import { ChannelPath } from '../contract/schemas.ts'
+import { ChannelPath, SCOPE_MAX } from '../contract/schemas.ts'
 import { forbidden } from './errors.ts'
 
 /**
@@ -227,6 +227,7 @@ export const FULL_ACCESS = compileAccess('all')
  * nothing by sending it.
  */
 export function parseScope(header: string): Can {
+  if (header.length > SCOPE_MAX) throw new Error(`x-board-scope is longer than ${SCOPE_MAX} characters`)
   const out: Record<ChannelPattern, Grant> = {}
   const entries = header.split(';').map((entry) => entry.trim())
   if (entries.every((entry) => entry === '')) throw new Error('x-board-scope is empty: write pattern=permissions, like dev/=read,post')

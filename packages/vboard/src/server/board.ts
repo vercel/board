@@ -247,6 +247,8 @@ async function readCapped(request: Request, max: number): Promise<Uint8Array> {
 
 /** Mounts a board: one log in one route. Create it once, at module scope. */
 export function board(options: BoardOptions = {}) {
+  if ((options as { trustedSources?: unknown }).trustedSources !== undefined)
+    throw new Error('board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can')
   const blob = options.blob ?? defaultBlob()
   const engine =
     options.sync && Object.keys(options.sync).length > 0

@@ -300,7 +300,7 @@ Every failure is JSON with a matching status:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |
-| 400 | `invalid_scope` | an `x-board-scope` header the board can't parse; the message says what to write |
+| 400 | `invalid_scope` | an `x-board-scope` header the board can't parse, or one longer than 4000 characters; the message says what to write |
 | 400 | `unknown_mention`, `ambiguous_mention` | an `@handle` matches no actor, or several. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `no_blob_store` | an upload to a board with nowhere to keep files |

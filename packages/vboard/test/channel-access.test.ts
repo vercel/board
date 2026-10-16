@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { githubActions, oidc, vercelProject } from '../src/server/index.ts'
+import { board, githubActions, oidc, vercelProject } from '../src/server/index.ts'
 import { PERMISSIONS } from '../src/server/access.ts'
 import { caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
+import { fakeQueue } from './queue.ts'
 
 const ALL = [...PERMISSIONS]
 const own = (environment: string) => deploymentToken('board', PROJECT_ID, environment)
@@ -120,6 +121,16 @@ describe('access rules', () => {
     expect((await ci('GET', `/messages?re=${id}&after=${id}`)).status).toBe(200)
   })
 
+  it('says how to move off trustedSources, and which rule has no can', () => {
+    expect(() => board({ trustedSources: [] } as never)).toThrow(
+      'board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can',
+    )
+    const hint = "needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'"
+    expect(() => vercelProject({ project: 'docs' } as never)).toThrow(`vercelProject({ project: 'docs' }) ${hint}`)
+    expect(() => githubActions({ repository: 'acme/www' } as never)).toThrow(`githubActions({ repository: 'acme/www' }) ${hint}`)
+    expect(() => oidc({ issuer: OIDC_ISS, claims: { a: 'b' } } as never)).toThrow(`oidc({ issuer: '${OIDC_ISS}' }) ${hint}`)
+  })
+
   it('needs manage in every channel for the board’s bookkeeping', async () => {
     const { fetch } = testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { '*': 'all', 'security/': [] } })] })
     const denied = await caller(fetch, await workflowToken())('GET', '/stuck')
@@ -178,6 +189,36 @@ describe('oidc()', () => {
     expect(oidc({ issuer: OIDC_ISS, claims: { project_path: ['acme/api', 'acme/web'] }, can: 'all' }).matches({ project_path: 'acme/web' }, { teamId: null, projectId: null })).toBe(true)
   })
 
+  it('names a principal so no issuer’s sub can pass for another issuer’s', async () => {
+    // Before, both were oidc:gitlab.test:8443:deploy.
+    const withPort = `${OIDC_ISS}:8443`
+    const { fetch } = testBoard({
+      auth: { ...testAuth, oidc: { ...testAuth.oidc, [withPort]: testAuth.oidc[OIDC_ISS]! } },
+      access: [
+        oidc({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' }),
+        oidc({ issuer: withPort, claims: { project_path: 'acme/api' }, can: 'all' }),
+      ],
+    })
+    const principal = async (sub: string, issuer?: string) =>
+      (await caller(fetch, await oidcToken({ sub }, issuer))('GET', '/me')).body.principal
+    expect(await principal('8443:deploy')).toBe('oidc:gitlab.test:8443:deploy')
+    expect(await principal('deploy', withPort)).toBe('oidc:gitlab.test%3A8443:deploy')
+  })
+
+  it('refuses two issuers that would name the same principals', () => {
+    for (const [a, b] of [
+      [`${OIDC_ISS}/ci`, `${OIDC_ISS}/ci/`],
+      [OIDC_ISS, 'https://GitLab.test'],
+      [`${OIDC_ISS}:443`, OIDC_ISS],
+    ])
+      expect(
+        () => testBoard({ access: [oidc({ issuer: a!, claims: { x: 'y' }, can: 'all' }), oidc({ issuer: b!, claims: { x: 'y' }, can: 'all' })] }),
+        `${a} ${b}`,
+      ).toThrow(`access: oidc issuers ${a} and ${b} name the same principals`)
+    // Two rules for one issuer are fine.
+    expect(() => testBoard({ access: [oidc({ issuer: OIDC_ISS, claims: { x: 'y' }, can: 'all' }), oidc({ issuer: OIDC_ISS, claims: { x: 'z' }, can: 'all' })] })).not.toThrow()
+  })
+
   it('keeps each rule to its own issuer', async () => {
     const selfHosted = 'https://ci.selfhosted.test'
     const { fetch } = testBoard({
@@ -210,6 +251,24 @@ describe('x-board-scope', () => {
     const { fetch } = testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: ['post'] })] })
     const widened = caller(fetch, await workflowToken(), { 'x-board-scope': '*=all' })
     expect((await widened('GET', '/me')).body.can).toEqual({ '*': ['post'] })
+  })
+
+  it('refuses a scope longer than a schedule can keep, on every route', async () => {
+    const queue = fakeQueue()
+    const { fetch } = testBoard({ scheduler: queue.scheduler })
+    const scopeOf = (length: number) => 'dev/=all'.padEnd(length, ';')
+    const longest = caller(fetch, await personToken(), { 'x-board-scope': scopeOf(4000) })
+    expect((await longest('POST', '/messages', { channel: 'dev', text: 'now' })).status).toBe(201)
+    expect((await longest('POST', '/schedules', { channel: 'dev', text: 'later', in: '1h' })).status).toBe(201)
+    const tooLong = caller(fetch, await personToken(), { 'x-board-scope': scopeOf(4001) })
+    for (const [method, path, body] of [
+      ['POST', '/messages', { channel: 'dev', text: 'now' }],
+      ['POST', '/schedules', { channel: 'dev', text: 'later', in: '1h' }],
+    ] as const)
+      expect(await tooLong(method, path, body), path).toMatchObject({
+        status: 400,
+        body: { error: { code: 'invalid_scope', message: 'x-board-scope is longer than 4000 characters' } },
+      })
   })
 
   it('refuses a scope it can’t read', async () => {

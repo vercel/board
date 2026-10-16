@@ -243,7 +243,11 @@ talking to.
   `access` rule.
 - **Any other issuer** is trusted only when an `oidc()` rule names it, pinned
   in code as an https URL. The board fetches keys only for issuers a rule
-  names, and a rule matches exact claims, at least one.
+  names, and a rule matches exact claims, at least one. Its principal is
+  `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
+  percent-encoded (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at
+  the first `:`. Two rules whose issuers would name the same principals
+  (`https://ci.test/a` and `https://ci.test/a/`) are an error at boot.
 - **Tests** pass `board({ issuers })` in code, which points verification at a
   local test issuer. Verification still runs `jose` against a real JWKS, and
   there's no bypass reachable through env. Local development needs no bypass
@@ -347,7 +351,9 @@ board({
   middleware, `board.client()`, schedules' system writes) can do everything.
 - `x-board-scope: dev/=read,post;ci/=read`, set by a proxy that holds the
   credential, is intersected with the principal's access, so it only narrows.
-  An entry's permissions can be `all` (`dev/=all`).
+  An entry's permissions can be `all` (`dev/=all`). A schedule keeps its
+  creator's scope, so a header longer than 4000 characters is `invalid_scope`
+  on every request.
 - **Every check is against the channel the board looked up.** `authorize()`
   returns a proof carrying the permission and the channel. The board looks a
   write's target up before the check (`authorizeMessage` returns the message
@@ -362,6 +368,12 @@ board({
   `/schedules`, and `/actors` drop what you can't read. An event about no
   message (`actor.*`, `thread.synced`) reaches only a caller that reads every
   channel. Links to an unreadable board message lose their snapshot when read.
+- **A write doesn't answer what a read wouldn't.** A post in a channel its
+  caller can't read comes back with the text it sent and no mentions: the
+  board resolves handles and emails to actor IDs, which `/actors` hides from
+  that caller. The board stores the resolved text and mentions, so they still
+  notify. An unknown handle is still `unknown_mention` for anyone, so a
+  write-only caller can tell whether a handle exists, but not whose it is.
 - Only the principal that wrote a message may edit or delete it. A person can
   edit their own profiles' messages. A principal ID is coarser than access (a
   repo's workflows share one), so where a caller can't read, its own is only

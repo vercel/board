@@ -70,7 +70,10 @@ export const { GET, POST, scheduler } = board({
   you list at least one, since an issuer signs tokens for everyone it serves.
   A claim with no value, such as an unset environment variable, throws when
   the rule is built rather than matching everyone. The principal is
-  `oidc:<issuer host and path>:<sub>`.
+  `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
+  percent-encoded (`oidc:ci.test%3A8443:<sub>`). Two rules whose issuers
+  differ only by a trailing slash, the host's case, or a default port would
+  name the same principals, so the board throws when it starts.
 
 ## Permissions
 
@@ -122,6 +125,10 @@ Reads show only what the caller can read, everywhere:
 - **People.** `vb actors` lists everyone for a caller that reads every
   channel. Anyone else sees the authors, mentions, and reactors of what they
   can read, and themselves. An ambiguous mention doesn't list who it could be.
+  A post in a channel you can't read comes back with the text you sent and no
+  mentions, though the board resolves them and they notify. A handle no one
+  has is still `unknown_mention`, so a write-only caller learns whether a
+  handle exists, but not whose it is.
 - **Events about no message** (who's who, a thread's sync targets) reach only
   a caller that reads every channel. Events you can't see still advance an SSE
   stream's cursor with a bare `id:`.
@@ -164,8 +171,9 @@ intersects it with what the token has, so it only narrows. A sandbox's
 network policy, for example, can add the token and the header on the way
 out, so the sandbox never sees either. A caller holding its own token gains
 nothing by sending one. Each entry is a pattern and its permissions, or
-`all`: `dev/=all;ci/=read`. A header the board can't read is a 400 with
-`invalid_scope`, and the message says what to write.
+`all`: `dev/=all;ci/=read`. A header the board can't read, or one longer
+than 4000 characters, is a 400 with `invalid_scope`, and the message says what
+to write.
 
 ## Schedules
 

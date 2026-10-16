@@ -20,6 +20,7 @@ import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
 import { badRequest, duplicateId, forbidden, HttpError, notFound } from './errors.ts'
 import { view, type Reader } from './feed.ts'
+import type { MessageView } from '../api/routes.ts'
 import type { ResolvedTarget } from '../sync/provider.ts'
 import type { BoardClient } from '../client/client.ts'
 import { runMiddleware, type Middleware, type WriteSource } from './middleware.ts'
@@ -218,6 +219,7 @@ export type PostInput = WriteOrigin & {
 
 export async function writePost(ctx: WriteContext, input: PostInput) {
   const { identity } = input
+  const sent = input.text
   let channel = input.channel
   let re: number | null = null
   let replyTo: number | null = null
@@ -252,7 +254,7 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
       // the middleware may have changed them, and edits may have since.
       if (!sameAuthor(landed.by, identity.author) || landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo)
         throw duplicateId()
-      return view(landed, (await ctx.session.state(actorsReducer)).state, { access: identity.principal.access, messages })
+      return shownTo(view(landed, (await ctx.session.state(actorsReducer)).state, { access: identity.principal.access, messages }), identity.principal.access, sent)
     }
   }
   if (chain)
@@ -265,9 +267,9 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
         board: middlewareClient(ctx),
         ...(input.respond ? { respond: input.respond } : {}),
       },
-      (write) => commitPost(ctx, { ...input, text: write.text, labels: write.labels }, { channel: channel!, re, replyTo, thread, id }),
+      (write) => commitPost(ctx, { ...input, text: write.text, labels: write.labels }, { channel: channel!, re, replyTo, thread, id, sent }),
     )
-  return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id })
+  return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id, sent })
 }
 
 const sameAuthor = (a: Author, b: Author) =>
@@ -276,10 +278,10 @@ const sameAuthor = (a: Author, b: Author) =>
 async function commitPost(
   ctx: WriteContext,
   input: PostInput,
-  placed: { channel: string; re: number | null; replyTo: number | null; thread: string; id: string | undefined },
+  placed: { channel: string; re: number | null; replyTo: number | null; thread: string; id: string | undefined; sent: string },
 ) {
   const { identity } = input
-  const { channel, re, replyTo, thread, id } = placed
+  const { channel, re, replyTo, thread, id, sent } = placed
   const { state: actors } = await ctx.session.state(actorsReducer)
   const targets: { target: string; kind: 'channel' | 'thread'; cause: 'config' | 'request' }[] = []
   if (re === null) {
@@ -341,8 +343,17 @@ async function commitPost(
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
   const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
-  return view(message, known, await readerFor(ctx, identity.principal.access, message))
+  return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent)
 }
+
+/**
+ * A post's view for its writer. One that can't read the channel gets back the
+ * text it sent and no mentions: the board resolved its handles and emails to
+ * actor IDs, which `/actors` doesn't show it. The board keeps them, so the
+ * mentions still notify.
+ */
+const shownTo = (shown: MessageView, access: Access, sent: string): MessageView =>
+  access.readable(shown.channel) ? shown : { ...shown, text: sent, mentions: [] }
 
 /** The writer, as the reader of the view its write returns. Only a link to a board message needs the messages state. */
 async function readerFor(ctx: WriteContext, access: Access, message: Message): Promise<Reader> {

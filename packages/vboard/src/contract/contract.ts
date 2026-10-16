@@ -14,6 +14,7 @@ import {
   MessageId,
   MessageText,
   MESSAGE_TEXT_MAX,
+  SCOPE_MAX,
 } from './schemas.ts'
 
 /**
@@ -346,7 +347,7 @@ export const ScheduleIdentity = z.object({
         team: z.string().max(200).optional(),
       })
       .optional(),
-    scope: z.string().max(4000).optional(),
+    scope: z.string().max(SCOPE_MAX).optional(),
   }),
   actor: z.object({ id: ActorId, kind: SeenActorKind, handle: Handle, name: z.string().min(1).max(128), avatar: z.string().nullable() }),
 })

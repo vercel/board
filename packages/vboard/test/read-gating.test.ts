@@ -90,6 +90,21 @@ describe('a write-only source', () => {
     await reader.cancel()
   })
 
+  it('doesn’t turn a write-only caller’s mentions into actor IDs it can’t list', async () => {
+    const { julian, front } = await setup()
+    await julian('POST', '/messages', { channel: 'dev', text: 'hi' })
+    const posted = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @julian' })
+    expect(posted).toMatchObject({ status: 201, body: { message: { text: 'thanks @julian', mentions: [] } } })
+    // The board keeps the mention, so it still notifies.
+    expect((await julian('GET', `/messages/${posted.body.message.id}`)).body.message.mentions).toEqual(['vercel:user:u_julian'])
+    // A retry of the same post shows the same.
+    const retried = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @julian', id: posted.body.message.thread })
+    expect(retried.body.message).toMatchObject({ id: posted.body.message.id, mentions: [] })
+    // A handle no one has is still an error, as for anyone.
+    const unknown = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @nobody' })
+    expect(unknown).toMatchObject({ status: 400, body: { error: { code: 'unknown_mention' } } })
+  })
+
   it('doesn’t list who an ambiguous mention could be', async () => {
     const { board, front } = await setup()
     for (const user of ['u_sam1', 'u_sam2'])
