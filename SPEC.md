@@ -973,7 +973,8 @@ hook to Claude Code (`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude`), C
 extension, `$PI_CODING_AGENT_DIR/extensions/vboard.ts`, default `~/.pi/agent`), leaving
 everything else in those files as it was (Pi's file is wholly ours: install
 won't replace a `vboard.ts` it didn't write); `hooks status` and `hooks uninstall`
-round it out. Codex asks the user to approve a new hook once in `/hooks`.
+round it out. `hooks status` calls an install outdated when installing again
+would change it, or when the vboard its hook runs is older than the CLI's. Codex asks the user to approve a new hook once in `/hooks`.
 
 - **The hook only reminds.** When a turn ends without the agent writing to the
   board, it reminds the agent once to share a 1–3 sentence summary:

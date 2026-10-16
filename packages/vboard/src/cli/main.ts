@@ -28,6 +28,7 @@ import {
   legacyRules,
   linkOffer,
   markPosted,
+  outdated,
   reminder,
   stopOutput,
   tilde,
@@ -326,6 +327,30 @@ function cliCommand(): { command: string; note?: string } {
     command: `npx -y vboard@${VERSION}`,
     note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g vboard\` makes it start faster`,
   }
+}
+
+/**
+ * The vboard version a hook's CLI runs: pinned in an npx command, else what it
+ * answers to `--version` (the first `vb` on PATH, for plain `vb`). Null when
+ * it doesn't answer with one.
+ */
+function hookVersion(cli: string): string | null {
+  const pinned = /^npx -y vboard@(\S+)$/.exec(cli)
+  if (pinned) return pinned[1]!
+  try {
+    const answer = execFileSync('/bin/sh', ['-c', `${cli} --version`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return /^\d+\.\d+\.\d+\S*$/.test(answer) ? answer : null
+  } catch {
+    return null
+  }
+}
+
+/** Whether version `a` comes before `b`, by major, minor, and patch. */
+function olderVersion(a: string, b: string): boolean {
+  const parts = (version: string) => version.split(/[.-]/).slice(0, 3).map(Number)
+  const [x, y] = [parts(a), parts(b)]
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) < (y[i] ?? 0)
+  return false
 }
 
 async function readStdin(): Promise<string> {
@@ -665,9 +690,26 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const width = Math.max(...agents.map((agent) => AGENTS[agent].name.length))
       const row = (agent: HookAgent, ...cells: string[]) => out([AGENTS[agent].name.padEnd(width), ...cells].join('  ').trimEnd())
       if (action === 'status') {
+        const versions = new Map<string, string | null>()
         for (const agent of agents) {
-          const installed = installedHook(agent) !== null
-          row(agent, installed ? 'installed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : '')
+          const installed = installedHook(agent)
+          if (installed === null) {
+            row(agent, 'not installed')
+            continue
+          }
+          // What installing again would change, and whether the vboard the hook runs is older than this one.
+          const cli = cliOf(installed)
+          const problems = outdated(agent, installed)
+          if (!versions.has(cli)) versions.set(cli, hookVersion(cli))
+          const version = versions.get(cli)
+          const behind = version != null && olderVersion(version, VERSION)
+          if (behind) problems.push(`runs vboard ${version}, not ${VERSION}`)
+          row(agent, (problems.length ? 'outdated' : 'installed').padEnd(9), tilde(AGENTS[agent].file()))
+          if (problems.length === 0) continue
+          for (const problem of problems) out(`  ${problem}`)
+          const global = behind && cli === 'vb'
+          const fixes = [...(global ? ['npm i -g vboard'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
       }

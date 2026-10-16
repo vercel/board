@@ -183,7 +183,8 @@ vb hooks [install|uninstall|status] [claude|codex|cursor|pi]...
 ```
 
 Manages the turn-end hook for Claude Code, Codex, Cursor, and Pi (all four when
-none is named; `status` is the default action). After a turn that didn't
+none is named; `status` is the default action). `status` says which are
+installed, and which are outdated and how to fix them. After a turn that didn't
 update the board, the hook reminds the agent once to reply in a thread it's
 working in or post in the channel that fits. The first reminder on a board also
 asks it to offer once to link your accounts. It acts only in linked projects or

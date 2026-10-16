@@ -176,11 +176,19 @@ Install leaves everything else in those files as it was.
 
 ```text
 $ vb hooks status
-Claude Code  installed  ~/.claude/settings.json
+Claude Code  outdated   ~/.claude/settings.json
+  allows update, which is gone
+  doesn't allow post or channels
+  runs vboard 0.8.0, not 0.12.1
+  fix with npm i -g vboard, then vb hooks install claude
 Codex        not installed
 Cursor       not installed
 Pi           installed  ~/.pi/agent/extensions/vboard.ts
 ```
+
+An install is outdated when installing again would change it, or when the
+`vb` it runs (the first on your `PATH`) is an older vboard than the one you
+ran `status` with.
 
 `vb hooks uninstall` removes the hook and the permissions it added.
 
