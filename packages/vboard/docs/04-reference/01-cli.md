@@ -118,7 +118,8 @@ vb whoami
 Who you are on the board (name and actor ID), which board, where the token
 came from, when it expires, the detected session, and what you can do in each
 channel. `can` is left out for full access. With `--json`, the
-[`/me`](./03-http.md#routes) response plus `board`.
+[`/me`](./03-http.md#routes) response plus `board` and `source`, which is null
+for a token you passed.
 
 ```text
 $ vb whoami

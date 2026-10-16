@@ -88,6 +88,12 @@ export const boardContract = contract({
       links: z.array(Link).max(LINKS_PER_MESSAGE_MAX).optional(),
       /** (server) Posted by a schedule: its ID and which send this is, from 0. Other messages have none. */
       schedule: z.object({ id: z.number().int().positive(), n: z.number().int().nonnegative() }).optional(),
+      /**
+       * (server) Its author couldn't read the channel it posted in. Where a
+       * caller can't read, it edits and deletes only these of its own. Events
+       * from before channel access have none: everyone read everything then.
+       */
+      blind: z.literal(true).optional(),
     }),
     /** A message's links changed: an edit linked something new, or the platform sent what a link says. */
     'message.linked': z.object({ id: MessageId, thread: ThreadKey, links: z.array(Link).max(LINKS_PER_MESSAGE_MAX), by: Author, from: From }),
@@ -336,6 +342,8 @@ export const ScheduleIdentity = z.object({
         issuer: z.enum(['vercel', 'github', 'oidc']),
         iss: z.string().max(1000),
         claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
+        /** The board's own Vercel team, as the board knew it when it verified the token. */
+        team: z.string().max(200).optional(),
       })
       .optional(),
     scope: z.string().max(4000).optional(),
@@ -367,6 +375,12 @@ export const schedulesContract = contract({
       until: Millis.nullable(),
       times: z.number().int().positive().nullable(),
       as: ScheduleIdentity,
+      /**
+       * (server) Its creator couldn't read its channel. Where a caller can't
+       * read, it sees and cancels only these of its own. Schedules from before
+       * channel access have none.
+       */
+      blind: z.literal(true).optional(),
     }),
     'schedule.canceled': z.object({
       id: z.number().int().positive(),

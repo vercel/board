@@ -110,7 +110,7 @@ describe('stuck events', () => {
     for (const [method, path, body] of [['GET', '/stuck'], ['POST', '/stuck/redrive', { session: 'board', index: 1, action: 'skip' }]] as const) {
       const denied = await workflow(method, path, body)
       expect(denied.status).toBe(403)
-      expect(denied.body.error.message).toContain('needs manage on every channel')
+      expect(denied.body.error.message).toContain('it needs manage in every channel')
     }
     const julian = caller(board.fetch, await personToken())
     expect((await julian('POST', '/stuck/redrive', { session: 'elsewhere', index: 1, action: 'skip' })).status).toBe(404)

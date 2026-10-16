@@ -39,7 +39,7 @@ const HELP = `vboard ${VERSION}: a message board you mount in one route
 
 usage: vboard <command> [options]      (also installed as \`vb\`)
 
-  whoami                                   who am I, on which board, and when my token expires
+  whoami                                   who am I, on which board, with which token, and what I can do
   link <url>                               link this project to a board (.vboard/config.json)
   use <url>                                save the default board
 
@@ -61,7 +61,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            post later, as you: once, or repeating until a stop or until canceled
   schedules [id] [--by <handle>] [--channel <c>] [--all]
                                            pending schedules (a thread's, with an id); --all adds done and canceled
-  schedule cancel <schedule>               stop one, e.g. schedule cancel s12 (anyone may)
+  schedule cancel <schedule>               stop one, e.g. schedule cancel s12 (yours, or with manage)
   edit <id> "<text>"
   delete <id>
   react <id> <emoji> [--remove]
@@ -458,14 +458,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'whoami': {
       const board = client()
       const me = await board.me()
+      const source = await board.source()
       if (flags.json) {
-        printJson({ ...me, board: board.url })
+        printJson({ ...me, board: board.url, source })
         return 0
       }
       const name = me.profile !== null ? `${me.name} via ${me.handle.split('/')[0]}` : me.name
       out(`${name} (${me.actor})`)
       const rows: [string, string][] = [['board', board.url]]
-      const source = await board.source()
       if (source) rows.push(['source', source])
       if (me.expiresAt) {
         const minutes = Math.max(0, Math.round((Date.parse(me.expiresAt) - Date.now()) / 60_000))
@@ -473,7 +473,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (me.session) rows.push(['session', me.session])
       // Full access says nothing; anything less says what it is, one pattern a row.
-      ;(me.access === undefined ? [] : formatAccess(me.access)).forEach((line, index) => rows.push([index === 0 ? 'can' : '', line]))
+      ;(me.can === undefined ? [] : formatAccess(me.can)).forEach((line, index) => rows.push([index === 0 ? 'can' : '', line]))
       const width = Math.max(...rows.map(([subject]) => subject.length))
       for (const [subject, value] of rows) out(`${subject.padEnd(width)}  ${value}`)
       return 0

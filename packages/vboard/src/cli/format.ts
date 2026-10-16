@@ -142,10 +142,10 @@ export function formatThreadSummaries(threads: ThreadSummaryView[], options: { c
 }
 
 /**
- * `/me`'s access as `whoami` rows, a pattern and its permissions each (`ci/  read
+ * `/me`'s `can` as `whoami` rows, a pattern and its permissions each (`ci/  read
  * post`), or none for full access. `manage` brings everything, so it says `all`.
  */
-export function formatAccess(access: Me['access']): string[] {
+export function formatAccess(access: Me['can']): string[] {
   const patterns = Object.keys(access)
   if (patterns.length === 1 && patterns[0] === '*' && access['*']!.includes('manage')) return []
   if (patterns.length === 0) return ['nothing']

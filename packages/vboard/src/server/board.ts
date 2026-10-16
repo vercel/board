@@ -348,7 +348,8 @@ export function board(options: BoardOptions = {}) {
 
   /** The board's own bookkeeping spans every channel, so it needs `manage` in all of them. */
   const requireManage = (principal: Principal, what: string) => {
-    if (!principal.access.everywhere('manage')) throw forbidden(`${what} needs manage on every channel`)
+    if (!principal.access.everywhere('manage'))
+      throw forbidden(`this token can't ${what}: it needs manage in every channel`)
   }
 
   /**
@@ -450,7 +451,7 @@ export function board(options: BoardOptions = {}) {
             profile: author.profile,
             session: author.session,
             expiresAt: principal.expiresAt?.toISOString() ?? null,
-            access: principal.access.summary(),
+            can: principal.access.summary(),
           }
           return json(body)
         }
@@ -615,26 +616,26 @@ export function board(options: BoardOptions = {}) {
         case 'cancelSchedule':
           return json(await schedules.cancel(identity, match.id!))
         case 'edit': {
-          const { proof } = await authorizeOwn(writes, principal, match.id!, 'edit')
+          const authorized = await authorizeOwn(writes, principal, match.id!, 'edit')
           const body = EditBody.parse(await readJson(request))
-          await writeEdit(writes, { identity, proof, id: match.id!, text: body.text, ...origin })
+          await writeEdit(writes, { identity, authorized, text: body.text, ...origin })
           return json({ ok: true })
         }
         case 'delete': {
-          const { proof } = await authorizeOwn(writes, principal, match.id!, 'delete')
-          await writeDelete(writes, { identity, proof, id: match.id! })
+          const authorized = await authorizeOwn(writes, principal, match.id!, 'delete')
+          await writeDelete(writes, { identity, authorized })
           return json({ ok: true })
         }
         case 'react': {
-          const { proof } = await authorizeMessage(writes, principal.access, 'react', match.id!)
+          const authorized = await authorizeMessage(writes, principal.access, 'react', match.id!)
           const body = ReactBody.parse(await readJson(request))
-          await writeReaction(writes, { identity, proof, id: match.id!, emoji: body.emoji, remove: body.remove })
+          await writeReaction(writes, { identity, authorized, emoji: body.emoji, remove: body.remove })
           return json({ ok: true })
         }
         case 'label': {
-          const { proof } = await authorizeMessage(writes, principal.access, 'label', match.id!)
+          const authorized = await authorizeMessage(writes, principal.access, 'label', match.id!)
           const body = LabelBody.parse(await readJson(request))
-          await writeLabels(writes, { identity, proof, id: match.id!, set: body.set, unset: body.unset })
+          await writeLabels(writes, { identity, authorized, set: body.set, unset: body.unset })
           return json({ ok: true })
         }
         case 'upload': {
@@ -661,9 +662,9 @@ export function board(options: BoardOptions = {}) {
           return await attachmentResponse(blob, attachment)
         }
         case 'sync': {
-          const { proof } = await authorizeMessage(writes, principal.access, 'sync', match.id!)
+          const authorized = await authorizeMessage(writes, principal.access, 'sync', match.id!)
           const body = SyncBody.parse(await readJson(request))
-          return json(await writeAttach(writes, { identity, proof, id: match.id!, target: body.target }))
+          return json(await writeAttach(writes, { identity, authorized, target: body.target }))
         }
         case 'typing': {
           // Typing is a reply about to come: `post` and `read` where the thread is.
@@ -675,23 +676,23 @@ export function board(options: BoardOptions = {}) {
         }
         case 'inbox': {
           // Raw platform payloads, from every channel.
-          requireManage(principal, 'reading the inbox')
+          requireManage(principal, 'read the inbox')
           if (!engine) throw notFound('this board has no sync configured')
           const query = InboxQuery.parse(queryObject(url))
           return json({ events: await engine.readInbox(match.param!, query.channel, query.limit ?? 50) })
         }
         case 'stuck': {
           // What failed, with its errors, like the inbox.
-          requireManage(principal, 'reading stuck events')
+          requireManage(principal, 'read stuck events')
           return json({ stuck: await stuck() })
         }
         case 'redrive': {
-          requireManage(principal, 'retrying or skipping stuck events')
+          requireManage(principal, 'retry or skip stuck events')
           return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
         }
         case 'sourceRead': {
           // The app's token reads what the app can, not what the caller can.
-          requireManage(principal, 'reading a source')
+          requireManage(principal, 'read a source')
           if (!engine) throw notFound('this board has no sync configured')
           const query = SourceReadQuery.parse(queryObject(url))
           return json(await engine.readSource(match.param!, query.target, query.limit ?? 50))

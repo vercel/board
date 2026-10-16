@@ -266,7 +266,7 @@ export type Me = {
   session: string | null
   expiresAt: string | null
   /** What you may do in each channel pattern, implications included: `{ '*': [...every permission] }` is full access. */
-  access: AccessSummary
+  can: AccessSummary
 }
 
 /** A platform account linked to you, as `GET /identity` lists it. */
@@ -385,7 +385,7 @@ export const routes = {
   /** Posts a message later, as the caller: needs a scheduler. */
   schedule: { method: 'POST', path: '/schedules', body: ScheduleBody },
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
-  /** Anyone may cancel a schedule. Canceling one that's done is a no-op. */
+  /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
   /** Events that stopped their thread: full access only. */

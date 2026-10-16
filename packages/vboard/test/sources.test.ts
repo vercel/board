@@ -153,7 +153,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     const workflow = caller(board.fetch, await workflowToken())
     const denied = await read(workflow, '#project-vercel-kit')
     expect(denied.status).toBe(403)
-    expect(denied.body.error.message).toContain('needs manage on every channel')
+    expect(denied.body.error.message).toContain('it needs manage in every channel')
   })
 
   it('prints a channel with how to open each thread', () => {

@@ -286,19 +286,20 @@ that reply in it.
 channels(): Promise<ChannelView[]>  // { path, lastIndex, messages, threads }
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this client writes as
-source(): Promise<string | null>    // where its token came from; no request
+source(): Promise<string | null>    // where its token came from; gets one if it has none
 discovery(): Promise<Discovery>     // unauthenticated: url, audience, team_id, project_id, version, sync
 ```
 
 `me()` returns `{ actor, principal, kind, handle, name, avatar, profile,
-session, expiresAt, access }`. `access` maps each channel pattern to what you
+session, expiresAt, can }`. `can` maps each channel pattern to what you
 may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
 'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
 you can read; see [Access](../01-board/08-access.md).
 
 `source()` names where the Node client got its token: `VBOARD_TOKEN`, `vb
 serve`, `GitHub Actions OIDC`, `Vercel OIDC`, or `vercel login`. It's null for
-a token you passed.
+a token you passed. A client with no token yet gets one first, which can
+fetch discovery and mint a token, and fail as any call would.
 
 ### identity
 

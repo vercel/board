@@ -1,7 +1,7 @@
 import type { z } from 'zod'
 import type { ActorView, Filters, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
 import type { BoardEvent, Link } from '../contract/contract.ts'
-import type { Access } from './access.ts'
+import { FULL_ACCESS, type Access } from './access.ts'
 import {
   foldActors,
   foldMessages,
@@ -37,9 +37,12 @@ export function actorView(actors: ActorsState, id: string): ActorView | null {
 /** Who's reading a view, for what links show: a link to a board message they can't read shows nothing of it. */
 export type Reader = { access: Access; messages: MessagesState }
 
+/** The board's own code, which reads every channel: it needs no messages to say so. */
+export const OWN_CODE: Reader = { access: FULL_ACCESS, messages: { byId: {}, replies: {} } }
+
 /** Links as `reader` may see them. The log keeps each snapshot; it's hidden when it's read. */
-export function readableLinks(links: Link[], reader: Reader | undefined): Link[] {
-  if (!reader || reader.access.readsAll) return links
+export function readableLinks(links: Link[], reader: Reader): Link[] {
+  if (reader.access.readsAll) return links
   return links.map((link) => {
     const linked = link.message === null ? undefined : reader.messages.byId[link.message]
     return linked && !reader.access.readable(linked.channel)
@@ -48,9 +51,11 @@ export function readableLinks(links: Link[], reader: Reader | undefined): Link[]
   })
 }
 
-export function view(message: Message, actors: ActorsState, reader?: Reader): MessageView {
+/** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
+export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
+  const { blind: _blind, ...shown } = message
   return {
-    ...message,
+    ...shown,
     links: readableLinks(message.links, reader),
     labels: { ...message.labels },
     reactions: Object.fromEntries(
@@ -169,7 +174,7 @@ export function foldEvent(messages: MessagesState, actors: ActorsState, event: B
 }
 
 /** An event as subscribers receive it, with its message as it is afterwards. */
-export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState, reader?: Reader): BoardEventView {
+export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState, reader: Reader): BoardEventView {
   const by = (event.payload as { by?: { actor?: string } }).by?.actor
   const actor = by ? actors.byId[by] : undefined
   const { links } = event.payload as { links?: Link[] }

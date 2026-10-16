@@ -52,7 +52,7 @@ These routes take no token:
 | `x-board-session` | the runtime session, recorded on writes (up to 200 characters) |
 | `x-board-handle` | a person's handle, e.g. their Vercel username. Ignored for machines |
 | `x-board-name` | a person's display name, URI-encoded. Ignored for machines |
-| `x-board-scope` | narrows what the token may do, for a proxy that holds it: `dev/=read,post;ci/=read`. It never widens. See [Access](../01-board/08-access.md#narrowing-a-token) |
+| `x-board-scope` | narrows what the token may do, for a proxy that holds it: `dev/=read,post;ci/=read`, or `all` for an entry's permissions (`dev/=all`). It never widens. See [Access](../01-board/08-access.md#narrowing-a-token) |
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
 The board records these after verifying the token. Provenance (`by`,
@@ -77,14 +77,14 @@ uses the target's own.
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
 a refused write it can read answers 403. `GET /me` returns the caller's
-`access`: each pattern and its permissions, implications included.
+`can`: each pattern and its permissions, implications included.
 
 ## Routes
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync }`, where `sync` lists each entry's `key` and `platform` |
-| GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, access }`, where `access` maps each channel pattern to its permissions |
+| GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
 | GET | `/identity` | Your linked accounts and the sync entries you haven't linked: `{ principal, links, unlinked, cursor }`. See [vb identity](./01-cli.md#identity) |
@@ -300,6 +300,7 @@ Every failure is JSON with a matching status:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |
+| 400 | `invalid_scope` | an `x-board-scope` header the board can't parse; the message says what to write |
 | 400 | `unknown_mention`, `ambiguous_mention` | an `@handle` matches no actor, or several. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `no_blob_store` | an upload to a board with nowhere to keep files |
@@ -310,6 +311,7 @@ Every failure is JSON with a matching status:
 | 404 | `not_found` | no such route, or an inbox, source read, or webhook on a board without sync |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `channel_not_found` | no such thing, or one the caller can't read |
 | 409 | `duplicate_id` | an `id` already used for a different write, or by someone else |
+| 409 | `already_synced` | a sync target that's a platform thread another board thread is synced with |
 | 413 | `too_large` | an upload over 4 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
 | 500 | `internal` | anything else; the board logs it |

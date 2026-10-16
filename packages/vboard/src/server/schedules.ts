@@ -42,6 +42,8 @@ export type Schedule = {
   /** Its creator, as plain data: A2 snapshots state, and each send works out the access again. */
   as: Omit<Identity, 'principal'> & { principal: Omit<Principal, 'access'> }
   createdAt: string
+  /** Its creator couldn't read its channel when it scheduled it. */
+  blind: boolean
   /** Sends posted so far. */
   sent: number
   /** When the next send is due, or null when it's done or canceled. */
@@ -80,6 +82,7 @@ export function foldSchedules(state: SchedulesState, event: ScheduleEvent): Sche
         times: payload.times,
         as: identityOf(event),
         createdAt: new Date(event.createdAt).toISOString(),
+        blind: payload.blind ?? false,
         sent: 0,
         next: payload.first,
         last: null,
@@ -120,12 +123,16 @@ export function nextSend(schedule: Pick<Schedule, 'every' | 'until' | 'times'>, 
 
 /**
  * Whether `principal` is the schedule's creator, as far as seeing and canceling
- * it where it can't read goes. A principal ID is coarser than access (a repo's
- * workflows share one, and so do the proxies narrowing one token with
- * `x-board-scope`), so it also needs `post` there now, as it would to create it.
+ * it goes. A principal ID is coarser than access (a repo's workflows share one,
+ * and so do the proxies narrowing one token with `x-board-scope`), so it also
+ * needs `post` there now, as it would to create it. Where it can't read, the
+ * schedule is its own only if it was created without reading too, so a
+ * principal ID shared with a caller that reads doesn't reach that caller's.
  */
 export const createdBy = (schedule: Schedule, principal: Pick<Principal, 'id' | 'access'>) =>
-  schedule.as.principal.id === principal.id && principal.access.can('post', schedule.channel)
+  schedule.as.principal.id === principal.id &&
+  principal.access.can('post', schedule.channel) &&
+  (schedule.blind || principal.access.readable(schedule.channel))
 
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
@@ -337,6 +344,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
             },
             actor: identity.actor,
           },
+          ...(identity.principal.access.readable(channel!) ? {} : { blind: true as const }),
         },
       })
       const { state } = await session.state(schedulesReducer)

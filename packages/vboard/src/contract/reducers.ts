@@ -33,6 +33,8 @@ export type Message = {
   links: Link[]
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: number; n: number }
+  /** Set when its author couldn't read its channel, as `authorizeOwn` checks. Views leave it out. */
+  blind?: true
 }
 
 export type MessagesState = {
@@ -72,6 +74,7 @@ export function foldMessages(
         attachments: payload.attachments ?? [],
         links: payload.links ?? [],
         ...(payload.schedule ? { schedule: { ...payload.schedule } } : {}),
+        ...(payload.blind ? { blind: true as const } : {}),
       }
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
       return state

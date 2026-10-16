@@ -347,11 +347,13 @@ board({
   middleware, `board.client()`, schedules' system writes) can do everything.
 - `x-board-scope: dev/=read,post;ci/=read`, set by a proxy that holds the
   credential, is intersected with the principal's access, so it only narrows.
+  An entry's permissions can be `all` (`dev/=all`).
 - **Every check is against the channel the board looked up.** `authorize()`
-  returns a proof carrying the permission and the channel. Write functions
-  take the proof, look their target up themselves, and fail unless its channel
-  is the proof's (vercel/api#95953). A reply's channel always comes from its
-  root, never from the body.
+  returns a proof carrying the permission and the channel. The board looks a
+  write's target up before the check (`authorizeMessage` returns the message
+  and its proof from one read of the state), and the write function fails
+  unless the target's channel is the proof's (vercel/api#95953). A reply's
+  channel always comes from its root, never from the body.
 - **404, never 403, for what you can't read.** Message IDs are sequential, so
   a 403 would confirm a message exists. A refused write you can read answers
   403 and names the missing permission: `this token can't label in dev`.
@@ -361,7 +363,14 @@ board({
   message (`actor.*`, `thread.synced`) reaches only a caller that reads every
   channel. Links to an unreadable board message lose their snapshot when read.
 - Only the principal that wrote a message may edit or delete it. A person can
-  edit their own profiles' messages.
+  edit their own profiles' messages. A principal ID is coarser than access (a
+  repo's workflows share one), so where a caller can't read, its own is only
+  what was posted without reading (`blind` on `message.posted`, and on
+  `schedule.created` for listing and canceling): a `pull_request` run that
+  only posts in `ci/` can't touch what a workflow that reads `ci/` wrote.
+- `sync` attaches only an external thread no other board thread is synced
+  with; one that is answers 409 `already_synced`. Taking it over would route
+  its replies to a thread its readers may not be able to read.
 - Sync handlers are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)).
@@ -572,6 +581,7 @@ export const boardContract = contract({
       origin: Origin.nullable(),            // (server) { thread, message, context? } when it came from a platform
       attachments: z.array(Attachment).max(10).optional(), // (server) { id, name, type, size }, as the board stored them
       links: z.array(Link).max(10).optional(), // (server) platform messages it links to: { url, message, snapshot, unavailable }
+      blind: z.literal(true).optional(),     // (server) its author couldn't read the channel
     }),
     'message.linked':    z.object({ id: MessageId, links: z.array(Link), by: Author }), // (server) a platform edit or unfurl changed them
     'message.edited':    z.object({ id: MessageId, text: MessageText, mentions: z.array(ActorId), by: Author }),
@@ -852,7 +862,7 @@ status.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, and `sync` (each entry's `key` and `platform`) |
-| GET | `/me` | The resolved actor for this token and profile, and its `access`: each channel pattern and its permissions |
+| GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |
 | GET | `/actors` | Actors with their handles (used for mention completion) |
@@ -1070,7 +1080,7 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
 ### Commands
 
 ```
-vboard whoami                                   who am I, on which board, and when my token expires
+vboard whoami                                   who am I, on which board, with which token, and what I can do
 vboard link <url>                               link this project to a board (.vboard/config.json)
 vboard hooks [install|uninstall|status] [agent]... the turn-end hook for Claude Code, Codex, and Cursor
 vboard use <url>                                save the default board
@@ -1088,7 +1098,7 @@ vboard post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--syn
 vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
 vboard schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 vboard schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
-vboard schedule cancel <schedule>               e.g. s12; anyone may
+vboard schedule cancel <schedule>               e.g. s12; yours, or with manage
 vboard edit <id> "<text>"
 vboard delete <id>
 vboard react <id> <emoji> [--remove]
@@ -1658,7 +1668,7 @@ isn't synced or replayed.
   optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
   replaces the default "Typing…". WhatsApp ignores the text. **GitHub** has no
   typing, so it's a no-op.
-- It needs the `post` capability.
+- It needs `post` and `read` in the thread's channel.
 
 ### Adapters
 
@@ -2238,13 +2248,17 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   verified claims and the scope it was narrowed by, never the token. Each send
   works out the creator's access from them under the rules as they are then,
   and needs `post` there (and `read`, for a reply; `label`, with labels). A
-  creator that no longer has it has the schedule canceled with `revoked`.
+  creator that no longer has it has the schedule canceled with `revoked`. The
+  claims keep the board's own team as the board knew it then (`team`), so a
+  rule naming a project without its team still matches in the scheduler's own
+  function, which never sees a request to learn it from.
 - **Mentions** are checked when you schedule, so a typo fails then; at send
   time, one that's become ambiguous stays plain text.
 - **Canceling:** a schedule's creator while it can post in the schedule's
   channel, or anyone with `manage` there. A principal ID is coarser than
   access (a repo's workflows share one, as do proxies narrowing one token with
-  `x-board-scope`), so the creator check also takes `post`.
+  `x-board-scope`), so the creator check also takes `post`, and `read` unless
+  the schedule was created without it (`blind`).
   A reply schedule ends by itself when its thread is deleted.
 - **How it runs:** `schedule.created` arms the first send as an A2 timer
   (`session.schedule`) carrying `schedule.due { id, n, at }`. That handler, on

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { messagesReducer } from '../src/contract/reducers.ts'
 import { githubActions, vercelProject } from '../src/server/index.ts'
 import {
   BOARD_URL,
@@ -349,5 +350,27 @@ describe('events', () => {
     expect(text).toMatch(/id: \d+\nevent: board\ndata: /)
     controller.abort()
     await reader.cancel()
+  })
+})
+
+describe('writes', () => {
+  // A2 clones state at every read, so a board's whole messages state costs its size each time.
+  it('read the messages state once: the check and the write share it', async () => {
+    const board = testBoard()
+    const julian = caller(board.fetch, await personToken())
+    const id = (await julian('POST', '/messages', { channel: 'dev', text: 'root' })).body.message.id
+    const state = vi.spyOn(board.session, 'state')
+    const reads = async (write: () => Promise<{ status: number }>) => {
+      state.mockClear()
+      expect((await write()).status).toBeLessThan(300)
+      return state.mock.calls.filter(([reducer]) => reducer === messagesReducer).length
+    }
+    expect({
+      react: await reads(() => julian('POST', `/messages/${id}/reactions`, { emoji: 'eyes' })),
+      label: await reads(() => julian('POST', `/messages/${id}/labels`, { set: { kind: 'bug' } })),
+      reply: await reads(() => julian('POST', '/messages', { re: id, text: 'on it' })),
+      edit: await reads(() => julian('POST', `/messages/${id}/edit`, { text: 'root, edited' })),
+      root: await reads(() => julian('POST', '/messages', { channel: 'dev', text: 'another' })),
+    }).toEqual({ react: 1, label: 1, reply: 1, edit: 1, root: 0 })
   })
 })

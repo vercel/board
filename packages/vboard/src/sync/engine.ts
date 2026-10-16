@@ -520,7 +520,7 @@ export function createSyncEngine(options: {
     const writeId = (n: number) => idempotentId('vboard-inbound', trigger.id, String(n))
     // Sync is the owner's code, so it has full access; each write is still proved against the channel it lands in.
     const post = async (input: Omit<PostInput, 'proofs'>) => writePost(writes, { ...input, proofs: await trusted.post(writes, input) })
-    const proof = async <P extends Permission>(permission: P, id: number) => (await trusted.message(writes, permission, id)).proof
+    const authorized = <P extends Permission>(permission: P, id: number) => trusted.message(writes, permission, id)
     const result = (message: { id: number; re: number | null }): SyncResult => ({ root: message.re ?? message.id, message: message.id })
     const labels = (defaults: Record<string, string> = {}) => {
       const merged = { ...defaults, ...overrides.labels }
@@ -540,7 +540,7 @@ export function createSyncEngine(options: {
       const root = messages.byId[id]
       const set = Object.fromEntries(Object.entries(overrides.labels ?? {}).filter(([key, value]) => root?.labels[key] !== value))
       const unset = (overrides.unset ?? []).filter((key) => root?.labels[key] !== undefined)
-      if (Object.keys(set).length || unset.length) await writeLabels(writes, { identity, proof: await proof('label', id), id, set, unset })
+      if (Object.keys(set).length || unset.length) await writeLabels(writes, { identity, authorized: await authorized('label', id), set, unset })
     }
 
     switch (event.kind) {
@@ -590,23 +590,23 @@ export function createSyncEngine(options: {
         const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
         const identity = externalIdentity(author)
         if (rootId !== undefined) await setExtraLabels(identity, rootId)
-        if (event.kind === 'deleted') await writeDelete(writes, { identity, proof: await proof('post', id), id, from: key, asAuthor: false })
+        if (event.kind === 'deleted') await writeDelete(writes, { identity, authorized: await authorized('post', id), from: key, asAuthor: false })
         else if (event.kind === 'edited') {
           const { state: messages } = await session.state(messagesReducer)
           const stored = messages.byId[id]
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
-          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { ...source, identity, proof: await proof('post', id), id, text, from: key, asAuthor: false })
+          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { ...source, identity, authorized: await authorized('post', id), text, from: key, asAuthor: false })
           const links = stored ? await resolveLinks(platform, event.links ?? [], stored.links) : []
-          if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, proof: await proof('post', id), id, links, from: key })
+          if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, authorized: await authorized('post', id), links, from: key })
         } else {
           if (platform.singleReaction) {
             const { state: messages } = await session.state(messagesReducer)
             const emoji = canonicalEmoji(event.emoji)
             for (const [held, actors] of Object.entries(messages.byId[id]?.reactions ?? {}))
               if (actors.includes(identity.actor.id) && !(event.added && held === emoji))
-                await writeReaction(writes, { identity, proof: await proof('react', id), id, emoji: held, remove: true, from: key })
+                await writeReaction(writes, { identity, authorized: await authorized('react', id), emoji: held, remove: true, from: key })
           }
-          if (!platform.singleReaction || event.added) await writeReaction(writes, { identity, proof: await proof('react', id), id, emoji: event.emoji, remove: !event.added, from: key })
+          if (!platform.singleReaction || event.added) await writeReaction(writes, { identity, authorized: await authorized('react', id), emoji: event.emoji, remove: !event.added, from: key })
         }
         return { root: rootId ?? null, message: id }
       }
@@ -621,7 +621,7 @@ export function createSyncEngine(options: {
           const owned = (key: string) => event.owns?.some((prefix) => key.startsWith(prefix)) ?? false
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
-          if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, proof: await proof('label', rootId), id: rootId, set, unset })
+          if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, authorized: await authorized('label', rootId), set, unset })
           if (event.reply) return result(await post({ ...source, identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
           return { root: rootId, message: createdHere ? rootId : null }
         }

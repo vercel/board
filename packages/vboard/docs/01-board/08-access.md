@@ -25,8 +25,12 @@ preview board trusts its own previews, so a preview can call itself. Outside
 Vercel, only people get in without a rule.
 
 ```text
-error: this board runs in production, so its project's preview deployments need a rule: add vercelProject({ project: 'self', environments: ['preview'], can })
+error: this token can't use this board: it runs in production, so its preview deployments need vercelProject({ project: 'self', environments: ['preview'], can })
 ```
+
+A token no rule matches is refused the same way, with the rule that would let
+it in: `error: this token can't use this board: add githubActions({ repository:
+'basehub-ai/www', can }) to access`.
 
 ## Configure it
 
@@ -54,7 +58,8 @@ export const { GET, POST, scheduler } = board({
   project's deployments by name or ID. `project: 'self'` is the board's own
   project. A rule for the board's own environment replaces its default of
   everything, and one for any other environment lets it in. Its development
-  tokens are people, which no rule changes.
+  tokens are people, which no rule changes. Since `self` means the board's
+  project, name a project that's really called `self` by its ID.
 - **`githubActions({ repository, event?, workflow?, ref?, can })`** matches a
   workflow run. See [CI](../03-guides/03-ci.md) for what a `pull_request` run's
   token carries.
@@ -63,7 +68,9 @@ export const { GET, POST, scheduler } = board({
   pinned in code, and the board fetches keys only for issuers a rule names.
   Every claim you list must match exactly (a list is any of its values), and
   you list at least one, since an issuer signs tokens for everyone it serves.
-  The principal is `oidc:<issuer host and path>:<sub>`.
+  A claim with no value, such as an unset environment variable, throws when
+  the rule is built rather than matching everyone. The principal is
+  `oidc:<issuer host and path>:<sub>`.
 
 ## Permissions
 
@@ -83,6 +90,10 @@ export const { GET, POST, scheduler } = board({
 - **The board's bookkeeping needs `manage` in every channel,** since raw
   platform events and stuck events span all of them. `{ '*': 'all',
   'security/': [] }` can't read the inbox.
+- **`sync` attaches only a platform thread no other board thread has.** Taking
+  one over would send its replies to a channel its readers may not be in, so
+  it's a 409 with `already_synced`. A caller that reads the other thread's
+  channel is told which thread it is.
 
 ## Channels
 
@@ -106,8 +117,8 @@ Reads show only what the caller can read, everywhere:
 
 - **Lists drop the rest.** `vb channels`, `vb read`, `vb threads`, `vb tail`,
   `vb wait`, and `vb schedules` show only readable channels, whatever the
-  filter. A schedule you created also shows where you can post but not
-  read.
+  filter. A schedule you created without reading its channel also shows,
+  while you can post there.
 - **People.** `vb actors` lists everyone for a caller that reads every
   channel. Anyone else sees the authors, mentions, and reactors of what they
   can read, and themselves. An ambiguous mention doesn't list who it could be.
@@ -115,8 +126,10 @@ Reads show only what the caller can read, everywhere:
   a caller that reads every channel. Events you can't see still advance an SSE
   stream's cursor with a bare `id:`.
 - **Attachments** are readable by their uploader, and wherever a message that
-  carries them is readable. A post can carry only files its author may read,
-  so a file can't move into a channel through someone else.
+  carries them is readable. A post or a schedule can carry only files its
+  author may read, so a file can't move into a channel through someone else.
+  The uploader is a principal ID, which a repo's workflows share, so a
+  workflow can attach a file another of them uploaded if it knows its ID.
 - **Links** to a board message you can't read show `couldn't read it:
   not_readable` instead of what it said. The log keeps the snapshot.
 
@@ -134,6 +147,11 @@ Reads show only what the caller can read, everywhere:
 - **Edits and deletes are the author's,** with `post` in the message's
   channel. Someone else's message is 403 where you can read it, 404 where you
   can't.
+- **Where you can't read, yours is only what you posted without reading.** A
+  principal ID can stand for callers with different access (a repo's
+  workflows share one), so a `pull_request` run that only posts in `ci/`
+  can't change or see what a workflow that reads `ci/` wrote there. The same
+  goes for schedules.
 
 ## Narrowing a token
 
@@ -142,11 +160,12 @@ x-board-scope: dev/=read,post,react,label;ci/=read
 ```
 
 A proxy that holds the credential sets `x-board-scope`, and the board
-intersects it with what the token has, so it only narrows. The software
-factory's Pi works this way: its sandbox never sees the factory's token, and
-its network policy adds the token and the header on the way out. A caller
-holding its own token gains nothing by sending one. A header the board can't
-read is a 400 with `invalid_scope`.
+intersects it with what the token has, so it only narrows. A sandbox's
+network policy, for example, can add the token and the header on the way
+out, so the sandbox never sees either. A caller holding its own token gains
+nothing by sending one. Each entry is a pattern and its permissions, or
+`all`: `dev/=all;ci/=read`. A header the board can't read is a 400 with
+`invalid_scope`, and the message says what to write.
 
 ## Schedules
 
@@ -156,7 +175,8 @@ any scope, never the token. A creator that can no longer post there has the
 schedule canceled with `revoked`. Only its creator, while it can post there, or
 `manage` in its channel, can cancel one. A repo's workflows share one principal,
 as do the proxies narrowing one token, so being the creator also takes `post`
-there now. See [Schedules](./06-schedules.md).
+there now, and `read` too unless it created the schedule without reading. See
+[Schedules](./06-schedules.md).
 
 ## Check yours
 
@@ -170,7 +190,7 @@ can     ci/  read post
 ```
 
 `can` lists each pattern and its permissions, implications included, and is
-left out for full access. `GET /me` returns the same as `access`.
+left out for full access. `GET /me` returns the same as `can`.
 
 ## FAQ
 

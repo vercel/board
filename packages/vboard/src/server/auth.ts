@@ -33,6 +33,13 @@ export type TokenFacts = {
   issuer: 'vercel' | 'github' | 'oidc'
   iss: string
   claims: Readonly<Record<string, string | number | boolean>>
+  /**
+   * The board's own Vercel team, as the board knew it when it verified the
+   * token. A schedule's send may run where the board can't work it out (the
+   * scheduler's own function, with no request to learn it from), and a rule
+   * naming a project without its team needs it. Only the board writes it.
+   */
+  team?: string
 }
 
 const REGISTERED = new Set(['aud', 'exp', 'iat', 'nbf', 'jti'])
@@ -59,6 +66,9 @@ export type AccessRule = {
   matches(claims: Claims, context: MatchContext): boolean
   access: Access
 }
+
+/** A token no rule matches, and the rule that would let it in. */
+const notInAccess = (rule: string) => forbidden(`this token can't use this board: add ${rule} to access`)
 
 const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) =>
   allowed === undefined ||
@@ -144,6 +154,12 @@ export function oidc(options: {
   if (options.issuer === GITHUB_ISSUER) throw new Error('oidc: use githubActions() for GitHub Actions tokens')
   const required = Object.entries(options.claims)
   if (required.length === 0) throw new Error(`oidc: name at least one claim to match for ${options.issuer}`)
+  // An unset value (an environment variable that isn't there) must not match every token the issuer signs.
+  for (const [name, allowed] of required) {
+    const values: readonly unknown[] = typeof allowed === 'string' ? [allowed] : Array.isArray(allowed) ? allowed : []
+    if (values.length === 0 || values.some((value) => typeof value !== 'string' || value === ''))
+      throw new Error(`oidc: claim ${name} has no value to match for ${options.issuer}`)
+  }
   return {
     issuer: 'oidc',
     url: options.issuer,
@@ -272,7 +288,7 @@ export function createVerifier(options: {
     if (issuer === 'oidc') {
       if (!oidcIssuers.has(iss)) throw unauthorized(`untrusted issuer: ${iss}`)
       const access = ruleFor('oidc', claims, { teamId: null, projectId: null }, iss)
-      if (!access) throw forbidden(`this token from ${iss} isn't in access`)
+      if (!access) throw notInAccess(`oidc({ issuer: '${iss}', claims, can })`)
       if (typeof claims.sub !== 'string' || claims.sub === '') throw unauthorized(`token from ${iss} without sub`)
       return {
         id: `oidc:${issuerName(iss)}:${claims.sub}`,
@@ -286,7 +302,7 @@ export function createVerifier(options: {
 
     if (issuer === 'github') {
       const access = ruleFor('github', claims, { teamId: null, projectId: null })
-      if (!access) throw forbidden(`workflow isn't in access: ${String(claims.repository)}`)
+      if (!access) throw notInAccess(`githubActions({ repository: '${String(claims.repository)}', can })`)
       return {
         id: `github:repo:${String(claims.repository_id)}`,
         kind: 'workflow',
@@ -314,19 +330,21 @@ export function createVerifier(options: {
       }
     }
     const teamId = options.access.some((rule) => rule.issuer === 'vercel')
-      ? ((await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)))
+      ? ((await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)) ?? facts.team ?? null)
       : null
+    // Kept with the claims, so a later send that can't learn the team still matches as this did.
+    const kept = teamId === null ? facts : { ...facts, team: teamId }
     const access = ruleFor('vercel', claims, { teamId, projectId: ownProject })
-    if (access) return deployment(facts, project, environment, access, expiresAt)
+    if (access) return deployment(kept, project, environment, access, expiresAt)
     // A deployment in the board's own environment runs the board's code. A
     // preview runs any branch's, so a production board doesn't trust them.
     const here = boardEnvironment()
-    if (own && here !== null && environment === here) return deployment(facts, project, environment, FULL_ACCESS, expiresAt)
+    if (own && here !== null && environment === here) return deployment(kept, project, environment, FULL_ACCESS, expiresAt)
     if (own)
       throw forbidden(
-        `this board runs in ${here ?? 'no Vercel environment'}, so its project's ${environment || 'unnamed'} deployments need a rule: add vercelProject({ project: 'self', environments: ['${environment}'], can })`,
+        `this token can't use this board: it runs in ${here ?? 'no Vercel environment'}, so its ${environment || 'unnamed'} deployments need vercelProject({ project: 'self', environments: ['${environment}'], can })`,
       )
-    throw forbidden(`project isn't in access: ${project || String(claims.project_id)}`)
+    throw notInAccess(`vercelProject({ project: '${project || String(claims.project_id)}', can })`)
   }
 
   /**

@@ -26,7 +26,7 @@ const WALK: Record<RouteName, Walk> = {
   openapi: 'public',
   webhook: 'public',
   // About the caller.
-  me: () => [{ method: 'GET', path: '/me', status: 200, check: (body) => expect(body.access).toEqual({ open: ['read'] }) }],
+  me: () => [{ method: 'GET', path: '/me', status: 200, check: (body) => expect(body.can).toEqual({ open: ['read'] }) }],
   identity: () => [{ method: 'GET', path: '/identity', status: 200 }],
   identityLink: () => [{ method: 'POST', path: '/identity/link', body: { sync: 'slack' }, status: 404 }],
   identityCheck: () => [{ method: 'POST', path: '/identity/check', body: { sync: 'slack' }, status: 404 }],
@@ -46,7 +46,17 @@ const WALK: Record<RouteName, Walk> = {
     ['', '?channel=secret', '?label=private'].map((query) => ({ method: 'GET', path: `/threads${query}`, status: 200, check: nothingFrom('threads') })),
   events: () => [
     { method: 'GET', path: '/events?after=0', status: 200, check: nothingFrom('events') },
-    { method: 'GET', path: '/events?after=0&all=1', status: 200, check: nothingFrom('events') },
+    {
+      method: 'GET',
+      path: '/events?after=0&all=1',
+      status: 200,
+      // Events about no message (who's who) reach only a reader of every channel.
+      check: (body) => {
+        nothingFrom('events')(body)
+        expect(body.events.filter((event: any) => !event.message)).toEqual([])
+        expect(JSON.stringify(body.events)).not.toContain('keeper')
+      },
+    },
     { method: 'GET', path: '/events?after=0&channel=secret', status: 200, check: (body) => expect(body.events).toEqual([]) },
   ],
   schedules: ({ secret }) => [

@@ -345,6 +345,9 @@ describe('cli', () => {
       expect(stdout).toContain('basehub-ai/www (github:repo:123456)\n')
       expect(stdout).toContain('source  VBOARD_TOKEN\n')
       expect(stdout).toMatch(/\ncan     ci\/        read post\n        ci\/secret  nothing\n        feedback   post\n$/)
+      // --json carries the same facts.
+      const json = await vb(['whoami', '--json'], { VBOARD_URL: `${board.origin}/api/board`, VBOARD_TOKEN: await workflowToken() })
+      expect(JSON.parse(json.stdout)).toMatchObject({ source: 'VBOARD_TOKEN', can: { 'ci/': ['read', 'post'], 'ci/secret': [], feedback: ['post'] } })
     } finally {
       await board.close()
     }

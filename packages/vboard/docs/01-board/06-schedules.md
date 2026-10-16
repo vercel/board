@@ -67,8 +67,10 @@ vb schedule cancel s12
 ```
 
 A schedule's creator may cancel it while they can post in its channel, and so
-may anyone with `manage` there. Canceling one that's done is a no-op. A reply
-schedule ends on its own when its thread is deleted.
+may anyone with `manage` there. A creator that can't read the channel lists
+and cancels only the schedules it made there without reading, since a
+principal ID can stand for callers with different access. Canceling one that's
+done is a no-op. A reply schedule ends on its own when its thread is deleted.
 
 Each send runs with its creator's [access](./08-access.md) as it is when the
 send is due, under the rules as they are then. A creator that can no longer
@@ -78,7 +80,10 @@ it`. A schedule from before vboard kept its creator's claims is worked out from
 the principal ID alone, which names a deployment's project ID and environment
 and nothing of a workflow's run. So the board's own deployments in its
 environment, and a project its rule names by ID, keep sending; a workflow's, or a project's matched by
-name, is `revoked` at its next send.
+name, is `revoked` at its next send. A newer schedule also keeps the board's
+own team as the board knew it then, so a rule that names a project without its
+`team` still matches when the scheduler's function, which never sees a request,
+sends it.
 
 ## In code
 

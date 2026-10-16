@@ -6,7 +6,7 @@ import type { BoardClient } from '../client/client.ts'
 import { watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
 import { FULL_ACCESS } from './access.ts'
-import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
+import { compileFilter, eventView, foldEvent, hasCriteria, OWN_CODE, type ParsedFilters } from './feed.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 
 /** What a watcher's `run` gets. */
@@ -168,7 +168,7 @@ export function createWatchers(options: {
       const match = compileFilter(watcher.filters, { me: null, actors, messages, access: FULL_ACCESS })
       if (watcher.enters ? !entered(match, before, after, messages) : !(watcher.criteria ? match(before) || match(after) : id !== null))
         continue
-      view ??= eventView(event, after, actors)
+      view ??= eventView(event, after, actors, OWN_CODE)
       await server.session(watchSession(watcher.id)).append({
         type: 'watch.matched',
         id: await idempotentId('vboard-watch', watcher.id, event.id),
