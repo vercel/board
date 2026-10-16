@@ -10,7 +10,7 @@ import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { configDir, createClient, detectAgent, projectDir, projectUrl } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { actorName, formatAccess, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
@@ -100,54 +100,73 @@ env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
 class UsageError extends Error {}
 
+const OPTIONS = {
+  ...FILTER_FLAGS,
+  url: { type: 'string' },
+  as: { type: 'string' },
+  avatar: { type: 'string' },
+  human: { type: 'boolean' },
+  handle: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
+  unset: { type: 'string', multiple: true },
+  id: { type: 'string' },
+  'no-sync': { type: 'boolean' },
+  sync: { type: 'string', multiple: true },
+  attach: { type: 'string', multiple: true },
+  channel: { type: 'string' },
+  agent: { type: 'string' },
+  remove: { type: 'boolean' },
+  after: { type: 'string' },
+  limit: { type: 'string' },
+  all: { type: 'boolean' },
+  timeout: { type: 'string' },
+  port: { type: 'string' },
+  'no-open': { type: 'boolean' },
+  'no-inspect': { type: 'boolean' },
+  dir: { type: 'string' },
+  code: { type: 'boolean' },
+  'no-wait': { type: 'boolean' },
+  in: { type: 'string' },
+  at: { type: 'string' },
+  every: { type: 'string' },
+  until: { type: 'string' },
+  for: { type: 'string' },
+  times: { type: 'string' },
+} as const
+
+// No argument can hold a NUL, so a marked one can't be anything else.
+const MARK = '\0'
+
+/**
+ * Attachment IDs are base64url, so boards minted some that start with `-`,
+ * which `parseArgs` reads as a flag. Where `download` takes its ID, a token
+ * shaped like one is the ID: this marks it to parse as a positional.
+ */
+function markAttachmentId(args: string[]): string[] {
+  const positionals: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--') break
+    if (!arg.startsWith('-') || arg === '-') positionals.push(arg)
+    else if (positionals.length === 1 && positionals[0] === 'download' && AttachmentId.safeParse(arg).success)
+      return [...args.slice(0, i), `${MARK}${arg}`, ...args.slice(i + 1)]
+    else if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+  }
+  return args
+}
 const parsed = (() => {
   try {
-    return parseArgs({
-      args: withMentions(process.argv.slice(2)),
-      allowPositionals: true,
-      options: {
-        ...FILTER_FLAGS,
-        url: { type: 'string' },
-        as: { type: 'string' },
-        avatar: { type: 'string' },
-        human: { type: 'boolean' },
-        handle: { type: 'string' },
-        json: { type: 'boolean' },
-        help: { type: 'boolean', short: 'h' },
-        version: { type: 'boolean', short: 'v' },
-        unset: { type: 'string', multiple: true },
-        id: { type: 'string' },
-        'no-sync': { type: 'boolean' },
-        sync: { type: 'string', multiple: true },
-        attach: { type: 'string', multiple: true },
-        channel: { type: 'string' },
-        agent: { type: 'string' },
-        remove: { type: 'boolean' },
-        after: { type: 'string' },
-        limit: { type: 'string' },
-        all: { type: 'boolean' },
-        timeout: { type: 'string' },
-        port: { type: 'string' },
-        'no-open': { type: 'boolean' },
-        'no-inspect': { type: 'boolean' },
-        dir: { type: 'string' },
-        code: { type: 'boolean' },
-        'no-wait': { type: 'boolean' },
-        in: { type: 'string' },
-        at: { type: 'string' },
-        every: { type: 'string' },
-        until: { type: 'string' },
-        for: { type: 'string' },
-        times: { type: 'string' },
-      },
-    })
+    return parseArgs({ args: markAttachmentId(withMentions(process.argv.slice(2))), allowPositionals: true, options: OPTIONS })
   } catch (error) {
     process.stderr.write(`error: ${(error as Error).message}\n`)
     return null
   }
 })()
 // A misused flag runs nothing: the end of this file exits 2, once the error line is out.
-const { values: flags, positionals } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
+const { values: flags, positionals: marked } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
+const positionals = marked.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
 
 const out = (text: string) => process.stdout.write(`${text}\n`)
 const printJson = (value: unknown) => out(JSON.stringify(value))

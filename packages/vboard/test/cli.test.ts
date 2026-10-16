@@ -408,6 +408,32 @@ describe('cli', () => {
     expect(await vb(['post', 'proofs', 'x', '--attach', join(dir, 'missing.png')])).toMatchObject({ code: 2, stderr: `error: no such file: ${join(dir, 'missing.png')}\n` })
   }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
 
+  it('downloads an attachment whose id starts with "-", which reads like a flag', async () => {
+    // Boards minted one in 64 of these before they stopped: they're still out there.
+    const id = '-Pj4-Pj4-Pj4-Pj4-Pj4-A'
+    const files = await serve(async (request) =>
+      new URL(request.url).pathname === `/api/board/attachments/${id}`
+        ? new Response('the log', {
+            headers: { 'content-type': 'text/plain', 'content-disposition': `inline; filename*=UTF-8''run.log` },
+          })
+        : Response.json({ error: { code: 'not_found', message: 'not found' } }, { status: 404 }),
+    )
+    try {
+      const dir = await tmp('vboard-dash-')
+      const board = `${files.origin}/api/board`
+      const saved = join(dir, 'copy.log')
+      expect(await vb(['download', id, saved, '--url', board])).toEqual({ code: 0, stdout: `${saved}\n`, stderr: '' })
+      expect(await readFile(saved, 'utf8')).toBe('the log')
+      expect(await vb(['--url', board, 'download', id], {}, undefined, dir)).toEqual({ code: 0, stdout: 'run.log\n', stderr: '' })
+      expect(await vb(['download', '--url', board, '--', id, '-'])).toEqual({ code: 0, stdout: 'the log', stderr: '' })
+      // Only `download`'s id reads that way: a flag nothing knows is still misuse.
+      expect(await vb(['download', '--nope', saved, '--url', board])).toMatchObject({ code: 2 })
+      expect(await vb(['read', id, '--url', board])).toMatchObject({ code: 2 })
+    } finally {
+      await files.close()
+    }
+  }, 20_000)
+
 
   it('delivers all of a long read to a reader that falls behind', async () => {
     const root = (await vb(['post', 'long-reads', 'a long thread', '--no-sync', '--json'])).stdout

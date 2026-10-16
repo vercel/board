@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createBoardClient } from '../src/client/client.ts'
+import { memoryBlob } from '../src/server/blob.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 // A 1×1 PNG.
@@ -7,6 +9,11 @@ const PNG = Uint8Array.from(
   atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
   (c) => c.charCodeAt(0),
 )
+
+vi.mock('node:crypto', async (original) => {
+  const crypto = await original<typeof import('node:crypto')>()
+  return { ...crypto, randomBytes: vi.fn(crypto.randomBytes) }
+})
 
 async function setup(options: Parameters<typeof testBoard>[0] = {}) {
   const board = testBoard(options)
@@ -32,6 +39,21 @@ describe('attachments', () => {
     expect(file.headers.get('content-disposition')).toBe(`inline; filename*=UTF-8''after%20fix.png`)
     expect(file.headers.get('content-security-policy')).toContain('sandbox')
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(PNG)
+  })
+
+  it('mints no id that starts with "-", which a command line reads as a flag, and still serves those it did', async () => {
+    const blob = memoryBlob()
+    const { client } = await setup({ blob })
+    // 16 bytes of 0xf8 are `-Pj4…` in base64url: one draw in 64 starts with `-`.
+    vi.mocked(randomBytes).mockReturnValueOnce(Buffer.alloc(16, 0xf8) as never)
+    const shot = await client.upload({ data: PNG, name: 'shot.png', type: 'image/png' })
+    expect(shot.id).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_-]{21}$/)
+
+    const old = { id: '-Pj4-Pj4-Pj4-Pj4-Pj4-A', name: 'old.png', type: 'image/png', size: PNG.byteLength }
+    await blob.put(`vboard/attachments/${old.id}`, PNG, old.type)
+    await blob.put(`vboard/attachments/${old.id}.json`, new TextEncoder().encode(JSON.stringify(old)), 'application/json')
+    expect(new Uint8Array(await (await client.download(old.id)).arrayBuffer())).toEqual(PNG)
+    expect((await client.post('ops', { text: 'still here', attachments: [old.id] })).attachments).toEqual([old])
   })
 
   it('downloads what a browser could run, and needs a token to read', async () => {

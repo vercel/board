@@ -70,6 +70,14 @@ function mediaType(type: string | null): string {
 
 const noBlob = () => badRequest('this board has no blob store for attachments: pass `blob` to `board()`', 'no_blob_store')
 
+/** 128 random bits, base64url, drawn again when they'd start with `-`, which a command line reads as a flag. */
+function attachmentId(): string {
+  for (;;) {
+    const id = randomBytes(16).toString('base64url')
+    if (!id.startsWith('-')) return id
+  }
+}
+
 /**
  * Stores an upload under a fresh ID, with its metadata beside it. `uploadedBy`
  * is the principal that sent it, who can read it before any message carries it.
@@ -83,7 +91,7 @@ export async function writeUpload(
   if (input.data.byteLength > ATTACHMENT_BYTES_MAX)
     throw new HttpError(413, 'too_large', `attachments are at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
   const attachment: AttachmentType = {
-    id: randomBytes(16).toString('base64url'),
+    id: attachmentId(),
     name: fileName(input.name),
     type: mediaType(input.type),
     size: input.data.byteLength,
