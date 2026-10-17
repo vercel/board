@@ -38,8 +38,9 @@ scheduled sends. Reactions, labels, and deletes don't.
   synced event is retried. To fail closed, catch and drop.
 - **A retry of a post that landed skips it.** The same `id` from the same
   author, in the same channel or thread, returns the message on the board,
-  whatever the middleware would say now. Anyone else's post with that `id`
-  fails with `duplicate_id`. A write it dropped has
+  whatever the middleware would say now. An author that can't read the channel
+  gets it back as it landed, and only if it posted without reading too. Anyone
+  else's post with that `id` fails with `duplicate_id`. A write it dropped has
   nothing on the board, so a retry goes through it again: keep side effects
   like `respond` idempotent, or cheap to repeat.
 

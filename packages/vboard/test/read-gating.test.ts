@@ -3,7 +3,7 @@ import { memory } from 'experimental-a2/store-memory'
 import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
-import { board as mount, githubActions, vercelProject } from '../src/server/index.ts'
+import { board as mount, githubActions, vercelProject, type Middleware } from '../src/server/index.ts'
 import { slack } from '../src/sync/slack.ts'
 import type { MessagesState } from '../src/contract/reducers.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
@@ -118,6 +118,27 @@ describe('a write-only source', () => {
     const told = await julian('POST', '/messages', { channel: 'feedback', text: 'thanks @nobody' })
     expect(told.body.unknownMentions).toEqual(['nobody'])
   })
+
+  for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {
+    it(`gets back a retry as it landed, not what others added since (${middleware ? 'with' : 'without'} middleware)`, async () => {
+      const board = testBoard({ access: [intake], ...(middleware ? { middleware } : {}) })
+      const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+      const front = caller(board.fetch, await deploymentToken())
+      const sent = { channel: 'feedback/front', text: 'checkout is slow', id: 'feedback-checkout' }
+      const posted = await front('POST', '/messages', sent)
+      expect(posted.status).toBe(201)
+      const id = posted.body.message.id
+
+      await julian('POST', `/messages/${id}/labels`, { set: { kind: 'bug', owner: 'payments' } })
+      await julian('POST', `/messages/${id}/reactions`, { emoji: 'eyes' })
+      await julian('POST', '/messages', { re: id, text: 'looking into it' })
+      expect((await front('POST', `/messages/${id}/edit`, { text: 'checkout is very slow' })).status).toBe(200)
+
+      const retried = await front('POST', '/messages', sent)
+      expect(retried.body.message).toEqual(posted.body.message)
+      expect((await front('GET', `/messages/${id}`)).status).toBe(404)
+    })
+  }
 
   it('doesn’t tell a write-only scheduler which handles match no one', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler, access: [intake] })
@@ -304,6 +325,33 @@ describe('one principal, two rules', () => {
     expect((await deploy('POST', `/messages/${own}/delete`, {})).status).toBe(200)
     expect((await pr('POST', `/schedules/${blind}/cancel`)).body).toMatchObject({ canceled: true })
   })
+
+  for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {
+    it(`keep a post the one that reads wrote from the other's retry of its id (${middleware ? 'with' : 'without'} middleware)`, async () => {
+      const board = testBoard({
+        access: [
+          githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', event: 'push', can: { 'ci/': ['read', 'post', 'label'] } }),
+          githubActions({ repository: 'basehub-ai/www', event: 'pull_request', can: { 'ci/': ['post'] } }),
+        ],
+        ...(middleware ? { middleware } : {}),
+      })
+      const julian = caller(board.fetch, await personToken())
+      const deploy = caller(board.fetch, await workflowToken())
+      const pr = caller(board.fetch, await workflowToken(pullRequest))
+
+      const posted = await deploy('POST', '/messages', { channel: 'ci/deploys', text: 'deploy of abc123 OK', id: 'deploy-abc123', labels: { env: 'production' } })
+      expect(posted.status).toBe(201)
+      await deploy('POST', `/messages/${posted.body.message.id}/labels`, { set: { promoted: 'yes' } })
+      await julian('POST', `/messages/${posted.body.message.id}/reactions`, { emoji: 'rocket' })
+
+      const replayed = await pr('POST', '/messages', { channel: 'ci/deploys', text: 'deploy of abc123 OK', id: posted.body.message.thread })
+      expect({ status: replayed.status, code: replayed.body.error?.code, message: replayed.body.message }).toEqual({
+        status: 409,
+        code: 'duplicate_id',
+        message: undefined,
+      })
+    })
+  }
 
   it('re-checks post on what it wrote', async () => {
     const store = memory()

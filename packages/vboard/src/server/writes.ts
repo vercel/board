@@ -260,7 +260,15 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
       // the middleware may have changed them, and edits may have since.
       if (!sameAuthor(landed.by, identity.author) || landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo)
         throw duplicateId()
-      return shownTo(view(landed, (await ctx.session.state(actorsReducer)).state, { access: identity.principal.access, messages }), identity.principal.access, sent)
+      const { access } = identity.principal
+      const { state: actors } = await ctx.session.state(actorsReducer)
+      if (access.readable(channel)) return shownTo(view(landed, actors, { access, messages }), access, sent)
+      // A caller that can't read gets back what it sent, as it landed: never what others have added since.
+      // A post written by a caller that could read isn't its to replay, as `authorizeOwn` holds.
+      if (!landed.blind) throw duplicateId()
+      const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
+      const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
+      return shownTo(view(posted, actors, await readerFor(ctx, access, posted)), access, sent)
     }
   }
   if (chain)
