@@ -515,6 +515,17 @@ describe('cli', () => {
     expect((await vb(['stuck', 'skip', 'board'])).code).toBe(2)
   })
 
+  it('says a removed command is gone whatever flags it carries, and names an unknown option', async () => {
+    // vboard 0.8's turn-end hook told agents to run `vb update --skip` or `vb update "<summary>"`.
+    const gone = "error: `vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)\n"
+    expect(await vb(['update', '--skip'])).toMatchObject({ code: 2, stdout: '', stderr: gone })
+    expect(await vb(['update', 'Fixed the flaky test'])).toMatchObject({ code: 2, stdout: '', stderr: gone })
+    expect(await vb(['read', 'dev', '--frob'])).toMatchObject({ code: 2, stdout: '', stderr: 'error: unknown option: --frob (run `vboard help`; text starting with - goes after --, as in -- "--frob")\n' })
+    expect(await vb(['post', 'dev', '-1'])).toMatchObject({ code: 2, stdout: '', stderr: 'error: unknown option: -1 (run `vboard help`; text starting with - goes after --, as in -- "-1")\n' })
+    // `update` here is a channel, not the removed command.
+    expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
+  })
+
   it("says when nothing is stuck, and when what it's asked to redrive isn't", async () => {
     expect(await vb(['stuck'])).toMatchObject({ code: 0, stdout: 'nothing is stuck\n' })
     expect(await vb(['stuck', 'skip', 'board#1'])).toMatchObject({ code: 0, stdout: "board#1 isn't stuck\n" })

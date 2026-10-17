@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A person's Vercel CLI login, as @vercel/oidc reads it.
 const login = vi.hoisted(() => ({ token: 'vercel-cli-token' as string | null }))
+const runtimeToken = vi.hoisted(() => vi.fn(async (_options: { audience: string }) => 'runtime-token'))
 vi.mock('@vercel/oidc', async (original) => ({
   ...(await original<typeof import('@vercel/oidc')>()),
+  getVercelOidcToken: runtimeToken,
   getVercelToken: vi.fn(async () => {
     if (!login.token) throw new Error('not logged in')
     return login.token
@@ -73,12 +75,136 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     config = await mkdtemp(join(tmpdir(), 'vboard-protection-'))
     vi.stubEnv('XDG_CONFIG_HOME', config)
     vi.stubEnv('VERCEL_AUTOMATION_BYPASS_SECRET', '')
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('VBOARD_TOKEN', '')
+    runtimeToken.mockReset().mockResolvedValue('runtime-token')
     login.token = 'vercel-cli-token'
   })
   afterEach(async () => {
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
     await rm(config, { recursive: true, force: true })
+  })
+
+  it('uses Trusted Sources for hosted discovery and authenticated calls without bypass credentials', async () => {
+    vi.stubEnv('VERCEL', '1')
+    const token = await personToken()
+    const board = testBoard()
+    const sent: Headers[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      expect(new URL(request.url).host).toBe(HOST)
+      sent.push(request.headers)
+      expect(request.headers.get('x-vercel-trusted-oidc-idp-token')).toBe(token)
+      expect(request.headers.has('x-vercel-protection-bypass')).toBe(false)
+      // Vercel's edge consumes the native header; app auth still needs Authorization.
+      request.headers.delete('x-vercel-trusted-oidc-idp-token')
+      return board.fetch(request)
+    }) as typeof globalThis.fetch
+    const client = createClient({ url: BOARD_URL, token, fetch })
+    expect((await client.discovery()).url).toBe(BOARD_URL)
+    await client.post('dev', 'native trust')
+    expect(sent[1]!.get('authorization')).toBe(`Bearer ${token}`)
+    expect(runtimeToken).not.toHaveBeenCalled()
+  })
+
+  it.each(['option', 'callback', 'environment'] as const)('uses the explicit %s token for hosted discovery even when runtime OIDC fails', async (source) => {
+    vi.stubEnv('VERCEL', '1')
+    runtimeToken.mockRejectedValue(new Error('runtime OIDC is unavailable'))
+    const token = await personToken()
+    if (source === 'environment') vi.stubEnv('VBOARD_TOKEN', token)
+    else vi.stubEnv('VBOARD_TOKEN', 'lower-precedence-token')
+    const board = testBoard()
+    const sent: Headers[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      sent.push(request.headers)
+      expect(request.headers.get('x-vercel-trusted-oidc-idp-token')).toBe(token)
+      return board.fetch(request)
+    }) as typeof globalThis.fetch
+    const supplied = source === 'option' ? token : source === 'callback' ? async () => token : undefined
+    const client = createClient({ url: BOARD_URL, token: supplied, fetch })
+    expect((await client.discovery()).url).toBe(BOARD_URL)
+    await client.post('dev', 'explicit credentials')
+    expect(sent[1]!.get('authorization')).toBe(`Bearer ${token}`)
+    expect(runtimeToken).not.toHaveBeenCalled()
+  })
+
+  it('mints an audience-bound edge token for hosted discovery when no token was supplied', async () => {
+    vi.stubEnv('VERCEL', '1')
+    const board = testBoard()
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      expect(request.headers.get('x-vercel-trusted-oidc-idp-token')).toBe('runtime-token')
+      return board.fetch(request)
+    }) as typeof globalThis.fetch
+    expect((await createClient({ url: BOARD_URL, fetch }).discovery()).url).toBe(BOARD_URL)
+    expect(runtimeToken).toHaveBeenCalledWith({ audience: BOARD_URL })
+  })
+
+  it('explains how to configure hosted OIDC when minting fails without leaking the error', async () => {
+    vi.stubEnv('VERCEL', '1')
+    runtimeToken.mockRejectedValue(new Error('private runtime details'))
+    const fetch = vi.fn()
+    await expect(createClient({ url: BOARD_URL, fetch }).discovery()).rejects.toMatchObject({
+      code: 'no_token',
+      message: expect.stringContaining('enable OIDC'),
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('fails hosted trust with setup guidance instead of reading or creating a bypass', async () => {
+    vi.stubEnv('VERCEL', '1')
+    const { fetch, api } = protectedBoard()
+    await expect(createClient({ url: BOARD_URL, token: await personToken(), fetch }).discovery())
+      .rejects.toMatchObject({ code: 'protected', message: expect.stringContaining('Trusted Sources') })
+    expect(api).toEqual([])
+  })
+
+  it('still sends VERCEL_AUTOMATION_BYPASS_SECRET when hosted callers set it', async () => {
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_AUTOMATION_BYPASS_SECRET', SECRET)
+    runtimeToken.mockRejectedValue(new Error('runtime OIDC is unavailable'))
+    const { fetch, api, sent } = protectedBoard()
+    const client = createClient({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+    expect((await client.discovery()).url).toBe(BOARD_URL)
+    await client.post('dev', 'hosted with a bypass')
+    expect(sent.every((header) => header === SECRET)).toBe(true)
+    expect(api).toEqual([])
+    expect(runtimeToken).not.toHaveBeenCalled()
+  })
+
+  it('keeps local person credentials out of the Trusted Sources header', async () => {
+    const token = await personToken()
+    const board = testBoard()
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      expect(request.headers.has('x-vercel-trusted-oidc-idp-token')).toBe(false)
+      return board.fetch(request)
+    }) as typeof globalThis.fetch
+    const client = createClient({ url: BOARD_URL, token, fetch })
+    await client.discovery()
+    await client.post('dev', 'local person')
+    expect(runtimeToken).not.toHaveBeenCalled()
+  })
+
+  it('strips both OIDC headers on cross-origin redirects', async () => {
+    vi.stubEnv('VERCEL', '1')
+    let calls = 0
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (calls++ === 0) {
+        expect(request.headers.get('authorization')).toBe('Bearer runtime-token')
+        expect(request.headers.get('x-vercel-trusted-oidc-idp-token')).toBe('runtime-token')
+        return new Response(null, { status: 302, headers: { location: 'https://other.test/board' } })
+      }
+      expect(request.headers.has('authorization')).toBe(false)
+      expect(request.headers.has('x-vercel-trusted-oidc-idp-token')).toBe(false)
+      expect(request.headers.has('x-vercel-protection-bypass')).toBe(false)
+      return Response.json({ url: BOARD_URL })
+    }) as typeof globalThis.fetch
+    await createClient({ url: BOARD_URL, token: 'runtime-token', fetch }).me()
+    expect(calls).toBe(2)
   })
 
   it("gets through with the project's automation bypass, read with your Vercel login, and caches it", async () => {

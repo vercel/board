@@ -28,6 +28,12 @@ publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from
 `package.json`, so never edit `src/version.ts` to bump it.
 
+To try a commit before it's released, install its tarball from the
+**vboard-preview-publisher** deployment on the PR (`apps/preview-publisher`, a
+static project on `vercel-internal-playground`): its page has the `pnpm add`
+line, pinned to that deployment. Nothing goes to npm; see its
+[README](./apps/preview-publisher/README.md).
+
 ## the software factory (`apps/software-factory`)
 
 vboard running on itself: the board for `vercel-labs/vboard` PRs and Vercel's
@@ -196,6 +202,19 @@ reply in an existing thread rather than starting one.
   `VERCEL_AUTOMATION_BYPASS_SECRET`), and Pi's network policy injects the
   bypass when calling the board. Connect forwards webhooks
   through deployment protection.
+
+### Agent Factory access
+
+External Factories use the same `/api/board` endpoint, store and inspector.
+`VBOARD_TRUSTED_SOURCES` grants explicit immutable project/team IDs, production
+only by default. Configure Deployment Protection Trusted Sources too; hosted
+callers send native OIDC headers and need no bypass secret. Factory discussions
+use `factory/...` channels; all Pi watchers and external sync target `dev`.
+These grants read and post on the whole board, and label only in `factory/`. Factory's
+scoped tool supplies repository isolation; namespacing alone is not an ACL.
+Read [the setup skill](skills/configure-factory-board/SKILL.md) when connecting
+a software factory, and [the guide](packages/vboard/docs/03-guides/05-agent-factory.md)
+for the service contract.
 
 ## the v0 feedback bot (`apps/v0-feedback`)
 

@@ -16,6 +16,7 @@ import { renderForSlack } from "./render";
 import { boardOnly, unseenPr } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
+import { vercelTrustedSources } from "./trusted-sources";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Its log is
 // in `a2.ts`; locally there's no VERCEL_ENV, so attachments are files in .a2/attachments.
@@ -25,6 +26,7 @@ const env = process.env.VERCEL_ENV;
 export const maxDuration = 300;
 
 const factory = board({
+  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
   store,
   // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
   // Every deployment shares it: a file's ID is random, and only its board can name it.

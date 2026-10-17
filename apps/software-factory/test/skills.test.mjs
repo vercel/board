@@ -50,6 +50,9 @@ test("policy: Pi's GitHub API calls always carry the factory GitHub App's token"
   ]);
 });
 
+// ui-video is for Pi's Linux sandbox: an X11 desktop, bash 4, and GNU date and stat. Elsewhere (macOS) it can't run.
+const onLinux = process.platform === "linux" ? {} : { skip: "ui-video runs only on Linux (Pi's sandbox)" };
+
 // ui-video with fake Xvfb, ffmpeg and AI Gateway: what it records, which captions it burns in, and when.
 function recorder() {
   const dir = mkdtempSync(join(tmpdir(), "ui-video-"));
@@ -95,7 +98,7 @@ const cues = (dir) =>
     text: m[4],
   }));
 
-test("ui-video: records the desktop, starting it if needed, and captions each step until the next", (t) => {
+test("ui-video: records the desktop, starting it if needed, and captions each step until the next", onLinux, (t) => {
   const { dir, run, cleanup, display } = recorder();
   t.after(cleanup);
   const started = run(["start", "--mute"]);
@@ -120,7 +123,7 @@ test("ui-video: records the desktop, starting it if needed, and captions each st
   assert.ok(!existsSync(join(dir, "curl.log")), "and asks for no voice");
 });
 
-test("ui-video: starting over ends the take that was recording", (t) => {
+test("ui-video: starting over ends the take that was recording", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start", "--mute"]);
@@ -131,7 +134,7 @@ test("ui-video: starting over ends the take that was recording", (t) => {
   assert.equal(run(["stop", join(dir, "out.mp4")], { UI_VIDEO_LAST: "0" }).status, 0);
 });
 
-test("ui-video: each caption is read aloud from AI Gateway, where its step starts in the cut take", (t) => {
+test("ui-video: each caption is read aloud from AI Gateway, where its step starts in the cut take", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start"]);
@@ -160,7 +163,7 @@ test("ui-video: each caption is read aloud from AI Gateway, where its step start
   assert.match(encode, /-map 0:v -map \[a\] -c:a aac/);
 });
 
-test("ui-video: a line the voice model can't say is captioned only, and the take still works", (t) => {
+test("ui-video: a line the voice model can't say is captioned only, and the take still works", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start"]);
@@ -173,7 +176,7 @@ test("ui-video: a line the voice model can't say is captioned only, and the take
   assert.match(readFileSync(join(dir, "ffmpeg.log"), "utf8"), / -an /);
 });
 
-test("ui-video: UI_VIDEO_VOICE=off mutes it, and the model and voice can be picked", (t) => {
+test("ui-video: UI_VIDEO_VOICE=off mutes it, and the model and voice can be picked", onLinux, (t) => {
   const off = recorder();
   t.after(off.cleanup);
   off.run(["start"], { UI_VIDEO_VOICE: "off" });
@@ -192,7 +195,7 @@ test("ui-video: UI_VIDEO_VOICE=off mutes it, and the model and voice can be pick
   off.run(["stop", join(off.dir, "out.mp4")], { UI_VIDEO_LAST: "0" });
 });
 
-test("ui-video: the take cuts the time Pi spends thinking, keeping HOLD seconds after each step", (t) => {
+test("ui-video: the take cuts the time Pi spends thinking, keeping HOLD seconds after each step", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start", "--mute"]);
@@ -211,7 +214,7 @@ test("ui-video: the take cuts the time Pi spends thinking, keeping HOLD seconds 
   assert.match(encode, /select=between\(t\\,[\d.]+\\,[\d.]+\)\+between\(t\\,[\d.]+\\,[\d.]+\),setpts=N\/FRAME_RATE\/TB,/);
 });
 
-test("ui-video: a last step right before stop still stays on screen", (t) => {
+test("ui-video: a last step right before stop still stays on screen", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start", "--mute"]);
@@ -225,7 +228,7 @@ test("ui-video: a last step right before stop still stays on screen", (t) => {
   assert.ok(last.to - last.from >= 0.95, `on screen for ${last.to - last.from}s`);
 });
 
-test("ui-video: a take too big for the board is shrunk, then refused", (t) => {
+test("ui-video: a take too big for the board is shrunk, then refused", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start", "--mute"]);

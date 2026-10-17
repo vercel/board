@@ -1,0 +1,12 @@
+{
+  "name": "vboard-preview-publisher",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:preview": "node scripts/build.mjs",
+    "test:smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "vboard": "workspace:*"
+  }
+}

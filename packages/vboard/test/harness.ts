@@ -59,17 +59,23 @@ export const personToken = (userId = 'u_julian', audience?: string) =>
   )
 
 /** A deployment of some Vercel project. */
-export const deploymentToken = (project = 'marketing', projectId = 'prj_marketing', environment = 'production') =>
+export const deploymentToken = (
+  project = 'marketing',
+  projectId = 'prj_marketing',
+  environment = 'production',
+  options: { teamId?: string; audience?: string } = {},
+) =>
   sign(
     {
       sub: `owner:test:project:${project}:environment:${environment}`,
       owner: 'test',
-      owner_id: TEAM_ID,
+      owner_id: options.teamId ?? TEAM_ID,
       project,
       project_id: projectId,
       environment,
     },
     VERCEL_ISS,
+    options.audience,
   )
 
 /** A GitHub Actions run. */

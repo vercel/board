@@ -77,10 +77,16 @@ case "$cmd" in
     fi
     port="${port:-$(free_port)}"
     rm -f "$RUN/pid"
+    # Its own session, so it outlives the shell that started it. macOS has no setsid(1): perl does the same.
+    if command -v setsid >/dev/null; then
+      detach=(setsid)
+    else
+      detach=(perl -MPOSIX -e 'if (getpgrp() == $$) { fork() and exit } POSIX::setsid(); exec @ARGV or die "$ARGV[0]: $!\n"' --)
+    fi
     # The board writes its own pid: setsid may fork, so $! wouldn't be it.
     # Its output goes to serve.log as a whole, so nothing holds on to ours.
     (cd "$RUN/work" && exec env -i PATH="$PATH" HOME="$RUN/home" TERM=dumb PIDFILE="$RUN/pid" CLI="$(cat "$RUN/cli")" PORT="$port" BOARD="$RUN/board" \
-      setsid nohup bash -c 'echo $$ > "$PIDFILE"; exec node "$CLI" serve --no-inspect --no-open --port "$PORT" --dir "$BOARD"') \
+      "${detach[@]}" nohup bash -c 'echo $$ > "$PIDFILE"; exec node "$CLI" serve --no-inspect --no-open --port "$PORT" --dir "$BOARD"') \
       >"$RUN/serve.log" 2>&1 </dev/null &
     for _ in $(seq 1 20); do [ -s "$RUN/pid" ] && break; sleep 0.1; done
     echo "http://127.0.0.1:$port/api/board" > "$RUN/url"

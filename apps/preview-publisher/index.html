@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>vboard preview</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 14px;
+      }
+      body {
+        max-width: 760px;
+        margin: 12vh auto;
+        padding: 0 24px;
+        line-height: 1.6;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0;
+      }
+      h2 {
+        font-size: 1rem;
+        margin-top: 2rem;
+      }
+      pre {
+        padding: 16px;
+        border: 1px solid #8886;
+        border-radius: 8px;
+        overflow-x: auto;
+      }
+      a {
+        color: inherit;
+        text-underline-offset: 3px;
+      }
+      .commit {
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>vboard preview</h1>
+    <p>Install this build of <code>{{name}}</code> in your application.</p>
+    <p class="commit">
+      Source commit:
+      <a href="https://github.com/vercel-labs/vboard/commit/{{commit}}"><code>{{commit}}</code></a><br />
+      Package version: <code>{{version}}</code>
+    </p>
+    <h2>pnpm</h2>
+    <pre><code>pnpm add '{{url}}'</code></pre>
+    <h2>npm</h2>
+    <pre><code>npm install '{{url}}'</code></pre>
+    <h2>The CLI, without installing</h2>
+    <pre><code>npx -y --package '{{url}}' vb --version</code></pre>
+    <p>
+      Commit the updated package manifest and lockfile in your application. These commands pin this deployment, even
+      when you open this page through a branch alias.
+    </p>
+    <p>
+      The package keeps its current version. The tarball URL identifies the preview; nothing is published to npm. Keep
+      this deployment while applications depend on it.
+    </p>
+    <p><a href="{{url}}">Download tarball</a> · <a href="preview.json">Build metadata and integrity</a></p>
+  </body>
+</html>

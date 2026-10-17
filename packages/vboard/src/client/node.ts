@@ -251,7 +251,7 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
   const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
   if (!url)
     throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, run `vboard use <url>`, or `vboard serve` for a local one', 0)
-  const doFetch = guarded(url, options.fetch ?? globalThis.fetch)
+  const doFetch = guarded(url, options.fetch ?? globalThis.fetch, options.token)
 
   // Every token is for `url`, the board it's sent to. A board whose discovery claims
   // another audience gets none, so its answer can't get us to mint one it could replay.
@@ -288,7 +288,7 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
       return { token, expiresAt: expiry(token) }
     }
     if (process.env.VERCEL === '1') {
-      const token = await getVercelOidcToken({ audience })
+      const token = await hostedToken(audience)
       source = 'Vercel OIDC'
       return { token, expiresAt: expiry(token) }
     }
@@ -364,18 +364,24 @@ class Wall extends Error {
   }
 }
 
-/**
- * A board's fetch that gets past Vercel Deployment Protection the way
- * `vercel curl` does: with `VERCEL_AUTOMATION_BYPASS_SECRET` when it's set, or
- * else the project's automation bypass secret, which your Vercel login reads
- * (or creates, when there's none) the first time the board answers with the
- * wall, and which is cached on disk per board host.
- */
-function guarded(url: string, doFetch: typeof fetch): typeof fetch {
+async function hostedToken(url: string): Promise<string> {
+  try {
+    return await getVercelOidcToken({ audience: url })
+  } catch {
+    throw new BoardError('no_token', `cannot obtain Vercel OIDC credentials for ${url}: enable OIDC on the calling project or supply token / VBOARD_TOKEN; configure Deployment Protection Trusted Sources for its project and environment`, 0)
+  }
+}
+
+/** Explicit bypass wins; otherwise hosted calls use OIDC and local people use their saved bypass. */
+function guarded(url: string, doFetch: typeof fetch, suppliedToken?: ClientOptions['token']): typeof fetch {
   const host = new URL(url).host
   let secret: Promise<string | null> | undefined
   let looked: Promise<{ secret: string; created: boolean }> | undefined
   return async (input, init = {}) => {
+    const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
+    init = { ...init, headers }
+    // An explicit bypass secret still wins, hosted or not: it's what hosted callers
+    // and `vercel env pull` setups used before Trusted Sources.
     const fromEnv = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
     if (fromEnv)
       return through(doFetch, input, init, fromEnv).catch((error) => {
@@ -383,6 +389,20 @@ function guarded(url: string, doFetch: typeof fetch): typeof fetch {
           ? new BoardError('protected', `${url} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against ${WHERE}`, error.status)
           : error
       })
+    // Without one, hosted workloads use project trust, never a person's saved bypass credentials.
+    if (process.env.VERCEL === '1') {
+      if (!headers.has('x-vercel-trusted-oidc-idp-token')) {
+        const bearer = headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]
+        const token = bearer ?? (typeof suppliedToken === 'function' ? await suppliedToken() : suppliedToken)
+          ?? (process.env.VBOARD_TOKEN || await hostedToken(url))
+        headers.set('x-vercel-trusted-oidc-idp-token', token)
+      }
+      return through(doFetch, input, init, null).catch((error) => {
+        throw error instanceof Wall
+          ? new BoardError('protected', `${url} rejected Vercel OIDC access: configure Deployment Protection Trusted Sources for the calling project and environment`, error.status)
+          : error
+      })
+    }
     const used = await (secret ??= readBypass(host))
     try {
       return await through(doFetch, input, init, used)
@@ -436,6 +456,7 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
         if (next.origin !== new URL(target).origin) {
           headers = new Headers(headers)
           headers.delete('authorization')
+          headers.delete('x-vercel-trusted-oidc-idp-token')
           headers.delete('x-vercel-protection-bypass')
         }
         target = next.href

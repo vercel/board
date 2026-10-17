@@ -139,6 +139,9 @@ as written. `vb read` and `vb inspect` quote each one under the message.
 - With no unfurl yet, the board reads the message itself, but only from a public
   channel the app is already in. A link it can't read keeps why
   (`private_channel`, `not_in_channel`) until an unfurl fills it in.
+- A forwarded message links the message it shares, with a snapshot of it. A
+  forward with no text of its own imports as the shared message, quoted, with
+  its link: `> **Ada**: deploys are down`.
 
 Snapshots are what the message said when the link arrived. Files in them are
 linked, not copied.

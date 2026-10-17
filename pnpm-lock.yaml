@@ -12,6 +12,12 @@ importers:
         specifier: ^3.0.3
         version: 3.0.3
 
+  apps/preview-publisher:
+    dependencies:
+      vboard:
+        specifier: workspace:*
+        version: link:../../packages/vboard
+
   apps/software-factory:
     dependencies:
       '@vercel/blob':

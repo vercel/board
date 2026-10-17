@@ -109,12 +109,16 @@ export default function vboard(pi: any) {
 `
 }
 
+/**
+ * The command our hook runs. `|| true`: whatever `cli` turns out to be (an older vboard without
+ * `hook` exits 2, which Claude Code and Codex read as "keep going"), the hook can't fail a turn.
+ */
+const hookCommand = (agent: HookAgent, cli: string, flags = '') => `${cli} hook stop --agent ${agent}${flags} 2>/dev/null || true`
+
 /** Adds our hook, replacing an earlier one of ours; everything else in the file stays. Answers whether it changed. */
 export function installHook(agent: HookAgent, cli: string, flags = ''): boolean {
   const spec = AGENTS[agent]
-  // `|| true`: whatever `cli` turns out to be (an older vboard without `hook` exits 2, which Claude Code
-  // and Codex read as "keep going"), the hook can't fail a turn.
-  const command = `${cli} hook stop --agent ${agent}${flags} 2>/dev/null || true`
+  const command = hookCommand(agent, cli, flags)
   if (spec.shape === 'extension') {
     const source = piExtension(command)
     let current: string | null = null
@@ -210,11 +214,13 @@ export function allow(file: string, rules: string[]): string[] {
   return added
 }
 
-export function disallow(file: string, rules: string[]) {
+/** Removes the rules a file has. Answers whether it removed any. */
+export function disallow(file: string, rules: string[]): boolean {
   const config = readConfig(file)
   const allowed = config.permissions?.allow
-  if (!allowed?.some((rule) => rules.includes(rule))) return
+  if (!allowed?.some((rule) => rules.includes(rule))) return false
   writeConfig(file, { ...config, permissions: { ...config.permissions, allow: allowed.filter((rule) => !rules.includes(rule)) } })
+  return true
 }
 
 /**
@@ -241,6 +247,43 @@ export function codexNetwork(boardHost: string | null): { top: string; tables: s
       ...hosts.map((host) => `"${host}" = "allow"`),
     ].join('\n'),
   }
+}
+
+/** Names in words: `a`, `a or b`, `a, b, or c`. */
+const either = (names: string[]) => (names.length < 3 ? names.join(' or ') : `${names.slice(0, -1).join(', ')}, or ${names.at(-1)}`)
+
+/**
+ * How an installed hook differs from what installing it again would write, as
+ * short phrases (none when it's current): an older hook command or Pi
+ * extension, rules for commands since removed, rules it doesn't have yet.
+ * It keeps the CLI the hook runs, which `install` may choose differently.
+ */
+export function outdated(agent: HookAgent, installed: string): string[] {
+  const spec = AGENTS[agent]
+  const cli = cliOf(installed)
+  const problems: string[] = []
+  if (installed !== hookCommand(agent, cli)) problems.push('runs an older hook command')
+  if (spec.shape === 'extension') {
+    let source = ''
+    try {
+      source = readFileSync(spec.file(), 'utf8')
+    } catch {}
+    if (source !== piExtension(installed)) problems.push('the extension is from another version')
+  }
+  const rules = allowRules(agent, cli)
+  if (rules) {
+    const allowed = readConfig(rules.file).permissions?.allow ?? []
+    // A rule's subcommand, as people say it: `Bash(vb update:*)` is update.
+    const sub = (rule: string) => {
+      const inner = /^\w+\((.*?)(?::\*)?\)$/.exec(rule)?.[1] ?? rule
+      return inner.startsWith(`${cli} `) ? inner.slice(cli.length + 1) : inner
+    }
+    const gone = legacyRules(agent, cli).filter((rule) => allowed.includes(rule))
+    const missing = rules.rules.filter((rule) => !allowed.includes(rule))
+    if (gone.length > 0) problems.push(`allows ${either(gone.map(sub))}, which ${gone.length === 1 ? 'is' : 'are'} gone`)
+    if (missing.length > 0) problems.push(`doesn't allow ${either(missing.map(sub))}`)
+  }
+  return problems
 }
 
 // --- one session's turns -----------------------------------------------------------

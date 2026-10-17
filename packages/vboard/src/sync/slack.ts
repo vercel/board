@@ -143,6 +143,8 @@ type SlackMessage = {
 /** What Slack attaches to a message that links another: `is_msg_unfurl` marks a message link's. */
 type SlackAttachment = {
   is_msg_unfurl?: boolean
+  /** A forward's shared message. */
+  is_share?: boolean
   from_url?: string
   original_url?: string
   channel_id?: string
@@ -169,28 +171,62 @@ const tsTime = (ts: string | undefined) => {
 const filesOf = (files: SlackFile[] | undefined) =>
   (files ?? []).slice(0, 20).map((file) => ({ name: (file.name || file.title || 'file').slice(0, 1000), url: file.permalink?.slice(0, 4000) ?? null }))
 
-/** Every Slack message a message's mrkdwn links to, in order, with the unfurls Slack attached for them. */
+/** A permalink's channel, ts and thread, or null when `url` isn't a Slack message's. */
+function permalinkOf(url: string) {
+  const match = new RegExp(PERMALINK.source).exec(url)
+  if (!match || match.index !== 0) return null
+  const [, channel, seconds, micros, query] = match
+  const ts = `${seconds}.${micros}`
+  return { url: match[0].replaceAll('&amp;', '&'), channel: channel!, ts, thread: /[?&]thread_ts=(\d+\.\d+)/.exec(query?.replaceAll('&amp;', '&') ?? '')?.[1] ?? ts }
+}
+
+/** A Slack attachment as a link's snapshot. */
+const snapshotOf = (att: SlackAttachment, ts: string, markdown: (mrkdwn: string) => string) => ({
+  author: (att.author_subname || att.author_name || att.author_id || 'someone').slice(0, 256),
+  text: markdown(att.text ?? '').slice(0, MESSAGE_TEXT_MAX),
+  createdAt: tsTime(att.ts ?? ts),
+  files: filesOf(att.files),
+})
+
+/**
+ * Every Slack message a message's mrkdwn links to, in order, with the unfurls Slack attached for them,
+ * then the messages it forwards: a forward's shared message is only in its `is_share` attachments.
+ */
 export function slackLinks(key: string, text: string, attachments: SlackAttachment[] = [], markdown: (mrkdwn: string) => string = (t) => t): ExternalLink[] {
   const links: ExternalLink[] = []
+  // A message linked twice (its text and a forward's share) is one link, with whichever snapshot came.
+  const add = (found: NonNullable<ReturnType<typeof permalinkOf>>, att: SlackAttachment | undefined) => {
+    const known = links.find((link) => link.url === found.url || (link.thread === `${key}:${found.channel}:${found.thread}` && link.message === found.ts))
+    if (known) {
+      if (!known.snapshot && att) known.snapshot = snapshotOf(att, found.ts, markdown)
+      return
+    }
+    if (found.url.length > 4000 || links.length === LINKS_PER_MESSAGE_MAX) return
+    links.push({ url: found.url, thread: `${key}:${found.channel}:${found.thread}`, message: found.ts, snapshot: att ? snapshotOf(att, found.ts, markdown) : null })
+  }
   for (const match of text.matchAll(PERMALINK)) {
-    const [, channel, seconds, micros, query] = match
-    const url = match[0].replaceAll('&amp;', '&')
-    if (links.some((link) => link.url === url) || url.length > 4000) continue
-    const ts = `${seconds}.${micros}`
-    const thread = /[?&]thread_ts=(\d+\.\d+)/.exec(query?.replaceAll('&amp;', '&') ?? '')?.[1] ?? ts
-    const unfurl = attachments.find((att) => att.is_msg_unfurl && ((att.channel_id === channel && att.ts === ts) || att.from_url?.replaceAll('&amp;', '&') === url))
-    links.push({
-      url, thread: `${key}:${channel}:${thread}`, message: ts,
-      snapshot: unfurl ? {
-        author: (unfurl.author_subname || unfurl.author_name || unfurl.author_id || 'someone').slice(0, 256),
-        text: markdown(unfurl.text ?? '').slice(0, MESSAGE_TEXT_MAX),
-        createdAt: tsTime(unfurl.ts ?? ts),
-        files: filesOf(unfurl.files),
-      } : null,
-    })
-    if (links.length === LINKS_PER_MESSAGE_MAX) break
+    const found = permalinkOf(match[0])!
+    add(found, attachments.find((att) => att.is_msg_unfurl && ((att.channel_id === found.channel && att.ts === found.ts) || att.from_url?.replaceAll('&amp;', '&') === found.url)))
+  }
+  for (const att of attachments) {
+    const found = att.is_share ? permalinkOf(att.from_url ?? att.original_url ?? '') : null
+    if (found) add(found, att)
   }
   return links
+}
+
+/**
+ * What a forward with no text of its own says: the messages it shares, quoted,
+ * so the board (and whoever watches it) reads what was forwarded, not "(no text)".
+ */
+export function forwardText(links: ExternalLink[]): string {
+  return links.filter((link) => link.snapshot).map((link) => {
+    const { author, text } = link.snapshot!
+    const lines = text.trim() ? text.trim().split('\n') : ['']
+    // A first line that opens a block (a fence, a list, a heading, a quote) only works at a line's start.
+    const head = /^(```|~~~|[-*+] |\d+[.)] |#{1,6} |>)/.test(lines[0]!) ? [`> **${author}**:`, `> ${lines[0]}`] : [`> **${author}**: ${lines[0]}`]
+    return [...head, ...lines.slice(1).map((line) => `> ${line}`)].map((line) => line.trimEnd()).concat('', link.url).join('\n')
+  }).join('\n\n')
 }
 
 /** Slack's answers that mean "no files from this app", not "try again". */
@@ -466,7 +502,14 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         await join(web, channel.id, channel)
         return channel.id
       },
-      markdown: markdownOf,
+      // A forward has no text of its own: it says what it shares.
+      markdown(message) {
+        const text = markdownOf(message)
+        if (text.trim()) return text
+        const raw = message.raw as { attachments?: SlackAttachment[] } | null
+        const shared = Array.isArray(raw?.attachments) ? raw.attachments.filter((att) => att.is_share) : []
+        return shared.length ? forwardText(slackLinks('', '', shared, mrkdwn)) : text
+      },
       links(key, message) {
         const raw = message.raw as { text?: unknown; attachments?: SlackAttachment[] } | null
         return slackLinks(key, typeof raw?.text === 'string' ? raw.text : message.text, Array.isArray(raw?.attachments) ? raw.attachments : [], mrkdwn)

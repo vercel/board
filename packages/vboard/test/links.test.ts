@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
-import { slack, slackLinks, type SlackClient } from '../src/sync/slack.ts'
+import { forwardText, slack, slackLinks, type SlackClient } from '../src/sync/slack.ts'
 import { formatMessage } from '../src/cli/format.ts'
 import type { MessageView } from '../src/api/routes.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
@@ -47,6 +47,43 @@ describe('slack message links', () => {
       } },
       { url: reply.replace('&amp;', '&'), thread: `slack:C9:${TS}`, message: '1791322585.618629', snapshot: null },
     ])
+  })
+
+  it('links the message a forward shares, which Slack sends only as an attachment', () => {
+    const reply = '1791322585.618629'
+    const share = { is_share: true, is_msg_unfurl: true, from_url: permalink('C9'), channel_id: 'C9', ts: TS, author_name: 'Ada', text: 'deploys are *down*' }
+    const threaded = { is_share: true, from_url: `${permalink('C9', reply)}?thread_ts=${TS}&amp;cid=C9`, channel_id: 'C9', ts: reply, author_name: 'Ada', text: 'still down' }
+    expect(slackLinks('slack', '', [share, threaded])).toEqual([
+      { url: permalink('C9'), thread: `slack:C9:${TS}`, message: TS, snapshot: expect.objectContaining({ author: 'Ada', text: 'deploys are *down*' }) },
+      { url: `${permalink('C9', reply)}?thread_ts=${TS}&cid=C9`, thread: `slack:C9:${TS}`, message: reply, snapshot: expect.objectContaining({ author: 'Ada', text: 'still down' }) },
+    ])
+    // A forward with a comment that also links the shared message links it once.
+    expect(slackLinks('slack', `look <${permalink('C9')}>`, [share])).toHaveLength(1)
+    // ...and keeps the share's snapshot when Slack didn't also mark it an unfurl.
+    expect(slackLinks('slack', `look <${permalink('C9')}>`, [{ ...share, is_msg_unfurl: false }])).toEqual([
+      expect.objectContaining({ url: permalink('C9'), snapshot: expect.objectContaining({ author: 'Ada', text: 'deploys are *down*' }) }),
+    ])
+  })
+
+  it('quotes a forward that opens with a block with its author on a line of their own', () => {
+    const link = (text: string) => slackLinks('slack', '', [{ is_share: true, from_url: permalink('C9'), channel_id: 'C9', ts: TS, author_name: 'Ada', text }])
+    expect(forwardText(link('```\nError: deploy failed\n```'))).toBe(`> **Ada**:\n> \`\`\`\n> Error: deploy failed\n> \`\`\`\n\n${permalink('C9')}`)
+    expect(forwardText(link('- one\n- two'))).toBe(`> **Ada**:\n> - one\n> - two\n\n${permalink('C9')}`)
+    expect(forwardText(link('plain'))).toBe(`> **Ada**: plain\n\n${permalink('C9')}`)
+  })
+
+  it('imports a forward with no text of its own as the message it shares', async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const id = '1791322999.000009'
+    await webhook({
+      type: 'message', threadId: `slack:C1:${id}`, id, text: '', user: 'U_JB',
+      raw: { type: 'message', ts: id, text: '', attachments: [{ is_share: true, is_msg_unfurl: true, from_url: permalink('C9'), channel_id: 'C9', ts: TS, author_name: 'Ada', text: 'deploys are down\nsince noon', fallback: '[October 16th] ada: deploys are down' }] },
+    })
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    const [forward] = await messages(julian)
+    expect(forward!.text).toBe(`> **Ada**: deploys are down\n> since noon\n\n${permalink('C9')}`)
+    expect(forward!.links).toEqual([{ url: permalink('C9'), message: null, unavailable: null, snapshot: expect.objectContaining({ author: 'Ada', text: 'deploys are down\nsince noon' }) }])
   })
 
   it('links a synced message to its board copy', async () => {

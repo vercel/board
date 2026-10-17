@@ -48,7 +48,7 @@ const clip = (text: string) => (text.length > 256 ? `${text.slice(0, 255)}…` :
 
 export function autoland(options: GitHubOptions = {}): Watcher {
   return {
-    tail: "--label pr",
+    tail: "dev --label pr",
     run: async ({ event, board }) => {
       const root = event.message;
       if (

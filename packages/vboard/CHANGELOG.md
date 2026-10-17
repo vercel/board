@@ -1,5 +1,21 @@
 # vboard
 
+## 0.12.2
+
+### Patch Changes
+
+- 8061168: `vb hooks install` says `updated` when it changes an earlier install (a new hook command, permissions added, a stale `vb update` rule dropped, or Pi's extension rewritten), instead of `already installed`. It says `already installed` only when it leaves the file as it was.
+- f86967b: Use native Vercel Trusted Sources OIDC for hosted board access, including discovery, without automation bypass credentials. `VERCEL_AUTOMATION_BYPASS_SECRET` still wins when it is set.
+  Honor supplied tokens before runtime OIDC, keep local person tokens out of the Trusted Sources header, and report missing OIDC setup clearly.
+- 9781a9d: `vb update --skip`, the command vboard 0.8's turn-end hook suggested, says `vb update` is gone and what to run instead, as `vb update "<text>"` already did, instead of failing on `--skip`. An unknown option on any command is one line naming it: ``error: unknown option: --frob (run `vboard help`; text starting with - goes after --, as in -- "--frob")``.
+- e506191: A Slack message forwarded into a synced channel links the message it shares, with a snapshot of it, and a forward with no text of its own imports as that message quoted (`> **Ada**: …`) with its link, instead of `(no text)`.
+
+## 0.12.1
+
+### Patch Changes
+
+- d154b53: `vb download` takes an attachment whose ID starts with `-`, about one in 64 of them, instead of failing with `error: Unknown option`. Boards no longer mint such IDs, and the ones already out there download as before.
+
 ## 0.12.0
 
 ### Minor Changes

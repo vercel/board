@@ -28,6 +28,7 @@ import {
   legacyRules,
   linkOffer,
   markPosted,
+  outdated,
   reminder,
   stopOutput,
   tilde,
@@ -156,11 +157,31 @@ function markAttachmentId(args: string[]): string[] {
   }
   return args
 }
+/** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
+const REMOVED: Record<string, string> = {
+  update: "`vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)",
+}
+
+/** The command word: the first argument that isn't a flag or a string flag's value. */
+function commandWord(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--') return args[i + 1]
+    if (!arg.startsWith('-') || arg === '-') return arg
+    if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+  }
+  return undefined
+}
+
 const parsed = (() => {
+  const args = withMentions(process.argv.slice(2))
+  const removed = REMOVED[commandWord(args) ?? '']
   try {
-    return parseArgs({ args: markAttachmentId(withMentions(process.argv.slice(2))), allowPositionals: true, options: OPTIONS })
+    if (removed) throw new UsageError(removed)
+    return parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS })
   } catch (error) {
-    process.stderr.write(`error: ${(error as Error).message}\n`)
+    const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
+    process.stderr.write(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}\n`)
     return null
   }
 })()
@@ -326,6 +347,30 @@ function cliCommand(): { command: string; note?: string } {
     command: `npx -y vboard@${VERSION}`,
     note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g vboard\` makes it start faster`,
   }
+}
+
+/**
+ * The vboard version a hook's CLI runs: pinned in an npx command, else what it
+ * answers to `--version` (the first `vb` on PATH, for plain `vb`). Null when
+ * it doesn't answer with one.
+ */
+function hookVersion(cli: string): string | null {
+  const pinned = /^npx -y vboard@(\S+)$/.exec(cli)
+  if (pinned) return pinned[1]!
+  try {
+    const answer = execFileSync('/bin/sh', ['-c', `${cli} --version`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return /^\d+\.\d+\.\d+\S*$/.test(answer) ? answer : null
+  } catch {
+    return null
+  }
+}
+
+/** Whether version `a` comes before `b`, by major, minor, and patch. */
+function olderVersion(a: string, b: string): boolean {
+  const parts = (version: string) => version.split(/[.-]/).slice(0, 3).map(Number)
+  const [x, y] = [parts(a), parts(b)]
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) < (y[i] ?? 0)
+  return false
 }
 
 async function readStdin(): Promise<string> {
@@ -662,18 +707,32 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'update':
-      throw new UsageError('`vb update` is gone: reply in the thread you\'re working in (vb reply <id>), or post where it fits (vb post <channel>)')
-
     case 'hooks': {
       const [action = 'status', ...names] = args
       const agents = hookAgents(names)
       const width = Math.max(...agents.map((agent) => AGENTS[agent].name.length))
       const row = (agent: HookAgent, ...cells: string[]) => out([AGENTS[agent].name.padEnd(width), ...cells].join('  ').trimEnd())
       if (action === 'status') {
+        const versions = new Map<string, string | null>()
         for (const agent of agents) {
-          const installed = installedHook(agent) !== null
-          row(agent, installed ? 'installed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : '')
+          const installed = installedHook(agent)
+          if (installed === null) {
+            row(agent, 'not installed')
+            continue
+          }
+          // What installing again would change, and whether the vboard the hook runs is older than this one.
+          const cli = cliOf(installed)
+          const problems = outdated(agent, installed)
+          if (!versions.has(cli)) versions.set(cli, hookVersion(cli))
+          const version = versions.get(cli)
+          const behind = version != null && olderVersion(version, VERSION)
+          if (behind) problems.push(`runs vboard ${version}, not ${VERSION}`)
+          row(agent, (problems.length ? 'outdated' : 'installed').padEnd(9), tilde(AGENTS[agent].file()))
+          if (problems.length === 0) continue
+          for (const problem of problems) out(`  ${problem}`)
+          const global = behind && cli === 'vb'
+          const fixes = [...(global ? ['npm i -g vboard'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
       }
@@ -691,13 +750,15 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const { command: cli, note } = cliCommand()
       // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
+        const had = installedHook(agent) !== null
         const changed = installHook(agent, cli)
-        out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
-        out(`  ${changed ? 'added the turn-end hook' : 'already installed'}`)
         // The reminder asks for `vb reply`, `vb post`, `vb read`, and `vb channels`: no permission prompt for each.
         const rules = allowRules(agent, cli)
         const added = rules ? allow(rules.file, rules.rules) : []
-        if (rules) disallow(rules.file, legacyRules(agent, cli))
+        const dropped = rules ? disallow(rules.file, legacyRules(agent, cli)) : false
+        // "already installed" only when nothing was written: a new hook command, rule, or dropped rule is an update.
+        out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
+        out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
         if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
         if (agent === 'cursor' && !rules) out('  npm i -g vboard lets Cursor run vb without asking')
         if (agent === 'codex') {

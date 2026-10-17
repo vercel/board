@@ -124,6 +124,59 @@ describe('cli hooks', () => {
     })
   }
 
+  it('tells an outdated install from a current one, and how to fix it', async () => {
+    const home = await tmp('vboard-home-')
+    const at = { HOME: home, CODEX_HOME: join(home, '.codex'), PI_CODING_AGENT_DIR: join(home, 'pi-agent') }
+    const { version } = JSON.parse(await readFile(join(dirname(CLI), '../../package.json'), 'utf8')) as { version: string }
+    // Pi's is current to begin with; then its extension changes under it.
+    expect(await vb(['hooks', 'install', 'pi'], at)).toMatchObject({ code: 0, stderr: '' })
+    expect((await vb(['hooks', 'status', 'pi'], at)).stdout).toBe('Pi  installed  ~/pi-agent/extensions/vboard.ts\n')
+    const extension = join(home, 'pi-agent', 'extensions', 'vboard.ts')
+    await writeFile(extension, (await readFile(extension, 'utf8')).replace('let reminded = false', 'let reminded = 0'))
+    // What vboard 0.8.0 wrote for Claude Code: a `vb` that's still 0.8.0, `vb update` allowed, no post or channels.
+    const old = join(home, 'old-bin')
+    await mkdir(old)
+    await writeFile(join(old, 'vb'), '#!/bin/sh\necho 0.8.0\n', { mode: 0o755 })
+    await mkdir(join(home, '.claude'))
+    const settings = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'vb hook stop --agent claude 2>/dev/null || true', timeout: 10 }] }] } }
+    await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ ...settings, permissions: { allow: ['Bash(vb update:*)', 'Bash(vb reply:*)', 'Bash(vb read:*)'] } }))
+    // Codex's hook pins this version through npx, with a flag installs no longer write.
+    await mkdir(join(home, '.codex'))
+    await writeFile(join(home, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `npx -y vboard@${version} hook stop --agent codex --channel dev 2>/dev/null || true` }] }] } }))
+
+    const status = await vb(['hooks', 'status'], { ...at, PATH: `${old}${delimiter}${process.env.PATH}` })
+    expect(status).toMatchObject({ code: 0, stderr: '' })
+    expect(status.stdout).toBe(
+      [
+        'Claude Code  outdated   ~/.claude/settings.json',
+        '  allows update, which is gone',
+        "  doesn't allow post or channels",
+        `  runs vboard 0.8.0, not ${version}`,
+        '  fix with npm i -g vboard, then vb hooks install claude',
+        'Codex        outdated   ~/.codex/hooks.json',
+        '  runs an older hook command',
+        '  fix with vb hooks install codex',
+        'Cursor       not installed',
+        'Pi           outdated   ~/pi-agent/extensions/vboard.ts',
+        '  the extension is from another version',
+        '  fix with vb hooks install pi',
+        '',
+      ].join('\n'),
+    )
+    // With vb current, only what's in the file is left to fix.
+    const current = join(home, 'new-bin')
+    await mkdir(current)
+    await writeFile(join(current, 'vb'), `#!/bin/sh\necho ${version}\n`, { mode: 0o755 })
+    expect((await vb(['hooks', 'status', 'claude'], { ...at, PATH: `${current}${delimiter}${process.env.PATH}` })).stdout).toBe(
+      "Claude Code  outdated   ~/.claude/settings.json\n  allows update, which is gone\n  doesn't allow post or channels\n  fix with vb hooks install claude\n",
+    )
+    // Installing again brings each up to date.
+    expect(await vb(['hooks', 'install', 'claude', 'codex', 'pi'], at)).toMatchObject({ code: 0, stderr: '' })
+    expect((await vb(['hooks', 'status'], at)).stdout).toBe(
+      'Claude Code  installed  ~/.claude/settings.json\nCodex        installed  ~/.codex/hooks.json\nCursor       not installed\nPi           installed  ~/pi-agent/extensions/vboard.ts\n',
+    )
+  }, 30_000)
+
   it('installs the Claude Code hook in CLAUDE_CONFIG_DIR when it is set', async () => {
     const home = await tmp('vboard-home-')
     const config = await tmp('vboard-claude-')
@@ -138,6 +191,47 @@ describe('cli hooks', () => {
     expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
     expect(JSON.parse(await readFile(join(config, 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: [] } })
     expect(readdirSync(home)).toEqual([])
+  }, 20_000)
+
+  it('says it updated an earlier install that it changed, and already installed only when nothing changed', async () => {
+    // The command this checkout's hook runs, from a scratch install.
+    const scratch = await tmp('vboard-claude-')
+    await vb(['hooks', 'install', 'claude'], { HOME: await tmp('vboard-home-'), CLAUDE_CONFIG_DIR: scratch })
+    const command = JSON.parse(await readFile(join(scratch, 'settings.json'), 'utf8')).hooks.Stop[0].hooks[0].command as string
+    const cli = command.replace(/ hook stop .*$/, '')
+
+    // What 0.8 wrote: the same hook, `vb update` allowed, and no `vb post` or `vb channels`.
+    const home = await tmp('vboard-home-')
+    const config = await tmp('vboard-claude-')
+    const at = { HOME: home, CLAUDE_CONFIG_DIR: config, CODEX_HOME: join(home, '.codex'), PI_CODING_AGENT_DIR: join(home, 'pi') }
+    const settings = join(config, 'settings.json')
+    const hook = { Stop: [{ hooks: [{ type: 'command', command, timeout: 10 }] }] }
+    await writeFile(settings, JSON.stringify({ hooks: hook, permissions: { allow: [`Bash(${cli} update:*)`, `Bash(${cli} reply:*)`, `Bash(${cli} read:*)`] } }))
+    const updated = await vb(['hooks', 'install', 'claude'], at)
+    expect(updated).toMatchObject({ code: 0, stderr: '' })
+    expect(updated.stdout).toContain(`Claude Code  ${settings}\n  updated\n  reply, post, read, and channels run without asking\n\n`)
+    expect(JSON.parse(await readFile(settings, 'utf8')).permissions.allow).toEqual(['reply', 'read', 'post', 'channels'].map((sub) => `Bash(${cli} ${sub}:*)`))
+
+    // Only a legacy rule to drop is a change too.
+    const parsed = JSON.parse(await readFile(settings, 'utf8'))
+    await writeFile(settings, JSON.stringify({ ...parsed, permissions: { allow: [...parsed.permissions.allow, `Bash(${cli} update:*)`] } }))
+    expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain(`Claude Code  ${settings}\n  updated\n\n`)
+
+    // Nothing to change: the file stays byte for byte.
+    const settled = await readFile(settings, 'utf8')
+    expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain(`Claude Code  ${settings}\n  already installed\n\n`)
+    expect(await readFile(settings, 'utf8')).toBe(settled)
+
+    // An older hook command is replaced, and says so.
+    await writeFile(settings, JSON.stringify({ ...JSON.parse(settled), hooks: { Stop: [{ hooks: [{ type: 'command', command: 'vb hook stop --agent claude 2>/dev/null || true', timeout: 10 }] }] } }))
+    expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain(`Claude Code  ${settings}\n  updated\n\n`)
+
+    // So is Pi's extension, rewritten when an earlier vboard wrote it.
+    const extension = join(home, 'pi', 'extensions', 'vboard.ts')
+    await mkdir(dirname(extension), { recursive: true })
+    await writeFile(extension, '// Added by `vb hooks install pi`: an older version.\nconst COMMAND = "vb hook stop --agent pi"\n')
+    expect((await vb(['hooks', 'install', 'pi'], at)).stdout).toContain('Pi  ~/pi/extensions/vboard.ts\n  updated\n')
+    expect((await vb(['hooks', 'install', 'pi'], at)).stdout).toContain('Pi  ~/pi/extensions/vboard.ts\n  already installed\n')
   }, 20_000)
 
   it("reminds an agent once when its turn didn't update the board, and the agent posts where it fits", async () => {
