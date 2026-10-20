@@ -140,6 +140,38 @@ describe('scheduled messages', () => {
     expect((await julian('GET', '/schedules')).body.schedules).toMatchObject([{ sent: 1, next: new Date(T0 + HOUR + DAY).toISOString() }])
   })
 
+  it('keep sending after a deploy when a schedule has already sent: its next send is armed, not its first', async () => {
+    // A daily schedule from before that sent once, its second send waiting on the earlier deployment's queue.
+    const store = memory()
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const before = createServer({ contract: schedulesContract, store: store.log }).session(SCHEDULES_SESSION)
+    await before.append({
+      type: 'schedule.created',
+      payload: {
+        channel: 'dev', re: null, text: 'standup', labels: {}, noSync: false, first: T0 + HOUR, every: DAY, until: null, times: null,
+        as: {
+          author: by,
+          principal: { id: by.principal, kind: 'person', handle: 'julian' },
+          actor: { id: by.actor, kind: 'person', handle: 'julian', name: 'Julian', avatar: null },
+        },
+      },
+    })
+    await before.append({ type: 'schedule.fired', payload: { id: 1, n: 0, message: 1, next: T0 + HOUR + DAY } })
+    const queue = fakeQueue()
+    const board = testBoard({ store, scheduler: queue.scheduler })
+    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+
+    await julian('GET', '/me')
+    await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
+    vi.setSystemTime(T0 + HOUR + DAY)
+    await queue.fire()
+    await vi.waitFor(async () => {
+      const { body } = await julian('GET', '/messages?channel=dev')
+      expect(body.messages.map((m: { text: string }) => m.text)).toEqual(['standup'])
+    })
+    expect((await julian('GET', '/schedules')).body.schedules).toMatchObject([{ sent: 2, next: new Date(T0 + HOUR + 2 * DAY).toISOString() }])
+  })
+
   it('wait out more than a queue can delay in hops', async () => {
     const { julian, queue, root, replies, advance } = await setup()
     await julian('POST', '/schedules', { re: root.id, text: 'a week later', in: '8d' })

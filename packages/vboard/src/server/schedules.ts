@@ -245,9 +245,9 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   }
 
   /**
-   * Arms each schedule's next send, from the first schedule on: a queue delivers a timer to the
-   * deployment that armed it, so one an earlier deployment armed may never reach this one. The
-   * deployment that gets there first sends, and `due` makes the other's a no-op.
+   * Arms each schedule's next send, as the schedule stands now, from the first schedule on: a queue
+   * delivers a timer to the deployment that armed it, so one an earlier deployment armed may never
+   * reach this one. The deployment that gets there first sends, and `due` makes the other's a no-op.
    */
   const arming = consumer({
     contract: schedulesContract,
@@ -257,7 +257,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     backfill: true,
   }).run(async (ctx) => {
     if (!options.scheduler) return
-    const { state } = await ctx.session.state(schedulesReducer)
+    // Latest, not through `schedule.created`: one that has sent since waits on a later send.
+    const { state } = await ctx.session.state(schedulesReducer, { through: 'latest' })
     const schedule = state.byId[ctx.event.index]
     if (!schedule || schedule.next === null) return
     await arm(ctx, 'first', schedule.id, schedule.sent, schedule.next)
