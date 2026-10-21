@@ -251,9 +251,10 @@ cd ~ && exec flock ~/.pi/lock bash -c '
 export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
 
 /**
- * The board routes `vb` calls (vboard's `routes`), as an RE2 regex: all but `/webhooks/*`. Those skip board auth and
- * accept any OIDC token for this project, so the board's token there would let the sandbox forge Slack and GitHub
- * events. Other paths on the host, like the docs site, get no credentials either.
+ * The board routes Pi's `vb` calls, as an RE2 regex: discovery, and reading and writing messages, schedules and
+ * attachments. Not `/webhooks/*`, which skip board auth and accept any OIDC token for this project, so the board's
+ * token there would let the sandbox forge Slack and GitHub events. Not the full-access routes (stuck events, inboxes,
+ * raw source reads), identity linking, or anything else on the host, like the docs site.
  */
 const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
   "me",
@@ -261,15 +262,9 @@ const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
   "actors",
   "threads",
   "events",
-  "openapi\\.json",
-  "identity(/(link|check|unlink))?",
   "messages(/[0-9]+(/(edit|delete|reactions|labels|sync|typing))?)?",
   "schedules(/s?[0-9]+/cancel)?",
   "attachments(/[A-Za-z0-9_-]+)?",
-  "avatars/[a-z0-9-]+",
-  "inbox/[A-Za-z0-9_-]+",
-  "sources/[A-Za-z0-9_-]+/read",
-  "stuck(/redrive)?",
 ].join("|")}))?/?$`;
 
 /**

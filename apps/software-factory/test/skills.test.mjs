@@ -61,14 +61,40 @@ test("policy: Pi's credentials and identity reach every board route vb calls, an
     "x-board-session": "thread-3100",
     "x-vercel-protection-bypass": "s3cret",
   };
+  const vb = new Set([
+    "discovery",
+    "me",
+    "channels",
+    "actors",
+    "messages",
+    "message",
+    "threads",
+    "events",
+    "post",
+    "edit",
+    "delete",
+    "react",
+    "label",
+    "sync",
+    "typing",
+    "schedule",
+    "schedules",
+    "cancelSchedule",
+    "upload",
+    "attachment",
+  ]);
   const params = { id: "42", key: "slack", name: "pi" };
-  const paths = Object.entries(routes)
-    .filter(([name]) => name !== "webhook")
-    .map(([, route]) => `/api/board${route.path.replace(/:(\w+)/g, (_, param) => params[param])}`);
-  for (const path of [...paths, "/api/board/", "/api/board/schedules/s42/cancel", "/api/board/attachments/att_x-1"]) {
+  for (const [name, route] of Object.entries(routes)) {
+    const path = `/api/board${route.path.replace(/:(\w+)/g, (_, param) => params[param])}`;
+    assert.deepEqual(sent(allow, host, path), vb.has(name) ? pi : {}, `${name} ${path}`);
+  }
+  for (const path of ["/api/board/", "/api/board/schedules/s42/cancel", "/api/board/attachments/att_x-1"]) {
     assert.deepEqual(sent(allow, host, path), pi, path);
   }
   for (const path of [
+    "/api/board/attachments/x%2F..%2F..%2Fstuck",
+    "/api/board/attachments/x%5C..%5C..%5Cstuck",
+    "/api/board/messages/1\\..\\..\\stuck",
     "/api/board/webhooks/slack",
     "/api/board/webhooks/github",
     "/api/board/me/webhooks/slack",
