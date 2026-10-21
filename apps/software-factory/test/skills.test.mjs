@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { piFiles, piPreview, policy } from "../app/api/board/[[...path]]/agent.ts";
+import { piAvatar, piFiles, piName, piPreview, policy } from "../app/api/board/[[...path]]/agent.ts";
+import { routes } from "../../../packages/vboard/src/api/routes.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "skills/ui-video/scripts/ui-video");
@@ -42,6 +43,43 @@ test("policy: Pi's own branch preview gets past Vercel Authentication, and no ot
   assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview(3100)].sort());
   assert.deepEqual(allow["*"], []);
   assert.equal(policy(3100, tokens, undefined).allow[piPreview(3100)], undefined);
+});
+
+// The headers the sandbox's proxy adds to a request for `path` on `host`, as it reads a rule's path match.
+function sent(allow, host, path) {
+  const rules = (allow[host] ?? []).filter((rule) => !rule.match?.path || new RegExp(rule.match.path.regex).test(path));
+  return Object.assign({}, ...rules.flatMap((rule) => rule.transform.map((t) => t.headers)));
+}
+
+test("policy: Pi's credentials and identity reach every board route vb calls, and nothing else on the board's host", () => {
+  const allow = policy(3100, tokens, "s3cret").allow;
+  const host = "vboard-factory.playground-vercel.tools";
+  const pi = {
+    authorization: "Bearer b",
+    "x-board-profile": piName(3100),
+    "x-board-avatar": piAvatar(3100),
+    "x-board-session": "thread-3100",
+    "x-vercel-protection-bypass": "s3cret",
+  };
+  const params = { id: "42", key: "slack", name: "pi" };
+  const paths = Object.entries(routes)
+    .filter(([name]) => name !== "webhook")
+    .map(([, route]) => `/api/board${route.path.replace(/:(\w+)/g, (_, param) => params[param])}`);
+  for (const path of [...paths, "/api/board/", "/api/board/schedules/s42/cancel", "/api/board/attachments/att_x-1"]) {
+    assert.deepEqual(sent(allow, host, path), pi, path);
+  }
+  // Webhooks skip board auth and accept any OIDC token from this project, so the board's token there could forge Slack and GitHub events.
+  for (const path of [
+    "/api/board/webhooks/slack",
+    "/api/board/webhooks/github",
+    "/api/board/me/webhooks/slack",
+    "/api/board/messages/1/../../webhooks/slack",
+    "/api/a2/scheduler",
+    "/",
+    "/sync/slack",
+  ]) {
+    assert.deepEqual(sent(allow, host, path), {}, path);
+  }
 });
 
 test("policy: Pi's GitHub API calls always carry the factory GitHub App's token", () => {
