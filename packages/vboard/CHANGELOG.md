@@ -1,5 +1,50 @@
 # vboard
 
+## 0.13.0
+
+### Minor Changes
+
+- 1ee8f23: vboard runs on A2 0.21's consumers. Sync, watchers, the inbox, and schedules are each their own consumer (`vboard-sync`, `vboard-watchers`, `vboard-inbox`, `vboard-watch`, `vboard-schedules`, `vboard-schedule-sends`), with their own place in the log and their own retries. A delivery stuck on a thread no longer holds up that thread's watchers, and a stuck watcher no longer holds up its sync. A failed run is retried after 1 second, then 2, doubling up to 30.
+  
+  `vb stuck` names the consumer each event is stuck for. `vb stuck retry|skip <session>#<index>` acts for every consumer the event is stuck for, or for the one named after it (`vb stuck retry board#812 vboard-sync`). `POST /stuck/redrive` and `board.redrive()` take an optional `consumer`, and each stuck event has `consumer`.
+  
+  **Upgrading:** let your earlier deployment finish its work, then deploy: A2 0.21 drops what an earlier release hadn't finished. On Redis, keep your `keyPrefix`: every event is kept. On Postgres, apply `node_modules/vboard/sql/postgres/schema.sql` (A2's tables, then vboard's) while no deployment is running; every event is kept there too. SQLite needs nothing applied, but a file an earlier release wrote doesn't open: delete it or pass another `path`. Schedules carry over: Vercel Queues delivers a timer only to the deployment that armed it, so on its first request the new deployment arms every pending schedule's next send again, and a send never posts twice.
+- b4c7670: Access is per channel. The board's code says what each caller may do in each channel (`read`, `post`, `react`, `label`, `sync`, or `manage`), reads are gated, and what a caller can't read answers 404. `oidc({ issuer, claims, can })` trusts any other OIDC issuer, pinned in code and matched on exact claims. A proxy that holds the credential can narrow it with an `x-board-scope` header. `GET /me` returns `can`, and `vb whoami` prints where its token came from and, when it's less than everything, what it can do (`--json` has both, as `source` and `can`). A token no rule matches is refused with the rule that would let it in. See the new Access page.
+  
+  Breaking changes:
+  
+  - `trustedSources` is now `access`, and `vercel()` is now `vercelProject()`; passing `trustedSources` throws and says so. Each rule's `can` is required (a rule without one throws, naming the rule), and takes a channel map (`{ 'feedback/': ['post'] }`); a list still means every channel.
+  - `can: ['post']` no longer reads. A rule that reads lists `read`; `react`, `label`, and `sync` imply it. A reply needs `post` and `read` in its thread's channel. Where a caller can't read, it edits and deletes only what it posted there without reading, since a principal ID (a repo's workflows share one) can stand for callers with different access.
+  - Labels on a post or a schedule need `label`.
+  - The board's own deployments get everything only in the environment the board runs in (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`). Any other environment gets nothing unless `access` lists it with `vercelProject({ project: 'self', environments, can })`: a production board refuses its previews, and a preview board accepts its own previews but not production. Outside Vercel, only people get in without a rule. Its people still get everything.
+  - Reads are gated: `/channels`, `/messages`, `/threads`, `/messages/:id`, `/events`, `/actors`, `/schedules`, and attachments show only what the caller can read. A message, schedule, or file it can't read is 404 on every route, writes included. Events about no message (`actor.*`, `thread.synced`) reach only a caller that reads every channel.
+  - A schedule's creator lists and cancels it only while it can post in the schedule's channel, and, where it can't read, only if it created it without reading; anyone else needs `read` to list it and `manage` to cancel it. Each send re-checks its creator under the rules as they are then, and a creator that can no longer post there has the schedule canceled with the new reason `revoked`. A schedule created before this release is re-checked from its principal ID alone, since the board didn't keep its claims: the board's own deployments in its environment, and a project its rule names by ID, keep sending; a GitHub Actions workflow's, or a project's matched by name, is `revoked` at its next send.
+  - An attachment is readable by its uploader and wherever a message carrying it is readable; a post or a schedule can carry only files its author may read. Deleting a message stops its files being readable through it.
+  - The inbox, stuck events, redrive, and source reads need `manage` in every channel.
+  - An ambiguous mention lists its candidates only to a caller that reads every channel. A post in a channel its caller can't read comes back with the text it sent, no mentions, and no `unknownMentions` (so `vb` doesn't warn about a handle that matches no one there), though the mentions still notify. With middleware, its retry of that post comes back as it landed, and replaying the `id` of a post written by a caller that could read fails with `duplicate_id`.
+  - Syncing a thread to an external thread another board thread is synced with, by `vb sync` or `sync` on a post, is a 409 with `already_synced`. Before, it took the external thread's replies away from that thread.
+- 17e4063: `board({ access })` also takes a function, `(request) => ({ id, kind, handle, can })`, that replaces the built-in verifier with the host's own, so a host serving many teams' boards can authenticate with its own credentials. Nothing else is trusted then. `vercelBlob({ prefix })` lets many boards share one Blob store.
+- a3c984b: A board reads its messages, and where each one lives on Slack, GitHub, and WhatsApp, from tables it keeps from its log, so a post, a reply, a thread, and a channel's threads cost the same on a board of a hundred messages or a hundred thousand. Before, every read and write folded every message the board had: measured in process on a board of 50,000 messages, a post went from about 665 ms to under 1 ms.
+  
+  Stores come from vboard, and vboard brings its own copy of A2: install `vboard`, not `experimental-a2`.
+  
+  ```ts
+  import { board } from 'vboard'
+  import { vercelQueues } from 'vboard/scheduler-vercel'
+  import { postgres } from 'vboard/store-postgres'
+  
+  export const { GET, POST, scheduler } = board({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+    scheduler: vercelQueues({ topic: 'vboard' }),
+  })
+  ```
+  
+  `vboard/store-postgres` (needs `pg`), `vboard/store-redis` (needs `ioredis`), `vboard/store-redis-http` (Upstash's REST API), `vboard/store-sqlite`, and `vboard/store-memory` each keep A2's log and the board's tables in one database. `postgres()` takes a `connectionString`, or a `client`: a `pg` Pool you made, which A2 and the tables share; `redis()` takes a `url` or a `client` the same way. Schedulers are `vboard/scheduler-vercel` and `vboard/scheduler-qstash`.
+  
+  **Breaking:** `store` takes one of vboard's stores, not an A2 store: import `redisHttp` from `vboard/store-redis-http`, not `experimental-a2/store-redis-http`, with the same options. On Postgres, apply `node_modules/vboard/sql/postgres/schema.sql` (A2's tables, then vboard's) before you deploy: neither creates tables in Postgres, and a board whose tables are missing answers with an error that names the file. Redis and SQLite need nothing applied. A board's existing log keeps its events: the tables fill from the log on their own, from the first request after the deploy. Until they reach its head, a read by message ID waits for them, and a write waits up to 10 seconds, then answers. See the new Database page.
+  
+  Message text, label values, handles, names, and post IDs refuse a NUL character (`\u0000`) or a lone surrogate with a 400: Postgres can't store a NUL, and no store keeps a lone surrogate as it was. Sync cleans both from what platforms send.
+
 ## 0.12.3
 
 ### Patch Changes
