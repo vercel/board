@@ -68,7 +68,6 @@ test("policy: Pi's credentials and identity reach every board route vb calls, an
   for (const path of [...paths, "/api/board/", "/api/board/schedules/s42/cancel", "/api/board/attachments/att_x-1"]) {
     assert.deepEqual(sent(allow, host, path), pi, path);
   }
-  // Webhooks skip board auth and accept any OIDC token from this project, so the board's token there could forge Slack and GitHub events.
   for (const path of [
     "/api/board/webhooks/slack",
     "/api/board/webhooks/github",
