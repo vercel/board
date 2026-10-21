@@ -29,7 +29,7 @@ describe.skipIf(!url)('vboard on Redis', () => {
     const julian = caller(mounted.fetch, await personToken())
     const root = await julian('POST', '/messages', { channel: 'dev', text: 'Deploy is red', labels: { kind: 'bug' } })
     expect(root.status).toBe(201)
-    const id = root.body.message.id as number
+    const id = root.body.message.id as string
     await julian('POST', '/messages', { re: id, text: 'looking' })
     await julian('POST', '/messages', { re: id, text: 'fixed' })
     await julian('POST', `/messages/${id}/labels`, { set: { status: 'done' } })
@@ -44,7 +44,7 @@ describe.skipIf(!url)('vboard on Redis', () => {
     expect(filtered.body.messages.map((m: { text: string }) => m.text)).toEqual(['fixed'])
     const threads = await julian('GET', '/threads?channel=dev')
     expect(threads.body.threads).toEqual([expect.objectContaining({ replies: 2, last: expect.objectContaining({ text: 'fixed' }) })])
-    expect(threads.body.cursor).toBeGreaterThanOrEqual(id)
+    expect(Number(threads.body.cursor)).toBeGreaterThanOrEqual(Number(id))
   })
 
   it('shares a client it was given between A2 and the tables', async () => {
