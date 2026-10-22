@@ -43,9 +43,9 @@ const EVENTS: {
   {
     id: 813,
     from: "slack",
-    author: "ada (slack)",
+    author: "monto (slack)",
     text: "can you check iOS too?",
-    rows: { slack: "ada     check iOS?", github: "ada: check iOS?", agent: "#813 ada: check iOS?" },
+    rows: { slack: "monto   check iOS?", github: "monto: check iOS?", agent: "#813 monto: check iOS?" },
   },
   {
     id: 815,
@@ -57,18 +57,18 @@ const EVENTS: {
   {
     id: 816,
     from: "github",
-    author: "grace (github)",
+    author: "andrew (github)",
     text: "approved",
     labels: "state=open review=approved",
-    rows: { github: "grace approved", slack: "grace   approved", agent: "#816 grace: approved" },
+    rows: { github: "andrew approved", slack: "andrew  approved", agent: "#816 andrew: approved" },
   },
   {
     id: 817,
     from: "github",
-    author: "julian (github)",
+    author: "martin (github)",
     text: "merged",
     labels: "state=merged review=approved",
-    rows: { github: "julian merged #42", slack: "julian  merged", agent: "#817 julian: merged" },
+    rows: { github: "martin merged #42", slack: "martin  merged", agent: "#817 martin: merged" },
   },
 ];
 

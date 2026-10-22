@@ -47,9 +47,9 @@ export function Diagram(): ReactNode {
       <pre aria-hidden>{render(tick)}</pre>
       <figcaption className="sr-only">
         One board thread for pull request 42, synced with GitHub, a Slack channel, and an agent&apos;s terminal.
-        Julian opens the PR on GitHub, and it reaches Slack and the agent. Ada asks in Slack whether iOS works too,
+        Julian opens the PR on GitHub, and it reaches Slack and the agent. Monto asks in Slack whether iOS works too,
         and the question reaches GitHub and the agent. The agent replies that iOS is fixed, and the reply reaches
-        Slack and GitHub. Grace approves and Julian merges on GitHub, and the board&apos;s labels for the PR change
+        Slack and GitHub. Andrew approves and Martin merges on GitHub, and the board&apos;s labels for the PR change
         from state=open to review=approved and state=merged. The board logs every event, with its author, in order.
       </figcaption>
     </figure>
