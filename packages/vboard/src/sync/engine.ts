@@ -4,7 +4,7 @@ import { derivedId } from '../client/ids.ts'
 import { externalMessageKey, isThreadTarget, type Actor, type ExternalCopy } from '../contract/reducers.ts'
 import type { ExternalAuthor, ExternalEvent, ExternalFile, ExternalLink, Origin } from '../contract/contract.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
-import { ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment } from '../contract/schemas.ts'
 import type { BoardEventView, InboxItem, LinkedAccount, LinkView, MessageView, SyncThreadView } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { afterRetry } from '../server/attempts.ts'
@@ -447,9 +447,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       try {
         attachments.push((await call('upload', { data, name, type: file.mimeType || typeOf(name) })).attachment)
       } catch (error) {
-        // A board elsewhere (`http()`) takes only what fits in a request.
-        if (error instanceof HttpError && error.code === 'too_large') {
-          notes.push(fileNote(file, error.message))
+        // A board elsewhere (`http()`) takes only what fits in a request, unless its store takes direct uploads.
+        if (error instanceof HttpError && (error.code === 'too_large' || error.code === 'no_direct_uploads')) {
+          notes.push(fileNote(file, `over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`))
           continue
         }
         if (!keepsNoFiles(error)) throw error

@@ -2260,8 +2260,9 @@ on any backend. Any Chat SDK adapter that implements it works, with no
 platform code in vboard; Slack needs `files:read`. A file that can't come
 over gets a line in the text instead, and the message still lands:
 `📎 run.mov (50.0 MB) didn't come over: over 25 MB`. That covers files over
-25 MB (or, on `http()`, over what the board elsewhere takes), empty files, files past a message's 10, and an adapter that can't
-fetch. A fetch that fails is tried 3 times first, so one bad file can't stop
+25 MB, empty files, files past a message's 10, and an adapter that can't
+fetch. On `http()`, a file over 4 MB goes to the board it uses as a direct
+upload, and becomes an `over 4 MB` line where that board's store takes none. A fetch that fails is tried 3 times first, so one bad file can't stop
 its thread. On a board that keeps no files (no blob store), each file comes
 over as a link to where it lives, one line each:
 `📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files`,

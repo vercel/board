@@ -2,7 +2,7 @@ import { RegisterBody, routes, type Discovery, type MatchView, type Me, type Reg
 import type { Method, Protocol } from '../api/protocol.ts'
 import { BoardError, createBoardClient, type BoardClient, type ProfileOption } from '../client/client.ts'
 import { DERIVED_ID, derivedId, keyId, sha256 } from '../client/ids.ts'
-import type { Attachment } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type Identity, type ProtocolMethods, type SelfCaller } from './backend.ts'
 import { forbidden, HttpError, json } from './errors.ts'
 import { METHODS } from './routing.ts'
@@ -238,6 +238,12 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     let response: Response
     if (method === 'upload') {
       const { data, name, type } = input as Protocol['upload']['input']
+      // Too big for one request (a platform file sync imports): straight to the board's blob store,
+      // where it signs uploads. Elsewhere, refused here, so no body goes over the wire to be refused.
+      if (data.byteLength > ATTACHMENT_BYTES_MAX) {
+        const attachment = await client.upload({ data: data as Uint8Array<ArrayBuffer>, name: name ?? 'file', ...(type ? { type } : {}) }).catch(rethrow)
+        return Response.json({ attachment })
+      }
       response = await client
         .request(path, {
           method: 'POST',

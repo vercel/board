@@ -72,6 +72,11 @@ export type ClientOptions = {
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
+  /**
+   * How a direct upload's bytes go to the blob store's signed URL: `fetch` by default, never the
+   * board's own, which brings the board's credentials and would hand them to the store.
+   */
+  storeFetch?: typeof fetch
 }
 
 export type PostOptions = {
@@ -181,6 +186,7 @@ export function createBoardClient(options: ClientOptions) {
   const base = options.url.replace(/\/+$/, '')
   // Browsers reject a bare `fetch` detached from `window` ("Illegal invocation").
   const doFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
+  const storeFetch = options.storeFetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
 
   async function headers(auth: boolean, as?: ProfileOption): Promise<Record<string, string>> {
     const out: Record<string, string> = { ...(options.headers ? await resolve(options.headers) : {}) }
@@ -324,7 +330,7 @@ export function createBoardClient(options: ClientOptions) {
           throw error
         })
         // The store's URL carries its own signature: the board's token stays with the board.
-        const put = await doFetch(ticket.url, { method: 'PUT', headers: { ...ticket.headers, 'content-type': type }, body: input.data })
+        const put = await storeFetch(ticket.url, { method: 'PUT', headers: { ...ticket.headers, 'content-type': type }, body: input.data })
         if (!put.ok) throw new BoardError('upload_failed', `the blob store refused the file: ${put.status} ${(await put.text().catch(() => '')).slice(0, 300) || put.statusText}`, put.status)
         return (await call<{ attachment: Attachment }>('POST', `/attachments/uploads/${encodeURIComponent(ticket.id)}`, { body: {} })).attachment
       }

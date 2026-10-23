@@ -140,13 +140,18 @@ describe('attachments', () => {
       const board = testBoard({ blob })
       const token = await personToken()
       const puts: { url: string; authorization: string | null }[] = []
+      // The board's fetch brings its credentials to whatever it sends, as `vb`'s does.
       const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
-        if (!request.url.startsWith('https://blob.test/')) return board.fetch(request)
+        request.headers.set('authorization', `Bearer ${token}`)
+        return board.fetch(request)
+      }) as typeof globalThis.fetch
+      const storeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
         puts.push({ url: request.url, authorization: request.headers.get('authorization') })
         return put(request)
       }) as typeof globalThis.fetch
-      return { board, blob, token, puts, client: createBoardClient({ url: BOARD_URL, token, fetch }), call: caller(board.fetch, token) }
+      return { board, blob, token, puts, client: createBoardClient({ url: BOARD_URL, fetch, storeFetch }), call: caller(board.fetch, token) }
     }
 
     it('uploads a file over 4 MB straight to the store, then posts and serves it', async () => {
