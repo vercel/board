@@ -137,10 +137,11 @@ the message lands, vboard fetches each file through the adapter (it needs
 over gets a line in the text instead, and the message still lands:
 
 ```text
-📎 run.mov (50.0 MB) didn't come over: over 4 MB
+📎 run.mov (50.0 MB) didn't come over: over 25 MB
 ```
 
-That covers files over 4 MB and a fetch that fails three times. A board
+That covers files over 25 MB (sync fetches a file on the server, so it isn't held to
+the 4 MB an upload is) and a fetch that fails three times. A board
 [without a blob store](../01-board/01-mounting.md#without-a-blob-store) keeps no
 files, so each one is a line that links it where it lives in Slack, for people
 who can see it there:

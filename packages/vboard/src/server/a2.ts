@@ -20,7 +20,7 @@ import {
   type Origin,
 } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/reducers.ts'
-import { platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, LinkedAccount, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
@@ -645,7 +645,9 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       const { principal } = (await identityOf(caller))
       // A file is no use until a post or an import carries it, so uploading needs `post` or `sync` somewhere.
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
-      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }) }
+      // Sync's own imports are fetched in this process, with no request to fit under, so they may be bigger.
+      const max = ownSync(caller) ? IMPORT_BYTES_MAX : ATTACHMENT_BYTES_MAX
+      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }, max) }
     },
     async attachment(caller, { id }) {
       const { principal } = (await identityOf(caller))

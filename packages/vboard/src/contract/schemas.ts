@@ -6,6 +6,12 @@ export const MESSAGE_TEXT_MAX = 10_000
 export const SCOPE_MAX = 4000
 /** Under Vercel Functions' 4.5 MB request body limit, so an upload fits in one request. */
 export const ATTACHMENT_BYTES_MAX = 4 * 1024 * 1024
+/**
+ * The most a file sync brings over from a platform can be. Sync fetches it on the server and
+ * stores it in-process, so no request carries it and the request limit doesn't apply: this bounds
+ * what one import holds in memory.
+ */
+export const IMPORT_BYTES_MAX = 25 * 1024 * 1024
 export const ATTACHMENTS_PER_MESSAGE_MAX = 10
 
 const segment = '[a-z0-9][a-z0-9_-]*'

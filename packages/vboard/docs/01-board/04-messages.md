@@ -124,7 +124,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or
 
 - **At most 4 MB per file and 10 per message.** An upload is one request,
   under Vercel Functions' request limit. The CLI checks every file before
-  uploading any.
+  uploading any. Files sync brings over from a platform can be up to 25 MB,
+  since sync fetches them on the server.
 - **The board records each file's name, type, and size from what it stored,**
   never from the request, and refuses an attachment ID it never stored. An ID
   is 128 random bits.

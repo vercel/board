@@ -1031,7 +1031,9 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   refuses an ID it never stored. An ID is 128 random bits, so knowing one is
   the only way to name it.
 - **A file is at most 4 MB,** under Vercel Functions' 4.5 MB request limit, so
-  an upload is one request. A message carries at most 10.
+  an upload is one request. A file sync imports from a platform is at most
+  25 MB: sync fetches and stores it in-process, with no request to fit under.
+  A message carries at most 10.
 - **Files live in a blob store,** `a2()`'s `blob`. A board without one keeps
   no files: an upload, a post, schedule, or import that carries
   `attachments`, and a download answer 501 `no_files`, and the rest of the
@@ -2251,8 +2253,8 @@ fetches each file through the adapter's `rehydrateAttachment` and uploads it,
 on any backend. Any Chat SDK adapter that implements it works, with no
 platform code in vboard; Slack needs `files:read`. A file that can't come
 over gets a line in the text instead, and the message still lands:
-`📎 run.mov (50.0 MB) didn't come over: over 4 MB`. That covers files over
-4 MB, empty files, files past a message's 10, and an adapter that can't
+`📎 run.mov (50.0 MB) didn't come over: over 25 MB`. That covers files over
+25 MB (or, on `http()`, over what the board elsewhere takes), empty files, files past a message's 10, and an adapter that can't
 fetch. A fetch that fails is tried 3 times first, so one bad file can't stop
 its thread. On a board that keeps no files (no blob store), each file comes
 over as a link to where it lives, one line each:
@@ -2265,7 +2267,7 @@ Files on an edit aren't brought in, and an inbound function gets the
 platform's event as it is.
 
 Some limits of the import. When a platform doesn't report a file's size
-(Slack always does), the 4 MB check happens after the download. Each attempt
+(Slack always does), the 25 MB check happens after the download. Each attempt
 uploads its files under fresh random IDs. So a retry, whether a later file's
 fetch failed or the post itself did, leaves the earlier attempt's uploads as
 orphans in the blob store. That's harmless, since nothing names them, but it

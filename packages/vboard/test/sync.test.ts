@@ -324,7 +324,7 @@ describe('sync', () => {
     await vi.waitFor(async () => {
       const { body } = await julian('GET', `/messages/${root!.id}`)
       expect(body.replies).toHaveLength(1)
-      expect(body.replies[0]).toMatchObject({ text: "and the recording\n\n📎 run.mov (50.0 MB) didn't come over: over 4 MB", attachments: [] })
+      expect(body.replies[0]).toMatchObject({ text: "and the recording\n\n📎 run.mov (50.0 MB) didn't come over: over 25 MB", attachments: [] })
     })
     expect(s.fetches).toEqual(['https://files.slack.test/shot.png']) // the big one was never downloaded
 
@@ -333,11 +333,33 @@ describe('sync', () => {
     await webhook('slack', { type: 'edit', threadId: 'slack:C1:500.1', id: '500.2', text: 'and the recording, again', user: 'U1' })
     await vi.waitFor(async () => {
       const { body } = await julian('GET', `/messages/${root!.id}`)
-      expect(body.replies[0]).toMatchObject({ text: "and the recording, again\n\n📎 run.mov (50.0 MB) didn't come over: over 4 MB" })
+      expect(body.replies[0]).toMatchObject({ text: "and the recording, again\n\n📎 run.mov (50.0 MB) didn't come over: over 25 MB" })
     })
     const { body: after } = await julian('GET', `/messages/${root!.id}`)
     expect(after.message).toMatchObject({ text: '', editedAt: null, attachments: [{ name: 'shot.png' }] })
     expect(s.posts).toHaveLength(0) // nothing echoes back to Slack
+  })
+
+  it('brings a Slack file over 4 MB onto the board, since sync fetches it with no request to fit', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken())
+    // The 10.9 MB recording from #252, which used to come over as "over 4 MB".
+    const video = new Uint8Array(Math.round(10.9 * 1024 * 1024)).fill(7)
+    s.served.set('https://files.slack.test/demo.mp4', video)
+    await webhook('slack', {
+      type: 'message', threadId: 'slack:C1:600.1', id: '600.1', text: 'the demo', user: 'U1',
+      files: [{ name: 'demo.mp4', mimeType: 'video/mp4', url: 'https://files.slack.test/demo.mp4', size: video.byteLength }],
+    })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = (await read(julian, 'firehose')) as unknown as { text: string; attachments: { id: string; size: number }[] }[]
+    expect(root!.text).toBe('the demo')
+    expect(root!.attachments).toEqual([{ id: expect.any(String), name: 'demo.mp4', type: 'video/mp4', size: video.byteLength }])
+    const file = await board.fetch(new Request(`${BOARD_URL}/attachments/${root!.attachments[0]!.id}`, { headers: { authorization: `Bearer ${await personToken()}` } }))
+    expect((await file.arrayBuffer()).byteLength).toBe(video.byteLength)
+
+    // A person's upload still has to fit in one request.
+    const big = await board.fetch(new Request(`${BOARD_URL}/attachments`, { method: 'POST', body: video, headers: { authorization: `Bearer ${await personToken()}` } }))
+    expect(big.status).toBe(413)
   })
 
   it('retries a file Slack fails to hand over, then notes it if it keeps failing', async () => {

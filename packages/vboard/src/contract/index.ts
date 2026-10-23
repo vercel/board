@@ -2,6 +2,7 @@
 // people read. Sync bookkeeping, side contracts, and the folds stay internal.
 export {
   ATTACHMENT_BYTES_MAX,
+  IMPORT_BYTES_MAX,
   ATTACHMENTS_PER_MESSAGE_MAX,
   ActorId,
   ActorKind,
