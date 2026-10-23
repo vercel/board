@@ -330,7 +330,7 @@ export function createBoardClient(options: ClientOptions) {
           throw error
         })
         // The store's URL carries its own signature: the board's token stays with the board.
-        const put = await storeFetch(ticket.url, { method: 'PUT', headers: { ...ticket.headers, 'content-type': type }, body: input.data })
+        const put = await storeFetch(ticket.url, { method: 'PUT', headers: ticket.headers, body: input.data })
         if (!put.ok) throw new BoardError('upload_failed', `the blob store refused the file: ${put.status} ${(await put.text().catch(() => '')).slice(0, 300) || put.statusText}`, put.status)
         return (await call<{ attachment: Attachment }>('POST', `/attachments/uploads/${encodeURIComponent(ticket.id)}`, { body: {} })).attachment
       }

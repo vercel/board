@@ -87,6 +87,8 @@ test("policy: Pi's credentials and identity reach every board route vb calls, an
     "cancelSchedule",
     "upload",
     "attachment",
+    "uploadStart",
+    "uploadFinish",
   ]);
   const params = { id: "42", key: "slack", name: "pi" };
   for (const [name, route] of Object.entries(routes)) {

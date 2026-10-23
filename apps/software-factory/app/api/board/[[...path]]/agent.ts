@@ -268,7 +268,7 @@ const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
   "events",
   "messages(/[0-9]+(/(edit|delete|reactions|labels|sync|typing))?)?",
   "schedules(/s?[0-9]+/cancel)?",
-  "attachments(/[A-Za-z0-9_-]+)?",
+  "attachments(/uploads)?(/[A-Za-z0-9_-]+)?",
 ].join("|")}))?/?$`;
 
 /**

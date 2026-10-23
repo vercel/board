@@ -164,7 +164,8 @@ export async function startUpload(
   const ticket: Ticket = { id: attachmentId(), name: fileName(input.name), type: mediaType(input.type), size: input.size, uploadedBy: input.uploadedBy, expiresAt: expires.toISOString() }
   await blob.put(ticketKey(ticket.id), new TextEncoder().encode(JSON.stringify(ticket)), 'application/json')
   const { url, headers } = await blob.uploadUrl(dataKey(ticket.id), { contentType: ticket.type, maxBytes: ticket.size, expiresAt: expires })
-  return { id: ticket.id, url, headers, expiresAt: ticket.expiresAt }
+  // The type the URL was signed for, which the PUT must send as it is.
+  return { id: ticket.id, url, headers: { ...headers, 'content-type': ticket.type }, expiresAt: ticket.expiresAt }
 }
 
 /**

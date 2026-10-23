@@ -342,7 +342,7 @@ export const UploadStartBody = z.object({
   size: z.number().int().positive().max(DIRECT_UPLOAD_BYTES_MAX, `direct uploads are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB`),
 })
 
-/** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers`, before `expiresAt`, then finish it. */
+/** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
 export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
 
 export const EditBody = z.object({ text: MessageText })

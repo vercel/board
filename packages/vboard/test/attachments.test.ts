@@ -169,6 +169,11 @@ describe('attachments', () => {
       expect(file.headers.get('content-type')).toBe('video/mp4')
       expect((await file.arrayBuffer()).byteLength).toBe(video.byteLength)
 
+      // The PUT sends the type the URL was signed for, not the one the caller wrote.
+      const typed = await client.upload({ data: video, name: 'demo.mp4', type: 'Video/MP4; codecs=avc1' })
+      expect(typed).toMatchObject({ type: 'video/mp4', size: video.byteLength })
+      puts.pop()
+
       // Small files still go in one request.
       await client.upload({ data: PNG, name: 'shot.png', type: 'image/png' })
       expect(puts).toHaveLength(1)
@@ -178,7 +183,7 @@ describe('attachments', () => {
       const { board, blob, call } = await directSetup()
       const size = 5 * 1024 * 1024
       const ticket = (await call('POST', '/attachments/uploads', { name: 'run.mov', type: 'video/quicktime', size })).body
-      expect(ticket).toMatchObject({ id: expect.stringMatching(/^[A-Za-z0-9_][A-Za-z0-9_-]{21}$/), url: expect.any(String), headers: { 'x-signed': 'yes' }, expiresAt: expect.any(String) })
+      expect(ticket).toMatchObject({ id: expect.stringMatching(/^[A-Za-z0-9_][A-Za-z0-9_-]{21}$/), url: expect.any(String), headers: { 'x-signed': 'yes', 'content-type': 'video/quicktime' }, expiresAt: expect.any(String) })
 
       // Before the bytes: nothing to record, and nothing to read or post.
       expect((await call('POST', `/attachments/uploads/${ticket.id}`, {})).body.error.code).toBe('not_uploaded')
