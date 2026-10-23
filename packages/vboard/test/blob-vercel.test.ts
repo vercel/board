@@ -46,4 +46,13 @@ describe('vercelBlob() direct uploads', () => {
     expect(sdk.head).toHaveBeenCalledWith('team_a/vboard/attachments/abc', {})
     expect(await blob.head!('vboard/attachments/missing')).toBeNull()
   })
+
+  it("reads records from origin, so the CDN can't keep a miss for one read before it was written", async () => {
+    sdk.get.mockResolvedValue(null)
+    const blob = vercelBlob()
+    await blob.get('vboard/attachments/abc.json')
+    expect(sdk.get).toHaveBeenLastCalledWith('vboard/attachments/abc.json', { access: 'private', useCache: false })
+    await blob.get('vboard/attachments/abc')
+    expect(sdk.get).toHaveBeenLastCalledWith('vboard/attachments/abc', { access: 'private' })
+  })
 })

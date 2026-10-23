@@ -171,21 +171,27 @@ export async function startUpload(
 /**
  * Finishes a direct upload: once the store has exactly the bytes its start said, the board records
  * the attachment, as `writeUpload` does. Only its uploader may finish it; a second finish answers
- * the same attachment.
+ * the same attachment. It never reads the record before writing it: a store with a cache (Vercel
+ * Blob's CDN) would keep that miss, and the post that names the file would find nothing.
  */
 export async function finishUpload(blob: BlobStore | null, id: string, principal: string): Promise<AttachmentType> {
   if (!blob) throw noBlob()
   const found = Attachment.shape.id.safeParse(id).success ? await blob.get(ticketKey(id)) : null
   const ticket = found ? (JSON.parse(new TextDecoder().decode(await bytes(found.data))) as Ticket) : null
   if (!ticket || ticket.uploadedBy !== principal) throw notFound(`no upload: ${id}`, 'upload_not_found')
-  const done = await blob.get(metaKey(id))
-  if (done) return Attachment.parse(JSON.parse(new TextDecoder().decode(await bytes(done.data))))
   if (!blob.head) throw noDirectUploads()
   const stored = await blob.head(dataKey(id))
   if (!stored) throw new HttpError(409, 'not_uploaded', `nothing's been uploaded for ${id} yet: PUT the file to its URL first`)
   if (stored.size !== ticket.size)
     throw badRequest(`the store has ${stored.size} bytes for ${id}, but its upload said ${ticket.size}`, 'size_mismatch')
   const attachment: AttachmentType = { id, name: ticket.name, type: ticket.type, size: stored.size }
-  await blob.put(metaKey(id), new TextEncoder().encode(JSON.stringify({ ...attachment, uploadedBy: principal })), 'application/json')
+  try {
+    await blob.put(metaKey(id), new TextEncoder().encode(JSON.stringify({ ...attachment, uploadedBy: principal })), 'application/json')
+  } catch (error) {
+    // Finished before: a store that never overwrites refuses the record, which is there to read.
+    const done = await blob.get(metaKey(id)).catch(() => null)
+    if (!done) throw error
+    return Attachment.parse(JSON.parse(new TextDecoder().decode(await bytes(done.data))))
+  }
   return attachment
 }

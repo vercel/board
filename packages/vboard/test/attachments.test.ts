@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createBoardClient } from '../src/client/client.ts'
-import { memoryBlob } from '../src/server/blob.ts'
+import { memoryBlob, type BlobStore } from '../src/server/blob.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 // A 1×1 PNG.
@@ -207,6 +207,27 @@ describe('attachments', () => {
       const first = await call('POST', `/attachments/uploads/${ticket.id}`, {})
       expect(first).toMatchObject({ status: 201, body: { attachment: { id: ticket.id, name: 'run.mov', type: 'video/quicktime', size } } })
       expect((await call('POST', `/attachments/uploads/${ticket.id}`, {})).body).toEqual(first.body)
+    })
+
+    it("posts a direct upload on a store whose reads keep a miss, as Vercel Blob's CDN does", async () => {
+      // Board #252: the upload finished, then the post said `no attachment`, since finishing read
+      // the attachment's record before writing it, and the store's cache kept that miss.
+      const { blob, put } = signingBlob()
+      const misses = new Set<string>()
+      const cached: BlobStore = {
+        ...blob,
+        async get(key) {
+          if (misses.has(key)) return null
+          const found = await blob.get(key)
+          if (!found) misses.add(key)
+          return found
+        },
+      }
+      const board = testBoard({ blob: cached })
+      const token = await personToken()
+      const client = createBoardClient({ url: BOARD_URL, token, fetch: ((input: RequestInfo | URL, init?: RequestInit) => board.fetch(new Request(input, init))) as typeof globalThis.fetch, storeFetch: ((input: RequestInfo | URL, init?: RequestInit) => put(new Request(input, init))) as typeof globalThis.fetch })
+      const demo = await client.upload({ data: new Uint8Array(5 * 1024 * 1024), name: 'demo.mp4' })
+      expect((await client.post('scratch', { text: 'blob test', attachments: [demo] })).attachments).toEqual([demo])
     })
 
     it('refuses a direct upload over 100 MB before signing anything', async () => {

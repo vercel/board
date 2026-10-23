@@ -26,7 +26,9 @@ export function vercelBlob(options: { token?: string; storeId?: string; prefix?:
       })
     },
     async get(key) {
-      const found = await get(prefix + key, { ...auth, access: 'private' })
+      // A record (`.json`) can be read before it's written (an attachment named before its upload
+      // finished): from origin, so the CDN never keeps that miss. Files' bytes, once there, never change.
+      const found = await get(prefix + key, { ...auth, access: 'private', ...(key.endsWith('.json') ? { useCache: false } : {}) })
       if (!found || found.statusCode !== 200) return null
       return { data: found.stream, contentType: found.blob.contentType }
     },
