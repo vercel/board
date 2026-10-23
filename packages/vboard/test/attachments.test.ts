@@ -78,9 +78,11 @@ describe('attachments', () => {
     expect((await client.thread(posted.id)).message.attachments).toEqual([])
   })
 
-  it('refuses files over 4 MB, and says when a production board has nowhere to keep them', async () => {
+  it('refuses files over 4 MB where the store takes no direct uploads, and in one request everywhere', async () => {
     const { board, client, token } = await setup()
-    await expect(client.upload({ data: new Uint8Array(4 * 1024 * 1024 + 1), name: 'big.bin' })).rejects.toMatchObject({ status: 413, code: 'too_large' })
+    await expect(client.upload({ data: new Uint8Array(4 * 1024 * 1024 + 1), name: 'big.bin' })).rejects.toMatchObject({ status: 501, code: 'no_direct_uploads' })
+    const oneRequest = await board.fetch(new Request(`${BOARD_URL}/attachments`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: new Uint8Array(4 * 1024 * 1024 + 1) }))
+    expect(oneRequest.status).toBe(413)
 
     // Without a content-length, the board stops reading once it's past the limit.
     let sent = 0
@@ -100,5 +102,108 @@ describe('attachments', () => {
     )
     expect(chunked.status).toBe(413)
     expect(sent).toBeLessThanOrEqual(6 * 1024 * 1024)
+  })
+
+  describe('direct uploads', () => {
+    /** A store that signs URLs as an S3 or Vercel Blob one does: one key, at most the size, no overwrites, until it expires. */
+    function signingBlob() {
+      const store = memoryBlob()
+      const signed = new Map<string, { key: string; contentType: string; maxBytes: number; expiresAt: Date }>()
+      const blob = {
+        ...store,
+        async uploadUrl(key: string, options: { contentType: string; maxBytes: number; expiresAt: Date }) {
+          const token = randomBytes(8).toString('hex')
+          signed.set(token, { key, ...options })
+          return { url: `https://blob.test/put/${token}`, headers: { 'x-signed': 'yes' } }
+        },
+        async head(key: string) {
+          const found = await store.get(key)
+          return found ? { size: (found.data as Uint8Array).byteLength } : null
+        },
+      }
+      /** What the store answers a `PUT` on a URL it signed. */
+      async function put(request: Request): Promise<Response> {
+        const grant = signed.get(new URL(request.url).pathname.split('/').pop()!)
+        if (!grant || request.method !== 'PUT' || request.headers.get('x-signed') !== 'yes' || grant.expiresAt < new Date()) return new Response('forbidden', { status: 403 })
+        if (request.headers.get('content-type') !== grant.contentType) return new Response('wrong type', { status: 400 })
+        const data = new Uint8Array(await request.arrayBuffer())
+        if (data.byteLength > grant.maxBytes) return new Response('too large', { status: 413 })
+        if (await store.get(grant.key)) return new Response('exists', { status: 409 })
+        await store.put(grant.key, data, grant.contentType)
+        return new Response(null, { status: 200 })
+      }
+      return { blob, put }
+    }
+
+    async function directSetup() {
+      const { blob, put } = signingBlob()
+      const board = testBoard({ blob })
+      const token = await personToken()
+      const puts: { url: string; authorization: string | null }[] = []
+      const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        if (!request.url.startsWith('https://blob.test/')) return board.fetch(request)
+        puts.push({ url: request.url, authorization: request.headers.get('authorization') })
+        return put(request)
+      }) as typeof globalThis.fetch
+      return { board, blob, token, puts, client: createBoardClient({ url: BOARD_URL, token, fetch }), call: caller(board.fetch, token) }
+    }
+
+    it('uploads a file over 4 MB straight to the store, then posts and serves it', async () => {
+      const { client, puts } = await directSetup()
+      // The 10.9 MB recording from board #252.
+      const video = new Uint8Array(Math.round(10.9 * 1024 * 1024)).fill(7)
+      const demo = await client.upload({ data: video, name: 'demo.mp4' })
+      expect(demo).toMatchObject({ name: 'demo.mp4', type: 'video/mp4', size: video.byteLength })
+      // One PUT to the store, which never sees the board's token.
+      expect(puts).toEqual([{ url: expect.stringMatching(/^https:\/\/blob\.test\/put\//), authorization: null }])
+
+      const posted = await client.post('ops', { text: 'the demo', attachments: [demo] })
+      expect(posted.attachments).toEqual([demo])
+      const file = await client.download(demo.id)
+      expect(file.headers.get('content-type')).toBe('video/mp4')
+      expect((await file.arrayBuffer()).byteLength).toBe(video.byteLength)
+
+      // Small files still go in one request.
+      await client.upload({ data: PNG, name: 'shot.png', type: 'image/png' })
+      expect(puts).toHaveLength(1)
+    })
+
+    it('records an upload only once the store has exactly its bytes, and only for its uploader', async () => {
+      const { board, blob, call } = await directSetup()
+      const size = 5 * 1024 * 1024
+      const ticket = (await call('POST', '/attachments/uploads', { name: 'run.mov', type: 'video/quicktime', size })).body
+      expect(ticket).toMatchObject({ id: expect.stringMatching(/^[A-Za-z0-9_][A-Za-z0-9_-]{21}$/), url: expect.any(String), headers: { 'x-signed': 'yes' }, expiresAt: expect.any(String) })
+
+      // Before the bytes: nothing to record, and nothing to read or post.
+      expect((await call('POST', `/attachments/uploads/${ticket.id}`, {})).body.error.code).toBe('not_uploaded')
+      expect((await call('GET', `/attachments/${ticket.id}`)).status).toBe(404)
+      expect((await call('POST', '/messages', { channel: 'ops', text: 'x', attachments: [ticket.id] })).status).toBe(404)
+
+      // Someone else can't finish it.
+      const other = caller(board.fetch, await personToken('u_other'))
+      expect((await other('POST', `/attachments/uploads/${ticket.id}`, {})).status).toBe(404)
+
+      // Bytes that aren't the size it said are refused.
+      await blob.put(`vboard/attachments/${ticket.id}`, new Uint8Array(size - 1), 'video/quicktime')
+      expect((await call('POST', `/attachments/uploads/${ticket.id}`, {})).body.error.code).toBe('size_mismatch')
+    })
+
+    it('finishes once, and answers the same attachment when finished again', async () => {
+      const { blob, call } = await directSetup()
+      const size = 5 * 1024 * 1024
+      const ticket = (await call('POST', '/attachments/uploads', { name: 'run.mov', type: 'video/quicktime', size })).body
+      await blob.put(`vboard/attachments/${ticket.id}`, new Uint8Array(size), 'video/quicktime')
+      const first = await call('POST', `/attachments/uploads/${ticket.id}`, {})
+      expect(first).toMatchObject({ status: 201, body: { attachment: { id: ticket.id, name: 'run.mov', type: 'video/quicktime', size } } })
+      expect((await call('POST', `/attachments/uploads/${ticket.id}`, {})).body).toEqual(first.body)
+    })
+
+    it('refuses a direct upload over 100 MB before signing anything', async () => {
+      const { client, call, puts } = await directSetup()
+      expect((await call('POST', '/attachments/uploads', { name: 'huge.mov', size: 100 * 1024 * 1024 + 1 })).status).toBe(400)
+      await expect(client.upload({ data: new Uint8Array(100 * 1024 * 1024 + 1), name: 'huge.mov' })).rejects.toMatchObject({ status: 413, code: 'too_large' })
+      expect(puts).toHaveLength(0)
+    })
   })
 })

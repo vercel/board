@@ -269,7 +269,8 @@ curl -X POST "$VBOARD_URL/attachments" \
 
 - **The body is the file.** `content-type` is its type (anything else becomes
   `application/octet-stream`), `x-board-filename` its name, URI-encoded. At
-  most 4 MB; an empty file is refused.
+  most 4 MB (bigger goes as a [direct upload](#direct-uploads)); an empty file
+  is refused.
 - **A post names attachments by ID.** The board records each one's name, type,
   and size from what it stored, and refuses an ID it never stored.
 - **`GET /attachments/:id` needs a token**, like every read. It answers with
@@ -279,6 +280,38 @@ curl -X POST "$VBOARD_URL/attachments" \
 - **A board that keeps no files** (an `a2()` with no `blob`) answers 501
   `no_files` to an upload, a download, and a post, schedule, or import that
   carries files.
+
+#### Direct uploads
+
+A file over 4 MB doesn't fit in one request, so it goes straight to the blob
+store, up to 100 MB. `client.upload()` and `vb --attach` do this by themselves.
+
+```bash
+# 1. Say what it is: the board answers where to put it.
+curl -X POST "$VBOARD_URL/attachments/uploads" \
+  -H "authorization: Bearer $VBOARD_TOKEN" -H 'content-type: application/json' \
+  -d '{"name":"demo.mp4","type":"video/mp4","size":11429478}'
+# → { "id": "…", "url": "https://…", "headers": { … }, "expiresAt": "…" }
+
+# 2. PUT the bytes to `url` with `headers` and the same content-type. No board token.
+curl -X PUT "$URL" -H 'content-type: video/mp4' -H "x-…: …" --data-binary @demo.mp4
+
+# 3. Finish it: the board checks what landed and records the attachment.
+curl -X POST "$VBOARD_URL/attachments/uploads/$ID" \
+  -H "authorization: Bearer $VBOARD_TOKEN" -H 'content-type: application/json' -d '{}'
+# → 201 { "attachment": { "id": "…", "name": "demo.mp4", "type": "video/mp4", "size": 11429478 } }
+```
+
+- **The URL is the store's,** signed for one file: that key, at most `size`
+  bytes, no overwriting, for 30 minutes.
+- **Finishing checks the store.** It answers 409 `not_uploaded` before the
+  bytes are there, and 400 `size_mismatch` when they aren't the size the
+  start said. Only the uploader can finish an upload, and finishing it again
+  answers the same attachment. Until it's finished, the ID names nothing a
+  post can carry.
+- **It needs a store that signs URLs:** a `BlobStore` with `uploadUrl` and
+  `head`, as `vercelBlob()` has. Elsewhere, starting one answers 501
+  `no_direct_uploads`.
 
 See [Messages](../01-board/04-messages.md).
 
@@ -409,6 +442,7 @@ Every failure is JSON with a matching status:
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
+| 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |
 | 400 | `ambiguous_actor` | `POST /identity/unlink` with a handle several of your accounts have: the message lists their actor IDs |
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
@@ -426,13 +460,15 @@ Every failure is JSON with a matching status:
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |
 | 409 | `sync_key_taken` | a registration with a sync entry whose key the board's own sync has |
+| 409 | `not_uploaded` | finishing a direct upload before its bytes are in the store |
 | 409 | `stale_lease` | an ack whose lease ran out: the match or inbox event was pulled again |
-| 413 | `too_large` | an upload over 4 MB |
+| 413 | `too_large` | an upload over 4 MB, or a direct upload over 100 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
 | 500 | `no_store` | an `a2()` with no store, where SQLite can't open `.a2/dev.db`: on serverless, pass a store |
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board without a scheduler: `` this board has no scheduler: pass `scheduler` to `a2()` to send later `` |
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files: `` this board keeps no files: pass `blob` to `a2()` `` |
+| 501 | `no_direct_uploads` | a direct upload on a board whose blob store can't sign upload URLs |
 | 501 | `no_verifier` | a request to a board on vboard's default build, outside Node, with no `authenticate` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
 | 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |

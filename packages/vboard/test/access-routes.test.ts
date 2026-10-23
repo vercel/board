@@ -118,6 +118,9 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: '/schedules', body: { re: open.root, text: 'hi', in: '1h' }, status: 403 },
   ],
   upload: () => [{ method: 'POST', path: '/attachments', status: 403 }],
+  uploadStart: () => [{ method: 'POST', path: '/attachments/uploads', body: { name: 'big.mp4', type: 'video/mp4', size: 10_000_000 }, status: 403 }],
+  // Only its uploader finishes an upload: anyone else's is as if it didn't exist.
+  uploadFinish: () => [{ method: 'POST', path: '/attachments/uploads/AAAAAAAAAAAAAAAAAAAAAA', body: {}, status: 404 }],
   // The board's own bookkeeping spans every channel.
   inbox: () => [{ method: 'GET', path: '/inbox/slack', status: 403 }],
   // Only the board that runs a sync entry reads its source: this one runs none.

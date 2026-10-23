@@ -105,7 +105,7 @@ order on its lane.
 | Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
 | Attachment ID | 128 random bits, base64url (22 characters) |
 | External target | prefixed with its sync key: `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread), `github:owner/repo:12` |
-| Attachments | at most 4 MB each (25 MB for one sync imports), 10 per message |
+| Attachments | at most 4 MB each in one request, 100 MB as a direct upload, 25 MB for one sync imports; 10 per message |
 
 ## Side contracts
 

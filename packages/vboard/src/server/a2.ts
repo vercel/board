@@ -28,7 +28,7 @@ import { authenticates, type Granted } from './auth.ts'
 import { actorSeen } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller } from './backend.ts'
 import { BoardError } from '../client/client.ts'
-import { attachmentBody, attachmentNotFound, readUpload, writeUpload, type BlobStore } from './blob.ts'
+import { attachmentBody, attachmentNotFound, finishUpload, readUpload, startUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
@@ -648,6 +648,15 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       // Sync's own imports are fetched in this process, with no request to fit under, so they may be bigger.
       const max = ownSync(caller) ? IMPORT_BYTES_MAX : ATTACHMENT_BYTES_MAX
       return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }, max) }
+    },
+    async uploadStart(caller, { name, type, size }) {
+      const { principal } = (await identityOf(caller))
+      if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
+      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id })
+    },
+    async uploadFinish(caller, { id }) {
+      const { principal } = (await identityOf(caller))
+      return { attachment: await finishUpload(blob, id, principal.id) }
     },
     async attachment(caller, { id }) {
       const { principal } = (await identityOf(caller))

@@ -1,3 +1,18 @@
+// The sizes a file can be, here so a client reads them without zod.
+/** Under Vercel Functions' 4.5 MB request body limit, so an upload fits in one request. */
+export const ATTACHMENT_BYTES_MAX = 4 * 1024 * 1024
+/**
+ * The most a file sync brings over from a platform can be. Sync fetches it on the server and
+ * stores it in-process, so no request carries it and the request limit doesn't apply: this bounds
+ * what one import holds in memory.
+ */
+export const IMPORT_BYTES_MAX = 25 * 1024 * 1024
+/**
+ * The most a direct upload can be: the client sends the bytes straight to the blob store, on a URL
+ * the board signs, so no request to the board carries them. Needs a store with `uploadUrl`.
+ */
+export const DIRECT_UPLOAD_BYTES_MAX = 100 * 1024 * 1024
+
 /** `120 KB`, `3.4 MB`: a file's size the way people read it. */
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`

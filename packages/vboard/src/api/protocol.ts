@@ -49,6 +49,8 @@ import type {
   ThreadsQuery,
   ThreadView,
   TypingBody,
+  UploadStartBody,
+  UploadTicket,
 } from './routes.ts'
 
 type Input<S extends z.ZodType> = NonNullable<z.output<S>>
@@ -82,6 +84,10 @@ export type Protocol = {
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
   upload: { input: { data: Uint8Array; name: string | null; type: string | null }; output: { attachment: Attachment } }
   attachment: { input: Id; output: { attachment: Attachment; data: Uint8Array | ReadableStream<Uint8Array> } }
+  /** A direct upload's ticket: where to `PUT` a file too big for `upload`. 501 `no_direct_uploads` when the blob store can't sign one. */
+  uploadStart: { input: Input<typeof UploadStartBody>; output: UploadTicket }
+  /** The attachment, once the bytes are in the store: 409 `not_uploaded` before. Finishing one twice answers the same. */
+  uploadFinish: { input: Id; output: { attachment: Attachment } }
   watchers: { input: Nothing; output: { watchers: RegistrationView[] } }
   register: { input: Input<typeof RegisterBody>; output: RegistrationView }
   matches: { input: Input<typeof MatchesQuery>; output: { matches: MatchView[] } }

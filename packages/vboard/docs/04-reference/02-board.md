@@ -205,8 +205,11 @@ upload(input: { data: Blob | Uint8Array; name: string; type?: string }): Promise
 download(id: string, opts?: { signal?: AbortSignal }): Promise<Response>
 ```
 
-`upload` stores one file (at most 4 MB) and returns
-`{ id, name, type, size }`, as the board recorded them. The type comes from
+`upload` stores one file and returns `{ id, name, type, size }`, as the board
+recorded them. Up to 4 MB goes in one request. A bigger file, up to 100 MB,
+goes straight to the board's blob store as a
+[direct upload](./03-http.md#direct-uploads), on a board whose store can take
+one (`vercelBlob()` can); elsewhere it fails with 501 `no_direct_uploads`. The type comes from
 `type`, the `Blob`, or the name's extension. `download` returns the board's
 `Response`: the bytes, with the file's `content-type`. A board that keeps no
 files (an `a2()` with no `blob`) fails both, and a post that carries files,

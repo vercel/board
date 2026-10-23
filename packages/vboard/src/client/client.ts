@@ -34,7 +34,7 @@ import type {
   TypingResult,
 } from '../api/routes.ts'
 import type { Actor } from '../contract/reducers.ts'
-import { typeOf } from '../contract/files.ts'
+import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contract/files.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { parseSse } from './sse.ts'
@@ -307,9 +307,27 @@ export function createBoardClient(options: ClientOptions) {
     /** Stops a schedule: yours, or any with manage in its channel. `canceled` is false when it was already done or canceled. */
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
-    /** Stores a file on the board, for a post or reply's `attachments`. At most 4 MB. */
+    /**
+     * Stores a file on the board, for a post or reply's `attachments`. Up to 4 MB goes in one
+     * request; bigger, up to 100 MB, goes straight to the board's blob store on a URL the board
+     * signs, where its store can (`no_direct_uploads` where it can't).
+     */
     async upload(input: UploadInput): Promise<Attachment> {
       const type = input.type || (input.data instanceof Blob ? input.data.type : '') || typeOf(input.name)
+      const size = input.data instanceof Blob ? input.data.size : input.data.byteLength
+      if (size > ATTACHMENT_BYTES_MAX) {
+        if (size > DIRECT_UPLOAD_BYTES_MAX) throw new BoardError('too_large', `attachments are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB`, 413)
+        const ticket = await call<{ id: string; url: string; headers: Record<string, string> }>('POST', '/attachments/uploads', { body: { name: input.name, type, size } }).catch((error: unknown) => {
+          // A board from before direct uploads has no such route.
+          if (error instanceof BoardError && error.status === 404 && error.code === 'not_found')
+            throw new BoardError('too_large', `this board takes files of at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`, 413)
+          throw error
+        })
+        // The store's URL carries its own signature: the board's token stays with the board.
+        const put = await doFetch(ticket.url, { method: 'PUT', headers: { ...ticket.headers, 'content-type': type }, body: input.data })
+        if (!put.ok) throw new BoardError('upload_failed', `the blob store refused the file: ${put.status} ${(await put.text().catch(() => '')).slice(0, 300) || put.statusText}`, put.status)
+        return (await call<{ attachment: Attachment }>('POST', `/attachments/uploads/${encodeURIComponent(ticket.id)}`, { body: {} })).attachment
+      }
       const response = await doFetch(`${base}/attachments`, {
         method: 'POST',
         headers: { ...(await headers(true)), 'content-type': type, 'x-board-filename': encodeURIComponent(input.name) },

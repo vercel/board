@@ -1031,7 +1031,13 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   refuses an ID it never stored. An ID is 128 random bits, so knowing one is
   the only way to name it.
 - **A file is at most 4 MB,** under Vercel Functions' 4.5 MB request limit, so
-  an upload is one request. A file sync imports from a platform is at most
+  an upload is one request. A bigger one, up to 100 MB, is a direct upload:
+  `POST /attachments/uploads` with its name, type, and size answers a URL the
+  blob store signed for that one key (at most that size, no overwrite, 30
+  minutes), the client `PUT`s the bytes there, and
+  `POST /attachments/uploads/:id` records the attachment once the store has
+  exactly that many bytes. Only a `BlobStore` with `uploadUrl` and `head`
+  takes them; others answer 501 `no_direct_uploads`. A file sync imports from a platform is at most
   25 MB: sync fetches and stores it in-process, with no request to fit under.
   A message carries at most 10.
 - **Files live in a blob store,** `a2()`'s `blob`. A board without one keeps

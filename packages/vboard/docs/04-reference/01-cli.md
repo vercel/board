@@ -355,7 +355,7 @@ for new threads only.
 | Flag | Effect |
 | --- | --- |
 | `--label k=v` | sets a label on the message (the root, or the reply when given an ID); repeat for more |
-| `--attach <file>` | uploads a file (at most 4 MB, 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses: ``error: this board keeps no files: pass `blob` to `a2()` `` |
+| `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board whose blob store takes direct uploads; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses: ``error: this board keeps no files: pass `blob` to `a2()` `` |
 | `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
 | `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--id <key>` | an idempotency key: the same key never posts twice |

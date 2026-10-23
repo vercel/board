@@ -12,7 +12,7 @@ import { boardUrl, configDir, connect, detectAgent, projectDir, projectUrl } fro
 import { http } from '../backend-http/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
@@ -231,7 +231,7 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   for (const path of paths) {
     const info = await stat(path).catch(() => null)
     if (!info?.isFile()) throw new UsageError(`no such file: ${path}`)
-    if (info.size > ATTACHMENT_BYTES_MAX) throw new UsageError(`${path} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+    if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
   }
   const uploaded: Attachment[] = []
   for (const path of paths)

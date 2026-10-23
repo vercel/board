@@ -4,6 +4,7 @@ import {
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
   ChannelPath,
+  DIRECT_UPLOAD_BYTES_MAX,
   Emoji,
   LabelKey,
   Labels,
@@ -334,6 +335,16 @@ export const SyncAccountBody = z.object({
 export const SignInQuery = z.object({ sync: SyncKey, code: z.string().min(1).max(64) })
 export const SyncUnlinkBody = z.object({ account: ActorId })
 
+/** A direct upload, before its bytes: what the file will be called, its type, and its exact size. */
+export const UploadStartBody = z.object({
+  name: z.string().max(1024).nullable().optional(),
+  type: z.string().max(1024).nullable().optional(),
+  size: z.number().int().positive().max(DIRECT_UPLOAD_BYTES_MAX, `direct uploads are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB`),
+})
+
+/** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers`, before `expiresAt`, then finish it. */
+export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
+
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
 /** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */
@@ -653,6 +664,10 @@ export const routes = {
   /** The file is the body; `content-type` is its type and `x-board-filename` its name, URI-encoded. */
   upload: { method: 'POST', path: '/attachments' },
   attachment: { method: 'GET', path: '/attachments/:id' },
+  /** A file too big for one request: the board answers where to `PUT` it in its blob store. Needs a store with `uploadUrl`. */
+  uploadStart: { method: 'POST', path: '/attachments/uploads', body: UploadStartBody },
+  /** After the `PUT`: the board checks what landed in the store and records the attachment. */
+  uploadFinish: { method: 'POST', path: '/attachments/uploads/:id' },
   openapi: { method: 'GET', path: '/openapi.json' },
   /** Your linked platform accounts. */
   identity: { method: 'GET', path: '/identity' },

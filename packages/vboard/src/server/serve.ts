@@ -24,6 +24,7 @@ import {
   SyncCopiesQuery,
   SyncFindQuery,
   SyncImportBody,
+  UploadStartBody,
   SyncReceiptBody,
   SyncRootsQuery,
   SyncUnlinkBody,
@@ -52,7 +53,7 @@ import type { WatcherContext } from './watch.ts'
 import { VERSION } from '../version.ts'
 
 /** The methods whose answer is something new. */
-const CREATED = new Set<Method>(['post', 'schedule', 'upload'])
+const CREATED = new Set<Method>(['post', 'schedule', 'upload', 'uploadFinish'])
 
 /** Shown inline only when a browser can't run it: everything else downloads. */
 const INLINE = /^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm)|text\/plain)$/
@@ -95,6 +96,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'delete':
     case 'cancelSchedule':
     case 'attachment':
+    case 'uploadFinish':
       return { id }
     case 'messages':
       return MessagesQuery.parse(queryObject(url))
@@ -135,6 +137,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       }
       return { data: await readCapped(request, ATTACHMENT_BYTES_MAX), name, type: request.headers.get('content-type') }
     }
+    case 'uploadStart':
+      return UploadStartBody.parse(await body())
     case 'syncImport':
       return SyncImportBody.parse(await body())
     case 'syncReceipt':
