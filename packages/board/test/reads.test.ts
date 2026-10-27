@@ -93,3 +93,31 @@ describe('list reads', () => {
     expect(listed.body.messages.map((m: { text: string }) => m.text)).toEqual(['one', 'two'])
   })
 })
+
+describe('reads by ID', () => {
+  it("wait for the whole log on new tables, so a message shows what came after it", async () => {
+    // A log from before the tables: a thread, a reply, then a reaction on the root.
+    const log = a2Memory()
+    const earlier = createServer({ contract: boardContract, store: log }).session(BOARD_SESSION)
+    const by = { actor: 'vercel:user:u_julian', principal: 'vercel:user:u_julian', profile: null, session: null }
+    const post = (id: string, text: string, re: number | null) => ({
+      id, type: 'message.posted' as const,
+      payload: { channel: 'dev', text, re, replyTo: null, thread: 'root', labels: {}, noSync: false, mentions: [], by, origin: null, from: null },
+    })
+    await earlier.append(post('root', 'deploys are down', null))
+    await earlier.append(post('reply', 'looking', 1))
+    await earlier.append({ id: 'eyes', type: 'reaction.added', payload: { id: 1, thread: 'root', emoji: 'eyes', by, from: null } })
+
+    const tables = sqlTables(sqliteDb(':memory:'))
+    const deployed = board({
+      store: { log, tables, close: () => tables.close() },
+      url: BOARD_URL,
+      project: { id: PROJECT_ID, teamId: TEAM_ID },
+      auth: testAuth,
+    })
+    const reader = caller(deployed.fetch, await personToken())
+    const { body } = await reader('GET', '/messages/1')
+    expect(body.message.reactions).toEqual({ eyes: ['vercel:user:u_julian'] })
+    expect(body.replies.map((reply: { text: string }) => reply.text)).toEqual(['looking'])
+  })
+})
