@@ -83,7 +83,7 @@ uses the target's own.
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
-| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, and every registration in `GET /watchers` |
+| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, and every registration in `GET /watchers` |
 
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
@@ -125,6 +125,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/wake` | On a board on `http()` (no token): it has matches to pull. Answers `{ ran }` |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). With `sync` in every channel, the board's own and every registered sync's; a sync elsewhere sees what it pushed |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). The board reads it with entry `key`'s app, through the sync it runs, and needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
+| POST | `/sources/:key/join` | Add entry `key`'s app to a public channel so `/sources/:key/read` can read it. Body: `{ target }`, a channel (`#name`, an ID) or a link into it. Answers `{ channel, name, joined }`, `joined: false` when the app was already in. Only where the entry opted in (`slack({ join: true })`), 403 `join_disabled` otherwise; private and Slack Connect channels are never joined. Needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
 | GET | `/identity/sign-in` | `?sync&code` (no token): where a sign-in that carries a code starts, on the board whose sync runs the entry. Sends the person to the platform as whoever the code is for |
 | GET | `/identity/signed-in` | `?sync&code` (no token): where the platform sends them back. Links the account they approved, by the code |
@@ -141,7 +142,7 @@ Every board that keeps its own log answers every route here. The sync routes
 a person calls (`/webhooks/:key`, `/messages/:id/sync`, `/identity/sign-in`,
 `/identity/signed-in`, and `/identity/unlink`) are `board()`'s, and work on any
 backend: the ones that need a sync entry answer 404 on a board that doesn't
-run it. `/sources/:key/read`, `/messages/:id/typing`, `GET /messages/:id/sync`,
+run it. `/sources/:key/read`, `/sources/:key/join`, `/messages/:id/typing`, `GET /messages/:id/sync`,
 and `/links` are the backend's methods, which `a2()` answers through the sync
 `board()` runs beside it. A
 board on `http()` answers only wake-ups, webhooks, and its sync's sign-ins,

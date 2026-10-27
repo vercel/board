@@ -1459,6 +1459,7 @@ status.
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `sync` in every channel for the board's own inbox |
 | GET | `/sources/:key/read` | `?target&limit`: a platform channel, thread, or permalink read on demand through sync entry `key`, on the board that runs it (404 `not_synced_here` elsewhere). Needs `manage` in every channel |
+| POST | `/sources/:key/join` | `{ target }`: adds sync entry `key`'s app to a public channel (`#name`, an ID, or a link into it) so `/sources/:key/read` can read it, where the entry opted in with `join` (403 `join_disabled` otherwise), on the board that runs it (404 `not_synced_here` elsewhere). Answers `{ channel, name, joined }`. Needs `manage` in every channel |
 | GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
 | GET | `/identity/sign-in` | `?sync&code`: on the board that runs the entry's sync, sends a person to the platform's sign-in for it, carrying a code the board that keeps the log issued (`POST /sync/codes` names it as `signIn`). Takes no board token |
 | GET | `/identity/signed-in` | `?sync&code`: where that sign-in comes back; links the account it authorized to whoever the code was issued to. Takes no board token |
@@ -1738,6 +1739,7 @@ board typing <id> [status]                     show typing in the thread's synce
 board inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
 board sources                                 the board's sources (sync entries) and their platforms
 board sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
+board sources <key> join <channel|link>       add the app to a public channel so `sources <key> read` can read it, where the board opted in
 board download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
 board conformance [--channel <c>]              check the board speaks the protocol (posts to conformance, deletes what it posted)
 
@@ -2698,7 +2700,8 @@ public channels the app is already in, through `conversations.history` and
 `conversations.replies` (`channels:history`). Private channels and DMs answer
 403 `private_channel`, and Slack Connect channels (shared with another
 organization) 403 `shared_channel`; a channel the app isn't in answers 403
-`not_in_channel`, and the app doesn't join it, so someone adds it on purpose.
+`not_in_channel`: someone adds the app on purpose, or `POST /sources/:key/join`
+(`joinSource`, `vb sources <key> join`) does, where the board opted in.
 A channel that doesn't exist, by name or ID, is 404 `channel_not_found`; Slack
 rate-limiting is 429 `ratelimited`; Slack failing, or a `#name` lookup that
 can't list channels (`list_failed`), is 502; any other Slack refusal is 403
@@ -2708,6 +2711,20 @@ with Slack's code; a target that isn't a channel, thread, or permalink is 400
 board listen to it: inbound events still only come from channels the sync
 function's helpers route and synced threads. Because the app's token reads more than the caller might,
 it needs `manage` in every channel.
+
+**Joining on demand.** `POST /sources/:key/join` with `{ target }` (a channel
+as `#name` or `C0123`, or a link into it) adds the app to a public channel so
+it can be read, through `conversations.info` and then `conversations.join`
+(`channels:join`), the latter only when the app isn't in it yet. It's off
+unless the entry opts in (`slack({ ..., join: true })`); otherwise it answers
+403 `join_disabled`. It answers `{ channel, name, joined }`, `joined: false`
+when the app was already in. Private channels, DMs, and Slack Connect channels
+are never joined (403 `private_channel`, `shared_channel`), and a missing
+scope is 403 `missing_scope`. Slack announces the app in the channel and starts
+sending its events, but sync still imports only the channels its helpers
+route. Nothing is stored. It answers like a read otherwise: 404
+`not_synced_here` on a board that doesn't run the entry, and `manage` in every
+channel.
 
 **Rendering.** Messages use the common author-prefixed body by default.
 A renderer passed to `deliver` (or through `render`) changes it; credentials and

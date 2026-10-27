@@ -579,7 +579,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
             throw new UnreadableError('shared_channel', `${label} is shared with another organization: the board doesn't read those on demand`)
           if (!info.is_member)
             throw new UnreadableError('not_in_channel', options.join
-              ? `the app isn't in ${label}: join it first (\`sources join\`), which adds the app there`
+              ? `the app isn't in ${label}: join it first with \`vb sources <key> join ${label}\`, which adds the app there`
               : `the app isn't in ${label}: someone needs to add it (it won't join on its own)`)
           if (thread) {
             const replies = web.conversations.replies

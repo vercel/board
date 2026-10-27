@@ -959,7 +959,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const label = joined.name ? `#${joined.name}` : joined.channel
         return out(joined.joined ? `joined ${label}` : `already in ${label}`), 0
       }
-      if (sub !== 'read' || !target) throw new UsageError('usage: board sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel>')
+      if (sub !== 'read' || !target) throw new UsageError('usage: board sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel|link>')
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
       if (flags.json) return printJson(read), 0
       return out(formatSourceRead(key, read)), 0
