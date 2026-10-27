@@ -21,7 +21,7 @@ ui-video skill says how).
 ## 1. Start a board
 
 ```bash
-V=~/.pi/agent/skills/verify-board/scripts/verify-board
+V=~/.agents/skills/verify-board/scripts/verify-board
 $V up                                       # this checkout, as it is now
 $V up --name before --ref origin/main       # main, in a worktree of its own
 $V up --name pr --ref pr-123                # a PR's head (git fetch origin pull/123/head:pr-123 first)

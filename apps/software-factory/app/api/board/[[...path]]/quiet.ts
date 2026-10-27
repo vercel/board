@@ -38,7 +38,7 @@ type PullsSync =
 type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> } | Outbound;
 
 /**
- * PR threads come in from GitHub and go nowhere back: a reply on the board, a Pi's included, stays
+ * PR threads come in from GitHub and go nowhere back: a reply on the board, an Eve's included, stays
  * in Slack and on the board, so a conversation about a PR doesn't end up as comments on it.
  * Inline review threads and "closed by …" replies stay out of Slack; comments on a PR the board
  * has no thread for stay on GitHub.
@@ -51,7 +51,7 @@ export async function pulls(sync: PullsSync): Promise<void> {
 
 /**
  * Issue threads come in from GitHub and go nowhere back, like PR threads: a public repo would show
- * what's said on the board. Pi answers on GitHub only on purpose, with gh.
+ * what's said on the board. Eve answers on GitHub only on purpose, with gh.
  */
 export async function issues(sync: IssuesSync): Promise<void> {
   if (sync.direction === "in") await sync.import("dev");

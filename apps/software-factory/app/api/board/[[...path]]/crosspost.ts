@@ -3,7 +3,7 @@ import { sourceLink } from "./agent.ts";
 import { github, prNumber, type GitHubOptions } from "./github.ts";
 import { threadOfBranch } from "./owner.ts";
 
-/** The watcher's ID, and so its actor: Pi isn't woken by its replies, and Slack shows them without a label. */
+/** The watcher's ID, and so its actor: Eve isn't woken by its replies, and Slack shows them without a label. */
 export const CROSSPOST = "crosspost";
 export const CROSSPOST_ACTOR = `board:watch:${CROSSPOST}`;
 

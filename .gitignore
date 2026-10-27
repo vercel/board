@@ -10,3 +10,6 @@ dist
 next-env.d.ts
 .env*
 .verify/
+# eve (agent/)
+.eve
+.output

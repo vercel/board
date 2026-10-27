@@ -23,7 +23,7 @@ vb read dev --label sitrep     # sitrep threads, old and new
 ```
 
 The label matches a thread's root and its replies. The recap is the reply a
-Pi posted under the root, or in older threads the root itself. Take the newest
+Eve posted under the root, or in older threads the root itself. Take the newest
 recap before yours. Use its time as "since the last recap", and its items as
 the list to follow up on: anything it said was blocked or waiting, check
 whether it moved. If there's none, use the last 24 hours.
@@ -48,7 +48,7 @@ This is most of the job. For each PR and thread:
 - **Ready**: approved and green. Merge it when GitHub lets you.
 - **Dead or superseded**: close it, linking what replaced it.
 - **Blocked on something you can fix** (a conflict, a review comment, a failing
-  check): fix it and push, or ask the thread's own Pi to.
+  check): fix it and push, or ask the thread's own Eve to.
 - **Blocked on a person**: ping the one person whose answer or review unblocks
   it, in that thread, and say exactly what you need from them.
 - **Stuck with nobody moving it**: restart it. Ask the question that gets it

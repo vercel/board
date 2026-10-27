@@ -26,7 +26,7 @@ function harness(responses) {
   const notifications = [];
   let tokens = 0;
   const watcher = shipit({
-    tellPi: async input => { notifications.push(input); },
+    tellEve: async input => { notifications.push(input); },
     token: async () => { tokens++; return "test-token"; },
     fetch: async (url, init) => {
       requests.push({ url, ...init, body: init.body ? JSON.parse(init.body) : undefined });
@@ -62,7 +62,7 @@ test("shipit marks a draft ready before merging the same head", async () => {
   assert.deepEqual(h.notifications, []);
 });
 
-test("a failed ready mutation tells Pi the merge intent without attempting to merge", async () => {
+test("a failed ready mutation tells Eve the merge intent without attempting to merge", async () => {
   const h = harness([draft(), { body: { errors: [{ message: "Not allowed to mark this PR ready." }] } }]);
   await h.run();
   assert.equal(h.requests.length, 2);
@@ -150,7 +150,7 @@ for (const [name, body, reason] of [
   ["closed", { state: "closed", draft: false }, "The PR is closed."],
   ["missing head", { state: "open", draft: false }, "GitHub did not return the PR's head SHA."],
 ]) {
-  test(`tells Pi the merge intent for a ${name} PR without attempting to merge it`, async () => {
+  test(`tells Eve the merge intent for a ${name} PR without attempting to merge it`, async () => {
     const h = harness([{ body }]);
     await h.run();
     assert.equal(h.requests.length, 1);
@@ -177,7 +177,7 @@ test("reports an unsuccessful merge response", async () => {
   assertIntent(h, "Merge conflict.");
 });
 
-test("tells Pi the merge intent after a connection failure", async () => {
+test("tells Eve the merge intent after a connection failure", async () => {
   const h = harness([new Error("fetch failed")]);
   await h.run();
   assertIntent(h, "fetch failed");
@@ -202,13 +202,13 @@ test("uses the reactor's verified identity when its display name is unavailable"
   assertIntent(h, "The PR is closed.", "slack:user:U123");
 });
 
-test("a failed Pi handoff can retry with the same deduplication key", async () => {
+test("a failed Eve handoff can retry with the same deduplication key", async () => {
   const notifications = [];
   let delivered = false;
   const watcher = shipit({
     token: async () => "test-token",
     fetch: async () => Response.json({ state: "closed", draft: false }),
-    tellPi: async input => {
+    tellEve: async input => {
       notifications.push(input);
       if (!delivered) {
         delivered = true;

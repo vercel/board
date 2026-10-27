@@ -1,16 +1,16 @@
 import type { Watcher } from "@vercel/board";
-import type { tellPi } from "./agent";
+import type { tellEve } from "./agent";
 import { prNumber, REPO } from "./github.ts";
 
-/** Long enough for deepsec at its maximum thinking on a PR's diff, inside the 45m each Pi turn gets (`SANDBOX_MS` in agent.ts). */
+/** Long enough for deepsec at its maximum thinking on a PR's diff, inside the 45m a sandbox session gets (`agent/sandbox.ts`). */
 const DEEPSEC_TIMEOUT = "30m";
 
 /**
- * A person's :security: reaction on a PR thread's root (from Slack) has Pi run deepsec on the
+ * A person's :security: reaction on a PR thread's root (from Slack) has Eve run deepsec on the
  * PR's diff and report back, reacting :secure: when it comes out clean. Anyone in the channel
  * can ask, the same rule as :shipit:. On a thread that isn't a PR, the watcher says so itself.
  */
-export function security(options: { tellPi: typeof tellPi }): Watcher {
+export function security(options: { tellEve: typeof tellEve }): Watcher {
   return {
     // Not `--label pr`: a reaction on a non-PR thread gets an answer too.
     tail: "dev",
@@ -26,13 +26,13 @@ export function security(options: { tellPi: typeof tellPi }): Watcher {
       const pr = root.labels.pr;
       const number = prNumber(root.labels);
       if (!number) {
-        await board.reply(root.id, `\`:security:\` works on PR threads: react on a ${REPO} pull request's thread to have Pi run a deepsec review of its diff.`);
+        await board.reply(root.id, `\`:security:\` works on PR threads: react on a ${REPO} pull request's thread to have Eve run a deepsec review of its diff.`);
         return;
       }
       const requester = event.actor?.handle ?? event.payload.by.actor;
-      // Named, not $(mktemp -d): each of Pi's commands runs in a new shell, so a variable wouldn't last.
+      // Named, not $(mktemp -d): each of Eve's commands runs in a new shell, so a variable wouldn't last.
       const dir = `/tmp/deepsec-${event.cursor}`;
-      await options.tellPi({
+      await options.tellEve({
         board,
         task: "review",
         thread: root.id,

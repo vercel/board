@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GITHUB_TOKEN, byAgent, byPi, byWatcher, piAvatar, piName, sourceLink, startOrSay, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { byAgent, byEve, byWatcher, eveAvatar, eveName, sourceLink, startOrSay, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
-// Pi posts as the factory's production deployment.
+// Eve posts as the factory's production deployment.
 process.env.VERCEL_PROJECT_ID = "prj_factory";
 
 test("sourceLink: a Slack thread's permalink, a GitHub issue or PR, or nothing", () => {
@@ -22,7 +22,7 @@ test("sourceLink: a Slack thread's permalink, a GitHub issue or PR, or nothing",
   assert.equal(sourceLink({ thread: "whatsapp:123" }), null);
 });
 
-test("taskMessage: Pi's task names where the thread came from and who posted it", () => {
+test("taskMessage: Eve's task names where the thread came from and who posted it", () => {
   assert.equal(
     taskMessage("a feature request", {
       id: "1010",
@@ -37,31 +37,31 @@ test("taskMessage: Pi's task names where the thread came from and who posted it"
   );
 });
 
-test("piName: each thread's Pi has a name of its own", () => {
-  assert.equal(piName("1956"), "clever-lemur-1956");
+test("eveName: each thread's Eve has a name of its own", () => {
+  assert.equal(eveName("1956"), "clever-lemur-1956");
   const names = new Set();
   for (let t = 1; t <= 100_000; t++) {
-    const name = piName(t);
+    const name = eveName(t);
     // A valid board profile: starts with a letter, up to 32 letters, numbers, and hyphens.
     if (t % 997 === 0) assert.match(name, /^[A-Za-z][A-Za-z0-9-]{0,31}$/);
     names.add(name);
   }
   assert.equal(names.size, 100_000);
-  assert.ok(piName("99999999").length <= 32);
+  assert.ok(eveName("99999999").length <= 32);
 });
 
-test("byPi: the thread's own Pi, by its name or the old `pi`, and no other thread's", () => {
+test("byEve: the thread's own Eve, by its name or the old `pi`, and no other thread's", () => {
   const session = "thread-1956";
   const principal = "vercel:project:prj_factory:production";
-  assert.ok(byPi("1956", { principal, profile: piName("1956"), session }));
-  assert.ok(byPi("1956", { principal, profile: "pi", session }));
-  assert.ok(!byPi("1956", { principal, profile: piName("1957"), session }));
-  assert.ok(!byPi("1956", { principal, profile: piName("1956"), session: "thread-1957" }));
-  assert.ok(!byPi("1956", { principal, profile: null, session: null }));
+  assert.ok(byEve("1956", { principal, profile: eveName("1956"), session }));
+  assert.ok(byEve("1956", { principal, profile: "pi", session }));
+  assert.ok(!byEve("1956", { principal, profile: eveName("1957"), session }));
+  assert.ok(!byEve("1956", { principal, profile: eveName("1956"), session: "thread-1957" }));
+  assert.ok(!byEve("1956", { principal, profile: null, session: null }));
 });
 
-test("byPi: only the factory's production deployment, since anyone who can write sends a profile and session", () => {
-  const pi = { profile: piName("1956"), session: "thread-1956" };
+test("byEve: only the factory's production deployment, since anyone who can write sends a profile and session", () => {
+  const pi = { profile: eveName("1956"), session: "thread-1956" };
   for (const principal of [
     "vercel:user:abc123",
     "vercel:project:prj_factory:preview",
@@ -69,42 +69,21 @@ test("byPi: only the factory's production deployment, since anyone who can write
     "github:repo:1",
     "slack:user:U1",
   ]) {
-    assert.ok(!byPi("1956", { principal, ...pi }), principal);
+    assert.ok(!byEve("1956", { principal, ...pi }), principal);
   }
   delete process.env.VERCEL_PROJECT_ID;
   try {
-    assert.ok(!byPi("1956", { principal: "vercel:project:undefined:production", ...pi }), "no project, no Pi");
+    assert.ok(!byEve("1956", { principal: "vercel:project:undefined:production", ...pi }), "no project, no Eve");
   } finally {
     process.env.VERCEL_PROJECT_ID = "prj_factory";
   }
 });
 
-test("piAvatar: a PNG generated from each Pi's name", () => {
-  assert.equal(piAvatar("1956"), "https://vercel.com/api/www/avatar?s=64&format=png&u=clever-lemur-1956");
+test("eveAvatar: a PNG generated from each Eve's name", () => {
+  assert.equal(eveAvatar("1956"), "https://vercel.com/api/www/avatar?s=64&format=png&u=clever-lemur-1956");
 });
 
-test("GITHUB_TOKEN: Pi never gets a cached GitHub token that dies before its session ends", async () => {
-  const { getToken } = await import("@vercel/connect");
-  const realFetch = globalThis.fetch;
-  let minted = 0;
-  globalThis.fetch = async () => {
-    minted++;
-    // Each token Connect mints here has 44 minutes left, a minute short of a sandbox session.
-    return Response.json({ token: `t${minted}`, expiresAt: Date.now() + 44 * 60_000, connector: { id: "c", uid: "u", type: "github" } });
-  };
-  try {
-    const options = { vercelToken: "oidc" };
-    // The default 30s buffer hands the token out again: the bug.
-    const app = { subject: { type: "app" } };
-    assert.equal(await getToken("github/test", app, options), await getToken("github/test", app, options));
-    // Pi's asks for one that lasts the whole session, so it isn't reused.
-    assert.notEqual(await getToken("github/test", GITHUB_TOKEN, options), await getToken("github/test", GITHUB_TOKEN, options));
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
-
-test("byWatcher: the board's watchers' own notes, which wake neither Pi nor triage", () => {
+test("byWatcher: the board's watchers' own notes, which wake neither Eve nor triage", () => {
   assert.ok(byWatcher({ actor: "board:watch:crosspost" }));
   assert.ok(byWatcher({ actor: "board:watch:security" }));
   assert.ok(byWatcher({ actor: "board:watch:pi" }));
@@ -112,9 +91,9 @@ test("byWatcher: the board's watchers' own notes, which wake neither Pi nor tria
   assert.ok(!byWatcher({ actor: "board:schedule" }));
 });
 
-test("byAgent: a coding agent's or Pi's message, which triage doesn't judge, and not a person's", () => {
+test("byAgent: a coding agent's or Eve's message, which triage doesn't judge, and not a person's", () => {
   assert.ok(byAgent({ profile: "claude" }));
-  assert.ok(byAgent({ profile: piName("1956") }));
+  assert.ok(byAgent({ profile: eveName("1956") }));
   assert.ok(!byAgent({ profile: null }));
 });
 
@@ -123,7 +102,7 @@ function thread() {
   return { replies, board: { reply: async (id, text) => { replies.push({ id, text }); } } };
 }
 
-test("startOrSay: a start that fails is tried again, and once Pi starts the thread hears nothing", async () => {
+test("startOrSay: a start that fails is tried again, and once Eve starts the thread hears nothing", async () => {
   const { replies, board } = thread();
   let tries = 0;
   await startOrSay(board, 7, async () => {
@@ -133,7 +112,7 @@ test("startOrSay: a start that fails is tried again, and once Pi starts the thre
   assert.deepEqual(replies, []);
 });
 
-test("startOrSay: a Pi that never starts says why in its thread instead of throwing, so its watcher keeps listening", async () => {
+test("startOrSay: an Eve that never starts says why in its thread instead of throwing, so its watcher keeps listening", async () => {
   const { replies, board } = thread();
   let tries = 0;
   const error = console.error;
@@ -154,7 +133,7 @@ test("startOrSay: a Pi that never starts says why in its thread instead of throw
   assert.match(replies[0].text, /try again/);
 });
 
-test("the reviewer tells the PR's source thread, and that thread's Pi acts on it", async () => {
+test("the reviewer tells the PR's source thread, and that thread's Eve acts on it", async () => {
   const { INSTRUCTIONS } = await import("../app/api/board/[[...path]]/agent.ts");
   assert.match(INSTRUCTIONS.review, /Tell the thread the work started in/);
   assert.match(INSTRUCTIONS.review, /board #<id>/);
@@ -162,7 +141,7 @@ test("the reviewer tells the PR's source thread, and that thread's Pi acts on it
   assert.match(INSTRUCTIONS.thread, /gets the reviewer to look again/);
 });
 
-test("Pi's branch for a thread is board/<thread id>", async () => {
+test("Eve's branch for a thread is board/<thread id>", async () => {
   const { INSTRUCTIONS } = await import("../app/api/board/[[...path]]/agent.ts");
   assert.match(INSTRUCTIONS.thread, /a branch named board\/<thread id>/);
   assert.match(INSTRUCTIONS.review, /its branch is board\/<id>/);

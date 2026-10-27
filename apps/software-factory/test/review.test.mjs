@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { piName } from "../app/api/board/[[...path]]/agent.ts";
-import { asksPi, isDraft, reviewStarts } from "../app/api/board/[[...path]]/review.ts";
+import { eveName } from "../app/api/board/[[...path]]/agent.ts";
+import { asksEve, isDraft, reviewStarts } from "../app/api/board/[[...path]]/review.ts";
 
 const root = (state) => ({ re: null, labels: { pr: "vercel-labs/board#170", ...(state ? { state } : {}) } });
 
@@ -37,13 +37,15 @@ test("isDraft: only state=draft", () => {
   assert.equal(isDraft({}), false);
 });
 
-test("asksPi: a reply in a draft wakes Pi only when it asks Pi", () => {
-  assert.equal(asksPi("170", "@pi can you look at the failing test?"), true);
-  assert.equal(asksPi("170", "Pi, review this before I mark it ready"), true);
-  assert.equal(asksPi("170", "thoughts, pi?"), true);
-  assert.equal(asksPi("170", `${piName("170")} please rebase`), true);
-  assert.equal(asksPi("170", "still working on this, will mark ready soon"), false);
-  // Words and names that contain "pi" aren't Pi.
-  assert.equal(asksPi("170", "the api route picks the wrong pipeline"), false);
-  assert.equal(asksPi("170", "see pi-pr.yml and the pi/170 branch"), false);
+test("asksEve: a reply in a draft wakes Eve only when it asks Eve", () => {
+  assert.equal(asksEve("170", "@pi can you look at the failing test?"), true);
+  assert.equal(asksEve("170", "Eve, review this before I mark it ready"), true);
+  assert.equal(asksEve("170", "thoughts, pi?"), true);
+  assert.equal(asksEve("170", "@eve can you rebase?"), true);
+  assert.equal(asksEve("170", `${eveName("170")} please rebase`), true);
+  assert.equal(asksEve("170", "still working on this, will mark ready soon"), false);
+  // Words and names that contain "pi" aren't Eve.
+  assert.equal(asksEve("170", "the api route picks the wrong pipeline"), false);
+  assert.equal(asksEve("170", "see pi-pr.yml and the pi/170 branch"), false);
+  assert.equal(asksEve("170", "Steve says every evening build breaks"), false);
 });

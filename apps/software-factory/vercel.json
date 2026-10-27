@@ -8,15 +8,6 @@
           "retryAfterSeconds": 30
         }
       ]
-    },
-    "app/api/a2/tokens/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "vboard-factory-tokens",
-          "retryAfterSeconds": 30
-        }
-      ]
     }
   }
 }

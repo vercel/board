@@ -10,3 +10,8 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/provider@4.0.24'
   - ai@7.0.130
   - experimental-a2@0.22.0
+  - eve@0.84.1
+
+ignoredOptionalDependencies:
+  - "@mongodb-js/zstd"
+  - "node-liblzma"

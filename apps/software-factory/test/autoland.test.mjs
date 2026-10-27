@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { autoland, decide as decideFor } from "../app/api/board/[[...path]]/autoland.ts";
 
-// Pi posts as the factory's production deployment.
+// Eve posts as the factory's production deployment.
 process.env.VERCEL_PROJECT_ID = "prj_factory";
 const PI = "vercel:project:prj_factory:production";
 
@@ -144,7 +144,7 @@ test("the watcher pages through a PR's files", async () => {
   assert.deepEqual(h.labels[0].set, { autoland: "no", "autoland.why": "user-facing change to board core" });
 });
 
-test("only the PR thread's own Pi can set the verdict", async () => {
+test("only the PR thread's own Eve can set the verdict", async () => {
   for (const by of [
     { actor: "slack:user:U1", principal: "slack:user:U1", profile: null, session: null },
     { actor: `${PI}+pi`, principal: PI, profile: "pi", session: "thread-12" },
@@ -159,7 +159,7 @@ test("only the PR thread's own Pi can set the verdict", async () => {
   }
   const own = harness(routes());
   await own.run();
-  assert.equal(own.labels[0].set.autoland, "would", "thread-59's own Pi sets it");
+  assert.equal(own.labels[0].set.autoland, "would", "thread-59's own Eve sets it");
 });
 
 test("the watcher ignores other labels, replies, and other repos", async () => {

@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 
 const script = fileURLToPath(new URL("../skills/verify-board/scripts/verify-board", import.meta.url));
 
-test("verify-board: a local board driven by this checkout's vb, with Pi's board credentials out of reach", (t) => {
+test("verify-board: a local board driven by this checkout's vb, with Eve's board credentials out of reach", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "verify-board-"));
-  // Pi's environment: its vb points at the factory's board. Here that's a port nothing listens on, so a leak fails.
+  // Eve's environment: its vb points at the factory's board. Here that's a port nothing listens on, so a leak fails.
   const env = {
     PATH: process.env.PATH,
     VERIFY_BOARD_DIR: dir,
@@ -36,7 +36,7 @@ test("verify-board: a local board driven by this checkout's vb, with Pi's board 
   const read = run("vb", "--name", "t", "read", id, "--json");
   const messages = read.stdout.trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(messages.map((m) => m.text), ["hello from the report", "a reply"]);
-  // A person on the local board, not Pi's profile.
+  // A person on the local board, not Eve's profile.
   assert.deepEqual(messages.map((m) => m.by.profile), [null, null]);
 
   // Paths mean what they say from where it's called, not the run's scratch repo.

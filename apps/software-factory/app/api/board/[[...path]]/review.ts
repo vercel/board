@@ -1,7 +1,7 @@
-import { piName } from "./agent.ts";
+import { eveName } from "./agent.ts";
 
-// When `review-pi` starts Pi reviewing a PR. A draft isn't ready for review, so its thread
-// waits: Pi reviews a PR when it opens ready, or when it leaves draft. The GitHub sync keeps a
+// When `review-pi` starts Eve reviewing a PR. A draft isn't ready for review, so its thread
+// waits: Eve reviews a PR when it opens ready, or when it leaves draft. The GitHub sync keeps a
 // PR root's `state` label (`draft`, `open`, `merged`, `closed`), and marking a draft ready
 // relabels the root `state=open`.
 
@@ -10,7 +10,7 @@ export const isDraft = (labels: Record<string, string>) => labels.state === "dra
 
 /**
  * Whether an event on a PR root is the moment to review it: the root posted ready, or relabeled
- * `state=open` (marked ready, or reopened). The review's tellPi key is `pr`, which Pi takes once
+ * `state=open` (marked ready, or reopened). The review's tellEve key is `pr`, which Eve takes once
  * per thread, so a PR opened ready and later reopened is still reviewed once.
  */
 export function reviewStarts(event: {
@@ -26,9 +26,9 @@ export function reviewStarts(event: {
 }
 
 /**
- * Whether a reply in a draft PR's thread asks Pi itself: it names Pi (`pi`, `@pi`, `Pi,`) or this
- * thread's Pi by its own name. Kept to the text, so it can misfire on a reply about Pi; that wakes
- * Pi, which stays quiet when a reply isn't for it.
+ * Whether a reply in a draft PR's thread asks Eve itself: it names Eve (`eve`, `@eve`, or the old `pi`) or this
+ * thread's Eve by its own name. Kept to the text, so it can misfire on a reply about Eve; that wakes
+ * Eve, which stays quiet when a reply isn't for it.
  */
-export const asksPi = (thread: string, text: string) =>
-  /(^|[^\w/-])@?pi(?![\w/-])/i.test(text) || text.toLowerCase().includes(piName(thread));
+export const asksEve = (thread: string, text: string) =>
+  /(^|[^\w/-])@?(pi|eve)(?![\w/-])/i.test(text) || text.toLowerCase().includes(eveName(thread));

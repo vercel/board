@@ -43,7 +43,7 @@ export async function github(options: GitHubOptions = {}) {
 }
 
 /**
- * The factory GitHub App's bot account, which opens Pi's PRs and authors its commits: GraphQL's viewer for the app's
+ * The factory GitHub App's bot account, which opens Eve's PRs and authors its commits: GraphQL's viewer for the app's
  * token, so nothing pins the app's name or ID. GraphQL leaves off the `[bot]` that REST's logins carry.
  */
 export async function bot(api: Awaited<ReturnType<typeof github>>) {

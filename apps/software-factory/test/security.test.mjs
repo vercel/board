@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { security } from "../app/api/board/[[...path]]/security.ts";
-import { extension } from "../app/api/board/[[...path]]/agent.ts";
 
 function event() {
   return {
@@ -26,7 +25,7 @@ function harness() {
   const notifications = [];
   const replies = [];
   const reactions = [];
-  const watcher = security({ tellPi: async input => { notifications.push(input); } });
+  const watcher = security({ tellEve: async input => { notifications.push(input); } });
   const board = {
     reply: async (id, text) => { replies.push({ id, text }); },
     react: async (id, emoji) => { reactions.push({ id, emoji }); },
@@ -34,14 +33,14 @@ function harness() {
   return { notifications, replies, reactions, watcher, run: (input = event()) => watcher.run({ event: input, board }) };
 }
 
-test(":security: on a PR root asks Pi for a deepsec review of the diff, for any Slack reactor", async () => {
+test(":security: on a PR root asks Eve for a deepsec review of the diff, for any Slack reactor", async () => {
   for (const user of ["U123", "U456"]) {
     const input = event();
     input.payload.by = { actor: `slack:user:${user}`, principal: `slack:user:${user}` };
     const h = harness();
     await h.run(input);
     assert.deepEqual(h.replies, []);
-    assert.deepEqual(h.reactions, [], "only Pi reacts :secure:, after deepsec exits 0");
+    assert.deepEqual(h.reactions, [], "only Eve reacts :secure:, after deepsec exits 0");
     assert.equal(h.notifications.length, 1);
     const n = h.notifications[0];
     assert.equal(n.task, "review");
@@ -70,7 +69,7 @@ for (const [name, change] of [
   ["a PR from another repository", e => { e.message.labels.pr = "other/repo#53"; }],
   ["a malformed PR label", e => { e.message.labels.pr = "vercel-labs/board#53/merge"; }],
 ]) {
-  test(`on ${name}, replies that :security: works on PR threads without waking Pi`, async () => {
+  test(`on ${name}, replies that :security: works on PR threads without waking Eve`, async () => {
     const input = event();
     change(input);
     const h = harness();
@@ -89,7 +88,7 @@ for (const [name, change] of [
   ["its own :secure: reaction", e => { e.payload.emoji = "secure"; }],
   ["a board reaction", e => { e.payload.from = null; }],
   ["a GitHub reaction", e => { e.payload.from = "github"; }],
-  ["Pi or a deployment acting as a Slack reactor", e => { e.payload.by.principal = "vercel:project:pi:production"; }],
+  ["Eve or a deployment acting as a Slack reactor", e => { e.payload.by.principal = "vercel:project:pi:production"; }],
   ["a posted message", e => { e.type = "message.posted"; }],
   ["an event without a message", e => { delete e.message; }],
 ]) {
@@ -102,29 +101,19 @@ for (const [name, change] of [
     assert.deepEqual(h.replies, []);
     assert.deepEqual(h.reactions, []);
     await h.run();
-    assert.equal(h.notifications.length, 1, "the unchanged event reaches Pi");
+    assert.equal(h.notifications.length, 1, "the unchanged event reaches Eve");
   });
 }
 
-test("a retried callback sends Pi the same deduplication key", async () => {
+test("a retried callback sends Eve the same deduplication key", async () => {
   const h = harness();
   await h.run();
   await h.run();
   assert.deepEqual(h.notifications.map(n => n.key), ["security-88", "security-88"]);
 });
 
-test("a message late in a sandbox session extends it to a full turn, and an early one doesn't", () => {
-  const now = Date.parse("2026-10-07T17:00:00Z");
-  const min = 60_000;
-  assert.equal(extension(new Date(now + 5 * min), now), 40 * min);
-  assert.equal(extension(new Date(now - min), now), 46 * min);
-  assert.equal(extension(new Date(now + 45 * min), now), 0);
-  assert.equal(extension(new Date(now + 60 * min), now), 0);
-  assert.equal(extension(undefined, now), 0);
-});
-
 test("runs deepsec in a worktree named for the event, and attaches its files by full path", async () => {
-  // A shell variable doesn't outlive one of Pi's commands, and its commands don't keep their cwd.
+  // A shell variable doesn't outlive one of Eve's commands, and its commands don't keep their cwd.
   const input = event();
   input.cursor = "91";
   const g = harness();

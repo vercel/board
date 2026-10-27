@@ -4,11 +4,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { SETUP } from "../app/api/board/[[...path]]/agent.ts";
+import { TOOLS } from "../app/api/board/[[...path]]/harness.ts";
 
 const { version } = JSON.parse(readFileSync(new URL("../../../packages/board/package.json", import.meta.url), "utf8"));
 
-// A sandbox, as setup sees it: pi there, no gh, and a network where GitHub's API refuses it
+// A sandbox, as setup sees it: pnpm there, no gh, and a network where GitHub's API refuses it
 // (sandboxes share its unauthenticated rate limit) but release downloads work. npm, as far as
 // vb goes, is a registry of `name@version`s (`registry`) and one global vb that names the package
 // it's from (`vb`, like `@vercel/board@0.13.0`, or none). Like npm, it installs a vb over another
@@ -33,7 +33,7 @@ function sandbox({ vb = "@vercel/board@0.13.0", registry = [] } = {}) {
     writeFileSync(join(vbBin, "vb"), `#!/bin/bash\necho ${vb.slice(at(vb) + 1)}\n`);
     chmodSync(join(vbBin, "vb"), 0o755);
   }
-  fake("pi", "exit 0");
+  fake("pnpm", "exit 0");
   fake(
     "npm",
     `echo "$*" >> "$HOME/npm.log"
@@ -67,7 +67,7 @@ case "$url" in
 esac`,
   );
   const bash = execFileSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).trim();
-  const run = () => spawnSync(bash, ["-c", SETUP], { env: { HOME: home, PATH: `${vbBin}:${bin}` }, encoding: "utf8" });
+  const run = () => spawnSync(bash, ["-c", TOOLS], { env: { HOME: home, PATH: `${vbBin}:${bin}` }, encoding: "utf8" });
   // The global vb after setup: the package it's from and the version it answers.
   const installed = () =>
     existsSync(join(vbBin, "vb"))

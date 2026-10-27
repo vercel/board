@@ -49,7 +49,7 @@ test("trusted Factory sessions discover, post, review and respond with verified 
   assert.equal(replay.status, 201);
   assert.equal(replay.body.message.id, root.id);
   assert.equal((await author("GET", "/channels")).body.channels[0].path, channel);
-  // Labels only in factory/ channels: on dev they'd drive Pi.
+  // Labels only in factory/ channels: on dev they'd drive Eve.
   assert.equal((await author("POST", `/messages/${root.id}/labels`, { set: { "factory-task": "task-2" } })).status, 200);
   const person = caller(board.fetch, await personToken("u_operator", URL));
   const dev = (await person("POST", "/messages", { channel: "dev", text: "Existing dev work", noSync: true })).body.message;
@@ -104,8 +104,8 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const slackPlatform = fakePlatform("slack");
   const githubPlatform = fakePlatform("github");
   const watched = [];
-  const noPi = async () => { throw new Error("must not start a live agent"); };
-  const watchers = { autoland: autoland(), shipit: shipit({ tellPi: noPi }), security: security({ tellPi: noPi }), owner: owner(), crosspost: crosspost() };
+  const noEve = async () => { throw new Error("must not start a live agent"); };
+  const watchers = { autoland: autoland(), shipit: shipit({ tellEve: noEve }), security: security({ tellEve: noEve }), owner: owner(), crosspost: crosspost() };
   const board = testBoard({
     ...options,
     sync: {
@@ -146,7 +146,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
     if (!githubRoot) await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.ok(githubRoot);
-  // A board reply in a PR's thread (a Pi's, say) reaches Slack but not the PR on GitHub.
+  // A board reply in a PR's thread (an Eve's, say) reaches Slack but not the PR on GitHub.
   const slackBefore = slackPlatform.posts.length;
   await operator("POST", "/messages", { re: githubRoot.re ?? githubRoot.id, text: "Existing dev response" });
   while (slackPlatform.posts.length === slackBefore && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));

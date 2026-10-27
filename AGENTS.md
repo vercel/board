@@ -128,39 +128,39 @@ reply in an existing thread rather than starting one.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
   judging the whole thread whenever a person posts. Its scope (`classify.ts`) is the
-  library and the factory, Pi included, so "Pi should…" is a feature, not noise. `pi` hands `kind=bug`,
-  `kind=feature`, `kind=question`, and `kind=task` threads (not `noise`) to Pi (`agent.ts`);
-  `task` is someone asking Pi itself to do something (a recap, an investigation), and the
+  library and the factory, Eve included, so "Eve should…" is a feature, not noise. `pi` hands `kind=bug`,
+  `kind=feature`, `kind=question`, and `kind=task` threads (not `noise`) to Eve (`agent.ts`);
+  `task` is someone asking Eve itself to do something (a recap, an investigation), and the
   kinds live in `kinds.ts`
-  and tells it when someone replies; Pi reads what's new itself. Before it plans
-  or builds, Pi searches earlier threads and PRs and builds on related work. For a bug, Pi
+  and tells it when someone replies; Eve reads what's new itself. Before it plans
+  or builds, Eve searches earlier threads and PRs and builds on related work. For a bug, Eve
   reproduces it, then opens a PR from a `board/<thread>` branch (its body opens
   with a line linking what triggered it: the Slack thread or GitHub issue, which
-  `taskMessage` puts in Pi's first message), or labels the
+  `taskMessage` puts in Eve's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
-  `review-pi` hands each new `dev --label pr` thread to Pi to review the PR (Pi wears `:looking-bunny:` on the PR root while it reviews), and tells it when
-  someone other than a bot replies. A draft waits until it's ready (`review.ts`): Pi
+  `review-pi` hands each new `dev --label pr` thread to Eve to review the PR (Eve wears `:looking-bunny:` on the PR root while it reviews), and tells it when
+  someone other than a bot replies. A draft waits until it's ready (`review.ts`): Eve
   reviews it once, when its root's `state` turns from `draft` to `open`, and until then
-  only a reply that names Pi (`pi`, `@pi`, or the thread's Pi), or a reminder Pi
-  scheduled, wakes it. Pi hears every reply in its threads but stays quiet when one is
+  only a reply that names Eve (`eve`, `@eve`, the old `pi`, or the thread's Eve), or a reminder Eve
+  scheduled, wakes it. Eve hears every reply in its threads but stays quiet when one is
   addressed to someone else, and keeps board replies to a few lines; a review's detail
   goes in a GitHub review on the code. Review is its initial task; people can redirect
-  Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
+  Eve in the thread to fix, push, approve, mark ready, merge, or close the PR.
   `shipit` lets anyone add `:shipit:` to a PR's Slack root
   to request a merge as the factory GitHub App. Slack delivers that alias as
   `squirrel`, which the watcher also accepts, and `:approved:` works the same way. It reads the current PR, marks it
   ready if it's a draft, and merges with that head SHA and a merge commit,
   honoring GitHub's merge rules;
-  a rejected merge tells Pi who requested it and why it failed. Pi resolves
+  a rejected merge tells Eve who requested it and why it failed. Eve resolves
   blockers, marks drafts ready when needed, and completes the requested merge
   when GitHub's requirements allow, without asking for another reaction. It
   mentions reviewers or owners when their action is needed.
   `autoland` (`autoland.ts`) is auto-landing in shadow mode: it labels PRs and
-  merges nothing. After each review, the PR thread's Pi labels the root
+  merges nothing. After each review, the PR thread's Eve labels the root
   `land=yes|no` with `land.why` and the head it reviewed (`land.sha`); yes
   means it fixes a bug or does what a person clearly asked, with nothing to
-  fix and no caveats or tradeoffs. Only that Pi's label counts. The watcher
+  fix and no caveats or tradeoffs. Only that Eve's label counts. The watcher
   then checks the rest on GitHub (a factory PR, still open, no commits since
   the review, CI `check` green on the head, and not a user-facing change to
   board core, meaning `packages/board/src`, its `package.json`, or
@@ -168,101 +168,107 @@ reply in an existing thread rather than starting one.
   `autoland=would|no` with `autoland.why`. A `would` root also wears
   `:stamp-hammer:`, added and removed as the verdict flips, so Slack shows it.
   `security` (`security.ts`) lets anyone add `:security:` to a PR's Slack root
-  to have Pi run a deepsec review of its diff, in a fresh `git worktree` outside
+  to have Eve run a deepsec review of its diff, in a fresh `git worktree` outside
   its clone (deepsec only fails on net-new findings, so reused state could look
-  clean). Pi reacts `:secure:` only when deepsec exits 0. On a thread that isn't
-  a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
-  Each message to Pi extends its sandbox session to at least 45m, so a long run
-  late in a session isn't cut off.
-  Messages wait behind a running turn on a per-sandbox lock. "New activity"
-  ones (`news-…`) piled up there wake Pi once, for the newest, since Pi reads
-  what's new itself: a burst of replies costs one turn, not one each.
-  A message that can't reach Pi (its sandbox fails to start or set up) is
-  tried 3 times, then the watcher replies "Pi couldn't start" in the thread
+  clean). Eve reacts `:secure:` only when deepsec exits 0. On a thread that isn't
+  a PR, the watcher replies itself, and `pi` doesn't wake Eve for that reply.
+  A message that lands during a turn steers it (the eve channel's
+  `turnPolicy: "steer"`): Eve sees it at its next step, and a burst of replies
+  costs no extra turns. Each message is sent once
+  (`told:` keys in `eve.ts`). A message that can't reach Eve is
+  tried 3 times, then the watcher replies "Eve couldn't start" in the thread
   instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
   then board drops that event without a word. The next reply tries again. No
-  watcher's own reply wakes Pi or triage (`byWatcher`).
+  watcher's own reply wakes Eve or triage (`byWatcher`).
 - `crosspost` (`crosspost.ts`) links a factory PR's Slack thread and the Slack
   thread it was built for, both ways, once the PR's root lands in Slack (its tail
   has `--all`, for the delivery receipt that says where): the PR thread gets `:crosspost: From
   <who>'s Slack thread`, the source thread gets `:crosspost: #N <title>`. Slack
-  shows them without a label, and they don't wake Pi or triage. Neither reaches
+  shows them without a label, and they don't wake Eve or triage. Neither reaches
   GitHub, since PR threads are inbound only.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.
-- Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
-  per thread (`board-<thread>`), with `vb`, `gh`, and git. Its sandbox, branch
-  (`board/<thread>`), and preview say `board`, not `factory` or `pi` as on the
-  factory's earlier stores: thread IDs restarted with each, so an old
-  `factory-12` or `pi/12` belongs to another #12, and the watchers that read a
-  PR's branch (`owner`, `crosspost`, `autoland`) read only `board/`. Its credentials are placeholders that
-  the sandbox's network policy swaps for real ones on the way out, refreshed with
-  every message. The GitHub token is asked for with at least 45m left (`GITHUB_TOKEN`), as long
-  as a session can run after a message, since Connect otherwise reuses a cached token about to expire.
-  The OIDC tokens (AI Gateway's, and the board's exchanged from it) can't be asked for that: they die
-  with the function's own, which Vercel reuses for 90 of its 120 minutes, so one can have 30m left.
-  When they'd die before the session ends, an A2 timer (`tokens.ts`, on the board's queue) puts new
-  ones in the policy 15m before they do. The policy also pins who Pi is on the board (a profile named for the
-  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else.
-  Anyone who can write can send those headers, so `byPi` also needs the factory's production deployment as the
-  principal (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Pi's policy adds). Its `vb` talks to the production board, the only one a sandbox
-  can reach.
-- Pi's git needs no token of ours: Sandbox git credentials (a private beta;
-  `vercel-sandbox-git-credentials` and `vercel-sandbox-signed-commits` are
-  flagged on for the project in vercel/api) start its sandbox as a clone in
-  `/vercel/sandbox`, and a broker fetches and pushes as the Vercel GitHub App
-  within the project's bound (`git:write` on the repo, set once with
-  `POST /v1/git-credential-broker/bounds`). Pushes are signed, authored by
-  `vercel[bot]` with Pi's name as co-author. It takes 6 vCPUs (smaller sandboxes
-  come from a warm pool without the helper), a branch pushed by name that tracks
-  `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
-  Pi's `gh` goes through `github/vboard-factory`: the sandbox's network policy
-  adds the app's token to requests to `api.github.com`. A push to `board/**` also
-  has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
-  branch's first commit if it has none yet.
-  `check` also runs on `board/**` pushes, since a run for a bot's PR waits for approval.
+- Eve (Pi, before it moved to eve) is an eve agent (`apps/software-factory/agent/`, Opus 5.5 on AI Gateway),
+  mounted at `/eve/v1` by `withEve` in `next.config.ts`. The watchers reach it
+  over eve's HTTP API as this deployment (`eve.ts`): each thread's task gets one
+  eve session, kept in the factory's Redis (`board-factory-eve:*`), and every
+  message says which thread it's about. The eve channel (`agent/channels/eve.ts`)
+  takes only this deployment's own OIDC tokens (`runtime`, so a preview of the
+  factory can't drive production Eve) and puts the thread in the turn's auth,
+  where Eve's instructions (`agent/instructions/board.ts`, from `harness.ts`) and
+  its credentials read it. Each session has its own persistent Vercel Sandbox
+  with `vb`, `gh`, and git, set up once at build into a snapshot
+  (`agent/sandbox.ts`). Its branch (`board/<thread>`) and preview say `board`,
+  not `factory` or `pi` as on the factory's earlier stores: thread IDs restarted
+  with each, so an old `factory-12` or `pi/12` belongs to another #12, and the
+  watchers that read a PR's branch (`owner`, `crosspost`, `autoland`) read only
+  `board/`. Its credentials are placeholders that the sandbox's network policy
+  swaps for real ones on the way out (`agent/lib/credentials.ts`): put in place
+  with git's identity at every turn's start, and again before a `bash` call when
+  they're within 15m of dying (`stale` in `tokens.ts`). A sandbox eve recreates is
+  found at a turn's start, so it gets them then. The OIDC tokens die with the function's own,
+  which Vercel reuses for 90 of its 120 minutes, and GitHub's are asked for with
+  30m left, so a long turn renews them as it goes. The policy also pins who Eve
+  is on the board (a profile named for the thread, like `clever-lemur-1956`, and
+  session `thread-<id>`), so watchers can tell a thread's Eve from everyone else.
+  Anyone who can write can send those headers, so `byEve` also needs the
+  factory's production deployment as the principal
+  (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
+  Its `vb` talks to the production board, the only one a sandbox can reach.
+  eve's subagent tool is off (a subagent's sandbox has no credentials), and so
+  is its usage cap, whose "continue?" prompt nobody could answer. It has eve-code's
+  `apply_patch` tool (`agent/tools/apply_patch.ts`), not the rest of that extension,
+  and eve's opt-in `grep` (`agent/tools/grep.ts`). Its sessions export to Vercel Agent Runs
+  (`agent/instrumentation/`) with their content: eve would keep only metadata for
+  this deployment's own (private) sessions. Traces need a 100% sampling rule in the
+  project's Settings → Tracing.
+- Eve's `gh` and git go through `github/vboard-factory`: the sandbox's network
+  policy adds the app's token to `api.github.com` (as a bearer token) and to
+  `github.com` (as basic auth, for git over HTTPS). Commits carry the thread's
+  Eve as author. A push to `board/**` also has `.github/workflows/pi-pr.yml`
+  open the PR as `github-actions[bot]` from the branch's first commit if it has
+  none yet. `check` also runs on `board/**` pushes, since a run for a bot's PR
+  waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
-  they're files in `.a2/attachments` (`fsBlob()`). Pi attaches a screenshot to the reply
+  they're files in `.a2/attachments` (`fsBlob()`). Eve attaches a screenshot to the reply
   that links its PR when the change is visible (a captioned video, for a flow),
   never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
   `vb` is pinned (`BOARD` in `agent.ts`) to the board the factory was built
-  with, so each release reaches Pi when the factory deploys, with no bump; setup
-  upgrades sandboxes to exactly that. `gh` is pinned too (`GH`), which
+  with, so each release reaches Eve when the factory deploys, with no bump. `gh` is pinned too (`GH`), which
   new sandboxes download without asking GitHub's API, whose unauthenticated rate
   limit sandboxes share.
-- Pi's sandbox also gets the factory's own skills and extensions, from
-  `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
-  every turn (add a new file to `PI_FILES` in `agent.ts`). `sitrep` is how Pi
+- Eve gets the factory's own skills, from `apps/software-factory/skills/`
+  (`agent/skills` links there), which eve puts in `~/.agents/skills`. `sitrep` is how Eve
   does a recap that moves work forward. A schedule like `vb schedule dev
   ":sitrep: Morning recap" --at <9am> --every 1d --label kind=task --label
-  sitrep=morning` posts a bare root that a fresh Pi picks up, so the schedule text stays a title and
+  sitrep=morning` posts a bare root that a fresh Eve picks up, so the schedule text stays a title and
   the skill holds the how. A run finds the last recap by its `sitrep` label. `verify-board`
   tests board itself: it builds this checkout, a git ref in its own worktree
   (`origin/main`, to reproduce a bug before fixing it), or an npm version,
   serves a local board with `vb serve`, and runs each `vb` with only `PATH`
   and a home of its own, so nothing reaches the factory's board. The `computer`
-  extension is computer use, done the way Codex does it: one tool, sequential,
-  that does one action on a virtual desktop (Xvfb) per call, with the mouse and
-  keyboard through XTEST (`xinput.py`, using ctypes because the sandbox has no
+  tool (`agent/tools/computer.ts`) is computer use, done the way Codex does it: one tool
+  that does one action on the sandbox's virtual desktop (Xvfb) per call, with the mouse and
+  keyboard through XTEST (`agent/lib/xinput.py`, using ctypes because the sandbox has no
   pip or xdotool), and returns a screenshot. Each call carries a title.
   `ui-video` records that desktop with ffmpeg and burns each call's title in
   as a caption, read aloud by a speech model on AI Gateway (`openai/tts-1`; the
   network policy's gateway key covers it). It keeps each line and a few seconds
-  after its action and cuts the time Pi spends thinking, as an mp4 under 4 MB. Setup installs Xvfb and libXtst
+  after its action and cuts the time Eve spends thinking, as an mp4 under 4 MB. Setup installs Xvfb and libXtst
   (dnf), Chrome (through `agent-browser`, pinned as `AGENT_BROWSER`), and a
-  static ffmpeg (`FFMPEG_STATIC`), and a failed install doesn't stop Pi. Pi
+  static ffmpeg (`FFMPEG_STATIC`), and a failed install doesn't stop Eve. Eve
   tests against a local dev server or the preview of its own branch
-  (`piPreview`, `vboard-factory-git-board-<thread>.playground-vercel.tools`).
+  (`evePreview`, `vboard-factory-git-board-<thread>.playground-vercel.tools`).
   The network policy adds the Vercel Authentication bypass to
   that host only, so the secret never reaches other deployments, or the
   sandbox.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`), on topic `vboard-factory`. Production is behind Vercel
   Authentication: the CLI gets through with your `vercel login` (or
-  `VERCEL_AUTOMATION_BYPASS_SECRET`), and Pi's network policy injects the
+  `VERCEL_AUTOMATION_BYPASS_SECRET`), and Eve's network policy injects the
   bypass when calling the board. Connect forwards webhooks
   through deployment protection.
 
@@ -272,7 +278,7 @@ External Factories use the same `/api/board` endpoint, store and inspector.
 `BOARD_TRUSTED_SOURCES` grants explicit immutable project/team IDs, production
 only by default. Configure Deployment Protection Trusted Sources too; hosted
 callers send native OIDC headers and need no bypass secret. Factory discussions
-use `factory/...` channels; all Pi watchers and external sync target `dev`.
+use `factory/...` channels; all Eve watchers and external sync target `dev`.
 These grants read and post on the whole board, and label only in `factory/`. Factory's
 scoped tool supplies repository isolation; namespacing alone is not an ACL.
 Read [the setup skill](skills/configure-factory-board/SKILL.md) when connecting

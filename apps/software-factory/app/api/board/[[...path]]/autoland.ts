@@ -1,10 +1,10 @@
 import type { Watcher } from "@vercel/board";
-import { byPi } from "./agent.ts";
+import { byEve } from "./agent.ts";
 import { bot, github, prNumber, type GitHubOptions } from "./github.ts";
 
 // Auto-land, in shadow mode: it decides whether a factory PR would land on its own,
 // and labels the PR thread with the decision, but merges nothing. The reviewer (the
-// PR thread's Pi, a session apart from the one that wrote it) judges what code can't:
+// PR thread's Eve, a session apart from the one that wrote it) judges what code can't:
 // `land=yes|no`, `land.why`, and `land.sha`, the head it reviewed. Code checks the rest.
 
 /** The CI job a PR's head must pass (`.github/workflows/check.yml`). */
@@ -56,7 +56,7 @@ export function autoland(options: GitHubOptions = {}): Watcher {
         !("land" in event.payload.set) ||
         !root ||
         root.re !== null ||
-        !byPi(root.id, event.payload.by)
+        !byEve(root.id, event.payload.by)
       ) return;
       const number = prNumber(root.labels);
       if (!number) return;

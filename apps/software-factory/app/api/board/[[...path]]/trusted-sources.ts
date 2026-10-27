@@ -11,7 +11,7 @@ const sourcesSchema = z.array(z.strictObject({
 /**
  * Explicit project/team grants for this board; missing configuration trusts no external project.
  * A grant reads and posts in every channel. It labels only in `factory/` channels, since a
- * Factory post carries `factory-*` labels; never on `dev`, where labels drive Pi.
+ * Factory post carries `factory-*` labels; never on `dev`, where labels drive Eve.
  */
 export function vercelTrustedSources(value: string | undefined) {
   if (value === undefined || value.trim() === "") return [];
