@@ -16,18 +16,6 @@ export function boardOnly(event: Pick<GitHubEvent, "subthread" | "type" | "label
   return event.type === "pr.closed" && event.labels?.state === "closed";
 }
 
-type Outbound = { event: { type: string; payload: unknown }; message: { from: string | null }; deliver(): Promise<void> };
-
-/**
- * Delivers to GitHub only what was written on the board, by people and their agents: what's said
- * in Slack stays in Slack and on the board, since a public repo would show it. A reaction counts
- * where it was made, not where the message it's on came from.
- */
-export function fromBoard(sync: Outbound): Promise<void> | undefined {
-  const from = sync.event.type.startsWith("reaction.") ? (sync.event.payload as { from: string | null }).from : sync.message.from;
-  return from === null ? sync.deliver() : undefined;
-}
-
 /**
  * Whether a GitHub comment is on a PR the board has no thread for: one opened before the
  * board was, or while it wasn't listening. Syncing it would open a new Slack thread for an
@@ -42,10 +30,12 @@ export async function unseenPr(event: GitHubEvent, board: Board, channel: string
   return messages.length === 0;
 }
 
+// Going out, a function gets a delivery it never calls: nothing written on the board or in Slack reaches GitHub.
+type Outbound = { direction: "out"; deliver(): Promise<void> };
 type PullsSync =
   | { direction: "in"; event: GitHubEvent; board: Board; import(channel: string, overrides: { noSync: boolean }): Promise<unknown> }
-  | ({ direction: "out" } & Outbound);
-type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> } | ({ direction: "out" } & Outbound);
+  | Outbound;
+type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> } | Outbound;
 
 /**
  * PR threads come in from GitHub and go nowhere back: a reply on the board, a Pi's included, stays
@@ -59,8 +49,10 @@ export async function pulls(sync: PullsSync): Promise<void> {
   await sync.import("dev", { noSync: boardOnly(sync.event) });
 }
 
-/** Issue threads come in, and what's written on the board goes back, so Pi answers the reporter on GitHub. */
+/**
+ * Issue threads come in from GitHub and go nowhere back, like PR threads: a public repo would show
+ * what's said on the board. Pi answers on GitHub only on purpose, with gh.
+ */
 export async function issues(sync: IssuesSync): Promise<void> {
   if (sync.direction === "in") await sync.import("dev");
-  else await fromBoard(sync);
 }

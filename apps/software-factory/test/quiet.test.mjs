@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { boardOnly, fromBoard, issues, pulls, unseenPr } from "../app/api/board/[[...path]]/quiet.ts";
+import { boardOnly, issues, pulls, unseenPr } from "../app/api/board/[[...path]]/quiet.ts";
 
 const lifecycle = (type, labels = {}) => ({ subthread: null, type, labels });
 
@@ -45,30 +45,10 @@ test("comments on known PRs, and PR events, still sync", async () => {
   assert.equal(board.queries.length, 1);
 });
 
-test("GitHub gets what was written on the board, and reactions made there, not Slack's", async () => {
+test("board replies stay off GitHub, in PR and issue threads alike", async () => {
   const delivered = [];
-  const out = (type, from, payloadFrom) => ({
-    event: { type, payload: { from: payloadFrom } },
-    message: { from },
-    deliver: async () => void delivered.push(`${type}:${from}:${payloadFrom}`),
-  });
-  await fromBoard(out("message.posted", null, null));
-  await fromBoard(out("message.posted", "slack", "slack"));
-  // A Slack user's reaction on a board-written comment stays off GitHub, and a board reaction on a Slack message goes.
-  await fromBoard(out("reaction.added", null, "slack"));
-  await fromBoard(out("reaction.added", "slack", null));
-  assert.deepEqual(delivered, ["message.posted:null:null", "reaction.added:slack:null"]);
-});
-
-test("a PR thread's board replies stay off GitHub; an issue thread's go", async () => {
-  const delivered = [];
-  const out = (where) => ({
-    direction: "out",
-    event: { type: "message.posted", payload: { from: null } },
-    message: { from: null },
-    deliver: async () => void delivered.push(where),
-  });
+  const out = (where) => ({ direction: "out", deliver: async () => void delivered.push(where) });
   await pulls(out("pulls"));
   await issues(out("issues"));
-  assert.deepEqual(delivered, ["issues"]);
+  assert.deepEqual(delivered, []);
 });

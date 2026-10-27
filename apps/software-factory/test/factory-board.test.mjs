@@ -152,4 +152,21 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   while (slackPlatform.posts.length === slackBefore && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(slackPlatform.posts.slice(slackBefore).some((post) => /Existing dev response/.test(post.text)));
   assert.equal(githubPlatform.posts.length, 0);
+  // So does one in an issue's thread.
+  await board.fetch(new Request(`${URL}/webhooks/github`, {
+    method: "POST", headers: { "content-type": "application/json", "x-github-event": "issues", "x-github-delivery": "existing-dev-issue" },
+    body: JSON.stringify({ action: "opened", repository: { full_name: "vercel-labs/board" }, sender: { login: "reporter", id: 43 },
+      issue: { number: 124, title: "Existing GitHub issue", html_url: "https://github.com/vercel-labs/board/issues/124" } }),
+  }));
+  let issueRoot;
+  while (!issueRoot && Date.now() < until) {
+    issueRoot = (await operator("GET", "/messages?channel=dev&text=Existing%20GitHub%20issue")).body.messages[0];
+    if (!issueRoot) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(issueRoot);
+  const slackBeforeIssue = slackPlatform.posts.length;
+  await operator("POST", "/messages", { re: issueRoot.re ?? issueRoot.id, text: "Existing issue response" });
+  while (slackPlatform.posts.length === slackBeforeIssue && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(slackPlatform.posts.slice(slackBeforeIssue).some((post) => /Existing issue response/.test(post.text)));
+  assert.equal(githubPlatform.posts.length, 0);
 });

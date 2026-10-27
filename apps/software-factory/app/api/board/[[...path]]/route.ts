@@ -55,8 +55,7 @@ const factory = board({
         }),
       ),
     ),
-    // GitHub comes in; what's written on the board goes back only in issue threads (Pi answering a
-    // reporter). PR threads are inbound only: their replies stay in Slack and on the board.
+    // GitHub comes in and nothing goes back: PR and issue threads' replies stay in Slack and on the board.
     github: github(CONNECTOR, repos({ [REPO]: { pulls, issues } })),
   },
   watch: {
