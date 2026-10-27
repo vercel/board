@@ -5,7 +5,7 @@ import { boardContract } from '../src/contract/contract.ts'
 import { BOARD_SESSION } from '../src/contract/events.ts'
 // The engine itself, as a2() starts it.
 import { mount as board } from './harness.ts'
-import { tablesConsumer } from '../src/server/reads.ts'
+import { createReads, tablesConsumer } from '../src/server/reads.ts'
 import { waitUntil } from '../src/server/wait-until.ts'
 import { sqlTables } from '../src/store/sql.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
@@ -119,5 +119,21 @@ describe('reads by ID', () => {
     const { body } = await reader('GET', '/messages/1')
     expect(body.message.reactions).toEqual({ eyes: ['vercel:user:u_julian'] })
     expect(body.replies.map((reply: { text: string }) => reply.text)).toEqual(['looking'])
+  })
+
+  it('stop waiting for the catch-up when their signal aborts, and leave it running', async () => {
+    // A catch-up that never finishes unless it's aborted.
+    const consumes: (AbortSignal | undefined)[] = []
+    const session = {
+      consume: (_: unknown, options?: { signal?: AbortSignal }) => {
+        consumes.push(options?.signal)
+        return new Promise(() => {})
+      },
+    }
+    const reads = createReads({ position: async () => 0 } as never, session as never, {} as never)
+    const timeout = AbortSignal.timeout(50)
+    await expect(reads.ensure(5, timeout)).rejects.toMatchObject({ name: 'TimeoutError' })
+    // The whole-log catch-up isn't the caller's to stop: it ran without the caller's signal.
+    expect(consumes).toEqual([undefined])
   })
 })

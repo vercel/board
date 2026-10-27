@@ -67,9 +67,20 @@ export function createReads(tables: MessageTables, session: BoardSession, projec
     return whole
   }
 
+  /** `promise`, unless `signal` aborts first: the caller stops waiting, and what it waits for keeps going. */
+  function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return promise
+    if (signal.aborted) return Promise.reject(signal.reason)
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+    })
+  }
+
   /** Waits until the tables have applied `index`, or the whole log when it's omitted. */
   async function ensure(index?: number, signal?: AbortSignal): Promise<void> {
-    if (index !== undefined) await caughtUp()
+    if (index !== undefined) await untilAborted(caughtUp(), signal)
     if (index !== undefined && (await tables.position()) >= index) return
     await session.consume(projection, { ...(index !== undefined ? { through: index } : {}), ...(signal ? { signal } : {}) })
   }
