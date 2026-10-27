@@ -21,7 +21,7 @@ export const environment = VercelSandbox.environment({
 // Credentials are placeholders; hooks/credentials.ts puts the real ones in the network policy.
 export default defineSandbox(() =>
   environment.open({
-    resources: { vcpus: 6 },
+    resources: { vcpus: 4 },
     timeout: 45 * 60_000,
     networkPolicy: "deny-all",
     env: {
