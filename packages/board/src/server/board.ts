@@ -196,6 +196,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     pull: async () => (ownEntries.length > 0 ? (await server()).pull() : 0),
     sync: ownEntries,
     readSource: async (key, target, limit) => (await server()).readSource(key, target, limit),
+    joinSource: async (key, target) => (await server()).joinSource(key, target),
     locate: (url) => {
       const read = new Map<string, { platform: string; thread: string; message: string | null }>()
       for (const entry of Object.values(entries)) {

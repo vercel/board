@@ -32,6 +32,8 @@ import type {
   ScheduleBody,
   SchedulesQuery,
   ScheduleView,
+  SourceJoin,
+  SourceJoinBody,
   SourceRead,
   SourceReadQuery,
   ThreadsPage,
@@ -100,6 +102,8 @@ export type Protocol = {
   typing: { input: Id & Input<typeof TypingBody>; output: { targets: string[] } }
   /** A platform channel or thread, read with sync entry `key`'s app where that sync runs: needs `manage` everywhere. */
   readSource: { input: Key & Input<typeof SourceReadQuery>; output: SourceRead }
+  /** Adds sync entry `key`'s app to a public channel, where that sync runs and opted in: needs `manage` everywhere. */
+  joinSource: { input: Key & Input<typeof SourceJoinBody>; output: SourceJoin }
   /** Where a message's thread is synced, and its copy on each target, from sync's records: needs `read` where it is. */
   synced: { input: Id; output: SyncedView }
   /**

@@ -80,6 +80,8 @@ usage: board <command> [options]      (also installed as \`vb\`)
   sources <key> read <channel|thread|link> [--limit N]
                                            read a source's channel, thread, or message link without syncing it,
                                            e.g. sources slack read '#general', or a Slack permalink (full access only)
+  sources <key> join <channel|link>        add the app to a public channel so it can be read, where the board
+                                           opted in (slack({ join: true })); full access only
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
   conformance [--channel <c>]              check that the board speaks the protocol: posts to conformance,
                                            kept on the board, and deletes what it posted (1 if a check fails)
@@ -951,7 +953,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         for (const entry of sync) out(`${entry.key}  ${entry.platform}`)
         return 0
       }
-      if (sub !== 'read' || !target) throw new UsageError('usage: board sources <key> read <channel|thread|link> [--limit N]')
+      if (sub === 'join' && target) {
+        const joined = await client().joinSource(key, target)
+        if (flags.json) return printJson(joined), 0
+        const label = joined.name ? `#${joined.name}` : joined.channel
+        return out(joined.joined ? `joined ${label}` : `already in ${label}`), 0
+      }
+      if (sub !== 'read' || !target) throw new UsageError('usage: board sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel>')
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
       if (flags.json) return printJson(read), 0
       return out(formatSourceRead(key, read)), 0

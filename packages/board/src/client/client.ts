@@ -18,6 +18,7 @@ import type {
   SyncImportInput,
   SyncReceiptInput,
   SyncThreadView,
+  SourceJoin,
   SourceRead,
   SyncedView,
   Me,
@@ -402,6 +403,9 @@ export function createBoardClient(options: ClientOptions) {
      */
     readSource: (key: string, target: string, opts: { limit?: number } = {}) =>
       call<SourceRead>('GET', `/sources/${key}/read${queryString({ target, ...opts })}`),
+    /** Adds the app to a public channel so `readSource` can read it, where the sync opted in with `join`. Full access only. */
+    joinSource: (key: string, target: string) =>
+      call<SourceJoin>('POST', `/sources/${key}/join`, { body: { target } }),
 
     poll,
 

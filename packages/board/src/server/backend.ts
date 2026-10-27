@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import type { MessageView, SourceRead } from '../api/routes.ts'
+import type { MessageView, SourceJoin, SourceRead } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
 import type { ExternalEvent } from '../contract/external.ts'
 import type { Actor } from '../contract/folds.ts'
@@ -100,6 +100,8 @@ export type BoardBinding = {
    * `readSource` answers. 404 `not_synced_here` for an entry it doesn't run.
    */
   readSource(key: string, target: string, limit: number): Promise<SourceRead>
+  /** Adds sync entry `key`'s app to a channel, where it opted in: what `joinSource` answers. 404 `not_synced_here` likewise. */
+  joinSource(key: string, target: string): Promise<SourceJoin>
   /**
    * The message a platform link names, as each platform this board syncs reads it: the platform,
    * and its own thread and message IDs, the message null for a link to a thread. Any entry of that

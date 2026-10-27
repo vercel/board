@@ -493,6 +493,8 @@ describe('cli', () => {
     // Only the board that runs a sync entry reads its source.
     const unsynced = await vb(['sources', 'slack', 'read', '#general'])
     expect(unsynced).toMatchObject({ code: 1, stderr: "error: this board doesn't run sync entry slack: read it where its sync runs\n" })
+    const unjoined = await vb(['sources', 'slack', 'join', '#general'])
+    expect(unjoined).toMatchObject({ code: 1, stderr: "error: this board doesn't run sync entry slack: join it where its sync runs\n" })
   })
 
   it('says so when the board is older than thread summaries, instead of crashing on its discovery document', async () => {

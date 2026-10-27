@@ -19,7 +19,8 @@ const CHANNELS: Record<string, Channel> = {
   CEXT: { id: 'CEXT', name: 'shared-with-acme', is_member: true, is_ext_shared: true },
 }
 
-function setup() {
+function setup(options: { join: boolean } = { join: false }) {
+  const member = new Set(Object.values(CHANNELS).filter((c) => c.is_member).map((c) => c.id))
   const history = vi.fn(async ({ limit }: { channel: string; limit: number }) => ({
     messages: [
       { ts: '1791399999.000002', user: 'U_JB', text: 'latest' },
@@ -38,13 +39,16 @@ function setup() {
         ],
         has_more: false,
       })
-  const join = vi.fn(async () => ({}))
+  const join = vi.fn(async ({ channel }: { channel: string }) => {
+    member.add(channel)
+    return {}
+  })
   const web = {
     conversations: {
       list: async () => ({ channels: Object.values(CHANNELS) }),
       info: async ({ channel }: { channel: string }) => {
         if (channel === 'CBUSY') throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } })
-        return { channel: CHANNELS[channel] }
+        return { channel: CHANNELS[channel] && { ...CHANNELS[channel], is_member: member.has(channel) } }
       },
       join, history, replies,
     },
@@ -53,12 +57,14 @@ function setup() {
   const s = fakePlatform('slack', withSlackClient(web, false))
   const board = testBoard({
     access: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
-    sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient }, channels({ C1: 'firehose' })) },
+    sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient, join: options.join }, channels({ C1: 'firehose' })) },
   })
   const webhook = (body: unknown) =>
     board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
   return { board, history, replies, join, webhook }
 }
+
+const joinChannel = (call: ReturnType<typeof caller>, target: string) => call('POST', '/sources/slack/join', { target })
 
 const read = (call: ReturnType<typeof caller>, target: string, limit?: number) =>
   call('GET', `/sources/slack/read?target=${encodeURIComponent(target)}${limit ? `&limit=${limit}` : ''}`)
@@ -181,5 +187,44 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
       more: false,
     })
     expect(thread.split('\n')).toEqual([`slack:CKIT, thread ${ROOT}`, `${ROOT}  Ada`, '      root', `  ↳ ${REPLY}  pi`, '    nice'])
+  })
+})
+
+describe('joining a channel to read it (vb sources <key> join)', () => {
+  it("won't join unless the board opted in", async () => {
+    const { board, join } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const refused = await joinChannel(julian, '#elsewhere')
+    expect(refused.status).toBe(403)
+    expect(refused.body.error.code).toBe('join_disabled')
+    expect(join).not.toHaveBeenCalled()
+  })
+
+  it('joins a public channel the app is not in, then reads it', async () => {
+    const { board, join, history } = setup({ join: true })
+    const julian = caller(board.fetch, await personToken())
+    const before = await read(julian, '#elsewhere')
+    expect(before.body.error.code).toBe('not_in_channel')
+    expect(before.body.error.message).toContain('join it first')
+    const joined = await joinChannel(julian, '#elsewhere')
+    expect(joined.status).toBe(200)
+    expect(joined.body).toEqual({ channel: 'COUT', name: 'elsewhere', joined: true })
+    expect(join).toHaveBeenCalledWith({ channel: 'COUT' })
+    expect((await read(julian, 'COUT')).status).toBe(200)
+    expect(history).toHaveBeenLastCalledWith({ channel: 'COUT', limit: 50 })
+    expect((await joinChannel(julian, `https://vercel.slack.com/archives/COUT/p${ROOT.replace('.', '')}`)).body).toEqual({ channel: 'COUT', name: 'elsewhere', joined: false })
+    expect(join).toHaveBeenCalledTimes(1)
+  })
+
+  it("won't join private or Slack Connect channels, and needs manage", async () => {
+    const { board, join } = setup({ join: true })
+    const julian = caller(board.fetch, await personToken())
+    expect((await joinChannel(julian, 'CPRIV')).body.error.code).toBe('private_channel')
+    expect((await joinChannel(julian, 'CEXT')).body.error.code).toBe('shared_channel')
+    const workflow = caller(board.fetch, await workflowToken())
+    const denied = await joinChannel(workflow, 'COUT')
+    expect(denied.status).toBe(403)
+    expect(denied.body.error.message).toContain('it needs manage in every channel')
+    expect(join).not.toHaveBeenCalled()
   })
 })

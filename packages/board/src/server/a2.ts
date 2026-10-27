@@ -728,6 +728,12 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       if (!principal.access.everywhere('manage')) throw forbidden("this token can't read a source: it needs manage in every channel")
       return binding.readSource(key, target, limit ?? 50)
     },
+    async joinSource(caller, { key, target }) {
+      if (!binding.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: join it where its sync runs`, 'not_synced_here')
+      const { principal } = await identityOf(caller)
+      if (!principal.access.everywhere('manage')) throw forbidden("this token can't join a source: it needs manage in every channel")
+      return binding.joinSource(key, target)
+    },
     async synced(caller, { id }, signal) {
       const { principal } = await identityOf(caller)
       const message = await reads.message(messageAt(id), signal)

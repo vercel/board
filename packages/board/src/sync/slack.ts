@@ -4,7 +4,7 @@ import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
 import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
-import type { SourceMessage, SourceRead } from '../api/routes.ts'
+import type { SourceJoin, SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/external.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
@@ -25,6 +25,8 @@ export type SlackClient = {
     replies?(args: { channel: string; ts: string; oldest?: string; latest?: string; inclusive?: boolean; limit: number }): Promise<{ messages?: SlackMessage[]; has_more?: boolean }>
     /** Reads a channel, newest first, for `vb sources <key> read`; needs `channels:history`. */
     history?(args: { channel: string; limit: number }): Promise<{ messages?: SlackMessage[]; has_more?: boolean }>
+    /** Adds the app to a public channel, for `vb sources <key> join`; needs `channels:join`. */
+    join?(args: { channel: string }): Promise<unknown>
   }
   users?: {
     info(args: { user: string }): Promise<{ user?: SlackUser }>
@@ -274,6 +276,11 @@ export type SlackOptions = {
   adapter: Adapter | string
   /** Not needed with a connector. */
   client?: () => Promise<SlackClient>
+  /**
+   * Lets `vb sources <key> join` add the app to a public channel, so it can be read on demand
+   * without syncing it. Off by default; the app needs `channels:join`.
+   */
+  join?: boolean
 }
 
 /**
@@ -384,6 +391,19 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
             : `no Slack channel named #${name} (a private channel shows up once the app is invited)`,
         )
       return found
+    }
+
+    // A channel (`#name` or its ID), a thread (`C0123:1727000000.123456`), or a message permalink (its thread).
+    async function targetOf(web: SlackClient, target: string): Promise<{ channel: string; thread: string | null }> {
+      const link = new RegExp(PERMALINK.source).exec(target)
+      if (link) {
+        const [, id, seconds, micros, query] = link
+        return { channel: id!, thread: /[?&]thread_ts=(\d+\.\d+)/.exec(query?.replaceAll('&amp;', '&') ?? '')?.[1] ?? `${seconds}.${micros}` }
+      }
+      if (target.startsWith('#')) return { channel: (await find(web, target.slice(1))).id, thread: null }
+      const parsed = /^([A-Z0-9]+)(?::(\d+\.\d+))?$/.exec(target)
+      if (!parsed) throw new UnreadableError('invalid_target', `not a Slack channel, thread, or message link: ${target} (try #name, C0123, C0123:1727000000.123456, or a permalink)`)
+      return { channel: parsed[1]!, thread: parsed[2] ?? null }
     }
 
     // Slack's events carry user IDs only; their pictures come from users.info, once each.
@@ -541,21 +561,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       async read(target, { limit }): Promise<SourceRead> {
         const web = await client()
         if (!web) throw new UnreadableError('no_client', 'no Slack client to read it with')
-        let channel: string
-        let thread: string | null = null
-        const link = new RegExp(PERMALINK.source).exec(target)
-        if (link) {
-          const [, id, seconds, micros, query] = link
-          channel = id!
-          thread = /[?&]thread_ts=(\d+\.\d+)/.exec(query?.replaceAll('&amp;', '&') ?? '')?.[1] ?? `${seconds}.${micros}`
-        } else if (target.startsWith('#')) {
-          channel = (await find(web, target.slice(1))).id
-        } else {
-          const parsed = /^([A-Z0-9]+)(?::(\d+\.\d+))?$/.exec(target)
-          if (!parsed) throw new UnreadableError('invalid_target', `not a Slack channel, thread, or message link: ${target} (try #name, C0123, C0123:1727000000.123456, or a permalink)`)
-          channel = parsed[1]!
-          thread = parsed[2] ?? null
-        }
+        const parsed = await targetOf(web, target)
+        const channel = parsed.channel
+        let thread = parsed.thread
         let found: SlackMessage[]
         let more = false
         let name: string | null = null
@@ -570,7 +578,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           if (info.is_ext_shared)
             throw new UnreadableError('shared_channel', `${label} is shared with another organization: the board doesn't read those on demand`)
           if (!info.is_member)
-            throw new UnreadableError('not_in_channel', `the app isn't in ${label}: someone needs to add it (it won't join on its own)`)
+            throw new UnreadableError('not_in_channel', options.join
+              ? `the app isn't in ${label}: join it first (\`sources join\`), which adds the app there`
+              : `the app isn't in ${label}: someone needs to add it (it won't join on its own)`)
           if (thread) {
             const replies = web.conversations.replies
             if (!replies) throw new UnreadableError('no_client', "this Slack client can't read threads")
@@ -603,6 +613,34 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           files: filesOf(m.files),
         })))
         return { channel, name, thread, messages, more: more || found.length > limit }
+      },
+      // Joins a public channel so it can be read, only when the board opted in (`join: true`). Slack
+      // announces the app there and starts sending the channel's events, but sync still only
+      // imports the channels it maps. Private and Slack Connect channels stay out, as for reads.
+      async join(target): Promise<SourceJoin> {
+        if (!options.join) throw new UnreadableError('join_disabled', "this board doesn't join Slack channels: it needs `join: true` on slack()")
+        const web = await client()
+        if (!web) throw new UnreadableError('no_client', 'no Slack client to join with')
+        const { channel } = await targetOf(web, target)
+        try {
+          const info = (await web.conversations.info({ channel })).channel
+          if (!info) throw new UnreadableError('channel_not_found', `no Slack channel ${channel}`)
+          const name = info.name ?? null
+          const label = name ? `#${name}` : channel
+          if (info.is_private || info.is_im || info.is_mpim)
+            throw new UnreadableError('private_channel', `${label} is private: the app can only be invited there`)
+          if (info.is_ext_shared)
+            throw new UnreadableError('shared_channel', `${label} is shared with another organization: the board doesn't join those`)
+          if (info.is_member) return { channel, name, joined: false }
+          if (!web.conversations.join) throw new UnreadableError('no_client', "this Slack client can't join channels")
+          await web.conversations.join({ channel })
+          return { channel, name, joined: true }
+        } catch (error) {
+          if (error instanceof UnreadableError) throw error
+          const code = slackError(error).split(',')[0]!
+          if (code === 'missing_scope') throw new UnreadableError(code, "the Slack app can't join channels: it needs the channels:join scope")
+          throw new UnreadableError(code, `Slack refused to join ${target}: ${slackError(error)}`)
+        }
       },
       // Slack unfurls a message link a moment later, as a `message_changed` that keeps the text.
       // Chat SDK drops those (nothing it shows changed), so they come here.

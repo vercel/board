@@ -30,7 +30,7 @@ export const METHODS: readonly Method[] = [
   'discovery', 'me', 'channels', 'actors', 'identity', 'messages', 'threads', 'message', 'post', 'posted', 'edit', 'delete', 'react', 'label',
   'schedule', 'schedules', 'cancelSchedule', 'upload', 'attachment', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack', 'events',
   'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'syncRoots', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
-  'syncCode', 'syncAccount', 'syncUnlink', 'typing', 'readSource', 'synced', 'linked',
+  'syncCode', 'syncAccount', 'syncUnlink', 'typing', 'readSource', 'joinSource', 'synced', 'linked',
 ]
 
 const escape = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

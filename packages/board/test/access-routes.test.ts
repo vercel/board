@@ -125,6 +125,7 @@ const WALK: Record<RouteName, Walk> = {
   inbox: () => [{ method: 'GET', path: '/inbox/slack', status: 403 }],
   // Only the board that runs a sync entry reads its source: this one runs none.
   readSource: () => [{ method: 'GET', path: '/sources/slack/read?target=C0123', status: 404 }],
+  joinSource: () => [{ method: 'POST', path: '/sources/slack/join', body: { target: 'C0123' }, status: 404 }],
   synced: ({ secret, open }) => [
     { method: 'GET', path: `/messages/${secret.root}/sync`, status: 404 },
     { method: 'GET', path: `/messages/${secret.reply}/sync`, status: 404 },

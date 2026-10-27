@@ -392,6 +392,7 @@ the actor it unlinked: 404 `not_linked` when none of yours matches.
 ```ts
 inbox(key: string, opts?: { channel?: string; limit?: number }): Promise<InboxEntry[]>
 readSource(key: string, target: string, opts?: { limit?: number }): Promise<SourceRead>
+joinSource(key: string, target: string): Promise<SourceJoin>
 ```
 
 `inbox` returns the raw platform events a sync entry received, newest first:
@@ -401,7 +402,9 @@ syncing or storing it, with entry `key`'s app. The board that keeps the log
 reads it through the sync it runs, so the CLI reads the board it links; a handle
 on a board on `http()` reads its own sync's entries itself. A board that runs
 no entry `key` throws 404 `not_synced_here`. A request needs `manage` in every
-channel.
+channel. `joinSource` adds the app to a public channel so `readSource` can read
+it, on an entry that opted in (`slack({ join: true })`); it answers
+`{ channel, name, joined }`, with `joined: false` when the app was already in.
 
 ### Sync's records
 

@@ -1344,6 +1344,17 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }
   }
 
+  /** Adds the app to a channel so it can be read on demand: nothing is synced or stored. */
+  async function joinSource(key: string, target: string) {
+    const platform = platformOf(key)
+    try {
+      return await platform.join(target)
+    } catch (error) {
+      if (error instanceof UnreadableError) throw new HttpError(unreadableStatus(error.code), error.code, error.message)
+      throw badRequest(`can't join ${target} on ${key}: ${describe(error)}`, 'platform_error')
+    }
+  }
+
   return {
     entries,
     bind(next: SyncHost) {
@@ -1364,6 +1375,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     redeemSignIn,
     typing,
     readSource,
+    joinSource,
   }
 }
 

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { Actor } from '../contract/folds.ts'
-import type { MessageView, SourceRead } from '../api/routes.ts'
+import type { MessageView, SourceJoin, SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/external.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
 import { routesOf, type Routes, type Sync, type SyncFn } from './fn.ts'
@@ -130,6 +130,10 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
    */
   async read(_target: string, _options: { limit: number }): Promise<SourceRead> {
     throw new UnreadableError('unsupported', `${this.platform} can't be read on demand`)
+  }
+  /** Adds the board's app to a channel so `read` can read it, where the board opted in. Throws `UnreadableError` otherwise. */
+  async join(_target: string): Promise<SourceJoin> {
+    throw new UnreadableError('unsupported', `${this.platform} can't join channels on demand`)
   }
   async edit(_thread: string, _message: string, _body: ProviderPost): Promise<void> {}
   async delete(_thread: string, _message: string): Promise<void> {}

@@ -169,6 +169,7 @@ Each has a default that does nothing, or says the platform can't:
 | `inboxChannel(key, thread)` | The platform channel a thread is in (`desk:support` for `desk:support:t_812`), without calling the platform: `sync.channel` going out, which `channels` routes by |
 | `whoAmI(token)`, `postAs(token, target, kind, body)`, `editAs(…)`, `deleteAs(…)` | Posting as a person, with `users` |
 | `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
+| `join(target)` | Adds the app to a channel so `read` can read it: `joinSource(key, target)`, `POST /sources/:key/join` |
 | `mention(actor)` | A board mention in the platform's native form |
 | `findByEmail(email)` | `@[ada@acme.com]` mentions |
 | `locate(url)`, `url(thread, message)` | Links both ways: `vb read <link>` and `vb sync <id>`. See [Links](#links) |

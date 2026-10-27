@@ -17,6 +17,7 @@ import {
   ScheduleBody,
   SchedulesQuery,
   SignInQuery,
+  SourceJoinBody,
   SourceReadQuery,
   LinkedQuery,
   SyncAccountBody,
@@ -171,6 +172,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return { id, ...(TypingBody.parse(await body()) ?? {}) }
     case 'readSource':
       return { key, ...SourceReadQuery.parse(queryObject(url)) }
+    case 'joinSource':
+      return { key, ...SourceJoinBody.parse(await body()) }
     case 'linked':
       return LinkedQuery.parse(queryObject(url))
   }
@@ -212,6 +215,8 @@ export type Serve = {
   pull(): Promise<number>
   /** What `readSource` reads with: sync entry `key`'s app, a 404 `not_synced_here` for one this board doesn't run. */
   readSource(key: string, target: string, limit: number): Promise<Protocol['readSource']['output']>
+  /** What `joinSource` joins with: sync entry `key`'s app, a 404 `not_synced_here` for one this board doesn't run. */
+  joinSource(key: string, target: string): Promise<Protocol['joinSource']['output']>
   /** What `typing` shows typing with: the platforms this board syncs. */
   typing(messages: readonly MessageView[], status: string | undefined): Promise<string[]>
 }
@@ -866,6 +871,10 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     async readSource(key, target, limit) {
       if (!engine || !entries[key]) throw notFound(`this board doesn't run sync entry ${key}: read it where its sync runs`, 'not_synced_here')
       return engine.readSource(key, target, limit)
+    },
+    async joinSource(key, target) {
+      if (!engine || !entries[key]) throw notFound(`this board doesn't run sync entry ${key}: join it where its sync runs`, 'not_synced_here')
+      return engine.joinSource(key, target)
     },
     typing: async (messages, status) => (engine ? engine.typing(messages, status) : []),
   }

@@ -5,7 +5,7 @@ import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type Ext
 import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
 import type { SyncFn } from './fn.ts'
-import type { SourceRead } from '../api/routes.ts'
+import type { SourceJoin, SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
 import { userTokensOf } from './users.ts'
@@ -39,6 +39,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   url?(thread: string, message: string): Promise<string | null>
   /** A channel or thread, read on demand without syncing it. */
   read?(target: string, options: { limit: number }): Promise<SourceRead>
+  /** Adds the app to a channel so `read` can read it. */
+  join?(target: string): Promise<SourceJoin>
   avatar?(message: ChatMessage): Promise<string | null>
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
@@ -210,6 +212,9 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
 
   override async read(target: string, options: { limit: number }): Promise<SourceRead> {
     return this.transport.read ? this.transport.read(target, options) : super.read(target, options)
+  }
+  override async join(target: string): Promise<SourceJoin> {
+    return this.transport.join ? this.transport.join(target) : super.join(target)
   }
   override async fetchFile(file: ExternalFile): Promise<Uint8Array | null> {
     // Ready first: an adapter may resolve a file's credentials from its Chat state.

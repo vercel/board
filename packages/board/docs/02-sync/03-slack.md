@@ -212,11 +212,24 @@ is stored, and reading a channel doesn't make the board listen to it. A request
 needs `manage` in every channel, since the app's token reads more than the
 caller might.
 
+To read a public channel the app isn't in, opt in with `join: true`, and give
+the app `channels:join`. Then `vb sources slack join <channel|link>` (or
+`team.joinSource('slack', '#general')`, `POST /sources/slack/join`) adds the
+app to it. Slack announces the app there, but sync still imports only the
+channels it maps. Private and Slack Connect channels are never joined. Without
+the option, a join answers 403 `join_disabled`.
+
+```ts
+import { channels, slack } from '@vercel/board/sync-slack'
+
+slack({ adapter: 'slack/acme', join: true }, channels({ '#prs': 'prs' }))
+```
+
 | Answer | Why |
 | --- | --- |
 | 403 `private_channel` | A private channel or DM. |
 | 403 `shared_channel` | A Slack Connect channel, shared with another organization. |
-| 403 `not_in_channel` | The app isn't in it. Someone adds it on purpose. |
+| 403 `not_in_channel` | The app isn't in it. Someone adds it on purpose, or `join` does, where the board opted in. |
 | 404 `channel_not_found` | No such channel, by name or ID. |
 | 429 `ratelimited` | Slack is rate-limiting the app. |
 

@@ -231,6 +231,9 @@ export const SourceReadQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 })
 
+/** A channel to add the board's app to, so it can be read on demand: `#name`, an ID, or a link into it. */
+export const SourceJoinBody = z.object({ target: z.string().min(1).max(4000) })
+
 /** A platform's link to a message or thread, such as a Slack permalink or a GitHub comment's URL. */
 export const LinkedQuery = z.object({ url: z.string().url().max(4000) })
 
@@ -647,6 +650,13 @@ export type SourceRead = {
   more: boolean
 }
 
+/** A channel the board's app joined, or was already in (`joined: false`). */
+export type SourceJoin = {
+  channel: string
+  name: string | null
+  joined: boolean
+}
+
 export type ApiError = { error: { code: string; message: string } }
 
 /** A raw platform event, as `GET /inbox/:key` returns it. */
@@ -718,6 +728,8 @@ export const routes = {
   syncUnlink: { method: 'POST', path: '/sync/accounts/unlink', body: SyncUnlinkBody },
   /** Reads a platform channel or thread on demand, where that sync runs, without syncing or storing it. Full access only. */
   readSource: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },
+  /** Adds the app to a public channel so it can be read, where that sync runs and opted in with `join`. Full access only. */
+  joinSource: { method: 'POST', path: '/sources/:key/join', body: SourceJoinBody },
   webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },
   avatar: { method: 'GET', path: '/avatars/:name' },

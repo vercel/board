@@ -333,6 +333,10 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
       if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().readSource(input.key, input.target, input.limit ?? 50)
       return remoteCall('readSource', caller, input, signal) as Promise<Protocol['readSource']['output']>
     },
+    async joinSource(caller, input, signal) {
+      if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().joinSource(input.key, input.target)
+      return remoteCall('joinSource', caller, input, signal) as Promise<Protocol['joinSource']['output']>
+    },
     // The board it uses has the records; this board's own sync links what it synced there.
     async synced(caller, input, signal) {
       const { targets } = (await remoteCall('synced', caller, input, signal)) as Protocol['synced']['output']
