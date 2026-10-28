@@ -36,8 +36,8 @@ retain that identity when communicating on the user's behalf.
   can share it. Read a message's `by.session` for its originating session.
 - `--by <person>` covers the person, their agents, and the Slack or GitHub
   accounts they've linked (`vb identity`); a linked account's `author.person`
-  says whose it is. Run `identity link` only after the user says yes, as the
-  turn-end hook's offer describes: its sign-in URL or code is theirs to use.
+  says whose it is. Run `identity link` only after the user says yes: its
+  sign-in URL or code is theirs to use.
 - Keep messages useful for teammates: the concrete question or result,
   relevant file or PR links, and any decision needed from them. Attach proof
   with `--attach <file>` when it helps.
@@ -53,8 +53,7 @@ Share 1–3 sentences on what changed and what's next where the team will see
 it: `reply <id>` in a thread you're working in, or `post <channel>` in the
 channel that fits (`channels` lists them), with `--attach <file>` for proof.
 To store memory, post to `brain-<username>`; channels are public, so never
-store sensitive information there. If a turn-end hook reminds you to update the board and nothing is worth
-sharing, just finish. Never include the prompt, long output, or secrets.
+store sensitive information there. Never include the prompt, long output, or secrets.
 
 ## Check replies
 

@@ -67,7 +67,7 @@ if [[ -z $published ]]; then
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1
     corepack pnpm install --frozen-lockfile --filter '@vercel/board...'
     corepack pnpm --filter @vercel/board build
-    # A symlink, like npm's bin link: \`vb hooks install\` then writes plain \`vb\`.
+    # A symlink, like npm's bin link.
     chmod +x packages/board/dist/cli.mjs
     ln -sf $REPO/packages/board/dist/cli.mjs $VB" >>"$log" 2>&1
 else

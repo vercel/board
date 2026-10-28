@@ -48,8 +48,7 @@ and appends both to the run's `transcript.txt`. Follow the report's steps, or a
 person's path through the feature: the commands people run, not internal
 setters or test-only endpoints. Check what changed as well as what printed: the
 next `read`, the exit code, files in the run's `board/` (its log and
-attachments) or `home/` (`vb hooks install claude` writes
-`home/.claude/settings.json` there).
+attachments) or `home/` (where `~/.claude/settings.json` and other agent config live).
 
 `$V doctor` checks a run when something looks off: the board is up, `vb` is the
 version built, and it answers on 127.0.0.1.

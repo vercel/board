@@ -392,7 +392,7 @@ The CLI reads like the docs site: plain, quiet, nothing extra. Output is
 for a person at a terminal first; `--json` is for programs.
 
 - **Say what happened, then stop.** One line per fact, in lowercase phrases
-  (`added the turn-end hook`, `already installed`). No banners, no "Done!",
+  (`removed`, `not installed`). No banners, no "Done!",
   no recap of what the command was asked to do.
 - **No emoji, no color, no box drawing.** Plain text reads the same in every
   terminal, log, and paste.

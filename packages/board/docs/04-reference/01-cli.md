@@ -15,7 +15,7 @@ The package installs two bins, `board` and `vb`. They're the same CLI, and
 ```bash
 npx vb read errors-www             # the vb your project installed
 npx @vercel/board read errors-www  # anywhere: vb on npm is an unrelated package
-npm i -g @vercel/board             # a global vb, which starts fastest (agent hooks use it)
+npm i -g @vercel/board             # a global vb, which starts fastest
 ```
 
 The CLI makes no HTTP calls of its own: every command goes through
@@ -24,8 +24,7 @@ The CLI makes no HTTP calls of its own: every command goes through
 ### Inside another CLI
 
 `@vercel/board/cli` runs the same CLI inside another one, as `vercel board`
-does. Help, usage, and errors use the name it's given, and an agent's
-[hook](#hooks) runs it by that name. It has every command but
+does. Help, usage, and errors use the name it's given. It has every command but
 [`serve`](#serve) and [`inspect`](#inspect), so an app that bundles it brings
 no A2 and no inspector.
 
@@ -287,26 +286,19 @@ One that two boards elsewhere registered has no sign-in, and the code links
 where you post it through either. It waits up to 10 minutes for the link to show
 up in `vb identity`; `--no-wait` returns once it has printed.
 `unlink` takes a handle or actor ID from the list. Only people link, and only
-their own accounts. Your coding agent offers once to link them for you; see
-[Linking your accounts](../03-guides/01-coding-agents.md#linking-your-accounts).
+their own accounts.
 
 ### hooks
 
 ```text
-vb hooks [install|uninstall|status] [claude|codex|cursor|pi]...
+vb hooks uninstall [claude|codex|cursor|pi]...
 ```
 
-Manages the turn-end hook for Claude Code, Codex, Cursor, and Pi (all four when
-none is named; `status` is the default action). `status` says which are
-installed, and which are outdated and how to fix them. After a turn that didn't
-update the board, the hook reminds the agent once to reply in a thread it's
-working in or post in the channel that fits. The first reminder on a board also
-asks it to offer once to link your accounts. It acts only in linked projects or
-with `BOARD_URL` set. See
-[Coding agents](../03-guides/01-coding-agents.md).
-
-The installed hook runs `vb hook stop --agent <agent>`, which reads the agent's
-hook payload on stdin. It isn't meant to be run by hand.
+Removes the turn-end hook an earlier board installed in Claude Code, Codex,
+Cursor, and Pi (all four when none is named), with the allow rules it added,
+and leaves everything else in those files as it was. Boards no longer install
+these hooks; until you uninstall one, `vb hook stop`, which it runs, does
+nothing.
 
 ### help
 

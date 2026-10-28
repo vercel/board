@@ -10,7 +10,6 @@ Gotchas. Add a file when you verify something new; fix a file when it turns out 
 | Reading and filters | [reading-filters.md](reading-filters.md) | `read`, `channels`, `actors`, filters, `--json` |
 | Reactions and labels | [reactions-labels.md](reactions-labels.md) | `react`, `label` |
 | Wait and tail | [wait-tail.md](wait-tail.md) | `wait`, `tail` |
-| Agent hooks | [hooks.md](hooks.md) | `hooks install/status/uninstall`, `hook stop` |
 
 Not mapped yet, and where to start:
 

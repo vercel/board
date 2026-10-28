@@ -1,13 +1,12 @@
-import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { boardUrl, configDir, connect, detectAgent, projectDir, projectUrl } from '../client/node.ts'
+import { boardUrl, configDir, connect, projectDir } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
@@ -15,27 +14,7 @@ import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contr
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
-import {
-  AGENTS,
-  allow,
-  allowRules,
-  claimLinkOffer,
-  cliOf,
-  codexNetwork,
-  decideStop,
-  disallow,
-  installedHook,
-  installHook,
-  legacyRules,
-  linkOffer,
-  markPosted,
-  outdated,
-  reminder,
-  stopOutput,
-  tilde,
-  uninstallHook,
-  type HookAgent,
-} from './hooks.ts'
+import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 
 const help = () => `${app.name} ${VERSION}: a message board you mount in one route
 
@@ -84,8 +63,8 @@ usage: ${app.name} <command> [options]${app.name === 'board' ? '      (also inst
   conformance [--channel <c>]              check that the board speaks the protocol: posts to conformance,
                                            kept on the board, and deletes what it posted (1 if a check fails)
 
-  hooks [install|uninstall|status] [claude|codex|cursor|pi]...
-                                           after a turn that didn't update the board, remind the agent to (linked projects only)
+  hooks uninstall [claude|codex|cursor|pi]...
+                                           remove the turn-end hooks an earlier board installed
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
   wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)${Object.keys(app.commands).length > 0 ? `\n\n${Object.values(app.commands).map((command) => command.help).join('\n')}` : ''}
@@ -201,9 +180,9 @@ export type CommandContext = {
 
 /**
  * The CLI an app runs: its name, as help, usage, and errors say it (`board`, `vercel board`),
- * the command an agent's hook runs it with later (found when it isn't given), and its own commands.
+ * and its own commands.
  */
-export type App = { name: string; command?: string; commands: Record<string, Command> }
+export type App = { name: string; commands: Record<string, Command> }
 
 type Flags = ReturnType<typeof parseAll>['values']
 
@@ -373,101 +352,6 @@ function client(): Board {
   if (flags.human) return io.board.as(null)
   if (flags.as) return io.board.as(flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as)
   return io.board
-}
-
-/**
- * What names an agent's turns, for the turn-end hook: its session, or for
- * Cursor, whose shell has no session ID, the project it works in.
- */
-const turnKey = (agent: string, session: string | null) => session ?? (agent === 'cursor' ? `cursor@${projectDir()}` : null)
-
-/** A write from an agent session counts as this turn's board update. */
-function wrote() {
-  const detected = flags.human ? null : detectAgent()
-  const key = detected ? turnKey(detected.profile, detected.session) : null
-  if (key) markPosted(key)
-}
-
-const fromNpx = (path: string) => /[\\/]_npx[\\/]/.test(path)
-
-/** The first `vb` on PATH outside npx's cache, which is gone once npx exits. */
-function globalVb(): string | null {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    const candidate = join(dir, 'vb')
-    if (existsSync(candidate) && !fromNpx(realpathSync(candidate))) return candidate
-  }
-  return null
-}
-
-/**
- * Whether `bin` runs the CLI at `self`: a symlink to it (npm), or a shell
- * shim that execs node on it (pnpm, through `$basedir`- or `$basedir_abs`-relative paths).
- */
-function runsCli(bin: string, self: string): boolean {
-  try {
-    const real = realpathSync(bin)
-    if (real === self) return true
-    if (statSync(real).size > 64 * 1024) return false
-    const script = readFileSync(real, 'utf8')
-    if (!script.startsWith('#!')) return false
-    const basedir = dirname(bin)
-    // pnpm 10 quotes "$basedir/…"; pnpm 11 quotes "$basedir_abs/…" and notes `# cmd-shim-target=<path>`.
-    const paths = [
-      ...[...script.matchAll(/"([^"\n]+)"/g)].map(([, quoted]) => quoted!.replace(/^\$(?:\{basedir(?:_abs)?\}|basedir(?:_abs)?)(?=\/)/, basedir)),
-      ...[...script.matchAll(/^# cmd-shim-target=(.+)$/gm)].map(([, target]) => target!.trim()),
-    ]
-    for (const path of paths) if (isAbsolute(path) && existsSync(path) && realpathSync(path) === self) return true
-  } catch {}
-  return false
-}
-
-/**
- * How an agent's hook should run this CLI, long after this command exits:
- * `vb` when that's this CLI; under npx, a global `vb` of this version, else
- * this version through npx; otherwise this CLI's full path.
- */
-function cliCommand(): { command: string; note?: string } {
-  if (app.command) return { command: app.command }
-  const self = realpathSync(process.argv[1]!)
-  const installed = globalVb()
-  if (!fromNpx(self)) {
-    if (installed && runsCli(installed, self)) return { command: 'vb' }
-    const quote = (part: string) => (/^[\w./-]+$/.test(part) ? part : `'${part.replace(/'/g, `'\\''`)}'`)
-    return { command: [process.execPath, self].map(quote).join(' ') }
-  }
-  let version = ''
-  try {
-    version = installed ? execFileSync(installed, ['--version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() : ''
-  } catch {}
-  if (version === VERSION) return { command: 'vb' }
-  return {
-    command: `npx -y @vercel/board@${VERSION}`,
-    note: `the hook runs board ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g @vercel/board\` makes it start faster`,
-  }
-}
-
-/**
- * The board version a hook's CLI runs: pinned in an npx command, else what it
- * answers to `--version` (the first `vb` on PATH, for plain `vb`). Null when
- * it doesn't answer with one.
- */
-function hookVersion(cli: string): string | null {
-  const pinned = /^npx -y @vercel\/board@(\S+)$/.exec(cli)
-  if (pinned) return pinned[1]!
-  try {
-    const answer = execFileSync('/bin/sh', ['-c', `${cli} --version`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-    return /^\d+\.\d+\.\d+\S*$/.test(answer) ? answer : null
-  } catch {
-    return null
-  }
-}
-
-/** Whether version `a` comes before `b`, by major, minor, and patch. */
-function olderVersion(a: string, b: string): boolean {
-  const parts = (version: string) => version.split(/[.-]/).slice(0, 3).map(Number)
-  const [x, y] = [parts(a), parts(b)]
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) < (y[i] ?? 0)
-  return false
 }
 
 async function readStdin(): Promise<string> {
@@ -756,7 +640,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const message = re === undefined
         ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
         : await board.reply(re, options)
-      wrote()
       warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
@@ -773,7 +656,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags.id ? { id: flags.id } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
       })
-      wrote()
       warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
@@ -808,7 +690,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags.for ? { for: flags.for } : {}),
         ...(times !== undefined ? { times } : {}),
       })
-      wrote()
       warnUnknownMentions(schedule.unknownMentions)
       if (flags.json) printJson(schedule)
       else out(formatSchedule(schedule))
@@ -829,113 +710,25 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'hooks': {
-      const [action = 'status', ...names] = args
+      const [action, ...names] = args
+      if (action !== 'uninstall')
+        throw new UsageError(`\`${`${named()} hooks ${action ?? ''}`.trimEnd()}\` is gone: turn-end hooks were removed. Run \`${named()} hooks uninstall\` to clear an earlier install`)
       const agents = hookAgents(names)
       const width = Math.max(...agents.map((agent) => AGENTS[agent].name.length))
-      const row = (agent: HookAgent, ...cells: string[]) => out([AGENTS[agent].name.padEnd(width), ...cells].join('  ').trimEnd())
-      if (action === 'status') {
-        const versions = new Map<string, string | null>()
-        for (const agent of agents) {
-          const installed = installedHook(agent)
-          if (installed === null) {
-            row(agent, 'not installed')
-            continue
-          }
-          // What installing again would change, and whether the board the hook runs is older than this one.
-          const cli = cliOf(installed)
-          const problems = outdated(agent, installed)
-          // A host answers `--version` with its own version, not board's, so its hook isn't checked by it.
-          if (!versions.has(cli)) versions.set(cli, app.command ? null : hookVersion(cli))
-          const version = versions.get(cli)
-          const behind = version != null && olderVersion(version, VERSION)
-          if (behind) problems.push(`runs board ${version}, not ${VERSION}`)
-          row(agent, (problems.length ? 'outdated' : 'installed').padEnd(9), tilde(AGENTS[agent].file()))
-          if (problems.length === 0) continue
-          for (const problem of problems) out(`  ${problem}`)
-          const global = behind && cli === 'vb'
-          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`${named()} hooks install ${agent}`] : [])]
-          out(`  fix with ${fixes.join(', then ')}`)
-        }
-        return 0
-      }
-      if (action === 'uninstall') {
-        for (const agent of agents) {
-          const installed = installedHook(agent)
-          const cli = installed ? cliOf(installed) : null
-          const rules = cli ? allowRules(agent, cli) : null
-          if (rules) disallow(rules.file, [...rules.rules, ...legacyRules(agent, cli!)])
-          row(agent, uninstallHook(agent) ? 'removed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : '')
-        }
-        return 0
-      }
-      if (action !== 'install') throw new UsageError(`usage: ${app.name} hooks [install|uninstall|status] [claude|codex|cursor|pi]...`)
-      const { command: cli, note } = cliCommand()
-      // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
-        const had = installedHook(agent) !== null
-        const changed = installHook(agent, cli)
-        // The reminder asks for `vb reply`, `vb post`, `vb read`, and `vb channels`: no permission prompt for each.
-        const rules = allowRules(agent, cli)
-        const added = rules ? allow(rules.file, rules.rules) : []
-        const dropped = rules ? disallow(rules.file, legacyRules(agent, cli)) : false
-        // "already installed" only when nothing was written: a new hook command, rule, or dropped rule is an update.
-        out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
-        out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
-        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : `${named()} runs without asking`}`)
-        if (agent === 'cursor' && !rules && !app.command) out('  npm i -g @vercel/board lets Cursor run vb without asking')
-        if (agent === 'codex') {
-          if (changed) out('  approve it once in Codex with /hooks')
-          let host: string | null = null
-          try {
-            const url = process.env.BOARD_URL || projectUrl()
-            host = url ? new URL(url).hostname : null
-          } catch {}
-          const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
-          const profile = codexNetwork(host)
-          out(`  to let ${named()} reach the board from Codex's sandbox, add to ${tilde(config)}:`)
-          out('')
-          out(['# a permission profile (beta) that opens the network to just the board', '', '# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
-        }
-        out('')
+        const installed = installedHook(agent)
+        const cli = installed ? cliOf(installed) : null
+        const rules = cli ? allowRules(agent, cli) : null
+        if (rules) disallow(rules.file, rules.rules)
+        out([AGENTS[agent].name.padEnd(width), uninstallHook(agent) ? 'removed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : ''].join('  ').trimEnd())
       }
-      if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
-      out('The hooks remind once per turn without a board update.')
-      out(`They stay quiet outside projects linked with \`${named()} link <url>\`.`)
       return 0
     }
 
-    // What an agent's turn-end hook runs. It must never break the agent's turn: any failure lets it stop.
-    case 'hook': {
-      if (args[0] !== 'stop') throw new UsageError("usage: board hook stop --agent <agent>   (run by an agent's turn-end hook)")
-      const agent = flags.agent ?? 'agent'
-      try {
-        // Claude Code and Codex send `session_id`, `cwd`, and `stop_hook_active`; Cursor sends
-        // `conversation_id`, `workspace_roots`, `status`, and `loop_count`.
-        const payload = JSON.parse(await readStdin()) as {
-          session_id?: string
-          conversation_id?: string
-          cwd?: string
-          workspace_roots?: string[]
-          stop_hook_active?: boolean
-          loop_count?: number
-          status?: string
-        }
-        const cwd = payload.cwd ?? payload.workspace_roots?.[0]
-        if (cwd && existsSync(cwd)) process.chdir(cwd)
-        const session = turnKey(agent, agent === 'cursor' ? null : (payload.session_id ?? null))
-        const boardUrl = process.env.BOARD_URL || projectUrl()
-        if (!session || !boardUrl) return 0
-        if (payload.status && payload.status !== 'completed') return 0
-        const continuing = payload.stop_hook_active === true || (payload.loop_count ?? 0) > 0
-        if (decideStop(session, continuing) === 'ask') {
-          const cli = cliCommand().command
-          // The first reminder on this board also offers, once, to link the person's accounts.
-          const text = claimLinkOffer(boardUrl) ? `${reminder(cli)}\n\n${linkOffer(cli)}` : reminder(cli)
-          printJson(stopOutput(agent, text))
-        }
-      } catch {}
+    // What an earlier board's turn-end hook still runs: it does nothing, so those turns end as they would without it.
+    // `hooks uninstall` clears it.
+    case 'hook':
       return 0
-    }
 
     case 'edit': {
       const { unknownMentions } = await client().edit(messageId(args[0]), await text(args[1]))

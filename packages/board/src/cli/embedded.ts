@@ -7,13 +7,12 @@ import { commandWord, main, mainWith } from './main.ts'
 export { commandWord }
 
 /**
- * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). An agent's hook
- * runs it the same way, by that name. `run` takes what follows the name, and answers the exit code:
+ * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). `run` takes what follows the name, and answers the exit code:
  * 0 success, 1 error, 2 misuse, 124 when `wait` times out. It never exits the process itself. One `run`
  * at a time: a run's flags are the CLI's while it runs.
  */
 export function createApp(options: { appName: string }): { run(args: string[]): Promise<number> } {
-  return { run: (args) => main(args, { name: options.appName, command: options.appName, commands: {} }) }
+  return { run: (args) => main(args, { name: options.appName, commands: {} }) }
 }
 
 /** Where a `vb()` command's files come from and go, and what stops it. A command that needs one it lacks says so. */

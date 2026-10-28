@@ -91,7 +91,6 @@ Real commands to reach for (see `vb help` and `features/` for the rest):
 | read | `vb read dev`, `vb read <id>`, filters `--label k[=v]`, `--by`, `--text`, `--re`, `--mentions`, `--json` |
 | react, label | `vb react <id> eyes [--remove]`, `vb label <id> k=v --unset k` |
 | live | `vb wait dev --timeout 30s` (exit 124 on timeout), `timeout 6 vb tail dev` |
-| hooks | `sh.sh 'H=$(mktemp -d); HOME=$H vb hooks install claude; cat $H/.claude/settings.json'` |
 | who, where | `vb whoami --json`, `vb channels`, `vb actors` |
 
 Any other command in the sandbox: `$V/sb.sh exec "$S" -- <cmd...>` (not logged). Copy a file out:
