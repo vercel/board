@@ -461,6 +461,17 @@ describe('sync', () => {
     error.mockRestore()
   })
 
+  it("marks the app's edits on Slack, which shows (edited) only on people's own", async () => {
+    const { board, s } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'incident' })).body.message
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    await julian('POST', `/messages/${root.id}/edit`, { text: 'incident, resolved' })
+    await vi.waitFor(() => expect(s.edits).toHaveLength(1))
+    expect(JSON.parse(s.channelPosts[0]!.text).markdown).toBe('**julian**: incident')
+    expect(JSON.parse(s.edits[0]!.text).markdown).toBe('**julian**: incident, resolved _(edited)_')
+  })
+
   it('delivers a reply, and an edit, as the message is when it goes out: never text its author took back', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { board, s } = setup()

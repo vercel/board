@@ -465,6 +465,8 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       platform: 'slack',
       adapter: options.adapter,
       canStartThreads: true,
+      // Slack shows `(edited)` only on people's own edits, never on an app's.
+      marksEdits: false,
       // The adapter uploads files given without text as their own message: here, right after the text.
       async uploadFiles(thread, files) {
         const sent = await options.adapter.postMessage(thread, { markdown: '', files })

@@ -18,7 +18,7 @@ import { waitUntil } from '../server/wait-until.ts'
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
+import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderPost, type ProviderSender, type Renderer } from './provider.ts'
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
@@ -913,6 +913,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
 
+  /** A copy the app changes, marked `(edited)` where the platform wouldn't mark it, once its author has edited it. */
+  const asEdited = (target: string, message: MessageView, body: ProviderPost): ProviderPost =>
+    message.editedAt && !platformOf(keyOf(target)).marksEdits && body.markdown.trim() ? { ...body, markdown: `${body.markdown} _(edited)_` } : body
+
   async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {
     const replyCopy = message.replyTo === null ? undefined : (await copiesOf([message.replyTo]))[message.replyTo]?.[target]
     // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere into the main thread, as written.
@@ -989,7 +993,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[board] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
-      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, true, renderer)).catch((edit: unknown) =>
+      await platform.edit(native(copy.thread), copy.message, asEdited(target, message, renderFor(target, message, actors, true, renderer))).catch((edit: unknown) =>
         console.warn(`[board] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
@@ -1218,7 +1222,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           }
           if (event.type === 'message.edited')
             if (token) await platform.editAs(token, thread, copy.message, renderAsPerson(target, message, actors))
-            else await platform.edit(thread, copy.message, renderFor(target, message, actors, copy.files === null, renderer))
+            else await platform.edit(thread, copy.message, asEdited(target, message, renderFor(target, message, actors, copy.files === null, renderer)))
           else if (event.type === 'message.deleted') {
             if (token) await platform.deleteAs(token, thread, copy.message)
             else await platform.delete(thread, copy.message)
@@ -1256,7 +1260,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         await offer(keyOf(target), event, message, target, async (renderer) => {
           const body = renderFor(target, message, actors, copy.files === null, renderer)
           if (body.markdown === renderFor(target, previous, actors, copy.files === null, renderer).markdown) return
-          await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
+          await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, asEdited(target, message, body))
         })
       } catch (error) {
         console.warn(`[board] skipped labels.changed on ${target}:`, describe(error))

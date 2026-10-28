@@ -124,7 +124,7 @@ describe('sync on a board on http()', () => {
     await vi.waitFor(() => expect(s.posts).toHaveLength(1))
     await julian('POST', `/messages/${reply.id}/edit`, { text: 'looking into it' })
     await julian('POST', `/messages/${reply.id}/reactions`, { emoji: 'rocket' })
-    await vi.waitFor(() => expect(s.edits.map((edit) => [edit.messageId, edit.text])).toEqual([[s.posts[0]!.id, JSON.stringify({ markdown: '**julian**: looking into it' })]]))
+    await vi.waitFor(() => expect(s.edits.map((edit) => [edit.messageId, edit.text])).toEqual([[s.posts[0]!.id, JSON.stringify({ markdown: '**julian**: looking into it _(edited)_' })]]))
     await vi.waitFor(() => expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: s.posts[0]!.id, emoji: 'rocket', added: true }]))
   })
 
@@ -176,8 +176,10 @@ describe('sync on a board on http()', () => {
     // Written on the board as Ada, the reply goes back to her Slack thread, as one a person wrote would, as it is now.
     await vi.waitFor(() => {
       expect(s.posts.map((post) => post.threadId)).toEqual(['slack:C1:100'])
-      const shown = s.edits.filter((edit) => edit.messageId === s.posts[0]!.id).at(-1)?.text ?? s.posts[0]!.text
-      expect(shown).toBe(JSON.stringify({ markdown: '**U_ADA**: Thanks! Tracking it now.' }))
+      // A post that went out after the edit isn't an edit on Slack; an edit of it is marked as one.
+      const edit = s.edits.filter((edit) => edit.messageId === s.posts[0]!.id).at(-1)?.text
+      if (edit) expect(edit).toBe(JSON.stringify({ markdown: '**U_ADA**: Thanks! Tracking it now. _(edited)_' }))
+      else expect(s.posts[0]!.text).toBe(JSON.stringify({ markdown: '**U_ADA**: Thanks! Tracking it now.' }))
     })
   })
 
