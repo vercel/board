@@ -365,7 +365,7 @@ without a scheduler (an `a2()` with no `scheduler`) answers 501
 | Query | Effect |
 | --- | --- |
 | `after` | start after this cursor or message ID. Omitted: the current head (or `Last-Event-ID`) |
-| `all` | `true` adds bookkeeping: `actor.seen`, `thread.synced`, and delivery receipts |
+| `all` | `true` (or `1`) adds bookkeeping: `actor.seen`, `thread.synced`, and delivery receipts. `false` (or `0`) is the default; anything else is a 400 |
 | `wait` | long-poll only: seconds to hold for a match, at most 300 |
 
 Each event is a JSON object:

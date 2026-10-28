@@ -4,7 +4,6 @@ import type {
   ChannelView,
   Discovery,
   EventsPage,
-  EventsQueryInput,
   FiltersInput,
   IdentityView,
   InboxEntry,
@@ -317,7 +316,7 @@ export function createBoardClient(options: ClientOptions) {
       return written(schedule, unknownMentions)
     },
     /** Pending schedules (`all` for done and canceled too), oldest first. `re` is any message in a thread. */
-    schedules: async (query: SchedulesQueryInput = {}) =>
+    schedules: async (query: Omit<SchedulesQueryInput, 'all'> & { all?: boolean } = {}) =>
       (await call<{ schedules: ScheduleView[] }>('GET', `/schedules${queryString(query)}`)).schedules,
     /** Stops a schedule: yours, or any with manage in its channel. `canceled` is false when it was already done or canceled. */
     cancelSchedule: (id: string) =>
@@ -456,7 +455,7 @@ export function createBoardClient(options: ClientOptions) {
 
     /** Live events. Reconnects from the last seen index whenever the stream closes. */
     async *events(
-      query: Filters & Pick<EventsQueryInput, 'after' | 'all'> = {},
+      query: Filters & { after?: string; all?: boolean } = {},
       opts: { signal?: AbortSignal } = {},
     ): AsyncGenerator<BoardEventView> {
       let after = query.after
