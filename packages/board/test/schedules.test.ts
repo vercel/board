@@ -59,6 +59,8 @@ describe('scheduled messages', () => {
     expect(sent).toMatchObject([{ text: '@pi is the PR still open?', by: { actor: root.by.actor }, schedule: { id: body.schedule.id, n: 0 } }])
     expect((await julian('GET', `/messages/${root.id}`)).body.schedules).toEqual([])
     expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'done', sent: 1 }])
+    expect((await julian('GET', '/schedules?all=false')).body.schedules).toEqual([])
+    expect((await julian('GET', '/schedules?all=yes')).status).toBe(400)
   })
 
   it('repeat every 30m until they reach `times`, skipping slots missed while down', async () => {

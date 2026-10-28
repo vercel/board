@@ -116,6 +116,7 @@ describe('sync', () => {
       ((await julian('GET', `/events?channel=firehose&after=0${query}`)).body.events as { type: string }[]).map((e) => e.type)
     await vi.waitFor(async () => expect(await types('&all=true')).toContain('message.synced'))
     expect(await types('')).toEqual(['message.posted', 'message.posted'])
+    expect(await types('&all=false')).toEqual(['message.posted', 'message.posted'])
     await vi.waitFor(() => expect(seen).toEqual(['message.posted', 'message.posted']))
   })
 
