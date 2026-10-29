@@ -206,15 +206,20 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
 
   /**
    * Where this deployment's timers land: a session of its own on Vercel. A queue drains one session
-   * at a time, on the deployment that appended to it, so a deployment never runs a send another one
-   * armed, and can't drop it there.
+   * at a time, and Vercel Queues drains it on the deployment that appended to it, so an earlier
+   * deployment never drains the one that sends' timers, and can't drop them there.
    */
   const sends = deployment === null ? SCHEDULES_SESSION : `${SCHEDULES_SESSION}:${deployment}`
 
-  /** Arms send `n`, due at `at`: the whole way, or one hop toward it. A timer's name is its identity in the queue. */
+  /**
+   * Arms send `n`, due at `at`: the whole way, or one hop toward it. A timer's name is its identity
+   * in the queue, so arming the same send under the same name again adds nothing; only a hop's names
+   * the hop, since a send waits through several.
+   */
   async function arm(name: string, id: number, n: number, at: number) {
     const hop = Math.max(Math.min(at, Date.now() + MAX_HOP_MS), Date.now())
-    await session.forSends.schedule(`${name}-${id}-${n}-${hop}`, { at: new Date(hop) }, { type: 'schedule.due', payload: { id, n, at } })
+    const named = name === 'hop' ? `hop-${id}-${n}-${hop}` : `${name}-${id}-${n}`
+    await session.forSends.schedule(named, { at: new Date(hop) }, { type: 'schedule.due', payload: { id, n, at } })
   }
 
   /** Appends to the schedules, once for each `key`, from a send in any session. */
@@ -225,14 +230,15 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
     if (!writes || !accessNow || !send) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
-    // Another deployment's timer, or one from before deployments had sessions of their own: the one that sends armed its own.
-    if (ctx.session.id !== sends) return
     const { state } = await session.state(schedulesReducer, { through: 'latest' })
     const schedule = state.byId[id]
+    // A later deployment armed this send itself when it took over, and decides it under the rules as they are now.
+    // The one that sends runs any timer that reaches it, whoever armed it: a scheduler that delivers to one URL brings them all here.
+    if (deployment !== null && state.takeover !== null && state.takeover.deployment !== deployment) return
+    // This send went out, and an attempt before this one stopped short of arming the next: arm it now.
+    if (schedule && ctx.attempt > 1 && schedule.sent === n + 1 && schedule.next !== null) return arm('next', id, n + 1, schedule.next)
     // Canceled, done, or a stale timer for a send already made.
     if (!schedule || schedule.next !== at || schedule.sent !== n) return
-    // A later deployment armed this send itself when it took over, and decides it under the rules as they are now.
-    if (deployment !== null && state.takeover !== null && state.takeover.deployment !== deployment) return
     if (Date.now() < at - EARLY_MS) return arm('hop', id, n, at)
 
     if (schedule.re !== null) {
@@ -454,8 +460,11 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         },
       })
       const { state } = await session.state(schedulesReducer)
+      // Armed here too, not only by the arming consumer: an earlier deployment that drains the schedules first would arm it there, where it never sends.
+      const created = state.byId[row!.index]!
+      if (created.next !== null) await arm('first', created.id, created.sent, created.next)
       const { state: actors } = await writes.session.state(actorsReducer)
-      const schedule = scheduleView(state.byId[row!.index]!, actors)
+      const schedule = scheduleView(created, actors)
       // Which handles matched no one says which ones exist: only for a caller that reads the channel.
       return unknown.length && identity.principal.access.readable(channel!) ? { schedule, unknownMentions: unknown } : { schedule }
     },

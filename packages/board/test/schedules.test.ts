@@ -265,6 +265,116 @@ describe('scheduled messages', () => {
     expect(before.queue.timers).toEqual([])
   })
 
+  it("send from the newest deployment when a scheduler brings an earlier one's timer there", async () => {
+    const store = memory()
+    const deploy = (id: string) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const queue = fakeQueue()
+      const deployed = testBoard({ store, scheduler: queue.scheduler })
+      vi.unstubAllEnvs()
+      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+    }
+    const before = deploy('dpl_before')
+    await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
+    const after = deploy('dpl_after')
+    await after.julian('GET', '/me')
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+    const standups = async () => (await after.julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+
+    // A scheduler that delivers to one URL, the production alias, as qstash does.
+    vi.setSystemTime(T0 + HOUR)
+    await before.queue.fire(after.scheduler)
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+  })
+
+  it('arm a send more than a hop out once, however many instances take over', async () => {
+    const store = memory()
+    const queue = fakeQueue()
+    const instance = () => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', 'dpl_after')
+      const deployed = testBoard({ store, scheduler: queue.scheduler })
+      vi.unstubAllEnvs()
+      return fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    }
+    const first = instance()
+    await first('POST', '/schedules', { channel: 'dev', text: 'a week later', in: '8d' })
+    await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    vi.setSystemTime(T0 + MINUTE)
+    await instance()('GET', '/me')
+    await settle()
+    const armed = queue.timers.length
+    vi.setSystemTime(T0 + 2 * MINUTE)
+    await instance()('GET', '/me')
+    await settle()
+    expect(queue.timers).toHaveLength(armed)
+  })
+
+  it('send one created on the newest deployment when an earlier one catches up on it first', async () => {
+    const store = memory()
+    const deploy = (id: string, drains = true) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const queue = fakeQueue()
+      // Without `drains`, the schedules session waits for another deployment to drain it.
+      const scheduler: typeof queue.scheduler = {
+        ...queue.scheduler,
+        schedule: async (task) => (drains || task.kind !== 'drain' || task.sessionId !== 'schedules' ? queue.scheduler.schedule(task) : undefined),
+      }
+      const deployed = testBoard({ store, scheduler })
+      vi.unstubAllEnvs()
+      return { queue, deployed, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+    }
+    const before = deploy('dpl_before')
+    await before.julian('GET', '/me')
+    const after = deploy('dpl_after', false)
+    await after.julian('GET', '/me')
+    await after.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h' })
+    await before.deployed.servers[2]!.drain('schedules')
+    const standups = async () => (await after.julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+
+    vi.setSystemTime(T0 + HOUR)
+    await before.queue.fire()
+    await after.queue.fire()
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+  })
+
+  it('keep repeating when arming the next send failed after one went out', async () => {
+    const queue = fakeQueue()
+    // The queue refuses the second send's timer once, as if it were down for a moment.
+    let refused = false
+    const scheduler: typeof queue.scheduler = {
+      ...queue.scheduler,
+      schedule: async (task) => {
+        const due = task.kind === 'append' ? (task.events[0]?.payload as { n?: number } | undefined) : undefined
+        if (!refused && due?.n === 1) {
+          refused = true
+          throw new Error('queue unavailable')
+        }
+        return queue.scheduler.schedule(task)
+      },
+    }
+    const board = testBoard({ scheduler })
+    const julian = fresh(board.fetch, 'u_julian', { 'x-board-handle': 'julian' })
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    await julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
+    const standups = async () => (await julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+    vi.setSystemTime(T0 + HOUR)
+    await queue.fire()
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+    await vi.waitFor(() => expect(refused).toBe(true))
+
+    // The failed attempt runs again, and arms the next send this time.
+    await vi.waitFor(async () => {
+      await board.skipHold(board.servers[2]!, 'schedules')
+      await board.servers[2]!.drain('schedules')
+      expect(queue.timers.map((t) => (t.events[0]!.payload as { n: number }).n)).toContain(1)
+    })
+    vi.setSystemTime(T0 + HOUR + DAY)
+    await queue.fire()
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup', 'standup']))
+    await settle()
+  })
+
   it('wait out more than a queue can delay in hops', async () => {
     const { julian, queue, root, replies, advance } = await setup()
     await julian('POST', '/schedules', { re: root.id, text: 'a week later', in: '8d' })

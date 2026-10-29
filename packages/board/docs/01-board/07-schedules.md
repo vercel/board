@@ -128,7 +128,9 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
   first request: it arms every pending schedule's next send itself, and the
   timers an earlier deployment armed fire into a no-op. A queue's delivery
   never takes schedules over, so an old deployment that only its own timers
-  still reach doesn't take them back. Each send runs under
+  still reach doesn't take them back. With a scheduler that delivers to one URL, like
+  `qstash()` pointed at the production alias, an earlier deployment's timers
+  reach the newest one, which sends them once it has taken over. Each send runs under
   the access rules of the deployment that took over last, so a deploy that
   takes a grant away stops the schedules that grant was sending. Deployments
   that share one store, like a preview on production's database, take
