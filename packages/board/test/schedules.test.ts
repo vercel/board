@@ -198,9 +198,71 @@ describe('scheduled messages', () => {
     await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
 
     vi.setSystemTime(T0 + HOUR + DAY)
-    expect(await before.queue.fire()).toBe(0)
+    await before.queue.fire()
     expect(await after.queue.fire()).toBe(1)
     await vi.waitFor(async () => expect(await standups()).toEqual(['standup', 'standup']))
+    await settle()
+    expect(await standups()).toEqual(['standup', 'standup'])
+  })
+
+  it("send when the earlier deployment's timer for the same send lands at the same moment", async () => {
+    const store = memory()
+    const deploy = (id: string) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const queue = fakeQueue()
+      const deployed = testBoard({ store, scheduler: queue.scheduler })
+      vi.unstubAllEnvs()
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const before = deploy('dpl_before')
+    await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
+    const after = deploy('dpl_after')
+    await after.julian('GET', '/me')
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+    const standups = async () => (await after.julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+
+    // Both queues deliver the send together, the earlier deployment's first: its run mustn't take the later one's.
+    vi.setSystemTime(T0 + HOUR)
+    await Promise.all([before.queue.fire(), after.queue.fire()])
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+    await settle()
+    expect(await standups()).toEqual(['standup'])
+  })
+
+  it("stay on the newest deployment when an earlier one's timer starts a fresh instance there", async () => {
+    const store = memory()
+    const deploy = (id: string, queue = fakeQueue()) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const deployed = testBoard({ store, scheduler: queue.scheduler })
+      vi.unstubAllEnvs()
+      return { queue, scheduler: deployed.scheduler, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const before = deploy('dpl_before')
+    await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
+    const after = deploy('dpl_after')
+    await after.julian('GET', '/me')
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+    const standups = async () => (await after.julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+
+    // Nobody visits the earlier deployment any more: its own timer cold-starts an instance there, through the scheduler route.
+    const revived = deploy('dpl_before', before.queue)
+    vi.setSystemTime(T0 + HOUR)
+    await before.queue.fire(revived.scheduler)
+    await settle()
+    await before.queue.fire(revived.scheduler)
+    await settle()
+    expect(await standups()).toEqual([])
+
+    // The later deployment still sends once, and keeps the next one.
+    await before.queue.fire(revived.scheduler)
+    await after.queue.fire()
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+    await settle()
+    expect(await standups()).toEqual(['standup'])
+    expect(before.queue.timers).toEqual([])
   })
 
   it('wait out more than a queue can delay in hops', async () => {

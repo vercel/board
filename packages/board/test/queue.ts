@@ -19,18 +19,27 @@ export function fakeQueue() {
     },
     handler: (...mounted) => {
       servers = mounted
-      return async () => new Response(null, { status: 204 })
+      // A delivery through the board's scheduler route: the task is the body.
+      return async (request) => {
+        const task = (await request.json()) as SchedulerAppendTask
+        await deliverSchedulerAppend(servers.find((s) => s.contract.name === task.contract)!, task)
+        return new Response(null, { status: 204 })
+      }
     },
   }
   return {
     scheduler,
     timers,
-    /** Delivers every timer due by now, as the queue would. */
-    async fire() {
+    /**
+     * Delivers every timer due by now, as the queue would: straight to the A2 server, or through
+     * `route`, a board's scheduler callback, the way Vercel Queues reaches a deployment.
+     */
+    async fire(route?: (request: Request) => Promise<Response>) {
       const due = timers.filter((t) => t.dueAt <= Date.now())
       for (const task of due) {
         timers.splice(timers.indexOf(task), 1)
-        await deliverSchedulerAppend(servers.find((s) => s.contract.name === task.contract)!, task)
+        if (route) await route(new Request('https://queue.test/', { method: 'POST', body: JSON.stringify(task) }))
+        else await deliverSchedulerAppend(servers.find((s) => s.contract.name === task.contract)!, task)
       }
       return due.length
     },

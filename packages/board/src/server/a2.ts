@@ -1370,6 +1370,8 @@ export function a2(options: A2Options = {}) {
     if (!binding) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
     throw new Error('a2: its default store opens on the board\'s first request: pass a store to reach it before that')
   }
+  /** A queue's delivery, through the scheduler callback, and everything it runs: watchers' writes too. */
+  const delivery = new AsyncLocalStorage<true>()
   const ready = async () => {
     if (!built) {
       if (!binding) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
@@ -1379,8 +1381,9 @@ export function a2(options: A2Options = {}) {
       opening.catch(() => (opening = null))
       await opening
     }
-    // The first call on an instance starts the schedules catching up, and doesn't wait.
-    built!.schedules.catchUp()
+    // The first call on an instance starts the schedules catching up, and doesn't wait. Only a call
+    // that isn't a queue's delivery takes them over: an old deployment's timers mustn't take them back.
+    built!.schedules.catchUp({ takeOver: !delivery.getStore() })
     return built!
   }
   const methods = Object.fromEntries(
@@ -1399,7 +1402,7 @@ export function a2(options: A2Options = {}) {
       if (options.store) built = build({ ...options, store: options.store }, given)
     },
     /** The scheduler's callback: `export { scheduler as POST }` from a route of its own. A board without a scheduler answers 404. */
-    scheduler: async (request: Request): Promise<Response> => (await ready()).scheduler(request),
+    scheduler: (request: Request): Promise<Response> => delivery.run(true, async () => (await ready()).scheduler(request)),
     /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
     get servers() {
       return now().servers

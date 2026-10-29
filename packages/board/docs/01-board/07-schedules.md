@@ -126,7 +126,9 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
 - **The newest deployment sends.** Vercel Queues delivers a timer to the
   deployment that armed it, so each deployment takes schedules over on its
   first request: it arms every pending schedule's next send itself, and the
-  timers an earlier deployment armed fire into a no-op. Each send runs under
+  timers an earlier deployment armed fire into a no-op. A queue's delivery
+  never takes schedules over, so an old deployment that only its own timers
+  still reach doesn't take them back. Each send runs under
   the access rules of the deployment that took over last, so a deploy that
   takes a grant away stops the schedules that grant was sending. Deployments
   that share one store, like a preview on production's database, take

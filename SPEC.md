@@ -3081,10 +3081,13 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   so a send further out goes in hops of up to 5.
 - **The newest deployment sends.** Vercel Queues delivers a timer only to the
   deployment that armed it, and each deployment checks access under its own
-  rules. So each instance's first request appends `schedule.takeover` with its
-  `VERCEL_DEPLOYMENT_ID` (unless its deployment is already the one that sends)
-  and arms every pending schedule's next send itself. A send due on any other
-  deployment is a no-op, so an earlier deployment's rules never post one.
+  rules. So each instance's first request that isn't a queue's delivery appends
+  `schedule.takeover` with its `VERCEL_DEPLOYMENT_ID` (unless its deployment is
+  already the one that sends) and arms every pending schedule's next send
+  itself. A deployment's timers land in a session of its own,
+  `schedules:<deployment>`, so no deployment runs another's send. A send due on
+  any deployment but the one that took over last is a no-op, so an earlier
+  deployment's code and rules never post one, even when its own timer wakes it.
 - **It runs on the scheduler,** `a2()`'s `scheduler`: `vercelQueues()` or
   `qstash()` on serverless, or `localScheduler()` for a long-running process
   (a dev server, `vb serve`, tests). `localScheduler()`'s timers live in the

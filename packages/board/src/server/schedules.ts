@@ -171,6 +171,9 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
   }
 }
 
+/** What a send records in the schedules. */
+type ScheduleAppend = { [K in 'schedule.canceled' | 'schedule.fired']: { type: K; payload: Extract<ScheduleEvent, { type: K }>['payload'] } }['schedule.canceled' | 'schedule.fired']
+
 const SYSTEM = deploymentIdentity('board:schedule', 'schedule')
 
 /** The board's `accessNow`: a stored creator's access under the rules as they are now, or null. */
@@ -201,30 +204,41 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   /** Vercel Queues delivers a timer only to the deployment that armed it, which runs its own code and access rules. */
   const deployment = process.env.VERCEL_DEPLOYMENT_ID || null
 
-  /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
-  async function arm(schedule: ConsumerContext<ScheduleEvents>['session']['schedule'], name: string, id: number, n: number, at: number) {
-    const hop = Math.min(at, Date.now() + MAX_HOP_MS)
-    await schedule(name, { at: new Date(Math.max(hop, Date.now())) }, { type: 'schedule.due', payload: { id, n, at } })
+  /**
+   * Where this deployment's timers land: a session of its own on Vercel. A queue drains one session
+   * at a time, on the deployment that appended to it, so a deployment never runs a send another one
+   * armed, and can't drop it there.
+   */
+  const sends = deployment === null ? SCHEDULES_SESSION : `${SCHEDULES_SESSION}:${deployment}`
+
+  /** Arms send `n`, due at `at`: the whole way, or one hop toward it. A timer's name is its identity in the queue. */
+  async function arm(name: string, id: number, n: number, at: number) {
+    const hop = Math.max(Math.min(at, Date.now() + MAX_HOP_MS), Date.now())
+    await session.forSends.schedule(`${name}-${id}-${n}-${hop}`, { at: new Date(hop) }, { type: 'schedule.due', payload: { id, n, at } })
+  }
+
+  /** Appends to the schedules, once for each `key`, from a send in any session. */
+  async function record(event: ScheduleAppend, ...key: string[]) {
+    await session.append({ ...event, id: await idempotentId('board-schedule-record', ...key) })
   }
 
   async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
     if (!writes || !accessNow || !send) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
-    const { state } = await ctx.session.state(schedulesReducer, { through: 'latest' })
+    // Another deployment's timer, or one from before deployments had sessions of their own: the one that sends armed its own.
+    if (ctx.session.id !== sends) return
+    const { state } = await session.state(schedulesReducer, { through: 'latest' })
     const schedule = state.byId[id]
     // Canceled, done, or a stale timer for a send already made.
     if (!schedule || schedule.next !== at || schedule.sent !== n) return
     // A later deployment armed this send itself when it took over, and decides it under the rules as they are now.
     if (deployment !== null && state.takeover !== null && state.takeover.deployment !== deployment) return
-    if (Date.now() < at - EARLY_MS) return arm(ctx.session.schedule, 'hop', id, n, at)
+    if (Date.now() < at - EARLY_MS) return arm('hop', id, n, at)
 
     if (schedule.re !== null) {
       const root = await writes.reads.message(schedule.re, ctx.signal)
       if (!root || root.deleted) {
-        await ctx.session.append('ended', {
-          type: 'schedule.canceled',
-          payload: { id, by: SYSTEM.author, reason: 'thread_deleted' },
-        })
+        await record({ type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'thread_deleted' } }, 'ended', String(id))
         return
       }
     }
@@ -234,7 +248,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     const proofs = access && (await authorizePost(writes, access, { ...target, labels: schedule.labels }).catch(refused))
     if (!access || !proofs) {
       console.info(`[board] schedule s${id}'s creator can no longer post it in ${schedule.channel}`)
-      await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'revoked' } })
+      await record({ type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'revoked' } }, 'ended', String(id))
       return
     }
     // A retry after the post landed gets the same event ID, so the board hands back the message it already posted.
@@ -255,12 +269,12 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       if (!(error instanceof DroppedError)) throw error
       // Its text never changes, so the middleware would drop every send after this one too.
       console.info(`[board] the middleware dropped schedule s${id}: ${error.message}`)
-      await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'dropped' } })
+      await record({ type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'dropped' } }, 'ended', String(id))
       return
     }
     const next = nextSend(schedule, n, at, Date.now())
-    await ctx.session.append('fired', { type: 'schedule.fired', payload: { id, n, message: posted, next } })
-    if (next !== null) await arm(ctx.session.schedule, 'next', id, n + 1, next)
+    await record({ type: 'schedule.fired', payload: { id, n, message: posted, next } }, 'fired', String(id), String(n))
+    if (next !== null) await arm('next', id, n + 1, next)
   }
 
   /**
@@ -279,7 +293,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     const { state } = await ctx.session.state(schedulesReducer, { through: 'latest' })
     const schedule = state.byId[ctx.event.index]
     if (!schedule || schedule.next === null) return
-    await arm(ctx.session.schedule, 'first', schedule.id, schedule.sent, schedule.next)
+    await arm('first', schedule.id, schedule.sent, schedule.next)
   })
 
   /** Makes each due send, one schedule at a time. */
@@ -296,7 +310,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers: [arming, sending],
   })
-  const session = server.session(SCHEDULES_SESSION)
+  const session = Object.assign(server.session(SCHEDULES_SESSION), { forSends: server.session(sends) })
+  const scheduled = options.scheduler !== undefined
 
   /**
    * Makes this deployment the one that sends, unless it already is, and arms every pending
@@ -319,21 +334,33 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     }
     const since = state.takeover!.index
     for (const schedule of Object.values(state.byId))
-      if (schedule.next !== null) await arm(session.schedule, `takeover-${since}-${schedule.id}`, schedule.id, schedule.sent, schedule.next)
+      if (schedule.next !== null) await arm(`takeover-${since}`, schedule.id, schedule.sent, schedule.next)
   }
 
   /**
-   * The first request on an instance starts the arming catching up and takes schedules over, and
-   * doesn't wait: on the first deploy with it, every schedule from before gets its next send armed here.
+   * The first call on an instance starts the arming catching up, and doesn't wait: on the first
+   * deploy with it, every schedule from before gets its next send armed here. The first call that
+   * isn't a queue's delivery takes schedules over too: a deployment nobody visits any more still
+   * gets its own timers, and those mustn't take schedules back from the one people reach.
    */
   let catching: Promise<unknown> | null = null
-  function catchUp(): void {
-    if (catching || !options.scheduler) return
-    catching = Promise.all([session.consume(arming), takeOver()]).catch((error: unknown) => {
-      console.warn('[board] schedules are not caught up:', (error as Error).message)
-      catching = null
-    })
-    waitUntil(catching)
+  let taking: Promise<unknown> | null = null
+  function catchUp(options: { takeOver: boolean }): void {
+    if (!scheduled) return
+    if (!catching) {
+      catching = session.consume(arming).catch((error: unknown) => {
+        console.warn('[board] schedules are not caught up:', (error as Error).message)
+        catching = null
+      })
+      waitUntil(catching)
+    }
+    if (options.takeOver && !taking) {
+      taking = takeOver().catch((error: unknown) => {
+        console.warn('[board] schedules are not taken over:', (error as Error).message)
+        taking = null
+      })
+      waitUntil(taking)
+    }
   }
 
   /** `visible`: which schedules the caller may see. */
