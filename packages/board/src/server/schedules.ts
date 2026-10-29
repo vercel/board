@@ -57,7 +57,8 @@ export type Schedule = {
   canceled: { by: Author; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
 }
 
-export type SchedulesState = { byId: Record<string, Schedule> }
+/** `takeover`: the Vercel deployment that sends, the last to take over, and its event's index; null before any has. */
+export type SchedulesState = { byId: Record<string, Schedule>; takeover: { deployment: string; index: number } | null }
 
 const identityOf = (as: ScheduleEvent & { type: 'schedule.created' }): Schedule['as'] => {
   const { author, principal, actor } = as.payload.as
@@ -109,12 +110,19 @@ export function foldSchedules(state: SchedulesState, event: ScheduleEvent): Sche
       schedule.next = event.payload.next
       return state
     }
+    case 'schedule.takeover':
+      state.takeover = { deployment: event.payload.deployment, index: event.index }
+      return state
     default:
       return state
   }
 }
 
-export const schedulesReducer = reducer({ contract: schedulesContract, name: 'board.schedules.v1', initialState: { byId: {} } as SchedulesState })
+export const schedulesReducer = reducer({
+  contract: schedulesContract,
+  name: 'board.schedules.v2',
+  initialState: { byId: {}, takeover: null } as SchedulesState,
+})
   .fold(foldSchedules)
 
 /** The send after one due at `at`: the next slot after now, so downtime skips missed slots instead of replaying them. */
@@ -190,21 +198,25 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   let accessNow: AccessNow | null = null
   /** Posts as `identity`, through what every post does: the middleware too. */
   let send: Send | null = null
+  /** Vercel Queues delivers a timer only to the deployment that armed it, which runs its own code and access rules. */
+  const deployment = process.env.VERCEL_DEPLOYMENT_ID || null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
-  async function arm(ctx: ConsumerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
+  async function arm(schedule: ConsumerContext<ScheduleEvents>['session']['schedule'], name: string, id: number, n: number, at: number) {
     const hop = Math.min(at, Date.now() + MAX_HOP_MS)
-    await ctx.session.schedule(name, { at: new Date(Math.max(hop, Date.now())) }, { type: 'schedule.due', payload: { id, n, at } })
+    await schedule(name, { at: new Date(Math.max(hop, Date.now())) }, { type: 'schedule.due', payload: { id, n, at } })
   }
 
   async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
     if (!writes || !accessNow || !send) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
-    const { state } = await ctx.session.state(schedulesReducer)
+    const { state } = await ctx.session.state(schedulesReducer, { through: 'latest' })
     const schedule = state.byId[id]
     // Canceled, done, or a stale timer for a send already made.
     if (!schedule || schedule.next !== at || schedule.sent !== n) return
-    if (Date.now() < at - EARLY_MS) return arm(ctx, 'hop', id, n, at)
+    // A later deployment armed this send itself when it took over, and decides it under the rules as they are now.
+    if (deployment !== null && state.takeover !== null && state.takeover.deployment !== deployment) return
+    if (Date.now() < at - EARLY_MS) return arm(ctx.session.schedule, 'hop', id, n, at)
 
     if (schedule.re !== null) {
       const root = await writes.reads.message(schedule.re, ctx.signal)
@@ -248,13 +260,12 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     }
     const next = nextSend(schedule, n, at, Date.now())
     await ctx.session.append('fired', { type: 'schedule.fired', payload: { id, n, message: posted, next } })
-    if (next !== null) await arm(ctx, 'next', id, n + 1, next)
+    if (next !== null) await arm(ctx.session.schedule, 'next', id, n + 1, next)
   }
 
   /**
-   * Arms each schedule's next send, as the schedule stands now, from the first schedule on: a queue
-   * delivers a timer to the deployment that armed it, so one an earlier deployment armed may never
-   * reach this one. The deployment that gets there first sends, and `due` makes the other's a no-op.
+   * Arms each schedule's next send, as the schedule stands now, from the first schedule on: the
+   * first deploy with this consumer arms every schedule from before it.
    */
   const arming = consumer({
     contract: schedulesContract,
@@ -268,7 +279,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     const { state } = await ctx.session.state(schedulesReducer, { through: 'latest' })
     const schedule = state.byId[ctx.event.index]
     if (!schedule || schedule.next === null) return
-    await arm(ctx, 'first', schedule.id, schedule.sent, schedule.next)
+    await arm(ctx.session.schedule, 'first', schedule.id, schedule.sent, schedule.next)
   })
 
   /** Makes each due send, one schedule at a time. */
@@ -288,13 +299,37 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   const session = server.session(SCHEDULES_SESSION)
 
   /**
-   * The first request on an instance starts the arming catching up, and doesn't wait: on the
-   * first deploy with it, every schedule from before gets its next send armed here.
+   * Makes this deployment the one that sends, unless it already is, and arms every pending
+   * schedule's next send here, since the timers an earlier deployment armed only reach it. Each
+   * instance arms them again, under the same names, so one created on an earlier deployment
+   * after the takeover, or missed by a takeover that failed partway, still gets a timer here.
+   */
+  async function takeOver(): Promise<void> {
+    if (deployment === null) return
+    const read = await session.state(schedulesReducer)
+    let { state } = read
+    if (state.takeover?.deployment !== deployment) {
+      await session.append({
+        type: 'schedule.takeover',
+        payload: { deployment },
+        // Instances starting together take over once.
+        id: await idempotentId('board-schedule-takeover', deployment, String(read.index)),
+      })
+      state = (await session.state(schedulesReducer)).state
+    }
+    const since = state.takeover!.index
+    for (const schedule of Object.values(state.byId))
+      if (schedule.next !== null) await arm(session.schedule, `takeover-${since}-${schedule.id}`, schedule.id, schedule.sent, schedule.next)
+  }
+
+  /**
+   * The first request on an instance starts the arming catching up and takes schedules over, and
+   * doesn't wait: on the first deploy with it, every schedule from before gets its next send armed here.
    */
   let catching: Promise<unknown> | null = null
   function catchUp(): void {
     if (catching || !options.scheduler) return
-    catching = session.consume(arming).catch((error: unknown) => {
+    catching = Promise.all([session.consume(arming), takeOver()]).catch((error: unknown) => {
       console.warn('[board] schedules are not caught up:', (error as Error).message)
       catching = null
     })

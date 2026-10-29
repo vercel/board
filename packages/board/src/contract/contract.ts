@@ -233,6 +233,8 @@ export const schedulesContract = contract({
       message: MessageId,
       next: Millis.nullable(),
     }),
+    /** (server) The Vercel deployment `deployment` took over every send: an earlier one's timers no longer post. */
+    'schedule.takeover': z.object({ deployment: z.string().min(1) }),
   },
 })
 

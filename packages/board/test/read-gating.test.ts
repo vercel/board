@@ -445,6 +445,35 @@ describe('schedules', () => {
     expect(messages).toEqual([])
   })
 
+  it('are revoked by a later deployment even while the earlier one still gets their timers', async () => {
+    const store = memory()
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const deploy = (id: string, can: Parameters<typeof githubActions>[0]['can']) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const queue = fakeQueue()
+      const deployed = testBoard({ store, scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can })] })
+      vi.unstubAllEnvs()
+      return { queue, fetch: deployed.fetch }
+    }
+    const before = deploy('dpl_before', { ci: ['post'] })
+    expect((await caller(before.fetch, await workflowToken())('POST', '/schedules', { channel: 'ci', text: 'nightly: green', in: '1h' })).status).toBe(201)
+    const after = deploy('dpl_after', { ci: ['read'] })
+    const julian = async (method: string, path: string) => caller(after.fetch, await personToken())(method, path)
+    await julian('GET', '/me')
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+
+    vi.setSystemTime(T0 + 61 * 60_000)
+    await before.queue.fire()
+    await settle()
+    expect((await julian('GET', '/messages?channel=ci')).body.messages).toEqual([])
+
+    await after.queue.fire()
+    await vi.waitFor(async () =>
+      expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }]),
+    )
+    expect((await julian('GET', '/messages?channel=ci')).body.messages).toEqual([])
+  })
+
   it('are canceled by their creator, or by manage', async () => {
     const queue = fakeQueue()
     const board = testBoard({ scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: { ci: ['post', 'read'] } })] })
@@ -476,7 +505,7 @@ describe('schedules', () => {
     }
     const payload = { channel: 'ci', re: null, text: 'nightly', labels: {}, noSync: false, first: T0, every: null, until: null, times: null, as }
     const event = { index: 1, type: 'schedule.created', createdAt: T0, payload } as unknown as Parameters<typeof foldSchedules>[1]
-    const state = foldSchedules({ byId: {} }, event)
+    const state = foldSchedules({ byId: {}, takeover: null }, event)
     expect(structuredClone(state)).toEqual(state)
   })
 

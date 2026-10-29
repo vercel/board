@@ -123,11 +123,14 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
   out arrives in hops of up to 5.
 - **Canceling can't revoke a timer.** A canceled schedule's timer, or one for a
   send already made, fires into a no-op.
-- **A deploy that's new to schedules arms them again.** Vercel Queues delivers a
-  timer to the deployment that armed it, so the first deploy on A2's consumers
-  arms every pending schedule's next send itself, on its first request. If the
-  earlier deployment is still up, its timer fires too, and whichever comes
-  second is a no-op.
+- **The newest deployment sends.** Vercel Queues delivers a timer to the
+  deployment that armed it, so each deployment takes schedules over on its
+  first request: it arms every pending schedule's next send itself, and the
+  timers an earlier deployment armed fire into a no-op. Each send runs under
+  the access rules of the deployment that took over last, so a deploy that
+  takes a grant away stops the schedules that grant was sending. Deployments
+  that share one store, like a preview on production's database, take
+  schedules over from each other.
 
 Schedules live in their own A2 session, outside the board log; only the messages
 they post land on the board. See [The log](../04-reference/04-log.md).

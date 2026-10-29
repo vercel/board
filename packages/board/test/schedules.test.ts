@@ -172,6 +172,37 @@ describe('scheduled messages', () => {
     expect((await julian('GET', '/schedules')).body.schedules).toMatchObject([{ sent: 2, next: new Date(T0 + HOUR + 2 * DAY).toISOString() }])
   })
 
+  it('move to each new deployment on its first request: the earlier one stops sending', async () => {
+    const store = memory()
+    const deploy = (id: string) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const queue = fakeQueue()
+      const deployed = testBoard({ store, scheduler: queue.scheduler })
+      vi.unstubAllEnvs()
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', { 'x-board-handle': 'julian' }) }
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const before = deploy('dpl_before')
+    await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
+    const after = deploy('dpl_after')
+    await after.julian('GET', '/me')
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+    const standups = async () => (await after.julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+
+    vi.setSystemTime(T0 + HOUR)
+    await before.queue.fire()
+    await settle()
+    expect(await standups()).toEqual([])
+    expect(await after.queue.fire()).toBe(1)
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+    await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
+
+    vi.setSystemTime(T0 + HOUR + DAY)
+    expect(await before.queue.fire()).toBe(0)
+    expect(await after.queue.fire()).toBe(1)
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup', 'standup']))
+  })
+
   it('wait out more than a queue can delay in hops', async () => {
     const { julian, queue, root, replies, advance } = await setup()
     await julian('POST', '/schedules', { re: root.id, text: 'a week later', in: '8d' })
