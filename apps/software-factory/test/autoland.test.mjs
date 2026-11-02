@@ -167,7 +167,7 @@ test("the watcher ignores other labels, replies, and other repos", async () => {
   await h.run(event({ payload: { ...event().payload, set: { kind: "bug" } } }));
   await h.run(event({ type: "message.posted" }));
   await h.run(event({ message: { ...event().message, re: "12" } }));
-  await h.run(event({ message: { ...event().message, labels: { ...event().message.labels, pr: "vercel/v0#1" } } }));
+  await h.run(event({ message: { ...event().message, labels: { ...event().message.labels, pr: "acme/web#1" } } }));
   assert.deepEqual(h.labels, []);
   assert.deepEqual(h.requests, []);
   await h.run();

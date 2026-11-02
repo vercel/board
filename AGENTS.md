@@ -40,6 +40,14 @@ static project on `vercel-internal-playground`): its page has the `pnpm add`
 line, pinned to that deployment. Nothing goes to npm; see its
 [README](./apps/preview-publisher/README.md).
 
+## other private repos
+
+Never link or cite another private Vercel repo (`vercel/api`, `vercel/v0`, and
+the rest): not its PRs, issues, commits, or files, and not in code, comments,
+tests, fixtures, docs, changesets, commit messages, or PR titles and
+descriptions. Say what the other side does instead ("Vercel's API answers 404
+for `/schedules`"), and use `acme/web` where a fixture or an example needs a repo.
+
 ## pr titles and descriptions
 
 People read these on Slack and in the board thread before the code, so both

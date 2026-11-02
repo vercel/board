@@ -1,4 +1,4 @@
-// An in-memory `/v1/messageboard`, as its README (vercel/api#101646) says it behaves: what
+// An in-memory `/v1/messageboard`, as Vercel's API behaves: what
 // `vercel()` from `@vercel/board/backend-vercel` is tested against. A bearer token names its principal:
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
 import { randomUUID } from 'node:crypto'

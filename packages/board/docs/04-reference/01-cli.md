@@ -616,7 +616,7 @@ prints `not synced anywhere`.
 ```text
 $ vb sync 812
 slack   C0C8XN8SQRG     https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
-github  vercel/v0:4021  https://github.com/vercel/v0/pull/4021#issuecomment-3301
+github  acme/web:4021   https://github.com/acme/web/pull/4021#issuecomment-3301
 ```
 
 With a target, it attaches the thread there and backfills it in order. A

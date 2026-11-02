@@ -788,7 +788,7 @@ board({
   returns a proof carrying the permission and the channel. The board looks a
   write's target up before the check (`authorizeMessage` returns the message
   and its proof from one read of the state), and the write function fails
-  unless the target's channel is the proof's (vercel/api#95953). A reply's
+  unless the target's channel is the proof's. A reply's
   channel always comes from its root, never from the body.
 - **404, never 403, for what you can't read.** Message IDs are sequential, so
   a 403 would confirm a message exists. A refused write you can read answers

@@ -256,7 +256,7 @@ declare const proven: unique symbol
 /**
  * That `permission` was checked in `channel`. Write functions take one, look
  * their target up themselves, and refuse a target in another channel, so a
- * check made against one channel can't be spent on another (vercel/api#95953).
+ * check made against one channel can't be spent on another.
  * Only `authorize` makes one.
  */
 export type Proof<P extends Permission = Permission> = {

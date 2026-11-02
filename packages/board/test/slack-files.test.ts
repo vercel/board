@@ -93,13 +93,13 @@ describe('a new thread with files, to Slack', () => {
   it('posts its text and files as one message, the thread root', async () => {
     const { provider, uploads, viaAdapter, looks } = slackUploading(1)
     const sent = await provider.post('C1', 'channel', {
-      markdown: '**factory**: :merge: [Color picker stays put](https://github.com/vercel/v0/pull/1)',
+      markdown: '**factory**: :merge: [Color picker stays put](https://github.com/acme/web/pull/1)',
       files: [{ data: new Uint8Array([1, 2, 3]), filename: 'after.mp4', mimeType: 'video/mp4' }],
     })
     expect(uploads).toEqual([
       {
         channel_id: 'C1',
-        initial_comment: '*factory*: :merge: <https://github.com/vercel/v0/pull/1|Color picker stays put>',
+        initial_comment: '*factory*: :merge: <https://github.com/acme/web/pull/1|Color picker stays put>',
         file_uploads: [{ file: Buffer.from([1, 2, 3]), filename: 'after.mp4' }],
       },
     ])
