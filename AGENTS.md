@@ -42,11 +42,11 @@ line, pinned to that deployment. Nothing goes to npm; see its
 
 ## other private repos
 
-Never link or cite another private Vercel repo (`vercel/api`, `vercel/v0`, and
-the rest): not its PRs, issues, commits, or files, and not in code, comments,
-tests, fixtures, docs, changesets, commit messages, or PR titles and
-descriptions. Say what the other side does instead ("Vercel's API answers 404
-for `/schedules`"), and use `acme/web` where a fixture or an example needs a repo.
+Never link or cite another private Vercel repo: not its PRs, issues, commits,
+or files, and not in code, comments, tests, fixtures, docs, changesets, commit
+messages, or PR titles and descriptions. Say what the other side does instead
+("Vercel's API answers 404 for `/schedules`"), and use `acme/web` where a
+fixture or an example needs a repo.
 
 ## pr titles and descriptions
 
