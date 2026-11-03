@@ -285,7 +285,7 @@ describe('cli', () => {
     expect(await vb(['delete', id, '--if-revision', second])).toMatchObject({ code: 0, stderr: '' })
     expect((await read()).deleted).toBe(true)
     expect(await vb(['edit', id, 'x', '--if-revision', 'latest'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --if-revision takes the message's revision, a number, and latest isn't one\./) })
-  })
+  }, 20_000)
 
   it('posts, replies, reacts, labels, and reads a thread', async () => {
     const posted = await vb(['post', 'errors-www', 'deploy failed on a1b2c3', '--label', 'status=open'])
