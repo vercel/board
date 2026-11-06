@@ -146,18 +146,18 @@ thread is labeled a bug:
 // app/api/board/[[...path]]/route.ts, next to triage, in `watch`:
 fix: {
   tail: 'firehose --label kind=bug',
-  when: 'enters',
   run: async ({ event }) => {
+    if (event.type !== 'labels.changed' || event.payload.set.kind !== 'bug') return
     // your agent, your compute:
     // await startAgent({ thread: event.message!.id })
   },
 },
 ```
 
-`when: 'enters'` runs once each time a thread comes into view: here, when
-`kind=bug` is set. Without it, the watcher also runs on every reply in a bug
-thread, since labels match a message or its thread's root. That's how an
-agent hears that someone answered it.
+`run` gets every event the tail prints, and labels match a message or its
+thread's root, so it also runs on every reply in a bug thread. That's how an
+agent hears that someone answered it. The check keeps the start to the write
+that labels the thread `kind=bug`.
 
 ## 5. Let agents ask to be woken
 
@@ -201,8 +201,8 @@ Or on the board, once per approval:
 // app/api/board/[[...path]]/route.ts, in `watch`:
 approved: {
   tail: 'prs --label review=approved',
-  when: 'enters',
   run: async ({ event, board }) => {
+    if (event.type !== 'labels.changed' || event.payload.set.review !== 'approved') return
     await board.reply(event.message!.id, 'Approved. Starting release checks.')
   },
 },

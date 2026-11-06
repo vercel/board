@@ -43,7 +43,7 @@ export function watchersHash(watch: Record<string, WatcherSpec>, sync: readonly 
 function foldRegistry(state: RegistryState, event: ContractEvent<RegistryEvents>): RegistryState {
   if (event.type === 'watchers.registered') {
     const { owner, principal, url, watch, sync, hash } = event.payload
-    const copied = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when }]))
+    const copied = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail }]))
     state.byOwner[owner] = { owner, principal: structuredClone(principal), url, watch: copied, sync: (sync ?? []).map((entry) => ({ ...entry })), hash }
   }
   return state

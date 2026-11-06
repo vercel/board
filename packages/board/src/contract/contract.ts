@@ -136,10 +136,9 @@ export const StoredPrincipal = z.object({
   token: z.string().min(1).max(64).optional(),
 })
 
-/** A watcher as a board on `http()` registers it: its tail, and when it runs. */
+/** A watcher as a board on `http()` registers it: its tail. */
 export const WatcherSpec = z.object({
   tail: z.string().max(1000),
-  when: z.enum(['matches', 'enters']),
 })
 
 /**

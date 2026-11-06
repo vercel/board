@@ -67,7 +67,7 @@ export const SYNC = '@sync'
 /** What runs on a board's events. */
 export type Subscription =
   /** A watcher: every event its tail prints. */
-  | { kind: 'tail'; tail: string; when: 'matches' | 'enters' }
+  | { kind: 'tail'; tail: string }
   /** Sync's outbound: every post, change, and thread sync in every channel, as its own code sees them. */
   | { kind: 'sync' }
 

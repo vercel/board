@@ -3017,12 +3017,11 @@ export const GET = team.fetch, POST = team.fetch
   `<principal>+<id>`: the deployment, with the watcher's ID as the profile),
   with IDs derived from the match, so a retried `run` doesn't post twice if it
   writes in the same order. They sync like any other write.
-- **`when: 'enters'` runs only when a message comes into view:** an existing
-  message changes from not matching to matching (a label is set, a text is
-  edited), or a new message matches and its thread wasn't already in view. So
-  `{ tail: '--label state=done', when: 'enters' }` runs once each time a thread
-  is marked done, not on its replies or on later label changes that keep it done.
-  It needs a filter to enter.
+- **`run` picks the events it wants.** A watcher has no mode that runs only
+  when a message comes into view: `{ tail: '--label state=done' }` runs on
+  every reply in a done thread too, and one that acts once checks the event
+  (`event.type === 'labels.changed' && event.payload.set.state === 'done'`, or
+  `event.message?.re === null` on a post for a new thread).
 - **`--all` adds delivery receipts, as in `vb tail`.** A tail hides
   `message.synced` and `message.files_synced` without it, so watchers don't run
   on them by default. A watcher that needs to know where a message landed on a

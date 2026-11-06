@@ -203,7 +203,7 @@ function build(options: A2Options, binding: BoardBinding) {
   let ownHandle: ReturnType<BoardBinding['handle']> | null = null
   const post = options.transport?.post ?? publicPost
   const tails = Object.fromEntries(
-    Object.entries(binding.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),
+    Object.entries(binding.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail }]] : [])),
   )
   // Always, since boards on http() may register watchers here at any time.
   const watchers = createWatchers({

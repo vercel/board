@@ -757,8 +757,8 @@ describe('vercel()', () => {
     const team = handleOn(api)
     await team.register({ url: null, watch: { open: { tail: 'dev/ --label status=open|draft --text "is failing"' }, mine: { tail: 'general --by me' } } })
     expect(api.registrations.get('vercel:user:u_jb')?.watch).toEqual({
-      open: { filter: { channelTree: 'dev', text: 'is failing', labels: [{ key: 'status', values: ['open', 'draft'] }] }, when: 'matches' },
-      mine: { filter: { channelIds: ['general'], authors: ['vercel:user:u_jb'] }, when: 'matches' },
+      open: { filter: { channelTree: 'dev', text: 'is failing', labels: [{ key: 'status', values: ['open', 'draft'] }] } },
+      mine: { filter: { channelIds: ['general'], authors: ['vercel:user:u_jb'] } },
     })
     for (const tail of ['general --mentions @ada', 'general --source slack'])
       await expect(team.register({ url: null, watch: { w: { tail } } })).rejects.toMatchObject({ status: 400, code: 'bad_watcher' })
@@ -1076,7 +1076,7 @@ describe('vercel()', () => {
   it('hashes a registration with its sync entries, as a board on http() does', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
-    const watch = { w: { tail: 'general', when: 'matches' as const } }
+    const watch = { w: { tail: 'general' } }
     await pong.register({ url: null, watch })
     expect(api.registrations.get('vercel:project:prj_pong:production')!.hash).toBe(watchersHash(watch))
     await pong.register({ url: null, watch, sync: [{ key: 'slack', platform: 'slack' }] })

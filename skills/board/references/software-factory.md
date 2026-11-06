@@ -40,8 +40,9 @@ export const GET = team.fetch, POST = team.fetch
 
 - **`tail` is what you'd type after `vercel board tail`:** a channel or a prefix
   (`factory/`), then filters such as `--label kind=bug`. Try it in a terminal
-  with `--json` first. `when: 'enters'` runs only when a message comes into
-  view, such as when someone sets the label the tail filters on.
+  with `--json` first. `run` gets every event the tail prints, replies in a
+  labeled thread included, so check `event.type` and `event.payload` for the
+  ones you act on.
 - **Register the watchers after you deploy.** On Vercel, the route registers
   its tails with the board only once a request reaches it. After the first
   deploy, and whenever you add a watcher, send it one:

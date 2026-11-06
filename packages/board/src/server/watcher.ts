@@ -18,10 +18,5 @@ export type Watcher = {
    * delivery receipts, as in `vb tail`: `message.synced` says where a message landed on a platform.
    */
   tail: string
-  /**
-   * `matches` (the default) runs on every event the tail prints. `enters` runs only when a
-   * message enters the view: it didn't match before the event and does after it.
-   */
-  when?: 'matches' | 'enters'
   run: (context: WatcherContext) => unknown
 }

@@ -122,7 +122,7 @@ type ApiWatcherFilter = {
   text?: string
   labels?: { key: string; values?: string[] }[]
 }
-type ApiWatcherSpec = { filter: ApiWatcherFilter; when: 'matches' | 'enters' }
+type ApiWatcherSpec = { filter: ApiWatcherFilter }
 type ApiRegistration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, ApiWatcherSpec>; sync?: SyncEntrySpec[]; hash: string }
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
@@ -1154,7 +1154,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * looked up here, now, and what it can't match (mentions) is refused rather than left to match
    * nothing. It matches no `--source` either: that's filtered here, where `fromHere` says it is.
    */
-  async function filterOf(who: Who, id: string, spec: { tail: string; when?: 'matches' | 'enters' | undefined }, fromHere: boolean): Promise<ApiWatcherSpec> {
+  async function filterOf(who: Who, id: string, spec: { tail: string }, fromHere: boolean): Promise<ApiWatcherSpec> {
     const bad = (message: string) => new HttpError(400, 'bad_watcher', `watch ${id}: ${message}`)
     if (!RemoteWatcherId.safeParse(id).success) throw bad('ids start with a letter and use up to 32 letters, numbers, and hyphens')
     let filters
@@ -1185,7 +1185,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (filters.by !== undefined) filter.authors = await authorsOf(who, filters.by)
     if (filters.text !== undefined) filter.text = filters.text
     if (filters.label?.length) filter.labels = filters.label.map(([key, values]) => (values === null ? { key } : { key, values: [...values] }))
-    return { filter, when: spec.when ?? 'matches' }
+    return { filter }
   }
 
   /** A filter shown as a tail again, for listing: what it matches, if not always as it was written. */
@@ -1208,11 +1208,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   async function registerAs(
     who: Who,
     where: WakeAt,
-    watch: Record<string, { tail: string; when?: 'matches' | 'enters' | undefined }>,
+    watch: Record<string, { tail: string }>,
     sync: readonly SyncEntrySpec[],
     fromHere: boolean,
   ): Promise<RegistrationView> {
-    const specs: Record<string, WatcherSpec> = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when ?? 'matches' }]))
+    const specs: Record<string, WatcherSpec> = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail }]))
     const filters = Object.fromEntries(await Promise.all(Object.entries(specs).map(async ([id, spec]) => [id, await filterOf(who, id, spec, fromHere)] as const)))
     const entries = sync.map(({ key, platform }) => ({ key, platform }))
     // vboard's own hash of the tails and sync entries, which every wake-up carries back, so a board can tell its registration is stale.
@@ -1890,7 +1890,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           watchers.map(async (found) => ({
             owner: found.owner,
             ...whereOf(found),
-            watch: Object.fromEntries(await Promise.all(Object.entries(found.watch).map(async ([id, spec]) => [id, { tail: await tailOf(who, spec), when: spec.when }] as const))),
+            watch: Object.fromEntries(await Promise.all(Object.entries(found.watch).map(async ([id, spec]) => [id, { tail: await tailOf(who, spec) }] as const))),
             sync: syncOf(found),
             hash: found.hash,
           })),
@@ -1937,7 +1937,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         throw new Error(`vercel: board() names team ${next.team}, and vercel() team ${options.team}: name the team once`)
       for (const id of Object.keys(next.subscriptions)) own.add(id)
       tails = Object.fromEntries(
-        Object.entries(next.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),
+        Object.entries(next.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail }]] : [])),
       )
       binding = next
     },

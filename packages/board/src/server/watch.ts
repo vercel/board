@@ -122,7 +122,7 @@ export const registrantSession = (owner: string) => watchSession(`@${owner}`)
  */
 export function createWatchers(options: {
   /** This project's watchers, by ID. */
-  watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
+  watch: Record<string, { tail: string }>
   /** Runs one on an event it matched; posts it makes get IDs derived from `trigger`. A throw is retried. */
   run: (id: string, event: BoardEventView, trigger: string, attempt: number) => Promise<void>
   store?: A2Store | undefined
@@ -287,8 +287,7 @@ export function createWatchers(options: {
         access = now
       }
       const match = compileFilter(watcher.filters, { me: null, actors, messages, access })
-      if (watcher.enters ? !entered(match, before, after, messages) : !(watcher.criteria ? match(before) || match(after) : id !== null))
-        continue
+      if (!(watcher.criteria ? match(before) || match(after) : id !== null)) continue
       const key = registration ? `@${registration.owner}/${watcher.id}` : watcher.id
       const shown = registration
         ? eventView(event, after, actors, await reads!.reader(access, after ? [after] : []))
@@ -341,18 +340,6 @@ export function createWatchers(options: {
   async function messagesBefore(event: BoardEvent, signal: AbortSignal): Promise<MessagesState> {
     if (!reads) throw new Error('watchers used before the board bound them')
     return loadBefore(reads, event, signal)
-  }
-
-  /** Didn't match before and does now; a new reply only counts if its thread wasn't already in view. */
-  function entered(
-    match: (message: Message | undefined) => boolean,
-    before: Message | undefined,
-    after: Message | undefined,
-    messages: MessagesState,
-  ) {
-    if (match(before) || !match(after)) return false
-    const root = before === undefined && after!.re !== null ? messages.byId[after!.re] : undefined
-    return !match(root)
   }
 
   /**

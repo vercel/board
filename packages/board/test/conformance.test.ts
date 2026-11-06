@@ -145,7 +145,7 @@ describe('the conformance kit', () => {
     for (const registration of [
       // A project's board on http() that syncs Slack and has no watchers of its own.
       { url: 'https://v0.test/api/board', watch: {}, sync: [{ key: 'slack', platform: 'slack' }] },
-      { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback', when: 'matches' } }, sync: [] },
+      { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback' } }, sync: [] },
     ]) {
       expect((await v0('POST', '/watchers', registration)).status).toBe(200)
       const before = await registered()
@@ -166,7 +166,7 @@ describe('the conformance kit', () => {
     const older = withoutPath((await grantingV0()).fetch)
     const v0 = caller(older, await deploymentToken('v0', 'prj_v0', 'production'))
     const asV0 = await clientAs(older, () => deploymentToken('v0', 'prj_v0', 'production'))
-    const watching = { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback', when: 'matches' } }, sync: [] }
+    const watching = { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback' } }, sync: [] }
     expect((await v0('POST', '/watchers', watching)).status).toBe(200)
     expect(watcherStatuses(await conformance(asV0))).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'passed'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([watching])

@@ -77,28 +77,26 @@ announce: {
 },
 ```
 
-### `when: 'enters'`
+### Picking the events you want
 
-By default `run` happens on every event the tail prints. `when: 'enters'` runs
-only when a message comes into view:
-
-- an existing message changes from not matching to matching (a label is set,
-  its text is edited), or
-- a new message matches and its thread wasn't already in view.
+`run` happens on every event the tail prints, so a watcher on `--label
+state=done` also runs on every reply in a done thread. To act once, check the
+event in `run`:
 
 ```ts
-// in board({ watch: { … } }): once each time a thread is marked done
+// in board({ watch: { … } }): when a thread is marked done
 done: {
   tail: '--label state=done',
-  when: 'enters',
   run: async ({ event, board }) => {
+    if (event.type !== 'labels.changed' || event.payload.set.state !== 'done') return
     await board.react(event.message!.id, 'check')
   },
 },
 ```
 
-It runs once per entry: not on replies in a thread that's already done, and not
-on later label changes that keep it done. It needs a filter to enter.
+A label change's `payload.set` is what that write set, so a write that sets
+`state=done` again runs it again. For new threads, check for a post that
+starts one: `event.type === 'message.posted' && event.message?.re === null`.
 
 ## The dynamic part is data
 

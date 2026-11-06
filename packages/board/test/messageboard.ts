@@ -317,7 +317,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const actors = new Map<string, ActorView>()
   const attachments = new Map<string, Attachment>()
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
-  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; sync: { key: string; platform: string }[]; hash: string }
+  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter }>; sync: { key: string; platform: string }[]; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
@@ -557,8 +557,6 @@ function fakeBoard(shared: Shared, boardId: string) {
         if ((principal.environment === 'preview') !== (body.branch !== undefined)) throw new Refused(400, 'invalid_branch')
         if (typeof body.path !== 'string' || !body.path.startsWith('/') || body.path.startsWith('//')) throw new Refused(400, 'invalid_path')
       }
-      for (const [id, spec] of Object.entries(body.watch))
-        if (spec.when === 'enters' && Object.keys(spec.filter).length === 0) throw new Refused(400, 'bad_watcher', `watch ${id}: \`when: enters\` needs a filter to enter`)
       const where = body.path !== undefined ? { url: null, path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }
       const sync = body.sync ?? []
       // Only a project's own token syncs, and a key is one registrant's on the board.

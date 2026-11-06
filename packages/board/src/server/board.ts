@@ -235,7 +235,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   const context: BoardContext = { options, backend, runtime, policy, state, ownUrl, clientAs, handleOf }
 
   const subscriptions: Record<string, Subscription> = Object.fromEntries(
-    Object.entries(watch).map(([id, watcher]) => [id, { kind: 'tail', tail: watcher.tail, when: watcher.when ?? 'matches' }]),
+    Object.entries(watch).map(([id, watcher]) => [id, { kind: 'tail', tail: watcher.tail }]),
   )
   if (Object.keys(entries).length > 0) subscriptions[SYNC] = { kind: 'sync' }
   /** This board's sync entries, as its sync and discovery see them. */

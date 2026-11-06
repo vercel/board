@@ -273,7 +273,7 @@ export const REGISTERED_WATCHERS_MAX = 32
 const Registering = z.object({
   // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
   watch: z
-    .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
+    .record(z.string().max(100), z.object({ tail: z.string().max(1000) }))
     .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
   /**
    * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
@@ -704,7 +704,7 @@ export type Discovery = {
 export type RegistrationView = {
   /** The principal that registered. Its watchers write as it, with their IDs as profiles. */
   owner: string
-  watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
+  watch: Record<string, { tail: string }>
   /** Its sync entries. With any, its sync gets every event it delivers to platforms, as matches of watcher `@sync`. */
   sync: { key: string; platform: string }[]
   /** Every wake-up carries it, so the board can tell its registration is stale. */

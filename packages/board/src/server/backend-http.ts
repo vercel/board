@@ -343,7 +343,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
         }
         if (!PROFILE.test(id)) throw new Error(`watch ${id}: ${PROFILE_RULE}`)
         compileWatcher(id, spec)
-        specs[id] = { tail: spec.tail, when: spec.when }
+        specs[id] = { tail: spec.tail }
       }
       hash = null
       binding = next

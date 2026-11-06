@@ -208,7 +208,7 @@ describe('watchers on http()', () => {
     await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
     await vi.waitFor(async () => {
       const { body } = await caller(t.remote.fetch, await v0Token())('GET', '/watchers')
-      expect(body.watchers[0].watch).toEqual({ fix: { tail: 'feedback --label kind=bug', when: 'matches' } })
+      expect(body.watchers[0].watch).toEqual({ fix: { tail: 'feedback --label kind=bug' } })
     })
   })
 
@@ -641,13 +641,13 @@ describe('registering', () => {
   })
 
   it('hashes watchers and sync entries in code-unit order, the same in every locale', () => {
-    const spec = { tail: 'feedback', when: 'matches' as const }
+    const spec = { tail: 'feedback' }
     const entry = (key: string) => ({ key, platform: 'slack' })
     // A locale's collation puts `a` before `B`; code units put `B` (U+0042) before `a` (U+0061).
     const canonical = canonicalWatchers({ a: spec, B: spec }, [entry('a'), entry('B')])
     expect(JSON.parse(canonical)).toEqual([
-      ['B', 'feedback', 'matches'],
-      ['a', 'feedback', 'matches'],
+      ['B', 'feedback'],
+      ['a', 'feedback'],
       ['sync', [['B', 'slack'], ['a', 'slack']]],
     ])
     expect(canonicalWatchers({ B: spec, a: spec }, [entry('B'), entry('a')])).toBe(canonical)
@@ -723,6 +723,6 @@ describe('registering by path', () => {
     const backend = http(BOARD_URL, { fetch: bearer(remote, v0Token) })
     board({ backend, url: V0_URL, watch: { fix: { tail: 'feedback', run: async () => {} } } })
     await backend.registerWatchers()
-    expect(sent).toEqual([{ ...where, watch: { fix: { tail: 'feedback', when: 'matches' } } }])
+    expect(sent).toEqual([{ ...where, watch: { fix: { tail: 'feedback' } } }])
   })
 })
