@@ -20,20 +20,23 @@ export const wakeable = (here: string | null) => (here?.startsWith('https://') ?
 /** Whether a registration is woken at all: one with neither a URL nor a path pulls on its own, off Vercel. */
 const pulls = (registration: RegistrationView) => registration.url === null && registration.path === undefined
 
-/** On Vercel, a function doesn't outlive its request: a board there never pulls on its own. */
-const onVercel = () => typeof process !== 'undefined' && process.env.VERCEL === '1'
+/**
+ * Whether this is a deployment on Vercel, whose function doesn't outlive its request: `VERCEL` is 1,
+ * outside development. `vercel env pull` and `vercel dev` set both for a dev server, which stays up.
+ */
+export const deployedOnVercel = () => typeof process !== 'undefined' && process.env.VERCEL === '1' && process.env.VERCEL_ENV !== 'development'
 
 /** Where the other board wakes this one: a URL (null to pull on its own), or a path on this Vercel project. */
 export type WakeAt = { url: string | null } | { path: string; branch?: string }
 
 /**
- * A path on this Vercel project for a board that wakes by path, from `here`, this board's URL: on
- * Vercel, in every environment, the board that wakes it finds the deployment from its token. A
- * preview of a branch names it. Null off Vercel, where only a URL wakes it.
+ * A path on this Vercel project for a board that wakes by path, from `here`, this board's URL: from
+ * every deployment on Vercel, whose environment the board that wakes it finds from its token. A
+ * preview of a branch names it. Null anywhere else, a dev server included, where only a URL wakes it.
  */
 export function wakePath(here: string | null): { path: string; branch?: string } | null {
-  const env = typeof process !== 'undefined' && process.env.VERCEL === '1' ? process.env : null
-  if (!here || !env) return null
+  if (!here || !deployedOnVercel()) return null
+  const env = process.env
   // A custom environment says `preview` in VERCEL_ENV and its own name in VERCEL_TARGET_ENV.
   const environment = env.VERCEL_TARGET_ENV || env.VERCEL_ENV
   const branch = environment === 'preview' ? env.VERCEL_GIT_COMMIT_REF || null : null
@@ -131,7 +134,7 @@ export function registrant(options: RegistrantOptions) {
   let polling: AbortController | null = null
   /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
   function poll() {
-    if (polling || onVercel()) return
+    if (polling || deployedOnVercel()) return
     const controller = (polling = new AbortController())
     void (async () => {
       for (let pause = 1000; !controller.signal.aborted; ) {
@@ -165,7 +168,7 @@ export function registrant(options: RegistrantOptions) {
     if (started) return started
     if (!options.hasWork() || Date.now() - failedAt < REGISTER_EVERY_MS) return Promise.resolve()
     const here = wakeable(bound().url())
-    if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
+    if (!here && deployedOnVercel()) return Promise.resolve()
     started = register(here).then(
       (registration) => {
         if (pulls(registration)) poll()

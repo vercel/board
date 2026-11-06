@@ -694,7 +694,10 @@ describe('vercel()', () => {
     expect(registered()).toBe(before)
   })
 
-  it('registers a deployment anywhere a path wakes nothing with no url, and pulls what its watchers match', async () => {
+  it('registers a deployment off Vercel with no url, and pulls what its watchers match, with its env pulled too', async () => {
+    // What `vercel env pull` writes to .env.local, and `vercel dev` sets: a dev server, which stays up.
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'development', VERCEL_TARGET_ENV: 'development', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    onTestFinished(() => void vi.unstubAllEnvs())
     const api = fakeMessageboard()
     const ran: string[] = []
     const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:development') })
@@ -810,6 +813,22 @@ describe('vercel()', () => {
       await ada.post('pings', 'ping again')
       await vi.waitFor(() => expect(ran).toEqual(['ping', 'ping again']))
       expect(api.registrations.size).toBe(0)
+      expect(api.requests.filter((request) => request.includes('/watchers'))).toEqual([])
+    })
+
+    it('run as tails in a dev server with its env pulled, which says VERCEL=1 in development', async () => {
+      for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'development', VERCEL_TARGET_ENV: 'development', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+      onTestFinished(() => void vi.unstubAllEnvs())
+      const api = fakeMessageboard()
+      const ada = handleOn(api, 'user:u_ada')
+      await ada.post('pings', 'before it started')
+      const { ran, watch } = pinger()
+      const { team } = personal(api, watch)
+      await team.me()
+      await following(api)
+      const ping = await ada.post('pings', 'ping')
+      await vi.waitFor(() => expect(ran).toEqual(['ping']))
+      await vi.waitFor(async () => expect((await team.thread(ping.id)).replies.map((reply) => [reply.text, reply.by.actor])).toEqual([['pong', 'vercel:user:u_jb+pings']]))
       expect(api.requests.filter((request) => request.includes('/watchers'))).toEqual([])
     })
 

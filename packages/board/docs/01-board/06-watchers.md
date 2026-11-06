@@ -216,7 +216,10 @@ matches the tails, and the route at the top of this page runs `run`:
   doesn't outlive its request, and Vercel's API never wakes a URL.
 - **Off Vercel, it registers no URL and pulls on its own** from its first
   use, each pull held open until something matches: `next dev` with your
-  project's OIDC token pulled, say.
+  project's OIDC token pulled, say. A dev server counts as off Vercel even
+  with `VERCEL=1`, which `vercel env pull` and `vercel dev` set, since they
+  also set `VERCEL_ENV=development`. There, a board run as you runs its
+  watchers as tails.
 - **A match wakes it with nothing in the wake-up:** a `POST /wake` with no
   event. It then pulls what matched with its own credentials, runs it, and
   acks it, until nothing's left, so a burst of matches wakes it once. It

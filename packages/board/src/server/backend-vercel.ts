@@ -9,7 +9,7 @@ import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Perm
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { fileName, mediaType } from '../contract/files.ts'
 import { badRequest, HttpError, json, notFound } from './errors.ts'
-import { registrant, wakePath, type WakeAt } from './registrant.ts'
+import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
@@ -1397,7 +1397,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   function runHere() {
     if (here || deployedElse) return
     // A deployment's function doesn't outlive its request, so a tail there would stop with it.
-    if (typeof process !== 'undefined' && process.env.VERCEL === '1') {
+    if (deployedOnVercel()) {
       deployedElse = true
       console.error("[board] watchers on a deployment need its own OIDC token: with a board token or another Vercel token, none run here")
       return

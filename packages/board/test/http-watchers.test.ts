@@ -702,7 +702,7 @@ describe('registering by path', () => {
     ['a preview of a branch, which it names', { VERCEL: '1', VERCEL_ENV: 'preview', VERCEL_GIT_COMMIT_REF: 'jb/watchers' }, true, { path: '/api/board', branch: 'jb/watchers' }],
     ['a preview of no branch, as `vercel deploy` makes, which names none', { VERCEL: '1', VERCEL_ENV: 'preview' }, true, { path: '/api/board' }],
     ['a custom environment, which names no branch', { VERCEL: '1', VERCEL_ENV: 'preview', VERCEL_TARGET_ENV: 'staging', VERCEL_GIT_COMMIT_REF: 'staging' }, true, { path: '/api/board' }],
-    ['development, on Vercel', { VERCEL: '1', VERCEL_ENV: 'development' }, true, { path: '/api/board' }],
+    ['development, as `vercel env pull` and `vercel dev` say it, which stays up', { VERCEL: '1', VERCEL_ENV: 'development' }, true, { url: V0_URL }],
     ['off Vercel', {}, true, { url: V0_URL }],
     ["on a board that doesn't wake by path", production, false, { url: V0_URL }],
   ])('registers %s with %j', async (_case, env: Record<string, string>, byPath, where) => {

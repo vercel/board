@@ -273,7 +273,10 @@ checked with `@vercel/board/conformance`.
   from every deployment on Vercel (production, a branch's preview, which names
   its branch, a `vercel deploy` preview, a custom environment), which never
   pulls on its own. Only off Vercel does it register no URL and pull on its
-  own: it never sends the API a `url`. With anyone else's
+  own: it never sends the API a `url`. Deployed on Vercel means `VERCEL` is
+  `1` outside development, so a dev server with `vercel env pull`'s env, or
+  under `vercel dev` (`VERCEL_ENV=development`), counts as off Vercel, for
+  this and for the tails below. With anyone else's
   credentials (a person's, an app's, any board token), the API answers 403
   `watchers_need_project`, so nothing registers: a `/me` principal that isn't
   a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
