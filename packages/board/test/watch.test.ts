@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BoardEventView } from '../src/api/routes.ts'
 import { parseTail, parseWatchTail, words } from '../src/api/tail.ts'
 import type { Watcher } from '../src/server/index.ts'
-import { runMatch } from '../src/server/watch.ts'
+import { runMatch } from '../src/server/watch-run.ts'
 import { caller, personToken, testBoard } from './harness.ts'
 
 /** A watcher that records every event it runs on. */

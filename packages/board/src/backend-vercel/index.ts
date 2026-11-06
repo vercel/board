@@ -93,6 +93,7 @@ const environment: VercelEnvironment = {
   },
   team,
   profile: environmentProfile,
+  boardToken: () => boardToken() !== null,
 }
 
 /**

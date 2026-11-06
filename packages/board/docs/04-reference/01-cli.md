@@ -299,7 +299,7 @@ error document:
 - **`reason` is what a program branches on:** `missing_scope`,
   `login_required`, `permission_denied`, `deployment_protected`,
   `board_not_found`, `board_not_granted`, `board_name_taken`,
-  `board_token_scope`, `board_token_unsupported`,
+  `board_token_scope`, `watchers_need_project`,
   `message_not_found`, `channel_not_found`,
   `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
   the board's own codes, such as `already_synced` or `no_scheduler`.

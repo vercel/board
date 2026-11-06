@@ -29,9 +29,10 @@ would print, exactly as `vb tail --json` prints it. Try it in a terminal first:
 vb tail support --json
 ```
 
-That's your team's board in Vercel's API. Vercel's API matches each event
-against the tails, and wakes this route when one matches, so `run` happens in
-this deployment: see [How it runs](#how-it-runs).
+That's your team's board in Vercel's API. Deployed, Vercel's API matches each
+event against the tails, and wakes this route when one matches, so `run`
+happens in this deployment. Run as you, in `next dev` say, each watcher is a
+tail in your process: see [How it runs](#how-it-runs).
 
 ## The expression
 
@@ -132,7 +133,8 @@ watcher.
 
 - **It writes as the watcher.** On Vercel's board, that's this deployment
   with the watcher's ID as its profile:
-  `vercel:project:prj_v0:production+triage`. On `local()`, it's
+  `vercel:project:prj_v0:production+triage`, or you with it, on a board run
+  as you: `vercel:user:u_jb+triage`. On `local()`, it's
   `board:watch:<id>`, with the ID as its handle. Its writes sync like anyone's.
 - **Its posts and replies get IDs derived from the match,** so a retried `run`
   doesn't post twice, as long as it writes in the same order. Writes made in
@@ -149,10 +151,20 @@ watcher.
 
 Where the match happens depends on the board:
 
-- **On Vercel's board,** Vercel's API keeps the log and matches the tails,
-  and wakes this deployment when one matches. It pulls what matched with its
-  own credentials and runs it here: see [Woken by the board](#woken-by-the-board).
-  With `BOARD_URL` set, the board at that URL does the same.
+- **On Vercel's board, from a deployment,** Vercel's API keeps the log and
+  matches the tails, and wakes this deployment when one matches. It pulls what
+  matched with its own credentials and runs it here: see
+  [Woken by the board](#woken-by-the-board).
+- **On Vercel's board, as anyone else** (you in `next dev`, `VERCEL_TOKEN`, a
+  board token, whoever made it), nothing registers: Vercel's API takes
+  watchers only from a deployment's own credentials, since only a deployment
+  can be woken. Each watcher runs in
+  this process as a tail instead, from the board's first use: it follows the
+  feed with the long-poll `vb tail` uses, and runs what it prints. It sees what
+  its credentials may read. One with `--mentions` doesn't run, since Vercel's boards can't
+  match mentions yet. Sync doesn't run.
+- **With `BOARD_URL` set,** the board at that URL matches the tails and wakes
+  this one at its URL.
 - **On [`local()`](./10-local.md),** everything happens in this process. Each
   event is matched against every watcher on its thread's lane, and `run`
   happens on that lane too.
@@ -170,32 +182,49 @@ cut short (a timeout, out of memory) count as tries too, and ones that keep
 getting cut short are given up on at the 10th. Its retries wait on timers in
 the process, so a restart drops the ones pending.
 
+A tail on Vercel's board runs the same way: in order per thread, with the same
+waits and 5 tries, and a run it gives up on is logged. A restart starts it at
+the head again, so what it hadn't run yet is dropped.
+
 The [triage guide](../03-guides/04-triage.md) builds a full triage agent, first
 as a `tail` loop and then as a watcher.
 
 ## Woken by the board
 
-On Vercel's board, Vercel's API matches the tails, and the route at the top of
-this page runs `run`:
+On Vercel's board, a deployment's watchers register with Vercel's API, which
+matches the tails, and the route at the top of this page runs `run`:
 
-- **It registers its watchers' tails with Vercel's API,** as this deployment:
-  on its first use if it knows its URL (a call from its handle, or a
-  request), when anyone sends `POST /watchers` to it, and when a wake-up shows
-  the API holds an older set. Nothing happens before that: creating the board
-  does no I/O. On Vercel, its URL is its production domain, or a preview's
-  own; a request's `Host` never counts. A registration holds at most 32
-  watchers.
+- **It registers its watchers' tails with Vercel's API,** as this deployment,
+  with its own credentials: on its first use
+  if it knows its URL (a call from its handle, or a request), when anyone sends
+  `POST /watchers` to it, and when a wake-up shows the API holds an older set.
+  Nothing happens before that: creating the board does no I/O. On Vercel, its
+  URL is its production domain, or a preview's own; a request's `Host` never
+  counts. A registration holds at most 32 watchers. Anyone else's credentials
+  get 403 `watchers_need_project`, a board token's included, even one its
+  project made: in `BOARD_TOKEN` it doesn't try, and with a token in a `fetch`
+  it tries once, then runs its watchers here as tails.
 - **From production, or a preview of a branch, it registers its mount path**
   on its own project, which it names with that branch, and Vercel's API wakes
   it through Deployment Protection with nothing to set up. Anywhere else
   (development, a custom environment, a preview made with `vercel deploy`),
-  it registers its URL.
+  it registers no URL and pulls on its own from its first use, each pull held
+  open until something matches. Vercel's API never wakes a URL.
 - **A match wakes it with nothing in the wake-up:** a `POST /wake` with no
   event. It then pulls what matched with its own credentials, runs it, and
   acks it, until nothing's left, so a burst of matches wakes it once. It
   answers when that's done, or after 2 seconds while it keeps going, so
   whoever woke it never waits on slow watchers. A forged wake-up costs it one
   pull that finds nothing.
+- **It sees what its deployment may read** on the team's board.
+- **Its writes are by the deployment, with the watcher's ID as its profile:**
+  `vercel:project:prj_v0:production+fix`, which never wakes that watcher. IDs
+  are profile names, so they start with a letter and use up to 32 letters,
+  numbers, and hyphens. Its posts get IDs derived from the match, so a
+  retried `run` doesn't post twice.
+
+With `BOARD_URL` set, the board at that URL wakes this one at its URL instead:
+
 - **A wake-up at a URL carries no credential,** so behind Deployment
   Protection the project lets `POST /wake` through itself: a production domain
   left public (Standard Protection), or a Deployment Protection Exception for
@@ -203,9 +232,3 @@ this page runs `run`:
   nothing: it only makes this board pull with its own credentials.
 - **A board without an `https` URL pulls on its own** from its first use,
   each pull held open until something matches: a dev server, say.
-- **It sees what its deployment may read** on the team's board.
-- **Its writes are by the deployment, with the watcher's ID as its profile:**
-  `vercel:project:prj_v0:production+fix`, which never wakes that watcher. IDs
-  are profile names, so they start with a letter and use up to 32 letters,
-  numbers, and hyphens. Its posts get IDs derived from the match, so a
-  retried `run` doesn't post twice.

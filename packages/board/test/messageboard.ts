@@ -550,6 +550,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       // A URL, or a path on the caller's own project (a preview's with its branch), as api-messageboard checks one.
       if (body.url !== undefined && body.path !== undefined) throw new Refused(400, 'bad_request', 'A url or a path, not both.')
       if (body.branch !== undefined && body.path === undefined) throw new Refused(400, 'bad_request', 'A branch goes with a path.')
+      // A deployment is woken by its path on its project, or pulls: never at a URL.
+      if (typeof body.url === 'string') throw new Refused(400, 'bad_request', 'Watchers are woken by a path, not a url.')
       const principal = actor.principal
       if (body.path !== undefined) {
         if (principal.type !== 'project') throw new Refused(403, 'not_a_project')
@@ -561,6 +563,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const sync = body.sync ?? []
       // Only a project's own token syncs, and a key is one registrant's on the board.
       if (sync.length > 0 && principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+      // Watchers are for waking a deployment: only its own credentials register them, never a board token, whoever made it.
+      if (principal.type !== 'project' || actor.token) throw new Refused(403, 'watchers_need_project', 'Only a deployment can register watchers.')
       for (const { key } of sync) if ((syncKeys.get(key) ?? owner) !== owner) throw new Refused(409, 'sync_key_taken')
       for (const [key, holder] of syncKeys) if (holder === owner && !sync.some((entry) => entry.key === key)) syncKeys.delete(key)
       for (const { key } of sync) syncKeys.set(key, owner)
@@ -569,11 +573,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       return view(made)
     }
     if (!registrations.has(owner)) throw new Refused(404, 'no_registration')
-    const lane = queued.get(owner) ?? []
     if (method === 'GET' && rest === '/watchers/matches') {
       const until = Date.now() + Number(url.searchParams.get('wait') ?? 0) * 1000
       const limit = Number(url.searchParams.get('limit') ?? 10)
       for (;;) {
+        // Read again each time: a match queued while it waits may be the registrant's first.
+        const lane = queued.get(owner) ?? []
         const held = new Set(lane.filter((m) => m.lease && m.leaseUntil! > Date.now()).map((m) => `${m.watcher}|${m.threadId}`))
         const heads = new Map<string, Match>()
         for (const m of lane) if (!heads.has(`${m.watcher}|${m.threadId}`)) heads.set(`${m.watcher}|${m.threadId}`, m)
@@ -593,6 +598,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
     }
+    const lane = queued.get(owner) ?? []
     const acking = /^\/watchers\/matches\/([^/]+)\/ack$/.exec(rest)
     if (method === 'POST' && acking) {
       const body = parsed as { lease: string; error?: string; skip?: boolean }
@@ -1341,7 +1347,6 @@ export function fakeMessageboard(
     if (method === 'GET' && rest === '') return { board: show(board) }
     const minting = tokens.route(method, rest, body, actor, board.id)
     if (minting !== undefined) return minting
-    if (actor.token && method === 'PUT' && rest === '/watchers') throw new Refused(403, 'board_token_unsupported', "A board token can't register watchers yet.")
     return board.data.route(method, rest, url, body, actor)
   }
 

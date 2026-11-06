@@ -6,12 +6,13 @@ import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type L
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
-import { type Backend, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
+import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { fileName, mediaType } from '../contract/files.ts'
 import { badRequest, HttpError, json, notFound } from './errors.ts'
 import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
+import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
@@ -157,6 +158,8 @@ export type VercelEnvironment = {
   team(): Promise<string | null>
   /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
   profile(): { profile: ProfileOption; session: string | null }
+  /** Whether its fetch sends a board token you set (`BOARD_TOKEN`), whoever made it. */
+  boardToken(): boolean
 }
 
 /** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
@@ -198,6 +201,8 @@ const API_ONLY_CODES = new Set([
 const BOARD_CODES: Record<number, string> = { 400: 'invalid_request', 403: 'forbidden', 404: 'not_found', 409: 'conflict', 413: 'too_large' }
 /** Pages a filtered read of one channel scans for matches before it answers with what it found. */
 const SCAN_PAGES = 10
+/** How long after it couldn't tell who its credentials are a board waits to ask again. */
+const WHO_AGAIN_MS = 10_000
 
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
@@ -1128,6 +1133,34 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
+  /** A read of the feed, as `vb tail` makes it: one channel's feed when it names one, or every channel's. */
+  async function eventsAs(who: Who, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    const channel = await oneChannel(who, query)
+    if (channel) return channelEvents(who, channel, query, signal)
+    if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
+    const listed = await channelsFor(who, query.channel)
+    // With no cursor, it starts now, as on any board.
+    let position: Position =
+      query.after === undefined
+        ? { t: Date.now(), feeds: await heads(who, listed) }
+        : locate(query.after)
+          ? { t: await timeOf(who, query.after), feeds: {} }
+          : positionOf(query.after)
+    const until = Date.now() + (query.wait ?? 0) * 1000
+    // On a busy board a wait wakes at every change, so one that a filter (--mentions me, --by) finds
+    // nothing in would read again straight away: once one wakes within a second, it reads every
+    // second instead, as often as the board was read before waits, and no more.
+    let busy = false
+    for (;;) {
+      const started = Date.now()
+      const page = await read(who, listed, position, query, signal)
+      position = page.position
+      if (page.events.length > 0 || Date.now() >= until || signal.aborted) return { events: page.events, cursor: cursorOf(position) }
+      if (!busy) busy = (await changed(who, listed, position, until, signal)) && Date.now() - started < 1000
+      await pause(Math.min(started + 1000, until) - Date.now(), signal)
+    }
+  }
+
   /** The one channel a read names, when the API can read it directly: not a subtree, and from one of its cursors or now. */
   async function oneChannel(who: Who, query: { channel?: string; re?: string; after?: string }): Promise<ApiChannel | null> {
     if (query.channel === undefined || query.channel.endsWith('/') || query.re !== undefined) return null
@@ -1154,19 +1187,24 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * looked up here, now, and what it can't match (mentions) is refused rather than left to match
    * nothing. It matches no `--source` either: that's filtered here, where `fromHere` says it is.
    */
-  async function filterOf(who: Who, id: string, spec: { tail: string }, fromHere: boolean): Promise<ApiWatcherSpec> {
+  function checkedTail(id: string, spec: { tail: string }, fromHere: boolean) {
     const bad = (message: string) => new HttpError(400, 'bad_watcher', `watch ${id}: ${message}`)
     if (!RemoteWatcherId.safeParse(id).success) throw bad('ids start with a letter and use up to 32 letters, numbers, and hyphens')
-    let filters
+    let compiled
     try {
-      ;({ filters } = compileWatcher(id, spec))
+      compiled = compileWatcher(id, spec)
     } catch (error) {
       throw new HttpError(400, 'bad_watcher', (error as Error).message)
     }
-    if (filters.mentions !== undefined) throw bad("Vercel's boards can't match mentions yet")
-    if (filters.from !== undefined && !fromHere) {
+    if (compiled.filters.mentions !== undefined) throw bad("Vercel's boards can't match mentions yet")
+    if (compiled.filters.from !== undefined && !fromHere) {
       throw bad("Vercel's API can't match --source: put the watcher in the board's config, which filters its matches itself")
     }
+    return compiled
+  }
+
+  async function filterOf(who: Who, id: string, spec: { tail: string }, fromHere: boolean): Promise<ApiWatcherSpec> {
+    const { filters } = checkedTail(id, spec, fromHere)
     const filter: ApiWatcherFilter = {}
     if (filters.channel !== undefined) {
       if (filters.channel.endsWith('/')) filter.channelTree = filters.channel.slice(0, -1)
@@ -1179,7 +1217,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     if (filters.re !== undefined) {
       const at = locate(filters.re)
-      if (!at) throw bad(`--re ${filters.re} names no message here`)
+      if (!at) throw new HttpError(400, 'bad_watcher', `watch ${id}: --re ${filters.re} names no message here`)
       filter.threadId = at.threadId
     }
     if (filters.by !== undefined) filter.authors = await authorsOf(who, filters.by)
@@ -1205,6 +1243,25 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const whereOf = (found: ApiRegistration) =>
     found.path ? { url: null, path: found.path, ...(found.branch ? { branch: found.branch } : {}) } : { url: found.url }
 
+  /**
+   * Vercel's API takes watchers only from a deployment's own credentials: never a person's, an app's,
+   * or a board token's, whoever made it. Anyone else's registration, pull, or ack is its 403
+   * `watchers_need_project`.
+   */
+  const notADeployment = () =>
+    new HttpError(403, 'watchers_need_project', "Vercel's API takes watchers only from a deployment's own credentials.", {
+      hint: "Register them from the project's deployment, with no board token. Watchers in board()'s config run in this process instead.",
+      origin: 'handle',
+    })
+  const needsProject = (error: unknown) => (error instanceof HttpError && error.code === 'watchers_need_project' ? notADeployment() : error)
+  async function watchersApi<T>(...args: Parameters<typeof api>): Promise<T> {
+    try {
+      return await api<T>(...args)
+    } catch (error) {
+      throw needsProject(error)
+    }
+  }
+
   async function registerAs(
     who: Who,
     where: WakeAt,
@@ -1222,10 +1279,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         body: { ...where, watch: filters, tag: await tagOf(specs, entries), ...(entries.length ? { sync: entries } : {}) },
       })
     } catch (error) {
-      // Vercel's API takes no board token for watchers, for now.
-      if (error instanceof HttpError && error.code === 'board_token_unsupported')
-        throw new HttpError(403, 'board_token_unsupported', "a board token can't register watchers yet.", { hint: "Register them with a person's or a deployment's own credentials.", origin: 'handle' })
-      throw error
+      throw needsProject(error)
     }
     return { owner: made.owner, ...whereOf(made), watch: specs, sync: syncOf(made), hash: made.hash }
   }
@@ -1259,7 +1313,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   async function pullAs(who: Who, query: { limit?: number | undefined; wait?: number | undefined }, signal?: AbortSignal | undefined, specs: Record<string, WatcherSpec> = {}) {
     const path = await onBoard(who, '/watchers/matches')
-    const { matches } = await api<{ matches: ApiMatch[] }>(who, 'GET', path, {
+    const { matches } = await watchersApi<{ matches: ApiMatch[] }>(who, 'GET', path, {
       query: { limit: query.limit?.toString(), wait: query.wait?.toString() },
       ...(signal ? { signal } : {}),
     })
@@ -1277,7 +1331,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   async function ackAs(who: Who, id: string, body: { lease: string; error?: string | undefined; skip?: boolean | undefined }) {
-    await api(who, 'POST', await onBoard(who, `/watchers/matches/${encodeURIComponent(id)}/ack`), {
+    await watchersApi(who, 'POST', await onBoard(who, `/watchers/matches/${encodeURIComponent(id)}/ack`), {
       body: { lease: body.lease, ...(body.error !== undefined ? { error: body.error } : {}), ...(body.skip ? { skip: true } : {}) },
     })
   }
@@ -1292,17 +1346,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return binding
   }
 
-  // Its watchers run as a board on http()'s do: registered with the API, woken when one matches, and
-  // pulling on their own where nothing can wake them.
+  // A deployment's watchers run as a board on http()'s do: registered with the API, woken by their
+  // path when one matches, and pulling on their own where nothing can wake them.
   const runner = registrant({
     remote: "Vercel's API",
     registry: {
-      register: (where) => registerAs(deployment, where, tails, bound().sync, true),
+      register: (where) =>
+        registerAs(deployment, where, tails, bound().sync, true).catch((error: unknown) => {
+          // These aren't a deployment's own credentials after all (a board token in a fetch): they run here from now on.
+          if (error instanceof HttpError && error.code === 'watchers_need_project') {
+            refused = true
+            runner.close()
+            runHere()
+          }
+          throw error
+        }),
       matches: ({ signal, ...query }) => pullAs(deployment, query, signal, tails),
       ack: (id, body) => ackAs(deployment, id, body),
     },
-    // The API wakes a path on this project, through its Deployment Protection, wherever this board has one.
-    wakeAt: async (here) => wakePath(here) ?? { url: here },
+    // The API wakes a path on this project, through its Deployment Protection, wherever this board
+    // has one, and nothing at a URL: anywhere else, it pulls.
+    wakeAt: async (here) => wakePath(here) ?? { url: null },
     binding: bound,
     hash: () => tagOf(tails, bound().sync),
     hasWork: () => Object.keys(tails).length > 0 || bound().sync.length > 0,
@@ -1311,6 +1375,71 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     registerFor: async (caller, request) => json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal)),
   })
+
+  let deployed: Promise<boolean> | null = null
+  /** Whether Vercel's API refused to register this board's watchers: its credentials aren't a deployment's own. */
+  let refused = false
+  /**
+   * Whether this board's own credentials are a deployment's own: a project's, and no board token. A
+   * board token you set says so; one in a `fetch` passed in says so when the API refuses it.
+   */
+  const isDeployment = async () => {
+    if (refused || (!options.fetch && environment?.boardToken())) return false
+    return (deployed ??= self(deployment).then((found) => found.actor.principal.type === 'project')).catch((error: unknown) => {
+      deployed = null
+      throw error
+    })
+  }
+
+  let here: ReturnType<typeof tailWatchers> | null = null
+  /** Anyone else's watchers run in this process, as tails: nothing wakes a person. */
+  function runHere() {
+    if (here) return
+    const { sync, run } = bound()
+    if (sync.length > 0) console.error("[board] sync doesn't run on Vercel's board as anyone but a deployment: run it from the project's deployment")
+    const watchers: Parameters<typeof tailWatchers>[0]['watchers'] = {}
+    for (const [id, spec] of Object.entries(tails)) {
+      try {
+        watchers[id] = checkedTail(id, spec, true)
+      } catch (error) {
+        console.error(`[board] watcher ${id} doesn't run:`, (error as Error).message)
+      }
+    }
+    here = tailWatchers({
+      watchers,
+      events: (query, signal) => eventsAs(deployment, query, signal),
+      actorOf: (id) => actorOf({ profile: { name: id }, session: null }),
+      run,
+    })
+    here.start()
+  }
+
+  let failedAt = 0
+  /** On first use, a deployment registers its watchers with the API, and anyone else runs them here. */
+  async function start() {
+    if (here || (Object.keys(tails).length === 0 && bound().sync.length === 0) || Date.now() - failedAt < WHO_AGAIN_MS) return
+    let project: boolean
+    try {
+      project = await isDeployment()
+    } catch (error) {
+      failedAt = Date.now()
+      console.error("[board] couldn't tell whether this board runs as a deployment:", error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (project) await runner.start()
+    else runHere()
+  }
+
+  /** The routes to register and wake: only a deployment's board is woken or registers. */
+  const routes: BackendRoute[] = runner.routes.map((route) => ({
+    ...route,
+    async handle(request, context) {
+      if (context.caller || (await isDeployment().catch(() => true))) return route.handle(request, context)
+      void start()
+      if (route.path === '/wake') return json({ ran: 0 })
+      throw notADeployment()
+    },
+  }))
 
   const platformUser = ({ id, handle, name, avatar, isBot }: ExternalAuthor) => ({ id, handle, name, avatar, isBot })
 
@@ -1738,33 +1867,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       return { schedule: await scheduleView(who, schedule), canceled }
     },
-    async events(caller, query, signal) {
-      const who = whoOf(caller)
-      const channel = await oneChannel(who, query)
-      if (channel) return channelEvents(who, channel, query, signal)
-      if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
-      const listed = await channelsFor(who, query.channel)
-      // With no cursor, it starts now, as on any board.
-      let position: Position =
-        query.after === undefined
-          ? { t: Date.now(), feeds: await heads(who, listed) }
-          : locate(query.after)
-            ? { t: await timeOf(who, query.after), feeds: {} }
-            : positionOf(query.after)
-      const until = Date.now() + (query.wait ?? 0) * 1000
-      // On a busy board a wait wakes at every change, so one that a filter (--mentions me, --by) finds
-      // nothing in would read again straight away: once one wakes within a second, it reads every
-      // second instead, as often as the board was read before waits, and no more.
-      let busy = false
-      for (;;) {
-        const started = Date.now()
-        const page = await read(who, listed, position, query, signal)
-        position = page.position
-        if (page.events.length > 0 || Date.now() >= until || signal.aborted) return { events: page.events, cursor: cursorOf(position) }
-        if (!busy) busy = (await changed(who, listed, position, until, signal)) && Date.now() - started < 1000
-        await pause(Math.min(started + 1000, until) - Date.now(), signal)
-      }
-    },
+    events: (caller, query, signal) => eventsAs(whoOf(caller), query, signal),
     // Typing shows where this board's own sync has the thread: Vercel's API keeps no platform's app.
     async typing(caller, { id, status }, signal) {
       if (!binding || binding.sync.length === 0) return { targets: [] }
@@ -1884,7 +1987,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async watchers(caller) {
       const who = whoOf(caller)
-      const { watchers } = await api<{ watchers: ApiRegistration[] }>(who, 'GET', await onBoard(who, '/watchers'))
+      const { watchers } = await watchersApi<{ watchers: ApiRegistration[] }>(who, 'GET', await onBoard(who, '/watchers'))
       return {
         watchers: await Promise.all(
           watchers.map(async (found) => ({
@@ -1898,6 +2001,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
     },
     async register(caller, body) {
+      if (typeof body.url === 'string')
+        throw new HttpError(400, 'invalid_request', "Vercel's API wakes a deployment only by its path.", { hint: 'Register a path, or no url to pull its matches.', origin: 'handle' })
       return registerAs(whoOf(caller), typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }, body.watch, body.sync ?? [], false)
     },
     async matches(caller, query, signal) {
@@ -1916,7 +2021,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       name,
       (caller: Caller, ...args: unknown[]) => {
         if ('identity' in caller) throw servesNone()
-        if (binding) void runner.start()
+        if (binding) void start()
         return (method as (...input: unknown[]) => unknown)(caller, ...args)
       },
     ]),
@@ -1925,7 +2030,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const backend = {
     ...starting,
     // Its own routes are wake-ups and registering: who may do what on the board is Vercel's API's to say.
-    routes: runner.routes,
+    routes,
     // The board is Vercel's: a board here answers only wake-ups and webhooks.
     keeps: false,
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
@@ -1941,10 +2046,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       )
       binding = next
     },
-    /** Registers this board's watchers with Vercel's API now, as `POST /watchers` does. */
-    registerWatchers: runner.registerNow,
-    /** Stops pulling, for a board that pulls on its own. */
-    close: runner.close,
+    /** Registers this board's watchers with Vercel's API now, as `POST /watchers` does: only a deployment's. */
+    async registerWatchers() {
+      if (await isDeployment()) return runner.registerNow()
+      void start()
+      throw notADeployment()
+    },
+    /** Stops pulling, for a board that pulls on its own, and the tails of one that runs them here. */
+    close() {
+      runner.close()
+      here?.close()
+      here = null
+    },
   }
   return backend satisfies Backend
 }

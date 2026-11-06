@@ -626,8 +626,8 @@ function failureOf(error: unknown): Failure {
         return own('conflict', 'board_name_taken')
       case 'board_not_granted':
         return own('permission', 'board_not_granted')
-      case 'board_token_unsupported':
-        return own('permission', 'board_token_unsupported')
+      case 'watchers_need_project':
+        return own('permission', 'watchers_need_project')
       case 'board_token_scope':
         return own('permission', 'board_token_scope')
       case 'invalid_board_name':

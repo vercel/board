@@ -17,6 +17,9 @@ const describe = (error: unknown) => ((error instanceof Error ? error.message : 
 /** Only an https URL can be woken; anything else pulls on its own. */
 export const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
 
+/** Whether a registration is woken at all: one with neither a URL nor a path pulls on its own. */
+const pulls = (registration: RegistrationView) => registration.url === null && registration.path === undefined
+
 /** Where the other board wakes this one: a URL (null to pull on its own), or a path on this Vercel project. */
 export type WakeAt = { url: string | null } | { path: string; branch?: string }
 
@@ -62,8 +65,9 @@ export type RegistrantOptions = {
 /**
  * Runs a board's watchers on another board that matches them: it registers them there, is woken
  * when one matches, with nothing in the wake-up but a hash, and pulls what matched with its own
- * credentials, runs it, and acks it. When it can't be woken (no https URL of its own: a dev
- * server, say), it pulls on its own. http() and vercel() run their watchers this way.
+ * credentials, runs it, and acks it. When it can't be woken (no https URL of its own, a dev
+ * server say, or no path on a board that wakes only paths), it pulls on its own. http() and a
+ * deployment's vercel() run their watchers this way.
  */
 export function registrant(options: RegistrantOptions) {
   const { registry, rethrow } = options
@@ -160,7 +164,9 @@ export function registrant(options: RegistrantOptions) {
     const here = wakeable(bound().url())
     if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
     started = register(here).then(
-      () => {},
+      (registration) => {
+        if (pulls(registration)) poll()
+      },
       (error: unknown) => {
         started = null
         failedAt = Date.now()
@@ -206,7 +212,7 @@ export function registrant(options: RegistrantOptions) {
         started ??= Promise.resolve()
         const here = wakeable(bound().url())
         const registration = await register(here).catch(rethrow)
-        if (!here) poll()
+        if (!here || pulls(registration)) poll()
         return json(registration)
       },
     },

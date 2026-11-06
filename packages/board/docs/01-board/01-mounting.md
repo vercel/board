@@ -67,9 +67,11 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 - **A board token reaches its own board, by its ID.** `BOARD_TOKEN` goes to
   Vercel's API as it is, and acts as whoever minted it. Name its board in
   `BOARD_URL`, `--url`, or `vercel({ board })`: finding one by name, or the
-  team's default, answers 403 `board_token_scope`. Registering watchers with
-  one answers 403 `board_token_unsupported`,
-  `a board token can't register watchers yet.`
+  team's default, answers 403 `board_token_scope`.
+- **Only a deployment's own credentials register watchers.** Anyone else's
+  (yours, an app's, any board token) answer 403 `watchers_need_project`, and
+  a board run with them runs its config's watchers in this process: see
+  [How it runs](./06-watchers.md#how-it-runs).
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message, labels on a scheduled reply, and a post's `sync`
   targets. A platform message's files come over as links to them there. A

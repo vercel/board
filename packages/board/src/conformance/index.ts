@@ -1185,8 +1185,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
         checks.push(skipped ? { group, name, status: 'skipped', detail: skipped } : { group, name, status: 'passed' })
       } catch (error) {
         if (OPTIONAL.has(group) && error instanceof BoardError && error.status === 501) checks.push({ group, name, status: 'skipped', detail: `not kept here: ${error.message}` })
-        // Vercel's API takes no board token for watchers yet: a run on one can't check them.
-        else if (group === 'watchers' && error instanceof BoardError && error.code === 'board_token_unsupported') checks.push({ group, name, status: 'skipped', detail: "a board token can't register watchers yet" })
+        // Vercel's API takes watchers only from a deployment: a run as anyone else can't check them.
+        else if (group === 'watchers' && error instanceof BoardError && error.code === 'watchers_need_project') checks.push({ group, name, status: 'skipped', detail: 'only a deployment registers watchers here' })
         else checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }

@@ -265,12 +265,22 @@ checked with `@vercel/board/conformance`.
   answers 501 `not_supported`: files on a scheduled message, labels on a
   scheduled reply, a post's sync targets. Grants and tokens go to the API. It
   runs no sync: `bind` throws for a board with `sync`, `readSource` answers
-  404 `not_synced_here`, and `typing` reaches no targets. Its watchers run as
+  404 `not_synced_here`, and `typing` reaches no targets. Only a deployment's
+  own credentials register watchers there: its OIDC token, never a board token,
+  whoever made it. Its watchers run as
   `http()`'s do (below): it registers their tails with the API, which wakes
   this deployment by its path on its project (from production, or a branch's
-  preview, through Deployment Protection) or at its URL, and without an
-  `https` one it pulls on its own. Its routes are `POST /wake` and
-  `POST /watchers`, which registers now. It doesn't keep the board, so a board
+  preview, through Deployment Protection), and anywhere else it registers no
+  URL and pulls on its own: it never sends the API a `url`. With anyone else's
+  credentials (a person's, an app's, any board token), the API answers 403
+  `watchers_need_project`, so nothing registers: a `/me` principal that isn't
+  a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
+  tells it so, and from then on each config
+  watcher runs in this process as a tail, following `events` from the head as
+  `vb tail` does, with local()'s retries, and skipping its own writes. Sync
+  doesn't run for them. Its routes are `POST /wake` and `POST /watchers`,
+  which registers now; on a board run with anyone else's credentials, a
+  wake-up runs nothing and a registration answers 403 `watchers_need_project`. It doesn't keep the board, so a board
   on it serves no requests but wake-ups and webhooks: any other answers 404
   `this board uses Vercel's, and answers only wake-ups and webhooks`, and none
   is verified.
@@ -3052,9 +3062,11 @@ watcher's lane is the thread's, so one bad event would silence the watcher on
 that thread until then. A watcher removed from config skips the matches it
 left behind.
 
-**On Vercel's board** (and, with `BOARD_URL` set, on the board at that URL),
-the board that keeps the log matches the tails and wakes the deployment that
-runs them, which pulls, runs, and acks. A wake-up carries no credential. On a
+**On Vercel's board, from a deployment** (and, with `BOARD_URL` set, on the
+board at that URL), the board that keeps the log matches the tails and wakes
+the deployment that runs them, which pulls, runs, and acks. On Vercel's board
+run as anyone else, each watcher is a tail in its process instead (see
+`vercel()` in [Backends](#backends)). A wake-up carries no credential. On a
 board on the internal engine, a pulled match is leased for 5 minutes, an error
 waits and is tried again, after 5 tries it's `watch.failed`, and a wake-up
 that doesn't get there backs off from a minute to an hour; Vercel's API keeps
