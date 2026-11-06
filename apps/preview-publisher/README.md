@@ -58,10 +58,9 @@ DEPLOYMENT_URL=http://localhost:4173 pnpm --filter vboard-preview-publisher test
 For a deployed preview, set `DEPLOYMENT_URL` to its full HTTPS URL, and
 optionally `EXPECTED_COMMIT` to the PR's head SHA to check provenance. The smoke
 check makes unauthenticated requests, rejects redirects, checks the tarball's
-integrity, and installs its URL in a temporary npm project, which brings
-board's own A2 (`experimental-a2`) as a dependency. It imports `@vercel/board` and
-`@vercel/board/backend-http`, runs `vb --version`, and checks that the docs and the
-inspector's bundle shipped.
+integrity, and installs its URL in a temporary npm project. It imports
+`@vercel/board` and `@vercel/board/backend-local`, runs `vb --version`, and
+checks that the docs and the inspector's bundle shipped.
 
 The build packs `packages/board` with `pnpm pack`, whose `prepack` builds it.
 Its script isn't `build`, so the root's `pnpm build` (which CI runs) doesn't

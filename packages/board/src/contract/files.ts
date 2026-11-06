@@ -46,3 +46,15 @@ export function typeOf(name: string): string {
   const dot = name.lastIndexOf('.')
   return (dot > 0 && TYPES[name.slice(dot).toLowerCase()]) || 'application/octet-stream'
 }
+
+/** `shot.png`, as the board stores a name: no paths, no control characters. */
+export function fileName(name: string | null): string {
+  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  return base.slice(0, 255) || 'file'
+}
+
+/** `image/png`, or `application/octet-stream` when the type isn't one. */
+export function mediaType(type: string | null): string {
+  const value = (type ?? '').split(';')[0]!.trim().toLowerCase()
+  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(value) && value.length <= 255 ? value : 'application/octet-stream'
+}

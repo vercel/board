@@ -13,7 +13,6 @@ import { boardContract } from '../src/contract/contract.ts'
 import { github, repos, type GitHubEvent } from '../src/sync/github.ts'
 import type { MountOptions } from './harness.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
-import { vercelProject } from '../src/access/index.ts'
 import { memory as boardMemory } from '../src/store/memory.ts'
 import type { MessageTables } from '../src/store/types.ts'
 import { VERCEL_BUILDING } from './vercel-fixtures.ts'
@@ -1365,9 +1364,10 @@ describe('sync', () => {
     const slackClient = { conversations: { list, info: async () => ({}), join: async () => ({}) }, users: { info: async () => ({}) } }
     const s = fakePlatform('slack', withSlackClient(slackClient, false))
     const board = testBoard({
-      access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['read', 'post'] } })],
       sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never }, channels({ C1: 'firehose' })) },
     })
+    // Marketing's production deployments may read and post in feedback.
+    await board.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { feedback: ['read', 'post'] } })
     const front = caller(board.fetch, await deploymentToken())
     const { body } = await front('POST', '/messages', { channel: 'feedback', text: 'checkout is slow' })
     const denied = await front('POST', `/messages/${body.message.id}/sync`, { target: 'slack:#leak' })
@@ -1389,9 +1389,12 @@ describe('sync', () => {
     const slackClient = { conversations, users: { info: async () => ({}), lookupByEmail } }
     const s = fakePlatform('slack', withSlackClient(slackClient, false))
     const board = testBoard({
-      access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['read', 'post'] } })],
       sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never }, channels({ C1: 'firehose' })) },
     })
+    // Marketing's production deployments may read and post in feedback.
+    // Without g2's every project on the team: marketing may do only what its grant says.
+    await board.revokeGrant('g2')
+    await board.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { feedback: ['read', 'post'] } })
     const anyone = caller(board.fetch, 'not-a-token')
     const front = caller(board.fetch, await deploymentToken())
     const julian = caller(board.fetch, await personToken())
@@ -1435,10 +1438,13 @@ describe('sync', () => {
     const slackClient = { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }, users: { info: async () => ({}), lookupByEmail } }
     const s = fakePlatform('slack', withSlackClient(slackClient, false))
     const board = testBoard({
-      access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['post'] } })],
       sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never }, channels({ C1: 'firehose' })) },
       scheduler: fakeQueue().scheduler,
     })
+    // Marketing's production deployments may only post in feedback.
+    // Without g2's every project on the team: marketing may do only what its grant says.
+    await board.revokeGrant('g2')
+    await board.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { feedback: ['post'] } })
     const front = caller(board.fetch, await deploymentToken())
     const julian = caller(board.fetch, await personToken())
     const text = 'checkout is slow, cc @[ada@vercel.com]'

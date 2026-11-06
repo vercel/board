@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "pnpm -r --workspace-concurrency=1 build",
-    "test": "pnpm -r test",
+    "test": "pnpm --filter @vercel/board test && pnpm -r --filter '!@vercel/board' test",
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm build && pnpm typecheck && pnpm test"
   },

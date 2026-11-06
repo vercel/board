@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -133,7 +133,7 @@ describe('vb serve', () => {
     first.child.kill('SIGINT')
     expect(await first.exited).toBe(0)
     expect(existsSync(tokenFile)).toBe(false)
-    expect(existsSync(join(project, '.board', 'board.db'))).toBe(true)
+    expect(existsSync(join(project, '.board', 'local.db'))).toBe(true)
 
     // A new run, on another port, still has the thread.
     const second = serveIn(project, env)
@@ -142,6 +142,29 @@ describe('vb serve', () => {
     expect(read.stderr).toBe('')
     expect(read.stdout).toContain('from claude')
     expect(read.stdout).toContain('from julian')
+    second.child.kill('SIGINT')
+    expect(await second.exited).toBe(0)
+  })
+
+  it('carries over the log and files an earlier vb serve kept in .board/board.db', async () => {
+    const { project, env } = await setup()
+    await writeFile(join(project, 'shot.txt'), 'pixels')
+    const first = serveIn(project, env)
+    const at = { ...env, BOARD_URL: await first.url }
+    const posted = await vb(project, at, ['post', 'local', 'before the upgrade', '--attach', 'shot.txt', '--json'])
+    const [file] = JSON.parse(posted.stdout).message.attachments
+    first.child.kill('SIGINT')
+    expect(await first.exited).toBe(0)
+    // As an earlier vb serve left it: the log in board.db, the files in attachments/.
+    const board = join(project, '.board')
+    for (const suffix of ['', '-wal', '-shm']) if (existsSync(join(board, `local.db${suffix}`))) await rename(join(board, `local.db${suffix}`), join(board, `board.db${suffix}`))
+    await rename(join(board, 'local'), join(board, 'attachments'))
+
+    const second = serveIn(project, env)
+    const again = { ...env, BOARD_URL: await second.url }
+    expect((await vb(project, again, ['read', 'local'])).stdout).toContain('before the upgrade')
+    expect(await vb(project, again, ['download', file.id, '-'])).toMatchObject({ code: 0, stdout: 'pixels' })
+    expect(existsSync(join(board, 'board.db'))).toBe(false)
     second.child.kill('SIGINT')
     expect(await second.exited).toBe(0)
   })

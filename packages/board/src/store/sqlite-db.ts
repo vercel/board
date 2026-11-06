@@ -21,7 +21,7 @@ export function sqliteDb(path: string): Db {
   if (path !== ':memory:') mkdirSync(dirname(resolve(/* turbopackIgnore: true */ path)), { recursive: true })
   const db: DatabaseSync = new Database(path)
   db.exec('pragma busy_timeout = 5000')
-  for (const statement of ddl('sqlite')) db.exec(statement)
+  for (const statement of ddl()) db.exec(statement)
 
   const statements = new Map<string, StatementSync>()
   const run = (query: Sql) => {
@@ -38,7 +38,6 @@ export function sqliteDb(path: string): Db {
   }
 
   return {
-    dialect: 'sqlite',
     all: async (query) => run(query),
     async read(queries) {
       db.exec('begin')

@@ -18,11 +18,11 @@ import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINK
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
-import type { AccessSummary, Can as AccessCan } from '../server/access.ts'
+import type { AccessSummary, Can as AccessCan, Permission, WrittenCan } from '../server/access.ts'
 
 /**
  * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
- * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals,
+ * parse, compare, or count with. Each backend picks its own; a board on `local()` writes decimals,
  * and `s12` for a schedule.
  */
 export const Ref = z.string().min(1).max(128)
@@ -178,13 +178,77 @@ const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).m
 /** What a grant or token lets do: `'all'`, a list for every channel, or a map from channel pattern to one. board() checks the patterns. */
 const Can = z.union([CanGrant, z.record(z.string().min(1).max(300), CanGrant)])
 const ClaimValue = z.string().min(1).max(1000)
+const Environments = z.array(z.string().min(1).max(100)).min(1).max(16)
 
-/** Who a grant lets in: an issuer (`vercel`, `github`, or an https URL) and the claims its tokens carry, exactly. */
-export const GrantBody = z.object({
-  issuer: z.string().min(1).max(1000),
-  claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])),
-  can: Can.optional(),
+/**
+ * Who a grant names, as people write it: a user by email (or, where the board can't look one up,
+ * by ID), a project by name or ID, a repository by `owner/name`. The board resolves names and keeps
+ * IDs; a board that verifies tokens itself takes IDs only. A `user` names `email` or `userId`.
+ * Nothing else: a key it doesn't know (a misspelled `workflows`, say) is a 400, never dropped,
+ * since dropping it would name more than was meant.
+ */
+export const PrincipalInput = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('user'), email: z.string().min(3).max(320).optional(), userId: z.string().min(1).max(200).optional() }),
+  // Its environments are where its deployments get in; a principal to remove leaves them out.
+  z.strictObject({ kind: z.literal('project'), project: z.string().min(1).max(200), environments: Environments.optional() }),
+  z.strictObject({
+    kind: z.literal('github'),
+    repository: z.string().min(3).max(200),
+    workflow: z.string().min(1).max(300).optional(),
+    branch: z.string().min(1).max(255).optional(),
+    event: z.string().min(1).max(64).optional(),
+  }),
+  z.strictObject({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
+  z.strictObject({ kind: z.literal('all-users') }),
+  z.strictObject({ kind: z.literal('all-projects'), environments: Environments.optional() }),
+  // An app by its slug or its client ID.
+  z.strictObject({ kind: z.literal('app'), app: z.string().min(1).max(200) }),
+  z.strictObject({ kind: z.literal('all-apps') }),
+  z.strictObject({ kind: z.literal('everyone') }),
+])
+
+/** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
+export const GrantCan = z.record(z.string().min(1).max(300), CanGrant)
+
+/** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
+export const GrantBody = z.strictObject({
+  principals: z.array(PrincipalInput).min(1).max(32),
+  can: GrantCan,
 })
+
+/**
+ * Which grant decides a channel, and what it gives, for the caller or a principal it names: a
+ * `user` (by email, or by ID where the board can't look one up), a `project` in one `environment`
+ * (production by default), a `github` repository's run (with its `workflow`, `branch`, and
+ * `event`), or an `oidc` issuer's token with each `claim` as `name=value`.
+ */
+export const ExplainQuery = z
+  .object({
+    channel: ChannelPath,
+    user: z.string().min(1).max(320).optional(),
+    project: z.string().min(1).max(200).optional(),
+    environment: z.string().min(1).max(100).optional(),
+    github: z.string().min(3).max(200).optional(),
+    workflow: z.string().min(1).max(300).optional(),
+    branch: z.string().min(1).max(255).optional(),
+    event: z.string().min(1).max(64).optional(),
+    oidc: z.string().min(1).max(1000).optional(),
+    claim: repeated.optional(),
+    app: z.string().min(1).max(200).optional(),
+  })
+  .refine((query) => [query.user, query.project, query.github, query.oidc, query.app].filter((value) => value !== undefined).length <= 1, 'name one principal: user, project, github, oidc, or app')
+  .refine((query) => query.environment === undefined || query.project !== undefined, 'environment goes with project')
+  .refine((query) => (query.workflow === undefined && query.branch === undefined && query.event === undefined) || query.github !== undefined, 'workflow, branch, and event go with github')
+  .refine((query) => query.claim === undefined || query.oidc !== undefined, 'claim goes with oidc')
+
+/** A grant's change: principals to add and to remove, and a `can` to replace its own. */
+export const UpdateGrantBody = z
+  .strictObject({
+    add: z.array(PrincipalInput).min(1).max(32).optional(),
+    remove: z.array(PrincipalInput).min(1).max(32).optional(),
+    can: GrantCan.optional(),
+  })
+  .refine((body) => body.add !== undefined || body.remove !== undefined || body.can !== undefined, 'name principals to add or remove, or a can')
 
 /** A token acting as the caller: what it may do, and the profile and session every request with it writes as. */
 export const TokenBody = z.object({
@@ -422,8 +486,12 @@ export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
-/** A channel to make before anything posts to it. */
-export const CreateChannelBody = z.object({ path: ChannelPath })
+/**
+ * A channel to make before anything posts to it, and nothing else: a key it doesn't know is a 400,
+ * so a client that asks for more than a channel (one that expects `private: true` to close it, say)
+ * is told, never handed an open one.
+ */
+export const CreateChannelBody = z.strictObject({ path: ChannelPath })
 /** At most this many labels in a label write's `if`. */
 export const LABEL_CONDITIONS_MAX = 16
 
@@ -455,10 +523,23 @@ export type PostInput = z.input<typeof PostBody>
 export type ScheduleInput = z.input<typeof ScheduleBody>
 export type ScheduleBodyOutput = z.output<typeof ScheduleBody>
 export type SchedulesQueryInput = z.input<typeof SchedulesQuery>
-/** What `grant` takes: `can` as `access` writes it. */
-export type GrantInput = Omit<z.input<typeof GrantBody>, 'can'> & { can?: AccessCan }
-/** What `token` takes: `can` as `access` writes it. */
-export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan }
+/** A principal as `createGrant` and `updateGrant` take it. */
+/**
+ * A principal as a handle takes it. A project's environments, and every project's, are production
+ * when left out, so the board always gets them; a principal to remove goes by who it is, and keeps
+ * none.
+ */
+export type PrincipalInput = z.input<typeof PrincipalInput>
+/** What a grant gives at a pattern, as a handle takes it: `'all'`, `'none'`, or permissions. `'none'` is `[]` on the wire. */
+export type CanAt = 'all' | 'none' | readonly Permission[]
+/** A grant's `can`, as a handle takes it: each channel pattern and what it gives. */
+export type GrantCan = Readonly<Record<string, CanAt>>
+/** What `createGrant` takes. */
+export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan }
+/** What `updateGrant` takes: principals to add, principals to remove (by who they are, environments aside), and a `can` that replaces the grant's. */
+export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
+/** What `token` takes: `can` as `access` writes it, with `'none'` for a pattern it may do nothing in. */
+export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan | GrantCan }
 export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
@@ -489,15 +570,47 @@ export type ScheduleView = {
   createdAt: string
 }
 
-/** A grant: who it lets in, what it lets them do, and who set it when. */
+/**
+ * Which grants decide a channel for a principal: the `pattern` that won there (an exact channel,
+ * then the longest subtree, then `*`), the patterns it won `over` (the others its grants name that
+ * cover the channel, most specific first), the `level` that won at it, the `grants` at that level,
+ * which add up, and what they give, `can`, after `capped`, the team role that caps a person's. `pattern` and `level` are null where no grant decides: the
+ * board's own code, its own deployments where it runs, or a principal nothing lets in, whose `can`
+ * is empty.
+ */
+export type Explanation = {
+  channel: string
+  pattern: string | null
+  over: string[]
+  level: 'principal' | 'group' | 'everyone' | null
+  grants: GrantView[]
+  capped: string | null
+  can: Permission[]
+}
+
+/** A principal as a grant keeps it: IDs, with the names the board knows beside them. */
+export type PrincipalView =
+  | { kind: 'user'; userId: string; email: string | null }
+  | { kind: 'project'; projectId: string; name: string | null; environments: string[]; teamId: string | null }
+  | { kind: 'github'; repositoryId: string | null; repository: string; workflow?: string; branch?: string; event?: string }
+  | { kind: 'oidc'; issuer: string; claims: Record<string, string | string[]> }
+  | { kind: 'all-users' }
+  | { kind: 'all-projects'; environments: string[] }
+  | { kind: 'app'; clientId: string; name: string | null }
+  | { kind: 'all-apps' }
+  | { kind: 'everyone' }
+
+/** A grant: who it names, what it lets them do, and who changed it last, when. */
 export type GrantView = {
   id: string
-  issuer: string
-  claims: Record<string, string | string[]>
-  can: AccessSummary
-  /** The actor that last set it. */
-  by: string
-  at: string
+  principals: PrincipalView[]
+  /** As it was written: each pattern and `'all'` or its permissions, `[]` for none. */
+  can: Record<string, 'all' | Permission[]>
+  /** Whether a person's team role caps what it gives them: a viewer only reads and reacts. False where the board has no roles. */
+  capped: boolean
+  /** The actor that changed it last, and when: null for one the board started with. */
+  by: string | null
+  at: string | null
 }
 
 /** A token, as its minter and `manage` see it: never its secret. */
@@ -666,7 +779,7 @@ export type InboxItem = {
 
 /**
  * A channel, and what its board counts in it: its threads, its messages, and its last message's
- * position. `a2()` keeps all three; Vercel's API keeps none, so a board on it leaves them out.
+ * position. `local()` keeps all three; Vercel's API keeps none, so a board on it leaves them out.
  */
 export type ChannelView = { path: string } & Partial<Omit<Channel, 'path'>>
 export type MessagesPage = { messages: MessageView[]; cursor: string }
@@ -784,9 +897,12 @@ export const routes = {
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
-  /** Grants need manage in every channel. Setting one with the same issuer and claims changes its `can`. */
+  /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },
+  updateGrant: { method: 'PATCH', path: '/grants/:id', body: UpdateGrantBody },
+  /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
+  explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
   revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
   /** Your tokens, or every one with manage in every channel. A token acts as whoever minted it. */
   tokens: { method: 'GET', path: '/tokens' },

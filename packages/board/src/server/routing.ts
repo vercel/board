@@ -28,7 +28,7 @@ type Pattern = { method: string; pattern: RegExp; names: string[]; target: Targe
 /** Every protocol method, by the route it's served at. */
 export const METHODS: readonly Method[] = [
   'discovery', 'me', 'channels', 'createChannel', 'actors', 'messages', 'threads', 'message', 'post', 'posted', 'edit', 'delete', 'react', 'label',
-  'schedule', 'schedules', 'cancelSchedule', 'grants', 'createGrant', 'revokeGrant', 'tokens', 'createToken', 'revokeToken', 'upload', 'attachment', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack', 'events',
+  'schedule', 'schedules', 'cancelSchedule', 'grants', 'createGrant', 'updateGrant', 'explain', 'revokeGrant', 'tokens', 'createToken', 'revokeToken', 'upload', 'attachment', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack', 'events',
   'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
   'typing', 'readSource', 'joinSource', 'synced', 'linked',
 ]

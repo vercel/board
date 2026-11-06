@@ -30,7 +30,6 @@ describe('list reads', () => {
     const deployed = board({
       store: { log, tables, close: () => tables.close() },
       url: BOARD_URL,
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
       auth: testAuth,
     })
     const reader = caller(deployed.fetch, await personToken())
@@ -68,7 +67,6 @@ describe('list reads', () => {
     const deployed = board({
       store: { log, tables, close: () => tables.close() },
       url: BOARD_URL,
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
       auth: testAuth,
     })
     const julian = caller(deployed.fetch, await personToken())
@@ -112,7 +110,6 @@ describe('reads by ID', () => {
     const deployed = board({
       store: { log, tables, close: () => tables.close() },
       url: BOARD_URL,
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
       auth: testAuth,
     })
     const reader = caller(deployed.fetch, await personToken())

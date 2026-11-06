@@ -1,4 +1,4 @@
-// `@vercel/board/backend-vercel` outside Node: your team's board in Vercel's API, through the `fetch` you give it.
+// Your team's board in Vercel's API outside Node, internal: board({ fetch })'s backend, through that `fetch`.
 import { createVercel, type VercelBackend, type VercelOptions } from '../server/backend-vercel.ts'
 
 /**

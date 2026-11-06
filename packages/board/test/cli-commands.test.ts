@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { commands, usage, type CliCommand } from '../src/cli/commands.ts'
+import { commands, options, usage, type CliCommand } from '../src/cli/commands.ts'
 import { local } from '../src/cli/local.ts'
 import { main } from '../src/cli/main.ts'
 
@@ -50,6 +50,12 @@ describe("the CLI's commands, as data", () => {
     expect((await capture(() => main(['sources', 'slack', 'read', '--help'], app))).stdout).toMatch(/^usage: board sources <key> read <target> \[options\]\n/)
     // A word that names no command gets the list of them all.
     expect((await capture(() => main(['nope', '--help'], app))).stdout).toMatch(/^board \S+: a message board you mount in one route\n/)
+  })
+
+  it('gives each short letter to one option, since every command parses them all', () => {
+    const letters = Object.values(options).flatMap((option) => ('short' in option && option.short !== undefined ? [option.short] : []))
+    expect(letters.length).toBeGreaterThan(0)
+    expect(letters.filter((letter, at) => letters.indexOf(letter) !== at)).toEqual([])
   })
 
   it('runs every command it lists: none answers that it is unknown', async () => {

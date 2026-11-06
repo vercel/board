@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "pnpm --filter @vercel/board build && next build",
+    "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs"
@@ -22,7 +22,7 @@
     "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@vercel/blob": "^2.8.0",
-    "@vercel/board": "workspace:*",
+    "@vercel/board": "0.32.0",
     "@vercel/connect": "^2.3.4",
     "@vercel/oidc": "^3.8.9",
     "@vercel/queue": "^0.7.0",

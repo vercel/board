@@ -71,8 +71,8 @@ export interface MessageTables {
 }
 
 /**
- * Where a board keeps everything: its A2 log, and the tables it reads from. Create one with
- * `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or `memory()` from `@vercel/board/backend-a2/store-*`.
+ * Where a local board keeps everything: its log, and the tables it reads from. `sqlite()` and
+ * `memory()` (`store/sqlite.ts`, `store/memory.ts`) make one.
  */
 export type BoardStore = {
   /** The board's A2 store. */

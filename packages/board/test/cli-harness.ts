@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll } from 'vitest'
 import { serve } from './http.ts'
-import { personToken, testBoard } from './harness.ts'
+import { localBoard, personToken } from './harness.ts'
 
 // The CLI end to end, shared by the cli*.test.ts files. They're split so vitest runs
 // them in parallel: each file serves a board of its own, with `useBoard()`.
@@ -25,7 +25,7 @@ export let env: NodeJS.ProcessEnv
 export function useBoard() {
   beforeAll(async () => {
     // No fixed URL: the board infers its own from requests, as when mounted.
-    server = await serve(testBoard({ url: undefined }).fetch)
+    server = await serve(localBoard({ url: undefined }).fetch)
     url = `${server.origin}/api/board`
     // Every variable `detectAgent` reads, so the suite passes inside an agent's session too (Pi's included).
     const clean = Object.fromEntries(

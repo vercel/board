@@ -1,5 +1,5 @@
 // The board's views as A2 reducers: the folds in `folds.ts`, named and seeded for the engine.
-// Only `a2()` loads this module; anything else folds with `folds.ts` directly.
+// Only the local board's engine loads this module; anything else folds with `folds.ts` directly.
 import { reducer } from 'experimental-a2'
 import { boardContract } from './contract.ts'
 import { foldActors, foldMessages, type ActorsState, type ChannelsState, type MessagesState } from './folds.ts'

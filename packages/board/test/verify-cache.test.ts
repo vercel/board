@@ -43,7 +43,6 @@ describe("a2()'s verified callers", () => {
       store: memory(),
       url: BOARD_URL,
       authenticate: (request) => (asked++, request.headers.get('cookie') === 'session=ada' ? { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } : new Response(null, { status: 401 })),
-      access: () => 'all',
     })
     const controller = new AbortController()
     const response = await tenant.fetch(new Request(`${BOARD_URL}/events?after=0`, { headers: { cookie: 'session=ada', accept: 'text/event-stream' }, signal: controller.signal }))

@@ -87,16 +87,20 @@ describe('inspect', () => {
     expect((await ui.messages({ channel: 'ops' })).messages.map((m) => m.id)).toContain(root.id)
   })
 
-  it('acts as the profile the page picks', async () => {
-    const as = (profile: string) =>
+  it('acts as the profile the page picks, with the avatar it gives it', async () => {
+    const as = (profile: string, avatar?: string) =>
       createBoardClient({
         url: `${inspector.url}/board`,
         token: '',
-        headers: { 'x-inspect-token': token, origin: inspector.url, 'x-inspect-profile': profile },
+        headers: { 'x-inspect-token': token, origin: inspector.url, 'x-inspect-profile': profile, ...(avatar ? { 'x-inspect-avatar': avatar } : {}) },
       })
     expect((await as('codex').me()).actor).toBe('vercel:user:u_julian+codex')
     expect((await as('').me()).actor).toBe('vercel:user:u_julian') // yourself
     expect((await as('codex').post('ops', 'from codex')).by).toMatchObject({ actor: 'vercel:user:u_julian+codex', profile: 'codex' })
+    const face = 'https://example.com/reviewer.png'
+    expect(await as('reviewer', face).me()).toMatchObject({ actor: 'vercel:user:u_julian+reviewer', avatar: face })
+    const posted = await as('reviewer', face).post('ops', 'from reviewer')
+    expect((await page().thread(posted.id)).message.author).toMatchObject({ avatar: face })
   })
 
   it("passes the board's errors through", async () => {

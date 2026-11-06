@@ -75,17 +75,14 @@ principal ID can stand for callers with different access. Canceling one that's
 done is a no-op. A reply schedule ends on its own when its thread is deleted.
 
 Each send runs with its creator's [access](./09-access.md) as it is when the
-send is due, under the rules as they are then. A creator that can no longer
+send is due, under the grants as they are then. A creator that can no longer
 post there (or read the thread, for a reply) has the schedule canceled with
 `revoked`, and `vb schedules --all` says `ended: its creator can no longer post
 it`. A schedule from before board kept its creator's claims is worked out from
 the principal ID alone, which names a deployment's project ID and environment
 and nothing of a workflow's run. So the board's own deployments in its
-environment, and a project its rule names by ID, keep sending; a workflow's, or a project's matched by
-name, is `revoked` at its next send. A newer schedule also keeps the board's
-own team as the board knew it then, so a rule that names a project without its
-`team` still matches when the scheduler's function, which never sees a request,
-sends it.
+environment, and a project a grant names, keep sending; a workflow's is
+`revoked` at its next send.
 
 ## In code
 
@@ -103,38 +100,21 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
 
 ## How it runs
 
-- **It runs on the scheduler.** A board on `a2()` without one refuses:
-  `POST /schedules`, `schedule()`, and `vb schedule` answer 501
-  `no_scheduler`, and `vb` says it can't, with the board's words under it:
-  ``this board has no scheduler: pass `scheduler` to `a2()` to send later``.
-  See [Without a scheduler](./01-mounting.md#without-a-scheduler). In
-  production, pass `vercelQueues()` or `qstash()` and mount
-  [its route](./01-mounting.md#the-scheduler-route). On a dev server, in
-  `vb serve`, or in tests, `localScheduler()` sends while the process runs:
-  see [A dev server](./01-mounting.md#a-dev-server). Its timers live in the
-  process, so a restart drops the sends that were pending.
-- **Each send is an A2 timer.** Creating a schedule arms its first send. When it
-  fires, the board posts that send, records it, and arms the next.
-- **A send posts once.** Each one posts with an ID derived from the schedule and
-  `n`, so a retry after a crash gets back the message it already posted.
-- **Downtime doesn't replay.** The next send is the next slot after now, so a
-  board that was down sends once rather than catching up on every missed slot.
-- **Far-off sends hop.** Vercel Queues delays at most 6 days, so a send further
-  out arrives in hops of up to 5.
-- **Canceling can't revoke a timer.** A canceled schedule's timer, or one for a
-  send already made, fires into a no-op.
-- **The newest deployment sends.** Vercel Queues delivers a timer to the
-  deployment that armed it, so each deployment takes schedules over on its
-  first request: it arms every pending schedule's next send itself, and the
-  timers an earlier deployment armed fire into a no-op. A queue's delivery
-  never takes schedules over, so an old deployment that only its own timers
-  still reach doesn't take them back. With a scheduler that delivers to one URL, like
-  `qstash()` pointed at the production alias, an earlier deployment's timers
-  reach the newest one, which sends them once it has taken over. Each send runs under
-  the access rules of the deployment that took over last, so a deploy that
-  takes a grant away stops the schedules that grant was sending. Deployments
-  that share one store, like a preview on production's database, take
-  schedules over from each other.
+- **The board that keeps the log sends.** On Vercel's board, Vercel's API
+  posts each send, whether or not anything of yours is running. On
+  [`local()`](./10-local.md), timers in the process send while it runs, and a
+  restart drops the sends that were pending.
+- **On `local()`, a send posts once.** Each one posts with an ID derived from
+  the schedule and `n`, so a retry after a crash gets back the message it
+  already posted. Downtime doesn't replay: the next send is the next slot after
+  now, so a board that was down sends once rather than catching up on every
+  missed slot.
+- **Vercel's board takes no files on a scheduled message yet,** and no labels
+  on a scheduled reply: those answer 501 `not_supported`.
+- **A board that keeps no schedules refuses.** `POST /schedules`, `schedule()`,
+  and `vb schedule` answer 501 `no_scheduler`, and `vb` says it can't, with the
+  board's words under it. A [backend of your own](./01-mounting.md#a-backend-of-your-own)
+  may answer that.
 
-Schedules live in their own A2 session, outside the board log; only the messages
-they post land on the board. See [The log](../04-reference/04-log.md).
+Schedules live apart from the board's events; only the messages they post land
+on the board.

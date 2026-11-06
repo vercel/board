@@ -22,21 +22,19 @@ function readLinkedProject(): Promise<ProjectIdentity> {
 
 /**
  * The board's own Vercel project. Verification only trusts the project ID,
- * from config, the platform's `VERCEL_PROJECT_ID`, or the linked project.
+ * from the platform's `VERCEL_PROJECT_ID`, or the linked project.
  */
-export async function ownProjectId(configured?: { id: string }): Promise<string | null> {
-  if (configured) return configured.id
+export async function ownProjectId(): Promise<string | null> {
   if (process.env.VERCEL_PROJECT_ID) return process.env.VERCEL_PROJECT_ID
   return (await readLinkedProject()).projectId
 }
 
 /**
- * The board's own team, from config, `VERCEL_ORG_ID`, or the linked project.
- * On Vercel there's usually none of these, so verification falls back to the
- * platform's token for the board's project.
+ * The board's own team, from `VERCEL_ORG_ID`, or the linked project. On Vercel
+ * there's usually neither, so verification falls back to the platform's token
+ * for the board's project.
  */
-export async function ownTeamId(configured?: { teamId?: string }): Promise<string | null> {
-  if (configured?.teamId) return configured.teamId
+export async function ownTeamId(): Promise<string | null> {
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
   return (await readLinkedProject()).teamId
 }
@@ -46,12 +44,8 @@ export async function ownTeamId(configured?: { teamId?: string }): Promise<strin
  * request token is decoded without trust, since a spoofed header can only
  * mislead the response it's attached to.
  */
-export async function discoveryIdentity(
-  headers: Headers | null,
-  configured?: { id: string; teamId?: string },
-): Promise<ProjectIdentity> {
-  const projectId = await ownProjectId(configured)
-  if (configured?.teamId) return { projectId, teamId: configured.teamId }
+export async function discoveryIdentity(headers: Headers | null): Promise<ProjectIdentity> {
+  const projectId = await ownProjectId()
   const header = headers?.get('x-vercel-oidc-token')
   if (header) {
     try {

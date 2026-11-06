@@ -63,12 +63,12 @@ const keepsNoFiles = (error: unknown) => error instanceof HttpError && error.cod
  * A platform file on a board that keeps no files: a link to where it lives on the platform, which
  * its readers there can open, or its name when the platform gave no URL.
  */
-const fileLink = (file: ExternalFile) => {
+const fileLink = (file: ExternalFile, why: string) => {
   const name = file.name ?? 'a file'
-  if (!file.url || !/^https?:\/\//.test(file.url)) return fileNote(file, 'this board keeps no files')
+  if (!file.url || !/^https?:\/\//.test(file.url)) return fileNote(file, why)
   const label = name.replace(/[[\]\\]/g, (char) => `\\${char}`)
   const url = file.url.replace(/[ ()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
-  return fileNote(file, 'this board keeps no files', `[${label}](${url})`)
+  return fileNote(file, why, `[${label}](${url})`)
 }
 
 /** A platform message's text with its file notes after it. */
@@ -141,7 +141,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (!bound) throw new Error('sync used before board() bound it')
     return bound
   }
-  /** Sync's own caller: on a2(), `board:sync`; on http(), this deployment itself. */
+  /** Sync's own caller: on a local board, `board:sync`; on http(), this deployment itself. */
   const me: Caller = { self: 'sync', origin: { via: { kind: 'engine' } } }
 
   /** One protocol method, as sync. */
@@ -398,10 +398,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function importFiles(platform: SyncProvider, files: ExternalFile[], attempt: number) {
     const attachments: Attachment[] = []
     const notes: string[] = []
-    let noFiles = false
+    /** Why the board takes none of them, in its words, once it said so. */
+    let noFiles: string | null = null
     for (const file of files.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)) {
-      if (noFiles) {
-        notes.push(fileLink(file))
+      if (noFiles !== null) {
+        notes.push(fileLink(file, noFiles))
         continue
       }
       if (file.size !== undefined && file.size > IMPORT_BYTES_MAX) {
@@ -440,8 +441,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           continue
         }
         if (!keepsNoFiles(error)) throw error
-        noFiles = true
-        notes.push(fileLink(file))
+        noFiles = (error as HttpError).message
+        notes.push(fileLink(file, noFiles))
       }
     }
     for (const file of files.slice(ATTACHMENTS_PER_MESSAGE_MAX))

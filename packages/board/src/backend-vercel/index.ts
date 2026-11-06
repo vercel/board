@@ -1,5 +1,6 @@
-// `@vercel/board/backend-vercel`: your team's board in Vercel's API. In Node, it finds credentials the way
-// the Vercel CLI and a deployment do: `VERCEL_TOKEN`, the deployment's OIDC token, or `vercel login`.
+// Your team's board in Vercel's API, internal: board()'s default backend, and the CLI's. In Node, it finds credentials the way
+// the Vercel CLI and a deployment do: `VERCEL_TOKEN`, the deployment's OIDC token, or `vercel login`,
+// after `BOARD_TOKEN`, a board token you set, as `vb` sends one to any board.
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
@@ -11,10 +12,18 @@ import { HttpError } from '../server/errors.ts'
 const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_TOKEN
 
 /**
- * A token Vercel's API takes: `VERCEL_TOKEN`, this deployment's OIDC token, or your Vercel login,
- * the one the CLI that runs board's hands it (`vercel board`'s) or your `vercel login`.
+ * A token you set for the board: it goes as `Authorization: Bearer <token>`, as it is, whatever its
+ * format (that's Vercel's API's), ahead of every other, as it does to a board at a URL.
+ */
+const boardToken = () => process.env.BOARD_TOKEN || null
+
+/**
+ * A token Vercel's API takes: `BOARD_TOKEN`, `VERCEL_TOKEN`, this deployment's OIDC token, or your
+ * Vercel login, the one the CLI that runs board's hands it (`vercel board`'s) or your `vercel login`.
  */
 async function token(): Promise<string> {
+  const given = boardToken()
+  if (given) return given
   if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN
   if (deployed()) return getVercelOidcToken()
   // With no login to send, that's what it says, as `http()`'s does, not that the API didn't answer.
@@ -25,6 +34,7 @@ async function token(): Promise<string> {
 
 /** Where `token` comes from, in words: what `vb whoami` says. */
 export function credentialSource(): string {
+  if (boardToken()) return 'BOARD_TOKEN'
   if (process.env.VERCEL_TOKEN) return 'VERCEL_TOKEN'
   if (deployed()) return 'Vercel OIDC'
   return loginHanded() ? 'the Vercel CLI' : 'vercel login'
@@ -73,8 +83,9 @@ async function team(): Promise<string | null> {
 const environment: VercelEnvironment = {
   fetch: () => async (input, init = {}) => {
     const credential = await token()
-    // Your login goes through the fetch the CLI that runs board's hands it, which adds its own credentials.
-    if (!process.env.VERCEL_TOKEN && !deployed())
+    // Your login goes through the fetch the CLI that runs board's hands it, which adds its own
+    // credentials. A token you set goes as it is.
+    if (!boardToken() && !process.env.VERCEL_TOKEN && !deployed())
       return asYou(input, init, credential)
     const headers = new Headers(init.headers)
     headers.set('authorization', `Bearer ${credential}`)

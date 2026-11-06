@@ -4,7 +4,6 @@ import { slack, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { formatSourceRead } from '../src/cli/format.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/server/auth.ts'
 
 const ROOT = '1791389583.493629'
 const REPLY = '1791393976.415219'
@@ -19,7 +18,7 @@ const CHANNELS: Record<string, Channel> = {
   CEXT: { id: 'CEXT', name: 'shared-with-acme', is_member: true, is_ext_shared: true },
 }
 
-function setup(options: { join: boolean } = { join: false }) {
+async function setup(options: { join: boolean } = { join: false }) {
   const member = new Set(Object.values(CHANNELS).filter((c) => c.is_member).map((c) => c.id))
   const history = vi.fn(async ({ limit }: { channel: string; limit: number }) => ({
     messages: [
@@ -56,9 +55,10 @@ function setup(options: { join: boolean } = { join: false }) {
   }
   const s = fakePlatform('slack', withSlackClient(web, false))
   const board = testBoard({
-    access: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
     sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient, join: options.join }, channels({ C1: 'firehose' })) },
   })
+  // The deploy workflow may post everywhere, and manage nowhere.
+  await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
   const webhook = (body: unknown) =>
     board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
   return { board, history, replies, join, webhook }
@@ -71,7 +71,7 @@ const read = (call: ReturnType<typeof caller>, target: string, limit?: number) =
 
 describe('reading a platform on demand (vb sources <key> read)', () => {
   it('reads a public channel the app is in, oldest first, by name or ID', async () => {
-    const { board, history, join } = setup()
+    const { board, history, join } = await setup()
     const julian = caller(board.fetch, await personToken())
     const { status, body } = await read(julian, '#project-vercel-kit')
     expect(status).toBe(200)
@@ -91,7 +91,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
   })
 
   it('reads the thread a permalink points into, or a channel:ts thread', async () => {
-    const { board, replies } = setup()
+    const { board, replies } = await setup()
     const julian = caller(board.fetch, await personToken())
     const { body } = await read(julian, PERMALINK)
     expect(replies).toHaveBeenCalledWith({ channel: 'CKIT', ts: ROOT, limit: 50 })
@@ -101,7 +101,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
   })
 
   it("reads the whole thread from a reply's ts, or a reply permalink without thread_ts", async () => {
-    const { board, replies } = setup()
+    const { board, replies } = await setup()
     const julian = caller(board.fetch, await personToken())
     for (const target of [`CKIT:${REPLY}`, `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}`]) {
       const { body } = await read(julian, target)
@@ -112,7 +112,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
   })
 
   it("answers what it can't read with a status that says why", async () => {
-    const { board } = setup()
+    const { board } = await setup()
     const julian = caller(board.fetch, await personToken())
     const unknownName = await read(julian, '#nope')
     expect(unknownName.status).toBe(404)
@@ -129,7 +129,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
   })
 
   it("won't read private channels or channels the app isn't in, and never joins", async () => {
-    const { board, history, join } = setup()
+    const { board, history, join } = await setup()
     const julian = caller(board.fetch, await personToken())
     const secret = await read(julian, 'CPRIV')
     expect(secret.status).toBe(403)
@@ -146,7 +146,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
   })
 
   it('stores nothing, and the board still only listens to configured channels', async () => {
-    const { board, webhook } = setup()
+    const { board, webhook } = await setup()
     const julian = caller(board.fetch, await personToken())
     await read(julian, '#project-vercel-kit')
     await webhook({ type: 'message', threadId: `slack:CKIT:${ROOT}`, id: ROOT, text: 'should not sync', user: 'U_ADA' })
@@ -156,7 +156,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
   })
 
   it('needs manage, since the app reads more than the caller may', async () => {
-    const { board } = setup()
+    const { board } = await setup()
     const workflow = caller(board.fetch, await workflowToken())
     const denied = await read(workflow, '#project-vercel-kit')
     expect(denied.status).toBe(403)
@@ -192,7 +192,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
 
 describe('joining a channel to read it (vb sources <key> join)', () => {
   it("won't join unless the board opted in", async () => {
-    const { board, join } = setup()
+    const { board, join } = await setup()
     const julian = caller(board.fetch, await personToken())
     const refused = await joinChannel(julian, '#elsewhere')
     expect(refused.status).toBe(403)
@@ -201,7 +201,7 @@ describe('joining a channel to read it (vb sources <key> join)', () => {
   })
 
   it('joins a public channel the app is not in, then reads it', async () => {
-    const { board, join, history } = setup({ join: true })
+    const { board, join, history } = await setup({ join: true })
     const julian = caller(board.fetch, await personToken())
     const before = await read(julian, '#elsewhere')
     expect(before.body.error.code).toBe('not_in_channel')
@@ -217,7 +217,7 @@ describe('joining a channel to read it (vb sources <key> join)', () => {
   })
 
   it("won't join private or Slack Connect channels, and needs manage", async () => {
-    const { board, join } = setup({ join: true })
+    const { board, join } = await setup({ join: true })
     const julian = caller(board.fetch, await personToken())
     expect((await joinChannel(julian, 'CPRIV')).body.error.code).toBe('private_channel')
     expect((await joinChannel(julian, 'CEXT')).body.error.code).toBe('shared_channel')

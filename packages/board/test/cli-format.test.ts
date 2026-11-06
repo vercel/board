@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMessage, formatSchedule, formatThreads, formatThreadSummaries } from '../src/cli/format.ts'
+import { formatMessage, formatSchedule, formatThreads, formatThreadSummaries, principalFlags } from '../src/cli/format.ts'
 import type { MessageView, ScheduleView } from '../src/api/routes.ts'
 
 const by = { actor: 'vercel:user:j', principal: 'vercel:user:j', profile: null, session: null }
@@ -68,5 +68,12 @@ describe('reactions', () => {
     } as unknown as MessageView
     const out = formatThreads([message], new Map([['vercel:user:u0', 'Ada'], ['vercel:user:u1', 'claude via ada']]))
     expect(out.split('\n').at(-1)).toMatch(/^      \S+ Ada, claude via ada, vercel:user:u2 \+9   \S+ Julian$/)
+  })
+})
+
+describe('grants', () => {
+  it("lists an app by the name the board knows it by, or else its client ID, so two apps don't look alike", () => {
+    expect(principalFlags({ kind: 'app', clientId: 'oac_1', name: 'ship' })).toBe('--app ship')
+    expect(principalFlags({ kind: 'app', clientId: 'cl_ship', name: null })).toBe('--app cl_ship')
   })
 })

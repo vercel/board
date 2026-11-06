@@ -9,6 +9,7 @@ import { board as defaultBoard } from '../src/server/index.default.ts'
 import { http as defaultHttp } from '../src/backend-http/index.default.ts'
 import { bearer, BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 import { connect, detectAgent } from '../src/client/node.ts'
+import { as, fakeMessageboard } from './messageboard.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
   const team = testBoard()
@@ -127,9 +128,32 @@ describe('board() with no backend', () => {
     vi.unstubAllGlobals()
   })
 
-  it('is http() to the board the environment points at, as the token holder with its profile', async () => {
-    const team = testBoard()
+  /** A machine with nothing of board's, Vercel's, or an agent's in its environment. */
+  const clean = () => {
     for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|ACTIONS_ID_TOKEN|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+  }
+
+  it("is Vercel's board for the team, the one its name names, with the deployment's credentials or fetch's", async () => {
+    clean()
+    const api = fakeMessageboard()
+    vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
+    // The project's own code: its first use of the name makes the board.
+    const posted = await board({ name: 'security' }).post('dev', 'from pong')
+    expect(posted.by.principal).toBe('vercel:project:prj_pong:production')
+    expect(api.requests).toContain('POST /boards/ensure')
+    // fetch's credentials in place of the deployment's: Ada, reading the same board.
+    const ada = board({ name: 'security', fetch: as(api, 'user:u_ada') })
+    expect((await ada.me()).principal).toBe('vercel:user:u_ada')
+    expect((await ada.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from pong'])
+    // Without a name, the team's default board, where nothing was posted.
+    expect((await board().messages({ channel: 'dev' })).messages).toEqual([])
+  })
+
+  it('is http() to the board BOARD_URL names, as the token holder with its profile, and sends it no credentials meant for Vercel', async () => {
+    clean()
+    const team = testBoard()
     vi.stubEnv('BOARD_URL', BOARD_URL)
     vi.stubEnv('BOARD_TOKEN', await personToken())
     vi.stubEnv('BOARD_AS', 'ci')
@@ -137,13 +161,68 @@ describe('board() with no backend', () => {
     const here = board()
     expect((await here.post('dev', 'from CI')).by.actor).toBe('vercel:user:u_julian+ci')
     expect((await here.as(null).me()).actor).toBe('vercel:user:u_julian')
+    // A fetch for Vercel's API never reaches the board at BOARD_URL, whatever its name.
+    const meant = vi.fn(globalThis.fetch)
+    expect((await board({ name: 'security', fetch: meant }).post('dev', 'still there')).by.actor).toBe('vercel:user:u_julian+ci')
+    expect(meant).not.toHaveBeenCalled()
   })
 
-  it('outside Node, needs the URL, sends what its fetch sends, and serves only what its backend answers', async () => {
+  it("in a deployment, acts as a server's own user through its fetch: on the team it names, with none of the deployment's credentials or profile", async () => {
+    // The deployment's OIDC token, a JWT that names its own team, as Vercel's does.
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_deploy', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+    for (const extra of [{}, { VERCEL_TOKEN: 'vercel-token-from-env', BOARD_TOKEN: 'board-token-from-env' }]) {
+      clean()
+      for (const [key, value] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, VERCEL_ORG_ID: 'team_deploy', BOARD_AS: 'deploy-bot', ...extra })) vi.stubEnv(key, value)
+      // Team acme, which a request reaches only by naming it.
+      const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'security' }] })
+      vi.stubGlobal('fetch', () => {
+        throw new Error('reached the network with the deployment\'s credentials')
+      })
+      // What board hands the server's fetch, before that fetch adds its user's own credentials.
+      const seen: { url: string; headers: [string, string][]; body: string }[] = []
+      const asUser: typeof fetch = async (input, init = {}) => {
+        seen.push({ url: String(input), headers: [...new Headers(init.headers)], body: typeof init.body === 'string' ? init.body : '' })
+        return as(api, 'user:u_jb')(input, init)
+      }
+      for (const handle of [board({ team: 'acme', fetch: asUser }), board({ team: 'acme', name: 'security', fetch: asUser })]) {
+        const posted = await handle.as(null).post('dev', 'on behalf of jb')
+        expect(posted.by).toMatchObject({ principal: 'vercel:user:u_jb', actor: 'vercel:user:u_jb' })
+      }
+      expect(api.requests).toContain('GET /boards')
+      expect(seen.length).toBeGreaterThan(0)
+      for (const request of seen) {
+        expect(new URL(request.url).searchParams.get('slug')).toBe('acme')
+        expect(request.headers.map(([name]) => name)).not.toContain('authorization')
+        const sent = JSON.stringify(request)
+        for (const secret of [oidc, 'vercel-token-from-env', 'board-token-from-env', 'team_deploy', 'deploy-bot']) expect(sent).not.toContain(secret)
+      }
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('types fetch as the credentials of the backend board() picks, never beside one you pass', () => {
+    // Never called: the calls only have to typecheck, or not.
+    const typed = () => {
+      board({ name: 'security', fetch: globalThis.fetch })
+      board({ backend: http(BOARD_URL) })
+      // @ts-expect-error a backend you pass says how it reaches its board
+      board({ backend: http(BOARD_URL), fetch: globalThis.fetch })
+    }
+    expect(typed).toBeTypeOf('function')
+  })
+
+  it('outside Node, needs a fetch or a backend, sends what its fetch sends, and serves only what its backend answers', async () => {
     const team = testBoard()
     // A page's own session, as the board recognizes it: here, a token its fetch adds.
     const fetch = bearer((input, init) => team.fetch(new Request(input, init)), await personToken())
-    expect(() => defaultBoard()).toThrow("http: pass the board's URL: outside Node there's no environment to find it in")
+    expect(() => defaultBoard()).toThrow("board: pass a fetch that sends credentials Vercel's API takes, or a backend")
+    // With a fetch, Vercel's board, by its name.
+    const api = fakeMessageboard({ boards: [{ name: 'security' }] })
+    const onVercel = defaultBoard({ name: 'security', fetch: as(api, 'user:u_jb') })
+    expect((await onVercel.post('dev', 'from a page')).by.principal).toBe('vercel:user:u_jb')
+    expect(api.requests.filter((request) => request === 'GET /boards')).toHaveLength(1)
     const page = defaultBoard({ backend: defaultHttp(BOARD_URL, { fetch }) })
     expect((await page.as('page').post('dev', 'from a browser')).by.actor).toBe('vercel:user:u_julian+page')
     expect((await page.discovery()).url).toBe(BOARD_URL)

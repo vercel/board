@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
-import { vercelProject } from '../src/access/index.ts'
 import { http as httpBackend } from '../src/backend-http/index.ts'
 import { slack, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
@@ -29,7 +28,9 @@ beforeAll(async () => {
   servers = [teamServer, projectServer]
   teamUrl = `${teamServer.origin}/api/board`
   projectUrl = `${projectServer.origin}/api/board`
-  team = testBoard({ url: teamUrl, access: [vercelProject({ project: 'prj_support', can: 'all' })] })
+  team = testBoard({ url: teamUrl })
+  // The support project's production deployments may do everything there.
+  await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
   backend = httpBackend(teamUrl, { fetch: bearer(globalThis.fetch, () => deploymentToken('support', 'prj_support', 'production', { audience: teamUrl })) })
   project = board({
     backend,

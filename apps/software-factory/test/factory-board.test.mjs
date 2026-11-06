@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { board } from "@vercel/board";
+import { oidcTokens } from "@vercel/board/access";
+import { a2, memoryBlob } from "@vercel/board/backend-a2";
+import { memory } from "@vercel/board/backend-a2/store-memory";
 import { vercelTrustedSources } from "../app/api/board/[[...path]]/trusted-sources.ts";
-import { caller, deploymentToken, personToken, testBoard, TEAM_ID } from "../../../packages/board/test/harness.ts";
+// Only what's the same in every release: the test project, keys, tokens, and a caller.
+import { caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testAuth } from "../../../packages/board/test/tokens.ts";
 
 const URL = "http://board.test/api/board";
+
+/**
+ * A board as the factory runs one: its pinned `@vercel/board`, the same release its rules
+ * (`vercelTrustedSources`) and watchers are built with, in memory, in the test project, trusting
+ * the test issuers. This checkout's engine never sees the factory's rules.
+ */
+const testBoard = (given = {}) =>
+  board({
+    backend: a2({ store: memory(), blob: memoryBlob() }),
+    authenticate: oidcTokens(testAuth),
+    project: { id: PROJECT_ID, teamId: TEAM_ID },
+    url: URL,
+    ...given,
+  });
 const grants = JSON.stringify([{ projectId: "prj_factory", teamId: TEAM_ID }]);
 const options = { url: URL, access: vercelTrustedSources(grants) };
 const token = (environment = "production", overrides) => deploymentToken("factory", "prj_factory", environment, { audience: URL, ...overrides });
@@ -60,8 +79,12 @@ test("trusted Factory sessions discover, post, review and respond with verified 
 });
 
 test("refuses unconfigured projects, wrong teams, environments, audiences and malformed tokens", async () => {
+  // Only the trusted sources decide: g2 would let in every project on the board's team.
   const board = testBoard(options);
-  assert.equal((await caller(testBoard({ url: URL }).fetch, await token())("GET", "/me")).status, 403);
+  await board.revokeGrant("g2");
+  const plain = testBoard({ url: URL });
+  await plain.revokeGrant("g2");
+  assert.equal((await caller(plain.fetch, await token())("GET", "/me")).status, 403);
   for (const candidate of [
     await deploymentToken("other", "prj_other", "production", { audience: URL }),
     await token("production", { teamId: "team_other" }),
@@ -98,8 +121,8 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const { owner } = await import("../app/api/board/[[...path]]/owner.ts");
   const { inThread, devMirror } = await import("../app/api/board/[[...path]]/inthread.ts");
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
-  const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
-  const { github, repos } = await import("../../../packages/board/src/sync/github.ts");
+  const { channels, slack } = await import("@vercel/board/sync-slack");
+  const { github, repos } = await import("@vercel/board/sync-github");
   const { issues, pulls } = await import("../app/api/board/[[...path]]/quiet.ts");
   const slackPlatform = fakePlatform("slack");
   const githubPlatform = fakePlatform("github");
@@ -175,9 +198,9 @@ test("a factory PR starts its own Slack thread, and the thread it was built for 
   const { inThread, devMirror } = await import("../app/api/board/[[...path]]/inthread.ts");
   const { renderForSlack } = await import("../app/api/board/[[...path]]/render.ts");
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
-  const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
-  const { render } = await import("../../../packages/board/src/sync/fn.ts");
-  const { github, repos } = await import("../../../packages/board/src/sync/github.ts");
+  const { channels, slack } = await import("@vercel/board/sync-slack");
+  const { render } = await import("@vercel/board/sync");
+  const { github, repos } = await import("@vercel/board/sync-github");
   const { issues, pulls } = await import("../app/api/board/[[...path]]/quiet.ts");
   const slackPlatform = fakePlatform("slack");
   const githubPlatform = fakePlatform("github");

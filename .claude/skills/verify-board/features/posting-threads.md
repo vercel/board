@@ -39,7 +39,7 @@ Proven output (`vb read 3`):
     file notes.txt · text/plain · 6 B · ZNtC-mvCtG8GiP0yn-ssNw
 ```
 
-The attachment lands at `.board/attachments/board/attachments/<id>` (plus `.type` and `.json`
+The attachment lands at `.board/local/board/attachments/<id>` (`.board/attachments/…` on an older board) (plus `.type` and `.json`
 sidecars); `collect.sh` copies it out.
 
 ## Gotchas

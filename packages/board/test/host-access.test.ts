@@ -1,27 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { vercelProject, oidcTokens, type CallerRequest, type Can, type HostPrincipal, type RuleFunction } from '../src/access/index.ts'
+import { oidcTokens, type CallerRequest, type HostPrincipal } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
-import { vercelBlob } from '../src/blob/vercel.ts'
 import { fakeQueue } from './queue.ts'
-import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, testAuth, testBoard } from './harness.ts'
 
 /** A host's credentials: opaque platform tokens it verifies itself, each naming a team. */
 const PLATFORM: Record<string, { team: string; principal: HostPrincipal }> = {
   pt_ada: { team: 'team_a', principal: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-ada' } },
-  pt_viewer: { team: 'team_a', principal: { id: 'vercel:user:u_view', kind: 'person', handle: 'user-view' } },
   pt_bob: { team: 'team_b', principal: { id: 'vercel:user:u_bob', kind: 'person', handle: 'user-bob' } },
+  pt_carol: { team: 'team_a', principal: { id: 'vercel:user:u_carol', kind: 'person', handle: 'user-carol' } },
+  // A host that names its people as a local board does: they're people, never its owner.
+  pt_mallory: { team: 'team_a', principal: { id: 'local:user:mallory', kind: 'person', handle: 'mallory' } },
   pt_deploy: { team: 'team_a', principal: { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } },
+  pt_guest: { team: 'team_a', principal: { id: 'support:customer:99', kind: 'external', handle: 'customer-99' } },
 }
 
-/** The host's own model: what each principal may do. */
-const GRANTS: Record<string, Can> = {
-  'vercel:user:u_ada': 'all',
-  'vercel:user:u_view': ['read'],
-  'vercel:user:u_bob': 'all',
-  'vercel:project:prj_app:production': { 'feedback/': ['post'] },
-}
+/** What a grant names a host's deployment by: the project and environment its ID says. */
+const APP = { principals: [{ kind: 'project' as const, project: 'prj_app', environments: ['production'] }] }
 
 /** Who a request is, as a host's own credentials say: only on its own team's board. */
 const authenticate = (team: string) => (request: CallerRequest) => {
@@ -37,14 +34,29 @@ function hosted(team: string, options: Partial<MountOptions> = {}) {
     store: memory(),
     url: BOARD_URL,
     // The host's own project: its tokens must get nothing unless `authenticate` names them.
-    project: { id: PROJECT_ID, teamId: TEAM_ID },
     authenticate: authenticate(team),
-    access: (principal) => GRANTS[principal.id] ?? null,
     ...options,
   })
 }
 
-describe("a host's authenticate and access", () => {
+describe("a host's authenticate", () => {
+  it("puts a host's people through the grants like anyone: a lock shuts them out, a grant on them lets them in", async () => {
+    const tenant = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
+    const ada = caller(tenant.fetch, 'pt_ada')
+    const carol = caller(tenant.fetch, 'pt_carol')
+    // g1 lets both in, as every person: Ada lets Carol into security/, then closes it to everyone.
+    expect((await ada('POST', '/channels', { path: 'security' })).status).toBe(201)
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_carol' }], can: { 'security/': 'all' } })).status).toBe(200)
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'everyone' }], can: { 'security/': [] } })).status).toBe(200)
+    expect((await carol('POST', '/messages', { channel: 'security', text: 'in' })).status).toBe(201)
+    expect((await ada('POST', '/messages', { channel: 'security', text: 'out' })).status).toBe(403)
+    expect((await ada('GET', '/me')).body.can).toMatchObject({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'security/': [] })
+    // One the host names local:user: is a person like Ada: it can't lift the lock for itself.
+    const mallory = caller(tenant.fetch, 'pt_mallory')
+    expect((await mallory('POST', '/grants', { principals: [{ kind: 'user', userId: 'mallory' }], can: { 'security/': 'all' } })).status).toBe(403)
+    expect((await mallory('POST', '/messages', { channel: 'security', text: 'in?' })).status).toBe(403)
+  })
+
   it("trusts nothing built in: the host project's own person and deployment tokens get no access", async () => {
     const tenant = hosted('team_a')
     for (const token of [await personToken(), await deploymentToken('board', PROJECT_ID)]) {
@@ -54,7 +66,7 @@ describe("a host's authenticate and access", () => {
     }
   })
 
-  it("accepts what it grants, with no audience check, and keeps its handle over the one the CLI sends", async () => {
+  it("accepts who it names, with no audience check, and keeps its handle over the one the CLI sends", async () => {
     const ada = caller(hosted('team_a').fetch, 'pt_ada', { 'x-board-handle': 'bob', 'x-board-profile': 'pi' })
     const me = await ada('GET', '/me')
     expect(me.status).toBe(200)
@@ -104,13 +116,10 @@ describe("a host's authenticate and access", () => {
     controller.abort()
   })
 
-  it('gives what its access function grants, per channel: a viewer reads but cannot write', async () => {
+  it('gives a deployment it names what a grant gives its ID, per channel', async () => {
     const tenant = hosted('team_a')
     await caller(tenant.fetch, 'pt_ada')('POST', '/messages', { channel: 'dev', text: 'one' })
-    const viewer = caller(tenant.fetch, 'pt_viewer')
-    expect((await viewer('GET', '/messages')).body.messages).toHaveLength(1)
-    expect((await viewer('POST', '/messages', { channel: 'dev', text: 'two' })).status).toBe(403)
-
+    await tenant.createGrant({ ...APP, can: { 'feedback/': ['post'] } })
     // Write-only, in one subtree: it posts feedback and reads nothing.
     const deploy = caller(tenant.fetch, 'pt_deploy')
     expect((await deploy('POST', '/messages', { channel: 'feedback/app', text: 'from the app' })).status).toBe(201)
@@ -171,19 +180,24 @@ describe("a host's authenticate and access", () => {
         request.headers.get('cookie') === 'session=ada'
           ? { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }
           : Response.json({ error: { code: 'unauthorized', message: 'sign in' } }, { status: 401 }),
-      access: () => 'all',
     })
     const page = (cookie: string) => tenant.fetch(new Request(`${BOARD_URL}/me`, { headers: { cookie, 'x-board-profile': 'page' } }))
     expect(await (await page('session=ada')).json()).toMatchObject({ actor: 'vercel:user:u_ada+page', principal: 'vercel:user:u_ada' })
     expect((await page('session=eve')).status).toBe(401)
   })
 
-  it("gives a host's principals what their kind gets under the rules", async () => {
-    const rules = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
+  it("gives its people everything, and anyone else it names nothing until a grant does", async () => {
+    const tenant = hosted('team_a')
     // A person the host vouches for is a person: everything, as the board's own people.
-    expect((await caller(rules.fetch, 'pt_ada')('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
-    // A deployment it names gets what a rule gives its ID: none here.
-    expect((await caller(rules.fetch, 'pt_deploy')('GET', '/me')).body.error.message).toBe("this token can't use this board: add vercelProject({ project: 'prj_app', can }) to access")
+    expect((await caller(tenant.fetch, 'pt_ada')('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
+    // A deployment it names gets what a grant gives its ID: none here, and it hears which would.
+    expect((await caller(tenant.fetch, 'pt_deploy')('GET', '/me')).body.error).toEqual({
+      code: 'forbidden',
+      message: "this token can't use this board: no grant lets in project prj_app in production",
+      hint: 'Grant it: vb grants create --project prj_app --environment production',
+    })
+    // `external` gets everything only as a platform user sync writes as: one the host names, nothing.
+    expect((await caller(tenant.fetch, 'pt_guest')('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
   })
 
   it("composes with vb's tokens: a session cookie, or a bearer token, and nothing is a 401", async () => {
@@ -194,7 +208,6 @@ describe("a host's authenticate and access", () => {
     const tenant = board({
       store: memory(),
       url: BOARD_URL,
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
       authenticate: async (request) => (await staff(request)) ?? (await tokens(request)),
     })
     const me = async (headers: Record<string, string>) => {
@@ -204,26 +217,27 @@ describe("a host's authenticate and access", () => {
     expect(await me({ cookie: 'session=ada' })).toMatchObject({ status: 200, body: { principal: 'vercel:user:u_ada' } })
     expect(await me({ authorization: `Bearer ${await personToken()}` })).toMatchObject({ status: 200, body: { principal: 'vercel:user:u_julian' } })
     // A token that fails is refused, not passed over.
-    expect(await me({ authorization: `Bearer ${await personToken('u_julian', 'https://elsewhere.test/api/board')}` })).toMatchObject({ status: 401 })
+    expect(await me({ authorization: `Bearer ${await personToken('u_julian', 'https://elsewhere.test/api/board')}` })).toMatchObject({
+      status: 401,
+      body: { error: { code: 'unauthorized', message: expect.stringMatching(/^invalid token: /) } },
+    })
     expect(await me({})).toMatchObject({ status: 401, body: { error: { code: 'unauthorized', message: 'missing bearer token' } } })
   })
 })
 
-/** An app's own site: its session cookie names staff (people) and customers (external), and `vb`'s tokens still work. */
-function supportBoard(rules: (customers: RuleFunction) => MountOptions['access'], customers: RuleFunction) {
+/** An app's own site: its session cookie names staff and customers, people in its own ID scheme, and `vb`'s tokens still work. */
+function supportBoard() {
   const tokens = oidcTokens(testAuth)
   const session = (request: CallerRequest): HostPrincipal | null => {
     const cookie = request.headers.get('cookie') ?? ''
     if (cookie === 'session=staff-ada') return { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }
     const customer = /^session=customer-(\d+)$/.exec(cookie)?.[1]
-    return customer ? { id: `support:customer:${customer}`, kind: 'external', handle: `customer-${customer}` } : null
+    return customer ? { id: `support:customer:${customer}`, kind: 'person', handle: `customer-${customer}` } : null
   }
   return board({
     store: memory(),
     url: BOARD_URL,
-    project: { id: PROJECT_ID, teamId: TEAM_ID },
     authenticate: async (request) => session(request) ?? (await tokens(request)),
-    access: rules(customers),
   })
 }
 
@@ -234,24 +248,13 @@ const asCookie = (tenant: { fetch(request: Request): Promise<Response> }, cookie
   return { status: response.status, body: await response.json() }
 }
 
-describe('a function among the access rules', () => {
-  const customers: RuleFunction = (principal) => (principal.id.startsWith('support:customer:') ? { 'support/': ['read', 'post'] } : undefined)
+/** What a grant names the sync's deployment by. */
+const SYNC = { principals: [{ kind: 'project' as const, project: 'prj_sync', environments: ['production'] }], can: { '*': 'all' as const } }
 
-  it("gives a host's external principal what it returns, and nothing past it", async () => {
-    const tenant = supportBoard((fn) => [vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }), fn], customers)
-    const customer = asCookie(tenant, 'session=customer-99')
-    expect((await customer('GET', '/me')).body).toMatchObject({ principal: 'support:customer:99', can: { 'support/': ['read', 'post'] } })
-    expect((await customer('POST', '/messages', { channel: 'support/billing', text: 'my invoice is wrong' })).status).toBe(201)
-    expect((await customer('POST', '/messages', { channel: 'dev', text: 'hello?' })).status).toBe(403)
-    // The token rules still decide for tokens.
-    expect((await caller(tenant.fetch, await deploymentToken('front', 'prj_front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
-    // Without it, the rules give the customer nothing: `external` gets everything only as a platform user sync writes as.
-    const without = supportBoard(() => [vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } })], customers)
-    expect((await asCookie(without, 'session=customer-99')('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
-  })
-
+describe("a host's own ID scheme", () => {
   it("keeps a sync from writing as a host's principal, or as the watchers it registered, whatever platform it names", async () => {
-    const tenant = supportBoard((fn) => [vercelProject({ project: 'prj_sync', can: 'all' }), fn], customers)
+    const tenant = supportBoard()
+    await tenant.createGrant(SYNC)
     const customer = asCookie(tenant, 'session=customer-99')
     const staff = asCookie(tenant, 'session=staff-ada')
     expect((await customer('POST', '/watchers', { watch: { inbox: { tail: 'support/' } } })).status).toBe(200)
@@ -270,8 +273,9 @@ describe('a function among the access rules', () => {
   })
 
   it("keeps a sync from writing as a host's principal that wrote, or its profiles, though it registered nothing", async () => {
-    const tenant = supportBoard((fn) => [vercelProject({ project: 'prj_sync', can: 'all' }), fn], customers)
-    // Two of the host's external principals write, one as a profile of its own, and neither registers anything.
+    const tenant = supportBoard()
+    await tenant.createGrant(SYNC)
+    // Two of the host's principals write, one as a profile of its own, and neither registers anything.
     const write = (cookie: string, headers: Record<string, string> = {}) =>
       tenant.fetch(new Request(`${BOARD_URL}/messages`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', ...headers }, body: JSON.stringify({ channel: 'support/billing', text: 'refund please' }) }))
     expect((await write('session=customer-42')).status).toBe(201)
@@ -287,111 +291,26 @@ describe('a function among the access rules', () => {
     expect((await as('support:customer:44')).status).toBe(200)
   })
 
-  it('leaves a principal to the next rule when it returns undefined', async () => {
-    const asked: string[] = []
-    const passes: RuleFunction = (principal) => void asked.push(principal.id)
-    const tenant = supportBoard((fn) => [passes, vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }), fn], customers)
-    expect((await caller(tenant.fetch, await deploymentToken('front', 'prj_front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
-    expect((await asCookie(tenant, 'session=customer-7')('GET', '/me')).body.can).toEqual({ 'support/': ['read', 'post'] })
-    expect(asked).toEqual(['vercel:project:prj_front:production', 'support:customer:7'])
-    // Past the last rule, a token still hears which rule would let it in.
-    expect((await caller(tenant.fetch, await deploymentToken())('GET', '/me')).body.error.message).toBe(
-      "this token can't use this board: add vercelProject({ project: 'marketing', can }) to access",
-    )
-  })
-
-  it('stops at null: the rules after it are never asked', async () => {
-    const tenant = supportBoard((fn) => [() => null, vercelProject({ project: 'prj_front', can: 'all' }), fn], customers)
-    for (const call of [caller(tenant.fetch, await deploymentToken('front', 'prj_front')), asCookie(tenant, 'session=customer-99')])
-      expect((await call('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
-  })
-
-  it("can't take the defaults away: a person, and the board's own deployments where it runs, still get everything", async () => {
+  it("keeps the defaults: a person, and the board's own deployments where it runs, get everything, and its previews need a grant", async () => {
     vi.stubEnv('VERCEL_TARGET_ENV', '')
     vi.stubEnv('VERCEL_ENV', 'production')
     try {
-      const asked: string[] = []
-      const tenant = supportBoard(() => [(principal) => (asked.push(principal.id), null)], customers)
+      const tenant = supportBoard()
+      // Without g2's every project on the team, its previews included.
+      await tenant.revokeGrant('g2')
       const everything = { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] }
       expect((await asCookie(tenant, 'session=staff-ada')('GET', '/me')).body).toMatchObject({ principal: 'vercel:user:u_ada', can: everything })
       expect((await caller(tenant.fetch, await personToken())('GET', '/me')).body.can).toEqual(everything)
       expect((await caller(tenant.fetch, await deploymentToken('board', PROJECT_ID))('GET', '/me')).body.can).toEqual(everything)
-      expect(asked).toEqual([])
-      // Its previews aren't a default: the function decides for them.
-      expect((await caller(tenant.fetch, await deploymentToken('board', PROJECT_ID, 'preview'))('GET', '/me')).status).toBe(403)
-      expect(asked).toEqual([`vercel:project:${PROJECT_ID}:preview`])
+      // Its previews run any branch's code: they aren't a default.
+      expect((await caller(tenant.fetch, await deploymentToken('board', PROJECT_ID, 'preview'))('GET', '/me')).body.error).toEqual({
+        code: 'forbidden',
+        message: "this token can't use this board: it runs in production, and its preview deployments need a grant",
+        hint: `Grant them: vb grants create --project ${PROJECT_ID} --environment preview`,
+      })
     } finally {
       vi.unstubAllEnvs()
     }
-  })
-})
-
-describe("a function rule's schedules", () => {
-  const T0 = Date.parse('2026-10-07T12:00:00.000Z')
-  const HOUR = 3_600_000
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(T0)
-  })
-  afterEach(() => vi.useRealTimers())
-
-  it('ask it again at each send, and are revoked once it gives nothing', async () => {
-    const queue = fakeQueue()
-    const open = { support: true }
-    const tenant = board({
-      store: memory(),
-      url: BOARD_URL,
-      scheduler: queue.scheduler,
-      authenticate: (request) => (request.headers.get('cookie') === 'session=customer-99' ? { id: 'support:customer:99', kind: 'external', handle: 'customer-99' } : null),
-      access: [(principal) => (principal.id === 'support:customer:99' ? (open.support ? { 'support/': ['read', 'post'] } : null) : undefined)],
-    })
-    const customer = asCookie(tenant, 'session=customer-99')
-    const advance = async (ms: number) => {
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      vi.setSystemTime(Date.now() + ms)
-      await queue.fire()
-      await new Promise((resolve) => setTimeout(resolve, 20))
-    }
-    const created = await customer('POST', '/schedules', { channel: 'support', text: 'still waiting', every: '1h' })
-    expect(created.status).toBe(201)
-    await advance(HOUR)
-    expect((await customer('GET', '/messages?channel=support')).body.messages).toMatchObject([{ text: 'still waiting' }])
-    // The app closes the customer's support access: the next send asks, and gets nothing.
-    open.support = false
-    await advance(HOUR)
-    open.support = true
-    expect((await customer('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ id: created.body.schedule.id, sent: 1, state: 'canceled', canceled: { reason: 'revoked' } }])
-    expect((await customer('GET', '/messages?channel=support')).body.messages).toHaveLength(1)
-  })
-})
-
-const blobs = vi.hoisted(() => new Map<string, { data: Uint8Array; contentType: string }>())
-vi.mock('@vercel/blob', () => ({
-  put: async (key: string, data: Buffer, options: { contentType: string }) => void blobs.set(key, { data: new Uint8Array(data), contentType: options.contentType }),
-  get: async (key: string) => {
-    const found = blobs.get(key)
-    return found ? { statusCode: 200, stream: found.data, blob: { contentType: found.contentType } } : null
-  },
-}))
-
-describe('two hosted boards on one Vercel Blob store', () => {
-  it("don't serve each other's attachments when each has its own prefix", async () => {
-    const a = hosted('team_a', { blob: vercelBlob({ prefix: 'team_a' }) })
-    const b = hosted('team_b', { blob: vercelBlob({ prefix: 'team_b' }) })
-    const upload = await a.fetch(
-      new Request(`${BOARD_URL}/attachments`, {
-        method: 'POST',
-        headers: { authorization: 'Bearer pt_ada', 'content-type': 'text/plain', 'x-board-filename': 'secret.txt' },
-        body: 'team a only',
-      }),
-    )
-    const { attachment } = await upload.json()
-    expect([...blobs.keys()].every((key) => key.startsWith('team_a/board/attachments/'))).toBe(true)
-
-    const read = (tenant: typeof a, token: string) =>
-      tenant.fetch(new Request(`${BOARD_URL}/attachments/${attachment.id}`, { headers: { authorization: `Bearer ${token}` } }))
-    expect(await (await read(a, 'pt_ada')).text()).toBe('team a only')
-    expect((await read(b, 'pt_bob')).status).toBe(404)
   })
 })
 
@@ -404,16 +323,15 @@ describe("schedules from a host's principal", () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  /** A person the host grants dev/ until `grant.until`: there's no request to ask again when a schedule sends. */
+  /** A person the host signs in until `session.until`: there's no request to ask again when a schedule sends. */
   async function setup(until: number) {
-    const grant = { until }
+    const session = { until }
     const queue = fakeQueue()
     const tenant = board({
       store: memory(),
       url: BOARD_URL,
       scheduler: queue.scheduler,
-      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', expiresAt: new Date(grant.until) }),
-      access: () => ({ 'dev/': ['read', 'post'] }),
+      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', expiresAt: new Date(session.until) }),
     })
     const ada = caller(tenant.fetch, 'pt_ada')
     const advance = async (ms: number) => {
@@ -422,30 +340,58 @@ describe("schedules from a host's principal", () => {
       await queue.fire()
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    return { ada, advance, grant }
+    return { ada, advance, session }
   }
 
-  it('send with the access granted when they were made', async () => {
+  it("send while the host's principal is live", async () => {
     const { ada, advance } = await setup(T0 + 24 * HOUR)
-    expect((await ada('POST', '/schedules', { channel: 'ops', text: 'not mine', in: '1h' })).status).toBe(403)
     const { body } = await ada('POST', '/schedules', { channel: 'dev/standup', text: 'standup', in: '1h' })
     await advance(HOUR)
     expect((await ada('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ id: body.schedule.id, state: 'done', sent: 1 }])
     expect((await ada('GET', '/messages?channel=dev/standup')).body.messages).toMatchObject([{ text: 'standup' }])
   })
 
-  it('are revoked once that grant has expired, even for a person', async () => {
-    const { ada, advance, grant } = await setup(T0 + 2 * HOUR)
+  it('are revoked once that principal has expired, even for a person', async () => {
+    const { ada, advance, session } = await setup(T0 + 2 * HOUR)
     await ada('POST', '/schedules', { channel: 'dev/standup', text: 'standup', in: '3h' })
     await advance(3 * HOUR)
     // The host signs Ada in again, so she can see what happened.
-    grant.until = Date.now() + HOUR
+    session.until = Date.now() + HOUR
     expect((await ada('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }])
     expect((await ada('GET', '/messages?channel=dev/standup')).body.messages).toEqual([])
   })
+
+  it("ask the board's grants again at each send, and are revoked once they give nothing", async () => {
+    const queue = fakeQueue()
+    const tenant = board({
+      store: memory(),
+      url: BOARD_URL,
+      scheduler: queue.scheduler,
+      authenticate: (request) => (request.headers.get('cookie') === 'session=app' ? { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } : null),
+    })
+    const support = { ...APP, can: { 'support/': ['read' as const, 'post' as const] } }
+    const { grant } = await tenant.createGrant(support)
+    const app = asCookie(tenant, 'session=app')
+    const advance = async (ms: number) => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      vi.setSystemTime(Date.now() + ms)
+      await queue.fire()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const created = await app('POST', '/schedules', { channel: 'support', text: 'still waiting', every: '1h' })
+    expect(created.status).toBe(201)
+    await advance(HOUR)
+    expect((await app('GET', '/messages?channel=support')).body.messages).toMatchObject([{ text: 'still waiting' }])
+    // The grant is revoked: the next send asks, and gets nothing.
+    await tenant.revokeGrant(grant.id)
+    await advance(HOUR)
+    await tenant.createGrant(support)
+    expect((await app('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ id: created.body.schedule.id, sent: 1, state: 'canceled', canceled: { reason: 'revoked' } }])
+    expect((await app('GET', '/messages?channel=support')).body.messages).toHaveLength(1)
+  })
 })
 
-describe("a board that switches to a host's model", () => {
+describe("a board that switches its verifier", () => {
   const T0 = Date.parse('2026-10-07T12:00:00.000Z')
   const HOUR = 3_600_000
   beforeEach(() => {
@@ -454,31 +400,7 @@ describe("a board that switches to a host's model", () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  it("asks its function about schedules the built-in verifier's callers made, instead of trusting them", async () => {
-    const store = memory()
-    const queue = fakeQueue()
-    const before = testBoard({ store, scheduler: queue.scheduler })
-    const julian = caller(before.fetch, await personToken())
-    expect((await julian('POST', '/schedules', { channel: 'dev', text: 'from before', in: '1h' })).status).toBe(201)
-
-    // The same log, now behind a host that only knows Ada: its function decides for everyone.
-    const after = board({
-      store,
-      url: BOARD_URL,
-      scheduler: queue.scheduler,
-      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
-      access: (principal) => (principal.id === 'vercel:user:u_ada' ? 'all' : null),
-    })
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    vi.setSystemTime(T0 + HOUR)
-    await queue.fire()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    const ada = caller(after.fetch, 'pt_ada')
-    expect((await ada('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }])
-    expect((await ada('GET', '/messages?channel=dev')).body.messages).toEqual([])
-  })
-
-  it("revokes a host's principals' schedules once the board drops its function", async () => {
+  it("revokes a host's principals' schedules once its verifier is the built-in one alone", async () => {
     const store = memory()
     const queue = fakeQueue()
     const before = board({
@@ -486,7 +408,6 @@ describe("a board that switches to a host's model", () => {
       url: BOARD_URL,
       scheduler: queue.scheduler,
       authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
-      access: () => 'all',
     })
     expect((await caller(before.fetch, 'pt_ada')('POST', '/schedules', { channel: 'dev', text: 'from the host', in: '1h' })).status).toBe(201)
 
@@ -500,14 +421,13 @@ describe("a board that switches to a host's model", () => {
     expect((await julian('GET', '/messages?channel=dev')).body.messages).toEqual([])
   })
 
-  it("keeps sending the board's own code's schedules under a function", async () => {
+  it("keeps sending the board's own code's schedules behind a host's verifier", async () => {
     const queue = fakeQueue()
     const hostedBoard = board({
       store: memory(),
       url: BOARD_URL,
       scheduler: queue.scheduler,
       authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
-      access: () => 'all',
     })
     await hostedBoard.as('digest').schedule('dev', { text: 'daily digest', in: '1h' })
     await new Promise((resolve) => setTimeout(resolve, 20))

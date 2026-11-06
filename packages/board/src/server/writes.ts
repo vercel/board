@@ -424,7 +424,7 @@ async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, even
  * Runs `attempt`, a look and a conditional append, again each time the board moves on in
  * between, up to `CONDITIONAL_TRIES` times: how every conditional write here looks again.
  */
-async function whileHeadMoves<T>(attempt: () => Promise<T>): Promise<T> {
+export async function whileHeadMoves<T>(attempt: () => Promise<T>): Promise<T> {
   for (let tries = 1; ; tries++) {
     try {
       return await attempt()

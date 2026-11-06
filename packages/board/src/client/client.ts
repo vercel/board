@@ -17,6 +17,7 @@ import type {
   SourceRead,
   SyncedView,
   Me,
+  PrincipalInput,
   MatchView,
   MessagesPage,
   MessagesQueryInput,
@@ -27,6 +28,8 @@ import type {
   SchedulesQueryInput,
   GrantInput,
   GrantView,
+  UpdateGrantInput,
+  Explanation,
   TokenInput,
   TokenView,
   ThreadsPage,
@@ -207,6 +210,46 @@ export type Filters = Omit<FiltersInput, 'label'> & {
 
 export type BoardClient = ReturnType<typeof createBoardClient>
 
+/** A `can` as the wire takes it: `'none'` at a pattern is `[]`. */
+function wireCan<T>(can: T): T {
+  if (can === null || typeof can !== 'object' || Array.isArray(can)) return can
+  return Object.fromEntries(Object.entries(can).map(([pattern, grant]) => [pattern, grant === 'none' ? [] : grant])) as T
+}
+
+/** A principal to grant as the wire takes it: a project's environments, and every project's, are production when left out. */
+const withEnvironments = (principal: PrincipalInput): PrincipalInput =>
+  (principal.kind === 'project' || principal.kind === 'all-projects') && principal.environments === undefined ? { ...principal, environments: ['production'] } : principal
+
+/**
+ * The principal a private channel lets its creator in as, from what `/me` says it is: a person's
+ * user, or a deployment's project in the environment it runs in. Anyone else is refused before
+ * anything is written.
+ */
+function creatorOf(me: Me, path: string): PrincipalInput {
+  const [source, kind, id, environment] = me.principal.split(':')
+  if ((source === 'vercel' || source === 'local') && kind === 'user' && id) return { kind: 'user', userId: me.principal.split(':').slice(2).join(':') }
+  if (source === 'vercel' && kind === 'project' && id && environment) return { kind: 'project', project: id, environments: [environment] }
+  throw new BoardError('no_own_principal', `A private channel lets its creator in, as a person or a project's deployment, and ${me.principal} is neither, so ${path} wasn't made.`, 400, {
+    hint: 'Make it as a person or a deployment, or make it and its grants yourself.',
+  })
+}
+
+/** Whom `explain` asks about: nobody for yourself, or one principal as people name it. */
+export type ExplainPrincipal = {
+  user?: string
+  project?: string
+  /** Where the project's deployment runs: production when left out. */
+  environment?: string
+  github?: string
+  workflow?: string
+  branch?: string
+  event?: string
+  oidc?: string
+  claims?: Record<string, string>
+  /** An app on the team, by its slug or client ID. */
+  app?: string
+}
+
 /** What a write returns, with the handles in it that matched nobody and stayed plain text. */
 export type Written<T> = T & { unknownMentions?: string[] }
 
@@ -306,8 +349,78 @@ export function createBoardClient(options: ClientOptions) {
     /**
      * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
      * there. `created` is false when it was there already; it's left as it is.
+     *
+     * `private` makes it closed to everyone but you, from the protocol's own methods: a grant
+     * letting you in at `<path>/`, then one closing `<path>/` to everyone else, then the channel,
+     * answering the two grants as `grants`. A failure part way leaves the channel open with a grant
+     * too many, or closed and not made yet, and never shuts you out. Before it writes anything, it
+     * refuses a caller that's neither a person nor a project's deployment (400 `no_own_principal`),
+     * one that can't list grants, a path a grant other than `*`'s reaches already (409
+     * `channel_granted`: the channel, `<path>/`, or a pattern under it, whose grants would still let
+     * in whoever they name), and a path where it or a channel under it is there already (409
+     * `channel_exists`), since closing `security/` closes `security/incidents` too. A board that
+     * keeps no grants fails on the listing, with nothing made. Once its own grant is made it lists
+     * them again, and takes its own back when another reaches the path, so of two callers making
+     * the same channel at once, at most one keeps a way in; and once the lock is made, it lists them
+     * a last time, and takes both back when a grant made in between still reaches the path, or its
+     * own two aren't as it made them (someone added themselves to its grant, or opened the lock).
      */
-    createChannel: (path: string) => call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } }),
+    createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
+      if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
+      const creator = creatorOf(await call<Me>('GET', '/me'), path)
+      const pattern = `${path}/`
+      // A grant that already reaches it would still let in whoever it names, past the lock.
+      const reaching = async () =>
+        (await call<{ grants: GrantView[] }>('GET', '/grants')).grants.filter((grant) => Object.keys(grant.can).some((at) => at === path || at.startsWith(pattern)))
+      const granted = (grants: GrantView[], mine: GrantView[] = []) => {
+        // Its own grants, changed while it was made, are revoked by now: there's nothing to revoke.
+        const changed = grants.filter((grant) => mine.some((ours) => ours.id === grant.id)).map((grant) => grant.id)
+        if (changed.length === grants.length)
+          return new BoardError('channel_granted', `${changed.join(' and ')} changed while ${path} was being made, so a private ${path} wouldn't be yours alone: nothing was made.`, 409)
+        const named = grants.filter((grant) => !changed.includes(grant.id)).map((grant) => grant.id)
+        const list = named.length === 1 ? named[0]! : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
+        return new BoardError('channel_granted', `${list} already ${named.length === 1 ? 'grants' : 'grant'} in ${path}, so a private ${path} wouldn't be yours alone: nothing was made.`, 409, {
+          // The message names them all; one command fits only one.
+          hint: named.length === 1 ? `Revoke it first: vb grants revoke ${named[0]}` : 'Revoke them first, each with vb grants revoke <id>.',
+        })
+      }
+      const before = await reaching()
+      if (before.length > 0) throw granted(before)
+      const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      if (there)
+        throw new BoardError(
+          'channel_exists',
+          there.path === path ? `${path} is a channel already, so it stays as it is.` : `${there.path} is a channel already, and a private ${path} would close it too, so nothing was made.`,
+          409,
+          { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
+        )
+      const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      // What reaches the path besides its own grants as it made them: one someone changed (adding
+      // themselves to it, or opening the lock) lets them in as much as a grant of their own would.
+      const others = (grants: GrantView[], mine: GrantView[]) =>
+        grants.filter((grant) => {
+          const made = mine.find((ours) => ours.id === grant.id)
+          return made === undefined || JSON.stringify([grant.principals, grant.can]) !== JSON.stringify([made.principals, made.can])
+        })
+      // Someone making it at the same time: whoever finds the other's grant takes its own back, so at
+      // most one of them keeps a way in, and if each finds the other, neither does.
+      const raced = others(await reaching(), [own.grant])
+      if (raced.length > 0) {
+        await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
+        throw granted(raced, [own.grant])
+      }
+      const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
+      // Once the lock is there, no one it shuts out can grant themselves past it, so this listing is
+      // the last word: a grant made or changed before the lock landed would still let someone in, so
+      // it isn't private, and both of its grants go, the lock first.
+      const late = others(await reaching(), [own.grant, closed.grant])
+      if (late.length > 0) {
+        for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
+        throw granted(late, [own.grant, closed.grant])
+      }
+      const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
+      return { ...made, grants: [own.grant, closed.grant] }
+    },
     actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
@@ -345,12 +458,30 @@ export function createBoardClient(options: ClientOptions) {
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
     /**
-     * Lets in callers with an OIDC token from `issuer` that carries every one of `claims`, to do
-     * what `can` says (read, post, react, and label everywhere when left out). Setting the same
-     * issuer and claims again changes its `can`: `created` says which. Needs manage in every channel.
+     * A new grant: `principals` may do what `can` says, a map from channel pattern to permissions
+     * (`[]` for none). The same principals again are another grant. At each channel, the most
+     * specific pattern among the grants that name a caller decides, then the closest principal,
+     * and grants tied there add up. Needs manage at each pattern `can` names.
      */
-    createGrant: (input: GrantInput) => call<{ grant: GrantView; created: boolean }>('POST', '/grants', { body: input }),
-    /** The board's grants. Needs manage in every channel. */
+    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: { principals: input.principals.map(withEnvironments), can: wireCan(input.can) } }),
+    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
+    updateGrant: (id: string, { add, remove, can }: UpdateGrantInput) =>
+      call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, {
+        body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}) },
+      }),
+    /**
+     * Which grants decide `channel`, and what they give: for you, or with manage at `*`, for the
+     * principal `principal` names (`{ user }`, `{ project, environment }`, `{ github, workflow,
+     * branch, event }`, or `{ oidc, claims }`).
+     */
+    explain: (channel: string, principal: ExplainPrincipal = {}) => {
+      const { claims, ...rest } = principal
+      const params = new URLSearchParams({ channel })
+      for (const [name, value] of Object.entries(rest)) if (value !== undefined) params.set(name, value)
+      for (const [name, value] of Object.entries(claims ?? {})) params.append('claim', `${name}=${value}`)
+      return call<Explanation>('GET', `/grants/explain?${params}`)
+    },
+    /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
     revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),
@@ -359,7 +490,7 @@ export function createBoardClient(options: ClientOptions) {
      * given: for a widget, a sandbox, a script. `secret` shows only here. It lives 30 days, or
      * `expires`, at most 90.
      */
-    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input }),
+    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input.can === undefined ? input : { ...input, can: wireCan(input.can) } }),
     /** Your live tokens, or everyone's with manage in every channel. Never their secrets. */
     tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
     /** It and every token minted with it stop. `revoked` is false when it was already revoked. */

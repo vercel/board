@@ -103,17 +103,8 @@ print, durably, with retries.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
 
 const team = board({
-  backend,
   // sync: { slack: slack('slack/acme', channels({ '#firehose': 'firehose' })) },
   watch: {
     triage: {
@@ -132,7 +123,6 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 - **`event` is exactly what `vb tail --json` prints.** Debug a watcher by
@@ -144,11 +134,8 @@ export const { scheduler } = backend
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.
 
-Without a scheduler, a watcher runs in the request that wrote, and one that
-fails waits for the next write to try again (see
-[Without a scheduler](../01-board/01-mounting.md#without-a-scheduler)). A
-production board takes a scheduler, mounted in
-[its own route](../01-board/01-mounting.md#the-scheduler-route).
+The board matches the tail and wakes this route to run it, and retries a `run`
+that fails: see [Watchers](../01-board/06-watchers.md).
 
 ## 4. Hand reports to an agent
 

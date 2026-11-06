@@ -52,8 +52,38 @@ export function ContextMenuArea(props: { menu: ReactNode; onOpenChange?: (open: 
   )
 }
 
-/** Stops a right-click on text from reaching the custom menu: you get copy and look-up. */
-export const nativeMenu = { onContextMenuCapture: (event: React.MouseEvent) => event.stopPropagation() }
+/**
+ * Whether (x, y) is on a character, not the blank space a block leaves beside a short line or under
+ * its last one: the caret's nearest text node, and whether the point is inside one of its lines.
+ */
+function onText(x: number, y: number): boolean {
+  const node = document.caretPositionFromPoint?.(x, y)?.offsetNode ?? document.caretRangeFromPoint?.(x, y)?.startContainer
+  if (node?.nodeType !== Node.TEXT_NODE) return false
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  return [...range.getClientRects()].some((line) => x >= line.left && x <= line.right && y >= line.top && y <= line.bottom)
+}
+
+/** Whether a right-click there keeps the browser's menu: on text, a link, or an image. */
+const keepsBrowserMenu = (event: React.MouseEvent) => !!(event.target as Element).closest('a, img, video') || onText(event.clientX, event.clientY)
+
+/**
+ * Stops a right-click on text, a link, or an image from reaching the custom menu: you get copy and
+ * look-up. The space around them is the row's, where its menu opens, and where the cursor is the
+ * default one, not text's.
+ */
+export const nativeMenu = {
+  onContextMenuCapture: (event: React.MouseEvent) => {
+    if (keepsBrowserMenu(event)) event.stopPropagation()
+  },
+  // Not while a button is down: a selection being dragged keeps its cursor.
+  onMouseMove: (event: React.MouseEvent<HTMLElement>) => {
+    if (event.buttons === 0) event.currentTarget.style.cursor = keepsBrowserMenu(event) ? '' : 'default'
+  },
+}
+
+/** Keeps the browser's menu everywhere in something you type in. */
+export const fieldMenu = { onContextMenuCapture: (event: React.MouseEvent) => event.stopPropagation() }
 
 export function MenuItem(props: { onClick: () => void; danger?: boolean; hint?: string; children: ReactNode }) {
   return (

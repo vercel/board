@@ -91,7 +91,10 @@ export function useNow(every = 30_000): number {
   return now
 }
 
-/** Typing anywhere that isn't a field focuses the composer; the keystroke lands in it. */
+/**
+ * Typing anywhere that isn't a field focuses a composer, and the keystroke lands in it: the open
+ * thread's when there is one, since that's what you're looking at, or else `composer`.
+ */
 export function useTypeToFocus(composer: string) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -99,7 +102,9 @@ export function useTypeToFocus(composer: string) {
       const target = event.target as HTMLElement
       if (target !== document.body && target.closest('input, textarea, select, [contenteditable], [role="menu"], [role="dialog"], [role="listbox"]'))
         return
-      document.querySelector<HTMLTextAreaElement>(`textarea[data-composer="${CSS.escape(composer)}"]`)?.focus()
+      const find = (role: string) => document.querySelector<HTMLTextAreaElement>(`textarea[data-composer="${CSS.escape(role)}"]`)
+      const area = find('thread') ?? find(composer)
+      area?.focus()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)

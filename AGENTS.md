@@ -15,10 +15,13 @@ pnpm test           # vitest: unit, in-process server, and CLI end to end
 CI runs `pnpm check` on every PR and on `main` (`.github/workflows/check.yml`);
 its `check` job is the status a PR needs before it can land.
 
-Tests pass their pieces like any board (`packages/board/test/harness.ts`):
+Tests run on the local board's engine (`packages/board/test/harness.ts`):
 `memory()` for the store, `memoryBlob()` for files, no scheduler unless a test
-passes one, and a local test issuer. Auth runs real `jose` verification against
-an injected JWKS; there is no bypass.
+passes one, a local test issuer, and the test project as the board's
+environment. Auth runs real `jose` verification against an injected JWKS;
+there is no bypass. What doesn't depend on board's version (the test project,
+its keys, the tokens they sign, and `caller`) is `test/tokens.ts`, which the
+factory's tests use with the release they pin.
 
 Every test you write, change, or review gets the test-behavior skill
 (`.claude/skills/test-behavior`, and the factory's copy for Eve): break what it
@@ -59,7 +62,7 @@ characters at most: `fix(store): split big redisTables writes into bounded scrip
 - `type` is `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, or `chore`,
   with `!` when it breaks someone: `feat(protocol)!: …`.
 - `area`, when one fits, is where people would look: `cli`, `sdk`, `protocol`,
-  `sync`, `backend-a2`, `backend-http`, `backend-vercel`, `inspector`,
+  `sync`, `backend-local`, `backend-http`, `backend-vercel`, `inspector`,
   `factory`, `docs`.
 - No narration ("X does Y", "X is Y") and no second clause: two changes are
   two PRs.
@@ -109,6 +112,10 @@ plus the [docs site](#the-docs-packagesboarddocs) everywhere outside `/api`:
 the board route holds the whole config, and the A2 scheduler route re-exports
 the board's `scheduler`. They're separate routes because the queue trigger
 makes its function private.
+
+It runs `@vercel/board` 0.32.0 from npm, not this checkout: the last release
+with `a2()`, which it stays on until Vercel's board runs sync (#404). So does
+pong. What follows describes the factory on that release.
 
 ```bash
 cd apps/software-factory
@@ -251,7 +258,7 @@ thread rather than starting one.
   never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
   `vb` is pinned (`BOARD` in `agent.ts`) to the board the factory was built
-  with, so each release reaches Eve when the factory deploys, with no bump. `gh` is pinned too (`GH`), which
+  with: the release the factory pins, so Eve's `vb` moves when that pin does. `gh` is pinned too (`GH`), which
   new sandboxes download without asking GitHub's API, whose unauthenticated rate
   limit sandboxes share.
 - Eve gets the factory's own skills, from `apps/software-factory/skills/`
@@ -301,8 +308,10 @@ for the service contract.
 
 ## pong (`apps/pong`)
 
-A project's board on the factory's: `board({ backend: http(BOARD_URL) })`
-keeps no log, and the factory's board keeps it. Its one watcher, `ping`, tails
+A project's board on the factory's, on `@vercel/board` 0.32.0 like the factory:
+`board({ backend: http(BOARD_URL) })` keeps no log, and the factory's board
+keeps it. `http()` isn't exported after 0.32, so unpinned it moves to `board()`
+or `board({ name })` on Vercel's board, with a grant. Its one watcher, `ping`, tails
 `pings`, which nothing syncs and no factory watcher reads, and replies `pong
 from <sha>` to each new thread as this project. Its page (`app/page.tsx`)
 pings from a browser through server actions that use the same handle
@@ -342,7 +351,8 @@ read it in `node_modules/@vercel/board/docs`. The software factory serves it at
 https://vboard-factory.playground-vercel.tools: `docs/index.md` is the landing
 page's body, and every page also answers as markdown at its URL plus `.md`. The
 site (`app/` outside `api/`, `components/`, `lib/`) is A2's docs site ported,
-grayscale and Geist Mono; it reads the docs from its installed `@vercel/board`.
+grayscale and Geist Mono; it reads the docs from its installed `@vercel/board`,
+the release it pins, so it serves that release's docs.
 
 - **Plain GFM, no HTML.** Frontmatter is `title` and `description` (YAML: quote
   a value with `: ` in it). The description renders under the title, so a body
@@ -353,8 +363,10 @@ grayscale and Geist Mono; it reads the docs from its installed `@vercel/board`.
   and under a `## FAQ`, each `###` question folds into a `<details>`.
 - **Pages link by relative file path** (`../02-sync/03-slack.md#files`), so they
   read the same on GitHub and in `node_modules`. The site turns them into URLs,
-  and a link to no page fails the build; `apps/software-factory/test/docs.test.mjs`
-  checks anchors too.
+  and a link to no page or heading is broken there:
+  `packages/board/test/docs-links.test.ts` checks every link and anchor in
+  this checkout's docs, and `apps/software-factory/test/docs.test.mjs` the
+  site's own handling of them.
 - **Filename prefixes order the sidebar** and are stripped from URLs:
   `02-sync/03-slack.md` is `/sync/slack`, in the group "Sync".
 - **A2's voice:** present tense, as if it ships today; short sentences; no
@@ -372,8 +384,8 @@ included, post to Slack and GitHub.
 
 - **The page is just another handle.** `server.ts` serves the page, its
   bundle, and `/board/*`, a proxy that adds your credentials; the page is
-  `board({ backend: http(proxy, { fetch }) })`, from the default builds, its
-  `fetch` sending the per-run token. The page needs no inspector-specific API; if
+  `board({ backend: http(proxy, { fetch }) })`, on the internal `http()` of the
+  default builds, its `fetch` sending the per-run token. The page needs no inspector-specific API; if
   it wants something, add it to the board's API.
 - **State lives in `app/store.ts`, pure and tested.** Views merge by their
   `version` (an older view never replaces a newer one); your writes are
@@ -442,31 +454,36 @@ through a handle from `board()`, and `board()` only ever calls the backend's
 methods, and nothing reaches around them. The policy is `board()`'s, in one
 place on every backend: it routes and validates each request, verifies its
 caller (`authenticate`, `oidcTokens()` from `@vercel/board/access` by default),
-applies `access`, runs the `middleware`, and calls the backend with the caller
-it verified (`{ identity, origin }`), which the backend trusts because only
-`board()` makes one. Nothing with side effects runs for a request before
-`access` allows it. `a2()` is the log and its engine, the same in every
-environment: a `store` (SQLite at `.a2/dev.db` when none is passed, which
-serverless can't open), and a `scheduler` and `blob` only if they're passed.
-Without a scheduler, its consumers run in the request that wrote and scheduling
-answers 501 `no_scheduler`; without a blob store, it keeps no files (501
-`no_files`). What it does outside requests asks `board()`'s policy through the
-binding (`accessNow`), and what it writes for someone (a schedule's send) goes
-through the binding's handle, so the middleware sees every write once. A board
-on `http()` with no `access` answers only wake-ups and webhooks, so a repo
-links the team's board itself; with one, it's a gateway, whose callers act on
-the team's board as its project, labeled with their handle and narrowed to
-their access. Request
+works out what it may do (its people and its own deployments everything,
+anyone else what the board's grants and board tokens give), runs the
+`middleware`, and calls the backend with the caller it verified
+(`{ identity, origin }`), which the backend trusts because only `board()`
+makes one. Nothing with side effects runs for a request before its access
+allows it. With no backend, `board()` is the team's board in Vercel's
+API (`vercel()`), or with `BOARD_URL` set, `http()` to that board: both
+internal, and neither exported.
+`local()` keeps a board in this process on an internal engine, A2's log
+(`src/server/a2.ts`, never in the public API or its types): SQLite under
+`.board/` or memory, its files beside it, and a scheduler in the process. The
+engine without a scheduler, as some tests run it, runs its consumers in the
+request that wrote and answers scheduling with 501 `no_scheduler`; without a
+blob store, it keeps no files (501 `no_files`). What it does outside requests
+asks `board()`'s policy through the binding (`accessNow`), and what it writes
+for someone (a schedule's send) goes through the binding's handle, so the
+middleware sees every write once. A board
+on another one, Vercel's (`vercel()`) or the one at `BOARD_URL` (`http()`),
+answers only wake-ups and webhooks, so a repo links the team's board itself.
+Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
-handle. Nothing on the way to a handle over `http()` imports Node: credentials
-go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
-builds of `@vercel/board` and `@vercel/board/backend-http`. Watchers and sync run in either
+handle. Nothing on the way to a handle on Vercel's board imports Node:
+credentials go in `board({ fetch })`, whose Node default (`vb`'s) lives in the
+`node` build of `@vercel/board`. Watchers and sync run in either
 build: the engine loads when it's first used, and it and `SyncProvider` import
 nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
 A2 is bundled: tsdown inlines what board runs of it into `dist` (`deps.alwaysBundle`), so
-installing board installs no `experimental-a2`, and only `backend-a2` loads it. The Chat SDK,
+installing board installs no `experimental-a2`, and only `local()` loads it. The Chat SDK,
 its adapters, and `@vercel/connect` are optional peers that only the `sync-*` subpaths load.
-Neither reaches a handle over `http()`, its types included (`test/browser.test.ts` and
+Neither reaches a handle on Vercel's board, its types included (`test/browser.test.ts` and
 `test/types.test.ts` check), and the factory's own A2 (Pi's token refreshes) runs apart
 from board's, on its own store and queue.
 
@@ -479,21 +496,19 @@ from board's, on its own store and queue.
   answering, it writes the quote. (That's why replies sync without an
   automatic quote line.)
 
-- **One log.** Every board fact is an event in A2 session `board`. Messages and
+- **One log.** On a local board, every board fact is an event in A2 session `board`. Messages and
   the sync state are read from tables the `board-tables` consumer keeps from it
   (`src/store/`), built with `foldMessages` and `foldSync`; smaller views are reducers in
   `src/contract/reducers.ts`. Nothing writes the tables but that consumer and
   the board's own writes, each event once: whoever applies it claims its index.
   Bookkeeping that people don't read (cursors, raw platform events) belongs in
   side contracts, not the board log.
-- **The tables are one interface.** The board reads through `MessageTables`
-  (`src/store/types.ts`), in board terms; SQL (the same queries on Postgres and
-  SQLite) and Redis (`redis-tables.ts`, a script per write and per query) are
-  behind it. `test/tables.test.ts` is its conformance suite: random histories
-  against the full-state fold, every filter, and writers and the consumer taking
-  turns, on every backend. A change to either keeps it passing, and a new
-  backend joins its `BACKENDS`. Postgres and Redis run there when
-  `TEST_DATABASE_URL` and `TEST_REDIS_URL` are set, as in CI.
+- **The tables are one interface.** A local board reads through `MessageTables`
+  (`src/store/types.ts`), in board terms, on SQLite (`src/store/sql.ts`).
+  `test/tables.test.ts` is its conformance suite: random histories against the
+  full-state fold, every filter, and writers and the consumer taking turns, in a
+  file and in `memory()`. A change to either keeps it passing, and a new backend
+  joins its `BACKENDS`.
 - **Folds mutate in place.** A2 clones state at every read and snapshot
   boundary, so an event costs O(1). Never share a fold's state object outside
   the fold.

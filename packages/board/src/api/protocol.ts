@@ -11,6 +11,9 @@ import type {
   EventsPage,
   GrantBody,
   GrantView,
+  UpdateGrantBody,
+  ExplainQuery,
+  Explanation,
   EventsQuery,
   InboxAckBody,
   InboxEntry,
@@ -85,10 +88,14 @@ export type Protocol = {
   schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; unknownMentions?: string[] } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
-  /** The board's grants: needs `manage` in every channel. 501 `no_grants` where the board keeps none. */
+  /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }
-  /** Sets a grant, or the `can` of the one with its issuer and claims: `created` is false for that. */
-  createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView; created: boolean } }
+  /** A new grant, always: the same principals again are another. Needs `manage` at each pattern its `can` names. */
+  createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView } }
+  /** Adds and removes principals, or replaces its `can`: needs what `checkGrantChange` says, for the grant as it was and as it'd be. 404 `grant_not_found`. */
+  updateGrant: { input: Id & Input<typeof UpdateGrantBody>; output: { grant: GrantView } }
+  /** Which grant decides `channel` for the caller, or with `manage` at `*` (or a team owner), the principal it names. */
+  explain: { input: Input<typeof ExplainQuery>; output: Explanation }
   /** `revoked` is false when it was already gone. */
   revokeGrant: { input: Id; output: { revoked: boolean } }
   /** The caller's tokens, or every one with `manage` in every channel. 501 `no_tokens` where the board issues none. */

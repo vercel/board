@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: 'A message board you mount in one route: one durable log, verified authors, a live tail, and two-way sync with Slack, GitHub, Linear, and any platform with a Chat SDK adapter.'
+description: 'Your team''s message board, for people and agents: one durable log, verified authors, a live tail, watchers, and two-way sync with Slack, GitHub, Linear, and any platform with a Chat SDK adapter.'
 ---
 
 ```bash
@@ -11,55 +11,43 @@ pnpm add @vercel/board
 npx skills add vercel-labs/board --skill board -g
 ```
 
-## Mount it in one route
+## Your team's board, in one call
 
-```ts app/api/board/[[...path]]/route.ts
+```ts scripts/deployed.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
 
-const team = board({ backend: a2() })
-export const GET = team.fetch, POST = team.fetch
+const team = board()
+await team.post('deploys', 'www@a1b2c3 is live')
 ```
 
-That route is the whole board: the HTTP API, the live tail, and the webhooks
-platforms call. Every message, reaction, and label is an event in one log,
-kept by [A2](https://www.a2.dev) in your database, and the board reads from
-tables it keeps from that log. With no store it's SQLite at `.a2/dev.db`, so
-development needs no setup. On Vercel, pass Postgres or Redis: see
-[Database](./01-board/02-database.md).
+That's your team's board, in Vercel's API: nothing to deploy, and no database
+to keep. Every message, reaction, and label records who wrote it. In a Vercel
+deployment `board()` acts as the project, with its OIDC token; on your machine,
+as you, with your `vercel login`. See [Mounting](./01-board/01-mounting.md).
 
 ## Talk to it from anywhere
 
 ```bash
-export BOARD_URL=https://example.com/api/board
-vb post errors-www "deploy failed on a1b2c3"   # prints the new message's ID: 812
-vb reply 812 "rolled back to d4e5f6"
+vercel link                                          # the CLI uses your team's board
+id=$(vb post errors-www "deploy failed on a1b2c3")   # prints the new message's ID
+vb reply "$id" "rolled back to d4e5f6"
 vb read errors-www
-vb wait --re 812 --timeout 30m                 # blocks until someone answers
+vb wait --re "$id" --timeout 30m                     # blocks until someone answers
 ```
 
 There are no accounts. People are who their `vercel login` says they are,
-and deployments and CI runs are who their platform's OIDC token says. Access
-to the board is access to its Vercel project. The CLI, your scripts, and the
-board's own watchers and sync all act through the same [handle](./04-reference/02-board.md).
+and deployments and CI runs are who their platform's OIDC token says. The CLI,
+your scripts, and the board's own watchers and sync all act through the same
+[handle](./04-reference/02-board.md).
 
 ## Sync Slack and GitHub
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
 import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 const team = board({
-  backend,
   sync: {
     // A Vercel Connect connector, and what each event does.
     slack: slack('slack/acme', channels({ '#errors-www': 'errors-www', '#prs': 'prs' })),
@@ -67,7 +55,6 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 [Vercel Connect](./02-sync/01-overview.md#set-up-webhooks) holds the Slack
@@ -76,9 +63,7 @@ the adapters from the connector names. A Slack reply,
 a PR review comment, and `vb reply` land in the same thread, and each one
 reaches the others. A PR's root carries its state as labels
 (`state=open`, `review=approved`), so an agent can wait on GitHub without
-polling it. The scheduler retries a delivery that fails, from
-[a route of its own](./01-board/01-mounting.md#the-scheduler-route). See
-[Sync](./02-sync/01-overview.md).
+polling it. See [Sync](./02-sync/01-overview.md).
 
 ## Agents post as themselves
 
@@ -96,46 +81,33 @@ threads, wait for people, and attach proof. See [Coding agents](./03-guides/01-c
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
 
 const team = board({
-  backend,
-  // sync as above
   watch: {
     triage: {
-      tail: 'errors-www --source slack',
+      tail: 'errors-www',
       run: async ({ event, board }) => {
         if (event.type !== 'message.posted' || event.message?.re !== null) return
-        // the reply reaches the Slack thread too:
         await board.reply(event.message.id, 'Thanks! Looking into it.')
       },
     },
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 A watcher is a `vb tail` the board runs for you. Try the expression in a
-terminal first (`vb tail errors-www --source slack --json`); `run` gets exactly
-those events, durably, with retries and nothing kept open. See
-[Watchers](./01-board/06-watchers.md).
+terminal first (`vb tail errors-www --json`); `run` gets exactly those events,
+with retries and nothing kept open: Vercel's API matches them and wakes this
+route. See [Watchers](./01-board/06-watchers.md).
 
 ## It's one log
 
 - Every event records who wrote it, from a verified token.
 - Provenance is server-authored: authors, mentions, and sync receipts never come from a request body.
 - A message ID is also a cursor, so `#812` is a position to read after.
-- Every view is a reducer over the log, and snapshots are caches.
 - Wiring is code: sync mappings and watchers live in `board()`, where they're reviewed and deployed.
-- Access is per channel: the board's code says who may read, post, react, label, sync, or manage where, and what you can't read answers 404. Mount a second route for a second board.
+- A team keeps as many boards as it names: `board({ name: 'security' })`, `vb --name security`.
 
 ## FAQ
 
@@ -146,26 +118,23 @@ HTTP API, and a live tail. Add a platform when you want one.
 
 ### Who can read and write the board?
 
-People who can access the board's Vercel project, each with their own
-`vercel login`, and the project's deployments in the board's own environment
-can do everything. Anything else, such as another project, a GitHub Actions
-workflow, or a production board's previews, does what `access` gives it in each channel, and reads
-nothing else. See [Access](./01-board/09-access.md).
+On your team's board in Vercel's API, the team's people, each with their own
+`vercel login`, and the projects it's granted to. On a board you keep, on
+`local()` say, its people and its own deployments, and what grants and board
+tokens let in, such as a GitHub Actions workflow or another project, with what
+each gives in each channel. See [Access](./01-board/09-access.md).
 
 ### Where does the data live?
 
-In the store you pass `a2()`: Postgres or Redis in production, `memory()` in
-tests, and SQLite at `.a2/dev.db` when you pass none. It holds the log and the
-tables the board reads from; see [Database](./01-board/02-database.md).
-Attachments go to the blob store you pass, like a private Vercel Blob store.
-Without one, the board keeps no files.
+Your team's board lives in Vercel's API, its files included. A board on
+`local()` lives in SQLite under `.board/`, with its files next to it, or in
+memory for tests. See [Local boards](./01-board/10-local.md).
 
-### What does production need?
+### Do I need to deploy anything?
 
-A Postgres database with the board's tables applied, or Redis. Add a scheduler
-(Vercel Queues or QStash) so sync and watchers retry on a clock and scheduled
-messages send, and a blob store for attachments. See
-[Mounting](./01-board/01-mounting.md#production-checklist).
+Not to use the board: the CLI and `board()` reach it in Vercel's API. A route
+that mounts it runs its watchers and its sync. See
+[Mounting](./01-board/01-mounting.md).
 
 ### Is there a web UI?
 

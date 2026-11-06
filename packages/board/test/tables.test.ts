@@ -1,21 +1,18 @@
-import { Redis } from 'ioredis'
-import pg from 'pg'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
 import { compileAccess, FULL_ACCESS, type Can } from '../src/server/access.ts'
 import type { BoardEvent } from '../src/contract/events.ts'
 import { foldActors, foldMessages, foldSync, type ActorsState, type Message, type MessagesState, type SyncState } from '../src/contract/folds.ts'
 import { compileFilter, readableFilter, toMessageFilter } from '../src/server/feed.ts'
 import type { ParsedFilters } from '../src/api/routes.ts'
-import { postgresDb, type PgPool } from '../src/store/postgres-db.ts'
-import { redisHttp } from '../src/store/redis-http.ts'
-import { redisTables, tablesKeyBase } from '../src/store/redis-tables.ts'
-import { redis } from '../src/store/redis.ts'
+import { memory } from '../src/store/memory.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
+import { sqlite } from '../src/store/sqlite.ts'
 import { project } from '../src/store/project.ts'
-import { ddl, sqlTables } from '../src/store/sql.ts'
+import { sqlTables } from '../src/store/sql.ts'
 import type { BoardStore, MessageTables } from '../src/store/types.ts'
-import { pgliteDb } from './pglite-db.ts'
-import { upstashRest } from './upstash.ts'
 
 /** A small seeded generator, so a failing history can be replayed. */
 function random(seed: number) {
@@ -357,90 +354,18 @@ function conformance(open: () => Promise<MessageTables>) {
   })
 }
 
-// Postgres and Redis run when a server is configured (CI has both): each backend gets its own
-// schema or key prefix, so tests never share state.
-const postgresUrl = process.env.TEST_DATABASE_URL
-const redisUrl = process.env.TEST_REDIS_URL
+/** A store's tables, which close the whole store. */
+const tablesOf = (store: BoardStore): MessageTables => ({ ...store.tables, close: () => store.close() })
+const dir = mkdtempSync(join(tmpdir(), 'board-tables-'))
 let opened = 0
 
-const database = `board_tables_${process.pid}_${Date.now()}`
-let databaseUrl = ''
-const pools: pg.Pool[] = []
-
-/** The tables in a schema of their own, in a database of the suite's own. */
-async function postgresTables(): Promise<MessageTables> {
-  const schema = `t${++opened}`
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 3, options: `-c search_path=${schema}` })
-  pools.push(pool)
-  await pool.query(`create schema ${schema}`)
-  for (const statement of ddl('postgres')) await pool.query(statement)
-  return sqlTables(postgresDb(async () => pool as unknown as PgPool, { owned: false }))
-}
-
-const stores: BoardStore[] = []
-const clients: Redis[] = []
-const tablesOf = (store: BoardStore): MessageTables => {
-  stores.push(store)
-  return store.tables
-}
-
-/** Upstash's REST API, in front of the test server and under its rules for scripts: what `redisHttp` speaks. */
-let rest: Awaited<ReturnType<typeof upstashRest>> | undefined
-
+/** The tables as a local board keeps them: SQLite in a file, or `memory()`. */
 const BACKENDS: { name: string; open: () => Promise<MessageTables>; enabled: boolean }[] = [
-  { name: 'SQLite', open: async () => sqlTables(sqliteDb(':memory:')), enabled: true },
-  { name: 'Postgres (PGlite)', open: async () => sqlTables(await pgliteDb()), enabled: true },
-  { name: 'Postgres', open: postgresTables, enabled: Boolean(postgresUrl) },
-  { name: 'Redis', open: async () => tablesOf(redis({ url: redisUrl!, keyPrefix: `vbt${process.pid}x${++opened}` })), enabled: Boolean(redisUrl) },
-  {
-    // Redis runs nothing else while a script runs, so a long read goes in several: here, every one does.
-    name: 'Redis, 7 IDs a script',
-    open: async () => {
-      const client = new Redis(redisUrl!)
-      clients.push(client)
-      return redisTables((command, ...args) => client.call(command, ...args), `vbt${process.pid}x${++opened}`, { scanBudget: 7 })
-    },
-    enabled: Boolean(redisUrl),
-  },
-  {
-    name: "Upstash's REST API, under its rules for scripts",
-    open: async () => tablesOf(redisHttp({ url: rest!.url, token: 'test', keyPrefix: `vbt${process.pid}x${++opened}` })),
-    enabled: Boolean(redisUrl),
-  },
+  { name: 'SQLite, in a file', open: async () => tablesOf(sqlite({ path: join(dir, `${++opened}.db`) })), enabled: true },
+  { name: 'memory()', open: async () => tablesOf(memory()), enabled: true },
 ]
 
-beforeAll(async () => {
-  if (postgresUrl) {
-    const admin = new pg.Client({ connectionString: postgresUrl })
-    await admin.connect()
-    await admin.query(`create database ${database}`)
-    await admin.end()
-    const at = new URL(postgresUrl)
-    at.pathname = `/${database}`
-    databaseUrl = at.toString()
-  }
-  if (redisUrl) rest = await upstashRest(redisUrl)
-})
-
-afterAll(async () => {
-  for (const store of stores) await store.close()
-  for (const client of clients) client.disconnect()
-  if (redisUrl) {
-    // Every key the suite wrote is under a prefix of its own.
-    const client = new Redis(redisUrl)
-    const keys = await client.keys(`vbt${process.pid}x*`)
-    if (keys.length > 0) await client.del(...keys)
-    client.disconnect()
-  }
-  await rest?.close()
-  for (const pool of pools) await pool.end()
-  if (postgresUrl) {
-    const admin = new pg.Client({ connectionString: postgresUrl })
-    await admin.connect()
-    await admin.query(`drop database if exists ${database} with (force)`)
-    await admin.end()
-  }
-})
+afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe("a message's version", () => {
   const by = AUTHORS[0]
@@ -469,152 +394,6 @@ describe("a message's version", () => {
     foldMessages(state, event(9, 'message.sync_failed', { target: 'slack:C1', error: 'not_in_channel' }))
     foldMessages(state, receipt(10))
     expect(state.byId[5]).toMatchObject({ version: 10, undelivered: {} })
-  })
-})
-
-describe('a Redis keyPrefix', () => {
-  it("can't contain braces, which would set every key's hash tag", () => {
-    expect(() => redisTables(async () => null, 'board{1}')).toThrow("a Redis keyPrefix can't contain braces")
-  })
-})
-
-describe.skipIf(!redisUrl)('the Redis tables', () => {
-  const by = AUTHORS[0]
-  const post = (index: number, channel: string, re: number | null = null) =>
-    ({
-      type: 'message.posted', id: `p${index}`, index, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(),
-      payload: { channel, text: `in ${channel}`, re, replyTo: null, thread: `p${re ?? index}`, labels: {}, noSync: false, mentions: [], by, origin: null, from: null },
-    }) as unknown as BoardEvent
-  const labeled = (index: number, id: number) =>
-    ({ type: 'labels.changed', id: `l${index}`, index, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(), payload: { id, thread: `p${id}`, by, set: { kind: 'bug' }, unset: [] } }) as unknown as BoardEvent
-  const deleted = (index: number, id: number, root: number) =>
-    ({ type: 'message.deleted', id: `d${index}`, index, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(), payload: { id, thread: `p${root}`, by, from: null } }) as unknown as BoardEvent
-  /** A root, two replies, a label on the root, and the latest reply deleted: every script runs. */
-  const events = [post(1, 'dev'), post(2, 'dev', 1), post(3, 'dev', 1), labeled(4, 1), deleted(5, 3, 1)]
-  const readAll = async (tables: MessageTables) => {
-    await tables.messages({ channel: { path: 'dev', subtree: true }, text: 'dev' }, { limit: 10 })
-    await tables.threads({ labels: [{ key: 'kind', values: null }] }, { limit: 10 })
-    await tables.threads({ channel: { path: 'dev', subtree: false } }, { limit: 10 })
-    await tables.messagesAt([1, 2], 3)
-    await tables.copiesOf([1])
-  }
-  const shebang = (script: string) => /^#!lua flags=([^\n]*)\n/.exec(script)?.[1] ?? null
-  /** The scripts that ran on `prefix`'s keys, from a log of commands. */
-  const scriptsOn = (commands: readonly (readonly (string | number)[])[], prefix: string) =>
-    commands.filter(([command, , , ...keys]) => command === 'EVAL' && keys.some((key) => String(key).startsWith(`${prefix}:`))).map(([, script, count, ...rest]) => ({
-      script: String(script),
-      keys: rest.slice(0, Number(count)).map(String),
-    }))
-
-  it("lock only the board's tables on Upstash: every key shares its tag, and every query takes the shared lock", async () => {
-    const prefix = `vbt${process.pid}x${++opened}`
-    const tables = tablesOf(redisHttp({ url: rest!.url, token: 'test', keyPrefix: prefix }))
-    const from = rest!.commands.length
-    for (const event of events) await tables.apply(event)
-    await readAll(tables)
-    const scripts = scriptsOn(rest!.commands.slice(from), prefix)
-    // The server takes the flag, asked once.
-    expect(scripts.filter(({ script }) => script.endsWith('\nreturn 1'))).toHaveLength(1)
-    for (const { keys } of scripts) for (const key of keys) expect(key.startsWith(`${tablesKeyBase(prefix)}:`)).toBe(true)
-    const flags = new Set(scripts.map(({ script }) => shebang(script)))
-    expect(flags).toEqual(new Set(['allow-key-locking', 'no-writes,allow-key-locking']))
-    // The writes, and the reads their writes are worked out from, take the lock writes take.
-    const applies = scripts.filter(({ script }) => script.includes("redis.call('SET', KEYS[1], ARGV[1])"))
-    expect(applies.length).toBeGreaterThanOrEqual(events.length)
-    expect(new Set(applies.map(({ script }) => shebang(script)))).toEqual(new Set(['allow-key-locking']))
-    expect(new Set(scripts.filter(({ script }) => script.includes('local function matching')).map(({ script }) => shebang(script)))).toEqual(
-      new Set(['no-writes,allow-key-locking']),
-    )
-    expect(await tables.message(3)).toMatchObject({ deleted: true })
-  })
-
-  it('carry no flag where the server rejects it, and ask again after a transport error, which decides nothing', async () => {
-    const client = new Redis(redisUrl!)
-    clients.push(client)
-    const prefix = `vbt${process.pid}x${++opened}`
-    const sent: (string | number)[][] = []
-    let drop = true
-    const tables = redisTables(async (command, ...args) => {
-      sent.push([command, ...args])
-      if (command === 'EVAL' && drop) {
-        drop = false
-        throw new Error('fetch failed')
-      }
-      return client.call(command, ...args)
-    }, prefix)
-    await expect(tables.apply(events[0]!)).rejects.toThrow('fetch failed')
-    for (const event of events) await tables.apply(event)
-    await readAll(tables)
-    const scripts = scriptsOn(sent, prefix)
-    // Asked twice: the dropped question, then the one stock Redis says no to.
-    expect(scripts.filter(({ script }) => shebang(script) !== null).map(({ script }) => script)).toEqual([
-      '#!lua flags=allow-key-locking\nreturn 1',
-      '#!lua flags=allow-key-locking\nreturn 1',
-    ])
-    expect(scripts.length).toBeGreaterThan(events.length * 2)
-    expect(await tables.position()).toBe(events.length)
-  })
-
-  it("ignore the keys an earlier layout left under the prefix: they fill from the log", async () => {
-    const client = new Redis(redisUrl!)
-    clients.push(client)
-    const prefix = `vbt${process.pid}x${++opened}`
-    // What board on A2 0.21 kept: the tables under `<prefix>:board`, untagged.
-    await client.set(`${prefix}:board:pos`, '9')
-    await client.hset(`${prefix}:board:m`, '1', JSON.stringify({ id: 1, text: 'from before' }))
-    await client.hset(`${prefix}:board:e`, 'p1', '1')
-    await client.zadd(`${prefix}:board:i:all`, 1, '1')
-    const tables = redisTables((command, ...args) => client.call(command, ...args), prefix)
-    expect(await tables.position()).toBe(0)
-    expect(await tables.message(1)).toBeNull()
-    expect(await tables.byEventId('p1')).toBeNull()
-    expect((await tables.messages({}, { limit: 10 })).messages).toEqual([])
-    for (const event of events) await tables.apply(event)
-    expect(await tables.message(1)).toEqual(fold(events).messages.byId[1])
-    expect(await client.get(`${prefix}:board:pos`)).toBe('9')
-  })
-
-  it("run behind a shim that holds each script to Upstash's rules", async () => {
-    const send = async (...command: (string | number)[]) =>
-      (await fetch(rest!.url, { method: 'POST', body: JSON.stringify(command.map(String)) })).json() as Promise<{ result?: unknown; error?: string }>
-    const key = `vbt${process.pid}x{shim}:a`
-    expect(await send('EVAL', `#!lua flags=allow-key-locking\nreturn redis.call('GET', 'vbt${process.pid}x:elsewhere')`, 1, key)).toEqual({
-      error: expect.stringContaining("Dynamic keys are not allowed in Lua scripts when 'allow-key-locking' flag is set"),
-    })
-    expect(await send('EVAL', `#!lua flags=no-writes,allow-key-locking\nreturn redis.call('SET', KEYS[1], 1)`, 1, key)).toEqual({
-      error: expect.stringContaining('Write commands are not allowed from read-only scripts'),
-    })
-    expect(await send('EVAL', `#!lua flags=allow-key-locking\nreturn redis.call('PUBLISH', KEYS[1], 1)`, 1, key)).toEqual({
-      error: expect.stringContaining('scripts must not PUBLISH'),
-    })
-  })
-
-  it("give a subtree read a position no later than the channels it read", async () => {
-    const client = new Redis(redisUrl!)
-    clients.push(client)
-    const prefix = `vbt${process.pid}x${++opened}`
-    const other = redisTables((command, ...args) => client.call(command, ...args), prefix)
-    await other.apply(post(1, 'dev'))
-    // A post to a new child channel lands right after the read lists the channels.
-    let land: (() => Promise<void>) | null = null
-    const tables = redisTables(async (command, ...args) => {
-      const reply = await client.call(command, ...args)
-      const listed = command === 'SMEMBERS' || (command === 'EVAL' && args.includes(`${tablesKeyBase(prefix)}:channels`) && args.length <= 4)
-      if (listed && land) {
-        const run = land
-        land = null
-        await run()
-      }
-      return reply
-    }, prefix)
-    land = () => other.apply(post(2, 'dev/new'))
-    const { messages, position } = await tables.messages({ channel: { path: 'dev', subtree: true } }, { limit: 10 })
-    // The feed from that position carries what the page missed.
-    expect(messages.map((m) => m.id)).toEqual([1])
-    expect(position).toBeLessThan(2)
-    land = () => other.apply(post(3, 'dev/newer'))
-    const threads = await tables.threads({ channel: { path: 'dev', subtree: true } }, { limit: 10 })
-    expect(threads.position).toBeLessThan(3)
   })
 })
 

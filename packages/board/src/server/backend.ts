@@ -7,6 +7,7 @@ import type { Author } from '../contract/schemas.ts'
 import type { Access } from './access.ts'
 import type { Granted, Known, Pinned, StoredGrant } from './auth.ts'
 import type { Board } from './board.ts'
+import type { Decided } from './policy.ts'
 import type { WatcherContext } from './watcher.ts'
 import type { WriteOrigin } from './origin.ts'
 
@@ -30,7 +31,7 @@ export type SelfCaller = {
   /**
    * A handle (`via: client`, with the profile from `as(profile)`, or null for the board's own), a
    * watcher, the middleware's handle (`via: middleware`), or sync (`via: engine`). Each backend
-   * decides who that is on its board: `board:client` and `board:client:<profile>` on a2(), the
+   * decides who that is on its board: `board:client` and `board:client:<profile>` on local(), the
    * token's holder with that profile elsewhere.
    */
   self: string | null
@@ -78,11 +79,21 @@ export type InboxDelivery = { event: ExternalEvent; raw: unknown }
 
 /** What a backend gets from the board it serves: once, in memory, when board() is created. */
 export type BoardBinding = {
+  /**
+   * Which of the team's boards this is, as `board({ name })` says it: `security`, or null for the
+   * team's default board. A backend that keeps one board, or reaches one by its URL, may leave it
+   * unread.
+   */
+  name: string | null
+  /** Whose board it is, as `board({ team })` says it, by the team's ID or slug: null for the team the environment finds. */
+  team: string | null
+  /** Whether to make the board `name` names when the team has none by that name: `board({ ensure })`, true unless it says false. */
+  ensure: boolean
   /** What runs on this board's events, by ID: this project's watchers, and sync's outbound at `SYNC` when it syncs. */
   subscriptions: Record<string, Subscription>
   /**
    * Runs one subscription on an event. A throw is the backend's to retry; `attempt` counts tries
-   * from 1, and sync gives up on a delivery, and says so, before A2 would dead-letter it.
+   * from 1, and sync gives up on a delivery, and says so, before the backend stops trying it.
    */
   run(id: string, event: WatcherContext['event'], meta: { trigger: string; attempt: number }): Promise<void>
   /**
@@ -117,14 +128,16 @@ export type BoardBinding = {
    */
   typing(messages: readonly MessageView[], status: string | undefined): Promise<string[]>
   /**
-   * What a principal the backend stored may do now, under board()'s `access`: a schedule's creator
-   * at each send, a registrant at each event and pull. Null once it may do nothing.
+   * What a principal the backend stored may do now, under board()'s defaults and the board's grants:
+   * a schedule's creator at each send, a registrant at each event and pull. Null once it may do nothing.
+   * With `grants`, under those instead of the board's grants as they are: a grant write's own
+   * snapshot, so what it checks is what it appends to.
    */
-  accessNow(principal: Known): Promise<Access | null>
+  accessNow(principal: Known, grants?: readonly StoredGrant[]): Promise<Access | null>
+  /** Which grants, or which rule, decide `channel` for a principal under board()'s `access`, and what they give: what `explain` answers. */
+  explain(principal: Known, channel: string): Promise<Decided>
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
-  /** The OIDC issuers board()'s rules name, which no grant's issuer may share principals with. */
-  issuers(): readonly string[]
   /**
    * A handle through board(), as `caller`: what a backend writes for someone outside a request
    * goes through it, so board()'s middleware sees it, a schedule's send as its creator, say. A
@@ -167,19 +180,18 @@ export interface Backend extends ProtocolMethods {
   /** Routes of its own, beside the protocol: one at a protocol route's path takes its place. */
   readonly routes: readonly BackendRoute[]
   /**
-   * Whether the board lives here. One that keeps it (`a2()`) lets in, when board()'s `access` is left
-   * out, its people and the board's own deployments; one that uses another board (`http()`) serves no
-   * requests then but wake-ups and webhooks, and with an `access`, serves its callers as that board's
-   * project.
+   * Whether the board lives here. One that keeps it (`local()`) serves requests: its people, the
+   * board's own deployments, and whoever its grants and tokens let in. One that uses another board
+   * (Vercel's, or one at `BOARD_URL`) answers only wake-ups and webhooks.
    */
   readonly keeps: boolean
   /**
-   * Whether a schedule's sends come back through board(), as a2()'s do, so its middleware screens
+   * Whether a schedule's sends come back through board(), as local()'s do, so its middleware screens
    * each. A backend whose sends post elsewhere, as vercel()'s do from Vercel's API, says false, and
    * board() screens a schedule's message once, when it's made. True when left out.
    */
   readonly sendsSchedulesHere?: boolean
-  /** Its grants and tokens, for a backend that keeps them (`a2()`): board() checks requests against them. */
+  /** Its grants and tokens, for a backend that keeps them (`local()`): board() checks requests against them. */
   readonly trust?: Trust
   /**
    * board() calls it once, when it's created, before any request: what background work needs

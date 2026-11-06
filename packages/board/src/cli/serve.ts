@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { userInfo } from 'node:os'
@@ -6,9 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { BoardError } from '../client/client.ts'
 import { localTokenFile } from '../client/node.ts'
-import { fsBlob } from '../server/blob.ts'
-import { a2 } from '../server/a2.ts'
-import { localScheduler } from '../scheduler/local.ts'
+import { local } from '../server/local.ts'
 import { oidcTokens } from '../server/tokens.ts'
 import { board } from '../server/index.ts'
 
@@ -48,19 +46,26 @@ function safeUsername(): string {
   }
 }
 
+/** What an earlier `vb serve` left under `dir` (`board.db`, `attachments/`), moved to where `local()` keeps the board. */
+async function carryOver(dir: string) {
+  const there = (path: string) => stat(join(dir, path)).then(() => true, () => false)
+  if (!(await there('board.db')) || (await there('local.db'))) return
+  for (const suffix of ['', '-wal', '-shm']) if (await there(`board.db${suffix}`)) await rename(join(dir, `board.db${suffix}`), join(dir, `local.db${suffix}`))
+  if ((await there('attachments')) && !(await there('local'))) await rename(join(dir, 'attachments'), join(dir, 'local'))
+}
+
 /**
- * A board on this machine, for agents and people sharing one computer: a log in
- * SQLite under `dir`, attachments next to it, a scheduler in this process, no sync,
- * on 127.0.0.1 only. Its
- * keys live in memory for this run; it signs one token, for you, into a file
- * only you can read (`localTokenFile`), which `vb` on this machine picks up.
+ * A board on this machine, for agents and people sharing one computer: `local()` under `dir`, its
+ * log in SQLite, attachments next to it, a scheduler in this process, no sync, on 127.0.0.1 only.
+ * Its keys live in memory for this run; it signs one token, for you, into a file only you can read
+ * (`localTokenFile`), which `vb` on this machine picks up.
  */
 export async function serveLocal(options: { dir: string; port?: number; handle?: string }): Promise<LocalBoard> {
   const dir = resolve(options.dir)
   await mkdir(dir, { recursive: true, mode: 0o700 })
   quietSqliteWarning()
-  const { sqlite } = await import('../store/sqlite.ts')
-  const store = sqlite({ path: join(dir, 'board.db') })
+  await carryOver(dir)
+  const backend = local({ dir })
 
   const { publicKey, privateKey } = await generateKeyPair('ES256')
   const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: 'local', alg: 'ES256' }] })
@@ -75,7 +80,6 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   try {
     port = await listen(server, options.port ?? DEFAULT_SERVE_PORT)
   } catch (error) {
-    await store.close()
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
       throw new BoardError('port_taken', `Port ${options.port ?? DEFAULT_SERVE_PORT} is taken. Is a board already running there?`, 0)
     throw error
@@ -83,11 +87,18 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   const url = `http://127.0.0.1:${port}/api/board`
   const mounted = board({
     // Its timers live in this process, which runs as long as the board does.
-    backend: a2({ store, scheduler: localScheduler(), blob: fsBlob(join(dir, 'attachments')) }),
+    backend,
     authenticate: oidcTokens({ local: { issuer: ISSUER, jwks } }),
     url,
     basePath: '/api/board',
   })
+  try {
+    // Opened now, so a directory it can't write says so before it serves.
+    await mounted.channels()
+  } catch (error) {
+    server.close()
+    throw error
+  }
   handler = mounted.fetch
 
   const handle = options.handle ?? localHandle()
@@ -113,7 +124,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
       await rm(file, { force: true })
       server.closeAllConnections()
       await new Promise<void>((done) => server.close(() => done()))
-      await store.close()
+      await backend.close()
     },
   }
 }

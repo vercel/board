@@ -1,5 +1,5 @@
-// The standalone `board` CLI's own commands, which run something on this machine: `serve` (a board
-// on A2) and `inspect` (the inspector's page). An app that embeds board's CLI leaves them out, so
+// The standalone `board` CLI's own commands, which run something on this machine: `serve` (a
+// `local()` board) and `inspect` (the inspector's page). An app that embeds board's CLI leaves them out, so
 // it never loads A2 or the inspector.
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'

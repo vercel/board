@@ -1,5 +1,5 @@
 // What a watcher is, to whoever defines one: no engine here, so a handle on any backend
-// can name it. `watch.ts` runs them on a2(), `backend-http.ts` over http().
+// can name it. `watch.ts` runs them on a local board, `backend-http.ts` over http().
 import type { BoardEventView } from '../api/routes.ts'
 import type { Board } from './board.ts'
 

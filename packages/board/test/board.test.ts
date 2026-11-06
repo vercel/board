@@ -4,7 +4,6 @@ import { createServer } from 'experimental-a2/server'
 import { z } from 'zod'
 import { boardEvents, BOARD_SESSION } from '../src/contract/events.ts'
 import { memory } from '../src/store/memory.ts'
-import { githubActions, vercelProject } from '../src/access/index.ts'
 import {
   BOARD_URL,
   caller,
@@ -151,21 +150,23 @@ describe('auth', () => {
     expect(await claude.text()).toContain('<path') // the mark, not a letter
   })
 
-  it('rejects other projects unless access lists them', async () => {
-    const call = caller(testBoard().fetch, await deploymentToken())
+  it('rejects other projects until a grant names them, once g2 no longer names every one', async () => {
+    const plain = testBoard()
+    await plain.revokeGrant('g2')
+    const call = caller(plain.fetch, await deploymentToken())
     expect((await call('GET', '/me')).status).toBe(403)
 
-    const trusted = testBoard({ access: [vercelProject({ project: 'marketing', can: 'all' })] })
+    const trusted = testBoard()
+    await trusted.revokeGrant('g2')
+    await trusted.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } })
     const { body } = await caller(trusted.fetch, await deploymentToken())('GET', '/me')
     expect(body).toMatchObject({ actor: 'vercel:project:prj_marketing:production', handle: 'marketing' })
   })
 
-  it('limits a workflow to what `can` allows', async () => {
-    const { fetch } = testBoard({
-      access: [
-        githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] }),
-      ],
-    })
+  it("limits a workflow to what its grant's `can` allows", async () => {
+    const board = testBoard()
+    const { fetch } = board
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
     const call = caller(fetch, await workflowToken())
     const posted = await call('POST', '/messages', { channel: 'errors-www', text: 'deploy failed' })
     expect(posted.status).toBe(201)
@@ -174,7 +175,7 @@ describe('auth', () => {
     const react = await call('POST', `/messages/${posted.body.message.id}/reactions`, { emoji: 'eyes' })
     expect(react.status).toBe(404)
 
-    const otherWorkflow = caller(fetch, await workflowToken({ workflow_ref: 'basehub-ai/www/.github/workflows/evil.yml@refs/heads/x' }))
+    const otherWorkflow = caller(fetch, await workflowToken({ workflow_ref: 'acme/web/.github/workflows/evil.yml@refs/heads/x' }))
     expect((await otherWorkflow('GET', '/me')).status).toBe(403)
   })
 })

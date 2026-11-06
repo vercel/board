@@ -3,11 +3,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Attachment, ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, type Attachment as AttachmentType } from '../contract/schemas.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
+import { fileName, mediaType } from '../contract/files.ts'
 
 /**
- * Where attachments' bytes live. The board writes each file once, under a key
- * it chose, and never overwrites it; `vercelBlob()` from `@vercel/board/backend-a2/blob-vercel` is the
- * production one.
+ * Where a local board's attachments' bytes live. The board writes each file
+ * once, under a key it chose, and never overwrites it.
  */
 export type BlobStore = {
   put(key: string, data: Uint8Array, contentType: string): Promise<void>
@@ -33,8 +33,8 @@ export function memoryBlob(): BlobStore {
   }
 }
 
-/** Files on disk, for development and `vb serve`: under `dir`, `.a2/attachments` by default. */
-export function fsBlob(dir = '.a2/attachments'): BlobStore {
+/** Files on disk, under `dir`: a local board's, next to its database. */
+export function fsBlob(dir: string): BlobStore {
   const path = (key: string) => join(dir, ...key.split('/'))
   return {
     async put(key, data, contentType) {
@@ -58,20 +58,8 @@ const dataKey = (id: string) => `board/attachments/${id}`
 const ticketKey = (id: string) => `board/uploads/${id}.json`
 const metaKey = (id: string) => `board/attachments/${id}.json`
 
-/** `shot.png`, as the board stores a name: no paths, no control characters. */
-export function fileName(name: string | null): string {
-  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
-  return base.slice(0, 255) || 'file'
-}
-
-/** `image/png`, or `application/octet-stream` when the type isn't one. */
-export function mediaType(type: string | null): string {
-  const value = (type ?? '').split(';')[0]!.trim().toLowerCase()
-  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(value) && value.length <= 255 ? value : 'application/octet-stream'
-}
-
 /** A board without a blob store keeps no files: every file route says so. */
-const noBlob = () => new HttpError(501, 'no_files', 'this board keeps no files: pass `blob` to `a2()`')
+const noBlob = () => new HttpError(501, 'no_files', 'this board keeps no files')
 
 /** 128 random bits, base64url, drawn again when they'd start with `-`, which a command line reads as a flag. */
 function attachmentId(): string {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copies the board's side effects out of the sandbox into the evidence dir:
-# the served project's .board/ (board.db log, attachments/), the
+# the served project's .board/ (local.db log, local/ files; board.db and attachments/ on an older board), the
 # serve log, a file listing, and `vb read <id> --json` of every thread in every channel.
 #
 # usage: collect.sh <sandbox>     (down.sh runs it first)

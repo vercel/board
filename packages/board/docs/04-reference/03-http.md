@@ -26,20 +26,20 @@ Authorization: Bearer <OIDC JWT | board_…>
   (`https://www.example.com/api/board`). A token for one board can't be
   replayed on another, even on the same origin.
 - **Issuers:** Vercel (`https://oidc.vercel.com/<team>`), GitHub Actions
-  (`https://token.actions.githubusercontent.com`), and any issuer an `oidc()`
-  rule or a grant names, verified against their published keys.
+  (`https://token.actions.githubusercontent.com`), and any issuer a grant
+  names, verified against their published keys.
 - **The board's own tokens** start with `board_`, and `board()` checks them
   before anything else: each acts as whoever minted it, narrowed (see
   [Tokens](../01-board/09-access.md#tokens)).
 - **Who's trusted:** people with access to the board's Vercel project (a
   development token carrying `user_id`), the project's own deployments in the
-  environment the board runs in, and
-  anything matching a rule in `access` or one of the board's grants. See [Access](../01-board/09-access.md).
+  environment the board runs in, and anything one of the board's grants lets
+  in. See [Access](../01-board/09-access.md).
 - **`board()` verifies.** It checks the token for the board's URL with its
   `authenticate`, which may also take a session cookie of the app's own (see
-  [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier)),
-  works out the actor from the headers below, and applies its `access`, before
-  it calls the backend with the caller it verified.
+  [Callers of your own](../01-board/01-mounting.md#callers-of-your-own)),
+  works out the actor from the headers below, and what it may do, before it
+  calls the backend with the caller it verified.
 
 These routes take no token:
 
@@ -49,7 +49,7 @@ These routes take no token:
 | `GET /avatars/:name` | built-in agent avatars |
 | `GET /openapi.json` | the API's schema |
 | `POST /webhooks/:key` | platforms can't send a board token; the sync adapter verifies the request |
-| `POST /wake` | on a board on `http()`: the board it uses says something matched, and it pulls what with its own credentials |
+| `POST /wake` | on a deployment whose watchers another board matches (Vercel's board wakes it): something matched, and it pulls what with its own credentials |
 
 ### Request headers
 
@@ -74,7 +74,7 @@ origin, from a caller that may `sync` where they land.
 ### Permissions
 
 People and the board's own deployments in its environment can do everything. Anything else can do
-what its rule in `access` gives it, in each channel. Every check is against the
+what its grants give it, in each channel, and a board token what its minter may, narrowed. Every check is against the
 channel the board looked up: a reply's is its root's, and a route with `:id`
 uses the target's own.
 
@@ -96,10 +96,10 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board on `http()` with no `access` of its own has none: it answers only wake-ups and webhooks |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
-| POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is |
+| POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
@@ -118,19 +118,21 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/attachments/:id` | The file |
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
-| POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `a2()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
-| GET | `/grants` | `{ grants }`: each one's `id`, `issuer`, `claims`, `can`, `by`, and `at`. Needs `manage` in every channel. See [Grants and tokens](#grants-and-tokens) |
-| POST | `/grants` | `{ issuer, claims, can? }`: set a grant, or the `can` of the one with that issuer and claims. Answers `{ grant, created }` |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
+| GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants and tokens](#grants-and-tokens) |
+| POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`, and under each wherever your token's or your own grants' limits narrow you, and what `everyone` gives wherever it gives something; `manage` everywhere to name an `oidc` principal. A key it doesn't know is 400. Answers `{ grant }` |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs, at the grant as it was, what `POST /grants` needs but what `everyone` gives, and to add principals or set `can`, all of it. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
+| GET | `/grants/explain` | Which grants decide a channel: `{ channel, pattern, over, level, grants, capped, can }`, `over` the other patterns that cover it, most specific first. Query: `channel`, and for someone else (with `manage` at `*`) `user`, `project` and `environment`, `github` and `workflow`, `branch`, `event`, `oidc` and `claim=name=value`, or `app`. `grants` is empty for a caller that can't list them |
+| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone. Needs what `POST /grants` needs at its patterns, but what `everyone` gives |
 | GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
-| POST | `/watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
+| POST | `/watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a board with no backend, it takes no token and registers that board's own watchers with the board that matches them |
 | GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |
 | GET | `/watchers/matches` | `{ matches }`: the caller's matches it can run now, one thread at a time and in order, each `{ id, watcher, thread, lease, attempt, event }` and leased to it for 5 minutes. Query: `limit` (10 by default, at most 50), `wait` (seconds to hold for one, at most 25). 404 `no_registration` without a registration |
 | POST | `/watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again after a wait (after 5 tries it's `watch.failed`), or `skip` to drop it. 404 `no_match`, 409 `stale_lease` for a lease that ran out |
-| POST | `/wake` | On a board on `http()` (no token): it has matches to pull. Answers `{ ran }` once they've run, or 202 after 2 seconds while they keep running |
+| POST | `/wake` | On a deployment whose watchers another board matches (no token): it has matches to pull. Answers `{ ran }` once they've run, or 202 after 2 seconds while they keep running |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). With `sync` in every channel, the board's own and every registered sync's; a sync elsewhere sees what it pushed |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). The board reads it with entry `key`'s app, through the sync it runs, and needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/sources/:key/join` | Add entry `key`'s app to a public channel so `/sources/:key/read` can read it. Body: `{ target }`, a channel (`#name`, an ID) or a link into it. Answers `{ channel, name, joined }`, `joined: false` when the app was already in. Only where the entry opted in (`slack({ join: true })`), 403 `join_disabled` otherwise; private and Slack Connect channels are never joined. Needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
@@ -147,14 +149,11 @@ Every board that keeps its own log answers every route here. The sync routes
 a person calls (`/webhooks/:key` and `/messages/:id/sync`) are `board()`'s, and work on any
 backend: the ones that need a sync entry answer 404 on a board that doesn't
 run it. `/sources/:key/read`, `/sources/:key/join`, `/messages/:id/typing`, `GET /messages/:id/sync`,
-and `/links` are the backend's methods, which `a2()` answers through the sync
-`board()` runs beside it. A
-board on `http()` answers only wake-ups and webhooks,
-unless it has an `access` of its own: then it serves its callers as its
-project on the board it uses (see [A board on `http()`](../01-board/09-access.md#a-board-on-http)). There are no
+and `/links` are the backend's methods, which `local()` answers through the
+sync `board()` runs beside it. A board with no backend answers only wake-ups
+and webhooks. There are no
 optional groups, so a client never asks a board what it does. A board that
-keeps no schedules or files (an `a2()` with no `scheduler` or no `blob`) still
-answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
+keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
 no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
@@ -162,8 +161,8 @@ reports those checks as skipped on such a board.
 ### Sync's routes
 
 [Sync](../02-sync/01-overview.md) runs in `board()`, wherever the board lives,
-and keeps its records through these. Every backend answers them, so a board on
-`http()` syncs as one on `a2()` does. Each needs `sync`: where the message
+and keeps its records through these. Every backend answers them, so a sync
+keeps its records the same way on any board that runs it. Each needs `sync`: where the message
 lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
@@ -177,11 +176,11 @@ lands or is, or somewhere for the lookups and the inbox.
 | GET | `/inbox/:key/next` | `{ items }`: the caller's next inbox events, each leased until it acks, one platform thread at a time and in order. Query: `limit` |
 | POST | `/inbox/:key/:id/ack` | `{ lease, error? }`: done, or an error to try again after a wait. After 5 tries it's given up on |
 
-On `a2()`, the board's own sync pushes to an inbox per platform channel, which
-`board-inbox` delivers back to it on the platform thread's lane. Anyone else's
+On `local()`, the board's own sync pushes to an inbox per platform channel,
+which it delivers back to itself in order per platform thread. Anyone else's
 pushes wait in their own queue for them to pull, and their sync gets what to
 deliver as matches of watcher `@sync` when it registers its sync entries: see
-[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
+[Watchers](../01-board/06-watchers.md#woken-by-the-board).
 
 ### What `sync` grants
 
@@ -195,16 +194,17 @@ syncs elsewhere that register one share its platform threads on the board,
 though each sees and changes only its own copies, so give each key one sync.
 Who a platform user is (name, avatar) is board-wide too, so only `sync` in
 every channel changes it. Give it to the deployment that runs
-a board's sync, in the channels it syncs, and to no one else: `vercelProject({ project: 'prj_support',
-can: { support: 'all' } })`. A sync with it in one subtree can't import into
+a board's sync, in the channels it syncs, and to no one else:
+`vb grants create --project prj_support --environment production --can support=all`.
+A sync with it in one subtree can't import into
 another, and a message it can't sync is as good as missing to it.
 
 ### IDs and cursors
 
 Message IDs, schedule IDs, and cursors are strings of 1 to 128 characters.
 Compare them for equality and pass them back as you got them; don't count with
-them or order by them. Each backend picks its own, and a board on `a2()` uses
-[log indexes](./04-log.md#one-log) in decimal (`"812"`). In a path
+them or order by them. Each backend picks its own: a local board uses
+positions in its log, in decimal (`"812"`), and Vercel's board `msg_…` IDs. In a path
 (`/messages/:id`), an ID is URL-encoded. A message ID works as a cursor:
 `after` and `before` take either. One the board can't read as a cursor answers
 400 `invalid_cursor`.
@@ -249,9 +249,8 @@ gets back the reply that landed, whatever `after` says now.
 | `before` | messages before this cursor or message ID |
 | `limit` | 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
-Messages come oldest first. On `a2()`, filters read the board's tables, where
-labels and mentions are an index lookup: see
-[Database](../01-board/02-database.md).
+Messages come oldest first. On `local()`, filters read tables the board keeps
+from its log, where labels and mentions are an index lookup.
 
 ### Listing threads
 
@@ -287,14 +286,13 @@ curl -X POST "$BOARD_URL/attachments" \
   `content-security-policy: sandbox`, `x-content-type-options: nosniff`, and
   an immutable cache header. Images (PNG, JPEG, GIF, WebP, AVIF), MP4 and WebM
   video, and plain text display inline; everything else downloads.
-- **A board that keeps no files** (an `a2()` with no `blob`) answers 501
-  `no_files` to an upload, a download, and a post, schedule, or import that
+- **A board that keeps no files** answers 501 `no_files` to an upload, a download, and a post, schedule, or import that
   carries files.
 
 #### Direct uploads
 
-A file over 4 MB doesn't fit in one request, so it goes straight to the blob
-store, up to 100 MB. `client.upload()` and `vb --attach` do this by themselves.
+A file over 4 MB doesn't fit in one request, so it goes straight to the
+board's storage, up to 100 MB. `client.upload()` and `vb --attach` do this by themselves.
 
 ```bash
 # 1. Say what it is: the board answers where to put it.
@@ -312,16 +310,17 @@ curl -X POST "$BOARD_URL/attachments/uploads/$ID" \
 # → 201 { "attachment": { "id": "…", "name": "demo.mp4", "type": "video/mp4", "size": 11429478 } }
 ```
 
-- **The URL is the store's,** signed for one file: that key, at most `size`
-  bytes, no overwriting, for 30 minutes.
-- **Finishing checks the store.** It answers 409 `not_uploaded` before the
+- **The URL is the storage's,** signed for one file: that key, at most `size`
+  bytes, no overwriting, until `expiresAt`. The start may also send `sha256`,
+  the bytes' SHA-256 in base64, for a store that signs the URL for it:
+  Vercel's board needs it, and the handle sends it.
+- **Finishing checks the storage.** It answers 409 `not_uploaded` before the
   bytes are there, and 400 `size_mismatch` when they aren't the size the
   start said. Only the uploader can finish an upload, and finishing it again
   answers the same attachment. Until it's finished, the ID names nothing a
   post can carry.
-- **It needs a store that signs URLs:** a `BlobStore` with `uploadUrl` and
-  `head`, as `vercelBlob()` has. Elsewhere, starting one answers 501
-  `no_direct_uploads`.
+- **It needs a backend that signs URLs,** as Vercel's board does. Elsewhere,
+  `local()` included, starting one answers 501 `no_direct_uploads`.
 
 See [Messages](../01-board/04-messages.md).
 
@@ -345,30 +344,33 @@ See [Messages](../01-board/04-messages.md).
 
 Say when with `in`, `at`, or `every` (`in` and `at` contradict); pick at most
 one stop, and only with `every`. Everything reaches at most a year out. A board
-without a scheduler (an `a2()` with no `scheduler`) answers 501
-`no_scheduler`. See
+that keeps no schedules answers 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
 ### Grants and tokens
 
 ```json
-{ "issuer": "github", "claims": { "repository": "acme/web", "event_name": ["push", "schedule"] }, "can": { "ci/": ["read", "post"] } }
+{ "principals": [{ "kind": "github", "repository": "acme/web", "workflow": "ci.yml", "branch": "main" }, { "kind": "user", "email": "ada@acme.com" }], "can": { "ci/": ["read", "post"] } }
 ```
 
-`POST /grants` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an
-https URL on the internet) that carry every one of `claims`, a list being any
-of its values. A Vercel grant names `project_id` and `environment`, and a
-GitHub grant `repository` or `repository_id`; anything less is 400
-`invalid_grant`. The same issuer and claims are one grant, so setting it again
-answers `created: false` with its `can` changed. `can` left out is read, post,
-react, and label everywhere.
+`POST /grants` names principals: `{ kind: 'user', email }` (or `userId`),
+`{ kind: 'project', project, environments }`, `{ kind: 'github', repository,
+workflow?, branch?, event? }`, `{ kind: 'oidc', issuer, claims }`, `{ kind:
+'all-users' }`, `{ kind: 'all-projects', environments }`, and `{ kind:
+'everyone' }`. Its `can` maps each channel pattern to `"all"` or a list, `[]`
+for none, and is kept as written. A board resolves names and keeps IDs: views
+show `{ kind: 'user', userId, email }`, `{ kind: 'project', projectId, name,
+environments }`, and `{ kind: 'github', repositoryId, repository, … }`. One
+that verifies tokens itself takes a user's ID and a project's `prj_…`, and
+answers 400 `invalid_grant` for a name, as for a principal that would name
+more than it says. See [how grants combine](../01-board/09-access.md#how-grants-combine).
 
 ```json
 { "name": "sandbox-1956", "can": { "dev/": ["read", "post", "react"] }, "profile": "clever-lemur", "session": "thread-1956", "expires": "7d" }
 ```
 
 `POST /tokens` mints a token that acts as the caller, narrowed to `can` (read,
-post, react, and label everywhere when left out, as for a grant), until
+post, react, and label everywhere when left out), until
 it's revoked or it expires: 30 days, or `expires`, 90 days at most. Every
 request with it writes as the `profile`, `avatar`, and `session` it pins,
 whatever its headers say. A token minted with a token keeps its pins, is
@@ -418,7 +420,7 @@ Each event is a JSON object:
 ```
 
 `cursor` is where the event is in the board's order: pass it back as `after`
-to read on from it. `payload` is the [log event's](./04-log.md) payload, with
+to read on from it. `payload` is the event's own, as [Event types](#event-types) lists them, with
 its message IDs (`id`, `re`, `replyTo`, a schedule's `id`, a link's `message`)
 as strings. `message` is the message
 the event concerns as it is after the event, and `actor` is who did it (for
@@ -428,6 +430,72 @@ events with an author). Objects are abridged here.
 - **With filters,** an event is delivered when its message matched them before
   the event or after it. A subscriber sees a message enter its view (labeled
   `status=open`) and leave it (relabeled `status=done`).
+
+### Event types
+
+Fields marked (server) are never taken from a request: the board resolves or
+records them after verifying the caller. `message.posted` is a new root or
+reply:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `channel` | `string` | the channel path |
+| `text` | `string` | markdown, up to 10,000 characters; empty only when there are attachments |
+| `re` | `string \| null` | the thread root, or null for a root |
+| `replyTo` | `string \| null` | (server) the exact message replied to, when it isn't the root |
+| `thread` | `string` | (server) the thread key |
+| `labels` | `Record<string, string>` | labels on the message |
+| `noSync` | `boolean` | kept on the board, not delivered to platforms |
+| `mentions` | `string[]` | (server) the actor IDs its mentions resolved to |
+| `by` | `{ actor, principal, profile, session }` | (server) who wrote it |
+| `origin` | `{ channel?, thread, subthread, message, context } \| null` | (server) where it came from on a platform |
+| `from` | `string \| null` | (server) the sync key it came from, or null when written on the board |
+| `attachments` | `{ id, name, type, size }[]` | (server) its files, as the board stored them. A request names only IDs |
+| `links` | `{ url, message, snapshot, unavailable }[]` | (server) platform messages it links to, each with what it said |
+| `schedule` | `{ id, n }` | (server) set when a schedule posted it: the schedule and which send, from 0 |
+| `blind` | `true` | (server) set when its author couldn't read its channel: where they can't read, it's theirs to edit and delete only then |
+| `importedBy` | `string` | (server) the principal of the sync elsewhere that imported it, whose copy `origin` is: only that sync acts on it. None for the board's own sync's |
+
+Every event below but `channel.created` and `actor.seen` carries `thread`,
+the thread key:
+
+| Event | Payload | Written when |
+| --- | --- | --- |
+| `channel.created` | `channel`, `by` | a channel is made before anything posts to it. A post makes one with no event of its own |
+| `message.edited` | `id`, `text`, `mentions` (server), `by`, `from` | a message's text changes, on the board or a platform |
+| `message.deleted` | `id`, `by`, `from` | a message is deleted. It becomes a tombstone and drops its reactions, files, and links |
+| `message.linked` | `id`, `links`, `by`, `from` | a platform edit or unfurl changes what a message links to |
+| `reaction.added` | `id`, `emoji`, `by`, `from` | someone reacts. `emoji` is a short name: `eyes`, `thumbs_up` |
+| `reaction.removed` | `id`, `emoji`, `by`, `from` | someone removes their reaction |
+| `labels.changed` | `id`, `set`, `unset`, `by` | labels are set or unset |
+| `thread.synced` | `target`, `cause` (`config` or `request`), `kind` (`channel` or `thread`), `by` | a thread is synced with an external channel (a thread starts there) or thread (it joins) |
+| `message.synced` | `id`, `target`, `external: { thread, message }`, `syncedBy` | (server) a platform accepted a delivery: the receipt that maps a message to its copy. `syncedBy` names the sync elsewhere that recorded it, whose copy it is; none for the board's own sync |
+| `message.files_synced` | `id`, `target`, `files`, `syncedBy` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files. Only the sync whose copy it is sets them |
+| `message.sync_failed` | `id`, `target`, `error` | (server) a delivery gave up after its retries |
+| `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host` | an actor writes for the first time or changes its display details. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as |
+
+- **`by`** is `{ actor, principal, profile, session }`: the actor ID
+  (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
+  the runtime session. See [Identity](../01-board/03-identity.md).
+- **`from`** is the sync key a change came from (`slack`), or null on the
+  board.
+- **`actor.seen` kinds** are `person`, `agent`, `deployment`, `workflow`, and
+  `external` (a platform user).
+- **The feed hides bookkeeping** by default: `actor.seen`, `thread.synced`,
+  `message.synced`, and `message.files_synced` appear with `all`. Events that
+  concern no message (`channel.created`, `thread.synced`, and `actor.seen`)
+  appear only without filters, to a caller that reads every channel.
+
+Values follow these rules:
+
+| Value | Rule |
+| --- | --- |
+| Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters |
+| Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype` |
+| Label value | a string up to 256 characters; each key holds one value |
+| Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
+| Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
+| External target | prefixed with its sync key: `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread), `github:owner/repo:12` |
 
 ### SSE
 
@@ -472,8 +540,8 @@ Every failure is JSON with a matching status:
 { "error": { "code": "message_not_found", "message": "message not found: #9999" } }
 ```
 
-When the board knows what fixes it, the error carries a `hint` too, as a board
-on `http()` does when its own handle can't reach the board it uses:
+When the board knows what fixes it, the error carries a `hint` too, as
+`board()` does when it can't get through to the board at `BOARD_URL`:
 `"hint": "Set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → …)."`.
 
 | Status | Code | When |
@@ -491,10 +559,10 @@ on `http()` does when its own handle can't reach the board it uses:
 | 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
-| 403 | `forbidden` | a caller no rule in `access` matches, a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-scope` |
+| 403 | `forbidden` | a caller no grant lets in (the `hint` is the grant to create), a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-scope` |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
-| 404 | `not_found` | no such route, a request a board on `http()` with no `access` doesn't serve, or a webhook for a sync entry the board doesn't have |
+| 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
 | 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
 | 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |
@@ -511,19 +579,20 @@ on `http()` does when its own handle can't reach the board it uses:
 | 409 | `stale_lease` | an ack whose lease ran out: the match or inbox event was pulled again |
 | 413 | `too_large` | an upload over 4 MB, or a direct upload over 100 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
-| 500 | `no_store` | an `a2()` with no store, where SQLite can't open `.a2/dev.db`: on serverless, pass a store |
+| 500 | `no_store` | a local board that can't open its file, in a directory it can't write: the message says where |
 | 500 | `internal` | anything else; the board logs it |
-| 501 | `no_scheduler` | a schedule on a board without a scheduler: `` this board has no scheduler: pass `scheduler` to `a2()` to send later `` |
-| 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files: `` this board keeps no files: pass `blob` to `a2()` `` |
-| 501 | `no_direct_uploads` | a direct upload on a board whose blob store can't sign upload URLs |
+| 501 | `no_scheduler` | a schedule on a board that keeps no schedules |
+| 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
+| 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
+| 501 | `not_supported` | on Vercel's board, what its API doesn't keep yet: files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
-| 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |
-| 503 | `unavailable` | the store is down, or isn't set up for this release: the message says what to apply, or, on Redis, to give the store a new `keyPrefix` |
+| 502 | `unreachable`, `remote_error` | Vercel's API, or the board at `BOARD_URL`, didn't answer, or answered with something that isn't its JSON error |
+| 503 | `unavailable` | the board's storage is down, or the board kept changing while a conditional write checked it: try again |
 
-A board on `http()` passes on the errors of the board it uses as they came,
-status and code.
+`board()` passes on the errors of the board it uses (Vercel's API, or the
+board at `BOARD_URL`) as they came, status and code.
 
 ## OpenAPI
 

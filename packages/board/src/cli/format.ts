@@ -1,4 +1,4 @@
-import type { BoardEventView, GrantView, Me, MessageView, ScheduleView, SourceRead, SyncedView, ThreadSummaryView, TokenView } from '../api/routes.ts'
+import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, ThreadSummaryView, TokenView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -177,7 +177,8 @@ export function formatCan(can: Me['can']): string {
   const patterns = Object.keys(can)
   if (patterns.length === 1 && patterns[0] === '*' && can['*']!.includes('manage')) return 'all'
   if (patterns.length === 0) return 'nothing'
-  return patterns.map((pattern) => `${pattern}=${can[pattern]!.includes('manage') ? 'all' : can[pattern]!.join(',')}`).join(';')
+  const permissions = (list: readonly string[]) => (list.includes('manage') ? 'all' : list.length === 0 ? 'none' : list.join(','))
+  return patterns.map((pattern) => `${pattern}=${permissions(can[pattern]!)}`).join(';')
 }
 
 /** Rows of cells, each column padded to its widest, two spaces apart. */
@@ -186,19 +187,59 @@ const table = (rows: string[][]) => {
   return rows.map((row) => row.map((cell, column) => (column === row.length - 1 ? cell : cell.padEnd(widths[column]!))).join('  ').trimEnd()).join('\n')
 }
 
-/** Each grant on a row: its ID, its issuer, the claims it matches, and what it lets do. */
-export function formatGrants(grants: GrantView[]): string {
-  return table(
-    grants.map((grant) => [
-      grant.id,
-      grant.issuer,
-      Object.entries(grant.claims)
-        .map(([name, value]) => `${name}=${typeof value === 'string' ? value : value.join('|')}`)
-        .join(' '),
-      formatCan(grant.can),
-    ]),
-  )
+/** A workflow as people name it: `ci.yml` for `.github/workflows/ci.yml`. */
+const workflowName = (workflow: string) => workflow.replace(/^\.github\/workflows\/(?=[^/]+$)/, '')
+
+/** A principal as the flags that name it: `--user ada@acme.com`, `--project web --environment production,preview`. */
+export function principalFlags(principal: PrincipalView): string {
+  switch (principal.kind) {
+    case 'user':
+      return `--user ${principal.email ?? principal.userId}`
+    case 'project':
+      return `--project ${principal.name ?? principal.projectId} --environment ${principal.environments.join(',')}`
+    case 'github':
+      return [
+        `--github ${principal.repository}`,
+        ...(principal.workflow !== undefined ? [`--workflow ${workflowName(principal.workflow)}`] : []),
+        ...(principal.branch !== undefined ? [`--git-branch ${principal.branch}`] : []),
+        ...(principal.event !== undefined ? [`--event ${principal.event}`] : []),
+      ].join(' ')
+    case 'oidc':
+      return [`--oidc ${principal.issuer}`, ...Object.entries(principal.claims).flatMap(([name, value]) => [value].flat().map((one) => `--claim ${name}=${one}`))].join(' ')
+    case 'all-projects':
+      return `--all-projects --environment ${principal.environments.join(',')}`
+    case 'app':
+      return `--app ${principal.name ?? principal.clientId}`
+    default:
+      return `--${principal.kind}`
+  }
 }
+
+/**
+ * What a grant lets do, as `--can` writes it, `security/=none ci/=read,post`, or in words for
+ * `*` alone: `read post react label`, or `everything your role allows` for all of it where team
+ * roles cap it.
+ */
+export function grantCan(can: GrantView['can'], capped: boolean): string {
+  const patterns = Object.keys(can)
+  const words = (grant: GrantView['can'][string]) => (grant === 'all' ? 'all' : grant.length === 0 ? 'none' : grant.join(','))
+  if (patterns.length === 1 && patterns[0] === '*') {
+    const all = can['*']!
+    if (all === 'all' || all.includes('manage')) return capped ? 'everything your role allows' : 'everything'
+    return all.length === 0 ? 'nothing' : all.join(' ')
+  }
+  return patterns.map((pattern) => `${pattern}=${words(can[pattern]!)}`).join(' ')
+}
+
+const grantCells = (grant: GrantView) => [grant.id, grant.principals.map(principalFlags).join(' '), grantCan(grant.can, grant.capped)]
+
+/** Each grant on a row: its ID, who it names (as the flags that would), and what it lets them do. */
+export function formatGrants(grants: GrantView[]): string {
+  return table(grants.map(grantCells))
+}
+
+/** One grant as its row: `g3  --everyone  security/=none`. */
+export const grantRow = (grant: GrantView) => grantCells(grant).join('  ')
 
 /** Each token on a row: its ID, its name, what it may do, and when it expires. */
 export function formatTokens(tokens: TokenView[], now = Date.now()): string {

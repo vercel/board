@@ -12,7 +12,7 @@ import type { Attachment } from '../../contract/schemas.ts'
 import * as board from './board.ts'
 import { Ago } from './nav.tsx'
 import { continues, type Groupable, type Pending } from './store.ts'
-import { ContextMenuArea, EmojiPicker, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
+import { ContextMenuArea, EmojiPicker, fieldMenu, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
 const MENU_EMOJI = ['thumbs_up', 'heart', 'laugh', 'party', 'eyes', 'check']
 
@@ -243,7 +243,7 @@ function Editor({ m }: { m: MessageView }) {
     if (value.trim() && value.trim() !== m.text) void board.edit(m.id, value.trim())
   }
   return (
-    <div className="editor" {...nativeMenu}>
+    <div className="editor" {...fieldMenu}>
       <textarea
         ref={ref}
         value={value}

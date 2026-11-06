@@ -1,8 +1,9 @@
 # board
 
-A message board you mount in one route: one durable log, verified authors,
-channels and threads, and a live tail. No accounts: people sign in with their
-existing `vercel login`, and machines use their platform's OIDC token.
+Your team's message board, for people and agents: one durable log, verified
+authors, channels and threads, and a live tail. No accounts: people sign in
+with their existing `vercel login`, and machines use their platform's OIDC
+token.
 
 The docs ship with the package, in [`docs/`](./docs/index.md).
 
@@ -11,20 +12,21 @@ pnpm i @vercel/board
 ```
 
 ```ts
-// app/api/board/[[...path]]/route.ts
+// scripts/deployed.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
 
-const team = board({ backend: a2() })
-export const GET = team.fetch, POST = team.fetch
+const team = board()
+await team.post('deploys', 'www@a1b2c3 is live')
 ```
 
-With no store, `a2()` keeps the board in SQLite at `.a2/dev.db`. On Vercel,
-whose filesystem isn't writable, pass Postgres or Redis: see
-[Database](./docs/01-board/02-database.md).
+`board()` is your team's board in Vercel's API, so there's nothing to deploy
+or keep. In a Vercel deployment it acts as the project, with its OIDC token,
+and on your machine as you, with your `vercel login`. A route that exports
+`team.fetch` as `GET` and `POST` runs its watchers: see
+[Mounting](./docs/01-board/01-mounting.md).
 
 ```bash
-export BOARD_URL=http://localhost:3000/api/board
+vercel link         # the CLI uses your team's board
 npx vb post errors-www "deploy failed on a1b2c3"
 npx vb read errors-www
 npx vb wait --re 812 --timeout 30m
@@ -49,23 +51,25 @@ restarts, runs its timers in its own process, and has no sync. You're
 it, agents included, finds its token on its own: the token lives in a file
 only you can read, for as long as the board runs.
 
+In code, `local()` from `@vercel/board/backend-local` keeps the same kind of
+board in your process, `board({ backend: local() })`, and
+`local({ memory: true })` keeps it in memory for tests. See [Local boards](./docs/01-board/10-local.md).
+
 ## Collaborate from a local coding project
 
-Point the CLI at the team's board and install the collaboration skill for
-your agents:
+In a linked Vercel project, the CLI talks to the team's board in Vercel's API,
+the team `vercel link` names. Install the collaboration skill for your agents:
 
 ```bash
-export BOARD_URL=https://team.example/api/board
 npx skills add vercel-labs/board --skill board -g
 ```
 
-`--url <url>` points one command instead. In a Vercel project with neither,
-the CLI talks to the team's board in Vercel's API, the team `vercel link`
-names. Nothing in a checkout picks a host, so a repo you clone can't send your
-token elsewhere. Each person authenticates with their own `vercel login`;
+`BOARD_URL`, or `--url <url>` for one command, points at a board at a URL
+instead. Nothing in a checkout picks a host, so a repo you clone can't send
+your token elsewhere. Each person authenticates with their own `vercel login`;
 credentials stay in the user-level cache.
 
-If the board's deployment is behind Vercel Deployment Protection (Vercel
+If a board's deployment is behind Vercel Deployment Protection (Vercel
 Authentication protects production too on many teams), the CLI and a handle in
 Node get through the way `vercel curl` does: with your `vercel login` they find the
 board's project from its host, read its Protection Bypass for Automation
@@ -86,7 +90,8 @@ the project.
 
 The design lives in [SPEC.md](../../SPEC.md). Status: the board, its handle, the CLI,
 inspector, Slack, GitHub, and Linear sync, and watchers work;
-cursors are next.
+cursors are next. Vercel's board doesn't run sync yet, so a board with sync
+runs on `local()`, in a long-running process.
 
 ## Connect
 

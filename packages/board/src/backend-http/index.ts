@@ -1,5 +1,5 @@
-// `@vercel/board/backend-http`: a board that uses another one, over its HTTP protocol. In Node, it finds
-// that board, and credentials for it, the way `vb` does.
+// A board that uses another one, over its HTTP protocol, internal: board()'s backend with `BOARD_URL`
+// set, and the CLI's for `--url`. In Node, it finds that board, and credentials for it, the way `vb` does.
 import { boardUrl, connect, environmentProfile } from '../client/node.ts'
 import { createHttp, type Environment, type HttpBackend, type HttpOptions } from '../server/backend-http.ts'
 

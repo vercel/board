@@ -44,13 +44,21 @@ describe('cli schedules', () => {
   }, 30_000)
 
   it('says so when the board has no scheduler', async () => {
-    const root = (await vb(['post', 'dev', 'no queue here'])).stdout.trim()
-    const later = await vb(['schedule', root, 'later', '--in', '1h', '--json'])
-    expect(later).toMatchObject({ code: 1, stdout: '' })
-    expect(JSON.parse(later.stderr)).toMatchObject({
-      reason: 'no_scheduler',
-      message: `Can't schedule a message in #${root}. This board doesn't support it.`,
-      data: { error: { message: 'this board has no scheduler: pass `scheduler` to `a2()` to send later' } },
-    })
+    // A board on a2() without one: a local board always has one.
+    const unscheduled = await serve(testBoard({ url: undefined }).fetch)
+    const board = `${unscheduled.origin}/api/board`
+    const as = { BOARD_URL: board, BOARD_TOKEN: await personToken('u_julian', board) }
+    try {
+      const root = (await vb(['post', 'dev', 'no queue here'], as)).stdout.trim()
+      const later = await vb(['schedule', root, 'later', '--in', '1h', '--json'], as)
+      expect(later).toMatchObject({ code: 1, stdout: '' })
+      expect(JSON.parse(later.stderr)).toMatchObject({
+        reason: 'no_scheduler',
+        message: `Can't schedule a message in #${root}. This board doesn't support it.`,
+        data: { error: { message: "this board has no scheduler, so it can't send later" } },
+      })
+    } finally {
+      await unscheduled.close()
+    }
   })
 })

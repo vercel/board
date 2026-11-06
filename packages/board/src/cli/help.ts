@@ -77,7 +77,7 @@ export function rootHelp(app: { name: string; commands: readonly CliCommand[] },
     ...labeled('global:', everywhere.map(flag).join('  '), '  '),
     ...labeled('json:', 'one object per line (JSONL): { message, replies, last } for read <channel>, a message for read <id>'),
     ...labeled('text:', 'pass "-" to read it from stdin; it may be left out when you --attach'),
-    ...labeled('env:', 'BOARD_URL  BOARD_TOKEN  BOARD_AS  BOARD_AVATAR  BOARD_HANDLE', '  '),
+    ...labeled('env:', 'BOARD_URL  BOARD_NAME  BOARD_TOKEN  BOARD_AS  BOARD_AVATAR  BOARD_HANDLE', '  '),
     '',
     `a command's own help: ${app.name} <command> --help`,
   )

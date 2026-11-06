@@ -7,7 +7,7 @@ import { MessageId, MESSAGE_TEXT_MAX } from './schemas.ts'
 /**
  * An external thread or channel, prefixed with its sync key:
  * `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread),
- * `github:basehub-ai/www:12` (a PR thread).
+ * `github:acme/web:12` (a PR thread).
  */
 export const ExternalTarget = z.string().min(3).max(300)
 

@@ -110,7 +110,7 @@ teardown:
 | `up.log` | setup output: create, install, build, serve |
 | `doctor.txt` | each doctor run |
 | `transcript.txt` | every `vb.sh`/`sh.sh` call: `$ command`, output, `[exit N]` when nonzero |
-| `files/` | from `collect.sh` (run by `down.sh`): `.board/` (`board.db` + WAL, `attachments/`), `serve.log`, `read.json` (`vb read <id> --json` of every thread), `files.txt` |
+| `files/` | from `collect.sh` (run by `down.sh`): `.board/` (`local.db` + WAL and `local/` for its files, or `board.db` and `attachments/` on an older board), `serve.log`, `read.json` (`vb read <id> --json` of every thread), `files.txt` |
 | `down.txt` | the removal |
 
 Proof standards:
@@ -121,7 +121,7 @@ Proof standards:
   (`vb post` then `vb read <id>`; `vb label` then `vb read dev --label k=v`). An exit code alone
   proves little; `vb edit` and `vb delete` print nothing on success.
 - **Side effects.** Show the files the action leaves: the attachment under
-  `.board/attachments/`, the WAL growing, `~/.claude/settings.json` in a throwaway `HOME`.
+  `.board/local/` (an older board's `.board/attachments/`), the WAL growing, `~/.claude/settings.json` in a throwaway `HOME`.
 - **Errors too.** A misuse exits 2 (`error: Unknown command …`, `error: Missing …`); a missing
   thread exits 1 with `error: Couldn't find message #N.` With `--json`, stderr is one JSON document
   with its `reason`. Capture both when behavior at the edges is the claim.

@@ -408,7 +408,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       attachments: Attachment[],
     ): Promise<{ schedule: ScheduleView; unknownMentions?: string[] }> {
       if (!writes) throw new Error('schedules used before the board bound them')
-      if (!options.scheduler) throw new HttpError(501, 'no_scheduler', 'this board has no scheduler: pass `scheduler` to `a2()` to send later')
+      if (!options.scheduler) throw new HttpError(501, 'no_scheduler', "this board has no scheduler, so it can't send later")
       const now = Date.now()
       const every = body.every === undefined ? null : duration(body.every)
       if (every !== null && every < MIN_EVERY_MS) throw badRequest('`every` is at least 1m')

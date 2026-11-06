@@ -1,5 +1,5 @@
 // Where a write comes from and how to answer it, as a backend receives it: no write path here,
-// so the protocol's types can name it without loading a2().
+// so the protocol's types can name it without loading the local board's engine.
 import type { WriteSource } from './middleware.ts'
 
 /**

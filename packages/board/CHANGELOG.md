@@ -1,5 +1,117 @@
 # vboard
 
+## 0.36.0
+
+### Minor Changes
+
+- ce81561: `vb grants` names its options as the Vercel CLI does. `--branch`, a `--github` modifier, is `--git-branch` now: `vb grants create --github acme/web --git-branch main --can 'ci/=post'`. This breaks `--branch`, which shipped in 0.35.0. `--project` takes `-p`, and `--environment` takes `-e`, both still repeatable: `vb grants create -p web -e production -e preview --can 'ci/=post'`.
+
+### Patch Changes
+
+- 89cbe13: The inspector opens in under a second on a team board in Vercel's API, where it took 40: it shows once it knows who you are and the channels, and the activity view fills in when its read lands. That read, the latest across channels with no filter, now takes one page of each channel's messages at once instead of every thread's messages one at a time: on a board with 11 channels and 144 threads, 13 requests in 0.9 seconds instead of 172 in 40. Up to a `limit` of 100 it's exactly the latest `limit`. Past that, it can answer with fewer when one channel has more than 100 of them, since the API lists no further back, but never skips a message newer than its oldest.
+
+## 0.35.0
+
+### Minor Changes
+
+- db8c8af: `vb grants create`, `update`, and `explain` name principals with a flag each, `--user`, `--project`, `--github`, `--oidc`, `--app`, `--all-users`, `--all-projects`, `--all-apps`, and `--everyone`, each followed by its modifiers (`--environment`, `--workflow`, `--branch`, `--event`, `--claim`): `vb grants create --github acme/web --workflow ci.yml --can 'ci/=post'`. `--can pattern=permissions` repeats and takes `all` and `none`. `update` takes `--add-<kind>` and `--remove-<kind>`, and `--can`, which replaces the grant's. `explain` (`--app` included) prints which grant decides a channel, `security/ wins over *. Closest grant for bob@acme.com: g4 (--user): all.` `vb channels create security --private` closes a new channel to everyone but you. `vb tokens create --can` takes `none` too, and repeats.
+  
+  The handle does what the CLI does, with the same names: `createGrant`, `updateGrant`, `revokeGrant`, and `explain` take `'none'` at a pattern and give a project without `environments` its production deployments, and `createChannel(path, { private: true })` makes a grant letting you in, one closing the channel to everyone else, then the channel. Before it writes anything, it refuses a path where it or a channel under it is there (`channel_exists`), and one a grant other than `*`'s reaches already (`channel_granted`, naming the grant to revoke), since that grant would still let in whom it names. A project a board doesn't let in (`board_not_granted`) is told the grant that does: `Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'`, without `--name` for the team's board.
+  
+  On Vercel's board, `vb grants create --github` or `--oidc` adds `note  Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does` under `created …`, and with `--json` a `callers_not_signed_in` warning. A private channel is taken back, with nothing made, when someone adds themselves to its creator's grant, or opens its lock, before the lock lands.
+- ab92d1d: `conformance()` checks how grants combine, through `explain`: the most specific pattern decides, then the closest principal there, ties add up, `everyone` lets no one in, and a viewer reads but neither posts nor manages. It checks that an app is kept by its client ID, and every app as a group. It checks that changing a grant takes `manage` at its patterns, and that a token grants no one past its own `can`, even under a lock, and lets no one in where `everyone` gets more than it has. Every grant it makes is in `conformance/grants/`, the same for every run, so it leaves no channel behind; it revokes them all, and a revoke that fails fails the check. Two runs on one board at once see each other's grants, so run it on a scratch board. A board that looks names up needs real ones: pass `principals: { project, repository, viewer, app }`, none of them the run's own, which it refuses before it writes, or, for a project named by name, after one grant that changes nothing for the run, which it revokes. Grants across teams are skipped, since they aren't specified yet.
+  
+  On a board token, `conformance()` skips the watchers checks, `a board token can't register watchers yet`, as Vercel's API answers for now. `vb conformance` sends the tokens it mints to the board it checks by its URL, so on a team's board in Vercel's API they reach it by its ID, as a board token must.
+- f71a0fa: A board on `vercel()` sends grants to Vercel's API in the protocol's shapes: `updateGrant` as `PATCH /boards/:id/grants/:id`, and `explain` as `GET /boards/:id/grants/explain`. The API looks up the names people type (an email, a project's name, a repository, an app's slug) and answers views with IDs and names, which `vercel()` passes through, its times in milliseconds turned into the protocol's ISO strings (a grant's `at`, a token's `at` and `expiresAt`). What the API's grant rules refuse comes back as 403 `grant_forbidden`, said under what the command couldn't do: `error: You can't list grants.` with `listing grants takes manage at *` under it.
+  
+  A board token on `vercel()` reaches its own board by its ID, and says so when it can't: finding a board by name, or the team's default, is `error: a board token reaches only its own board, by its ID.` (403 `board_token_scope`), and registering watchers with one is `a board token can't register watchers yet.` (403 `board_token_unsupported`). `vb whoami` shows what the token may do and when it expires.
+  
+  Vercel's board keeps `--github` and `--oidc` grants but doesn't sign in GitHub Actions or other OIDC callers yet: a run's token gets a 401 there until it does, and the CI guide says so.
+
+## 0.34.0
+
+### Minor Changes
+
+- 860ee55: `team.explain('security/incidents', { user: 'bob@acme.com' })` (`GET /grants/explain?channel=…&user=…`) says which grant decides a channel, and what it gives: `{ channel, pattern, over, level, grants, capped, can }`, the pattern that won and the ones it won over, the level that won there, the grants at that level, and the result. `explainGrants` in `@vercel/board/access` gives the same answer from plain data, over what `grantAccess` takes. Without a principal it explains the caller; `{ app }` names an app on the team, which a local board, having no apps, explains as nothing letting it in. Anyone else's takes `manage` at `*`, and so does seeing which grants decided. Breaking for custom backends: `explain` is a new protocol method, and `BoardBinding` has `explain(principal, channel)` for a backend that keeps grants.
+- 2a8e00e: Grants name principals. A grant is `{ id, principals, can }`: who it names, as `user`, `project`, `github`, `oidc`, `all-users`, `all-projects`, or `everyone`, and one `can` for all of them, a map from channel pattern to permissions, `[]` for none. `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })` closes `security/`, and `team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } })` opens it to Alice alone. For a caller and a channel, the most specific pattern among the grants that name it wins, then the closest principal (one principal, then a group, then `everyone`), and grants tied there add up. `everyone` lets no one in by itself. People go through grants too, a host's included, so a lock keeps them out unless a grant names them. A project grant keeps the board's team, and matches a project's tokens only while they name that team, so a project moved to another team keeps none of its grants; a board that doesn't know its team keeps none and matches a project by its ID. `team.updateGrant(id, { add, remove, can })` (`PATCH /grants/:id`) changes a grant by its ID.
+  
+  Every board starts with g1, every person with everything, g2, every project on the board's team in production, preview, and development, and g3, every app on the team, both with read, post, react, and label everywhere, as Vercel's API seeds a team's board. Grants name apps (`{ kind: 'app', app }`, and `all-apps`). `grantAccess` in `@vercel/board/access` decides what a caller may do from plain data, as a board does, with booleans for whether the caller is on the team and a `cap`, the most it may do (a viewer reads and reacts), and a `can` that doesn't parse throws `InvalidCan`. You can't grant what you don't have: your token's and your own grants' limits count, an `everyone` lock doesn't, and anyone you let in gets what `everyone` gets. Revoking a grant, or removing from one, is judged the same way but for what `everyone` gets, since lifting it widens whoever it named. Naming an `oidc` principal takes `manage` everywhere. `checkGrantChange` in `@vercel/board/access` is the rule, with no I/O, so a backend that keeps grants runs the same one. Listing grants takes `manage` at `*`. Owners always may: the team's on Vercel's API, and on a local board its local user, the one `vb serve` mints a token for. A grant's keys are strict, and two oidc issuers that name the same principals are refused.
+  
+  Breaking: `{ issuer, claims, can? }` grants are gone, with setting a grant again to change its `can`, and `createGrant` answers `{ grant }` without `created`. A local board folds the grants it kept before into nothing. g2 lets every project on the team in, so a grant like `{ project: 'prj_front' } feedback/=post` doesn't keep it out of the rest of the board: write `{ '*': [], 'feedback/': ['post'] }`, or revoke g2. A project on another team can't be granted until cross-team access exists. `vb grants create` is gone until it takes principals, and `vb grants` lists each grant's principals as the flags that name them. Custom backends implement `updateGrant`.
+
+## 0.33.0
+
+### Minor Changes
+
+- 318a94d: `board()` with no backend uses your team's board in Vercel's API, the one `name` names, where it threw `no_board` without `BOARD_URL`. In Node it finds the team and credentials as the Vercel CLI and a deployment do (`VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`), and with `BOARD_URL` set, it's the board at that URL, as before.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()                          // the team's default board
+  const security = board({ name: 'security' })  // its board named security
+  const acme = board({ team: 'acme' })          // team acme's default board
+  ```
+  
+  `board({ fetch })` sends the credentials Vercel's API takes in place of the environment's, so a browser reaches Vercel's board with credentials of its own. It never goes to a board at `BOARD_URL`, and TypeScript rejects it beside a `backend`.
+  
+  `vb conformance` checks only a board you name (`--name`, `--url`, `BOARD_URL`, or `BOARD_NAME`): it posts and changes grants, so with none it exits 2 and says to name a scratch board, rather than check the team's.
+- f28c166: `local()` from `@vercel/board/backend-local` keeps a board in this process, for development, `vb serve`, tests, and working offline: SQLite under `.board/` (or `dir`), its attachments beside it, and a scheduler in the process, so it passes the whole conformance kit. Each `board({ name })` gets its own file, whatever its `team`, which a local board ignores: `.board/local.db` for the default board, `.board/security.db` for `security`. `memory: true` keeps it all in memory, for tests.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  import { local } from '@vercel/board/backend-local'
+  
+  const team = board({ backend: local() })
+  const test = board({ backend: local({ memory: true }) })
+  ```
+  
+  `vb serve` runs on it: its log is `.board/local.db` and its files `.board/local/`, where they were `.board/board.db` and `.board/attachments/`. An earlier run's files move there on the next start.
+- b261ac3: `board({ name })` picks one of the team's boards in Vercel's API by its name, and `board({ team })` another team's: `{ name: 'security' }` is this team's board named security, `{ team: 'acme', name: 'security' }` team acme's, `{ team: 'acme' }` acme's default board, and neither is the team's default board, as before. `board()` looks the name up once, whatever its case. The first time anyone uses a name the team has no board for, `board({ name })` makes it, for a person (`next dev` with a login, a script) as for a deployment, and Vercel's API grants a project's new board to that project in its environment. `board({ name, ensure: false })` only finds one, and fails with 404 `no_board` where the team has none by that name. A name a board you can't see already has fails with 409 `board_name_taken`. A board the project has no access to fails with 403 `board_not_granted`, the team's default board too.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const security = board({ name: 'security' })
+  const acme = board({ team: 'acme', name: 'security' })
+  ```
+  
+  `vb --name <board>` (or `BOARD_NAME`) picks it from the CLI, a name alone on `--scope`'s team. `vb` only finds it, so a typo at a terminal makes no board, and `--ensure` makes it; `board_not_found`'s way out is the same command with `--ensure`. `--name` goes ahead of `BOARD_URL`; `BOARD_NAME` and `BOARD_URL` both set is misuse, since each names another board, and `vb` asks you to unset one. `--scope` beside `--url` is misuse too: a board's URL names its team.
+  
+  A backend of your own reads them once, as `binding.name` and `binding.team` in `bind` (each null when left out), and `binding.ensure`.
+- fa8cadb: **Breaking:** `a2()` and its stores are gone, and with them a board you host on your own database. `@vercel/board/backend-a2` and every subpath under it (`contract`, `blob-vercel`, `store-postgres`, `store-redis`, `store-redis-http`, `store-sqlite`, `store-memory`, `scheduler-vercel`, `scheduler-qstash`, `scheduler-local`) no longer exist, nor does the package's `sql/` schema. `pg`, `ioredis`, `@upstash/qstash`, `@vercel/queue`, and `@vercel/blob` are no longer peers. `board({ project })` is gone too: a board's own Vercel project comes from `VERCEL_PROJECT_ID` or `.vercel/project.json`.
+  
+  What to do instead:
+  
+  - In production, use your team's board in Vercel's API: `board()`, or `board({ name })` for another of the team's boards. Messages, schedules, files, and watchers work there.
+  - For development, tests, `vb serve`, and working offline, use `board({ backend: local() })` from `@vercel/board/backend-local`.
+  - A board that syncs Slack, GitHub, or Linear stays on `@vercel/board@0.32` until Vercel's board runs sync, or syncs on `local()` in a long-running process.
+  - A board on `a2()` keeps its log in its own store: nothing moves it to Vercel's board.
+  
+  `no_scheduler` and `no_files` errors no longer tell you to pass anything to `a2()`.
+- b56703a: **Breaking:** `board({ access })` is gone, and with it every board that serves callers through another board. `vercelProject()`, `githubActions()`, `oidc()`, and `compileRules` are no longer in `@vercel/board/access`, nor are the `AccessRule`, `RuleFunction`, and `AccessFunction` types. A board on Vercel's board (`board()` with no backend) or at `BOARD_URL` answers only wake-ups and webhooks.
+  
+  Who may use a board is now its people, its own deployments in the environment it runs in, and whoever its grants and board tokens let in. What to do instead:
+  
+  - A rule that let in a project's deployments or a GitHub workflow becomes a grant: `vb grants create vercel --claim project_id=prj_… --claim environment=production --can …`, or `vb grants create github --claim repository=acme/web --can ci/=read,post`.
+  - A rule for another CI's OIDC tokens becomes a grant on its issuer URL, with the claims the rule matched.
+  - A gateway's callers use the team's board directly: a grant for their project or workflow, or a board token (`vb tokens create`). Until cross-team access exists, a caller on another team needs a board token minted on the board's team.
+  - A token no grant lets in gets 403 with the `vb grants create …` line that would.
+  
+  `authenticate` and `oidcTokens()`, `middleware`, and `compileAccess`, `union`, `FULL_ACCESS`, `DEFAULT_CAN`, and `resolveActor` from `@vercel/board/access` stay. A custom backend's `BoardBinding` no longer has `issuers`.
+- d6d9e2c: **Breaking:** `@vercel/board/backend-http` (`http()`) and `@vercel/board/backend-vercel` (`vercel()`) are no longer exported, nor are their types (`HttpBackend`, `HttpOptions`, `VercelBackend`, `VercelOptions`). `board()` still uses both inside: Vercel's board by default, and the board at `BOARD_URL` when it's set.
+  
+  What to write instead:
+  
+  - `board({ backend: vercel({ team }) })` is `board({ team })`, `vercel({ fetch })` is `board({ fetch })`, and a board by its ID is one by its name, `board({ name })`.
+  - A server that acts as its users through `vercel({ team, board, fetch })` moves to `board({ team, name, fetch })`, and picks the board by its name, since nothing picks one by its ID anymore. Its reads pass `ensure: false`, since `board({ name })` makes a missing board by default.
+  - `board({ backend: http(url) })` is your team's board, `board()` or `board({ name })`, once the project is granted it. For a board at a URL, `vb serve`'s say, set `BOARD_URL`.
+
+### Patch Changes
+
+- 7e258dc: A board token in `BOARD_TOKEN` reaches a team's board in Vercel's API as `Authorization: Bearer <token>`, as it is, whatever its format, ahead of `VERCEL_TOKEN`, a deployment's OIDC token, and your Vercel login, as it does a board at a URL. `vb`, `vercel board`, and `board()` in Node sent the login or the deployment's token instead. `vb whoami` says `source  BOARD_TOKEN`.
+- 308566a: On a team's board in Vercel's API, `me()` and `vb whoami` say what Vercel's API says your credentials may do in each channel, and when they stop working, where they always said read, post, react, and label everywhere, with no expiry. A person may do what their team role lets them: an owner, a member, or a developer everything, and a viewer only read. A project may read, post, react, and label everywhere. Where the API says nothing, that's still what they say.
+
 ## 0.32.0
 
 ### Minor Changes

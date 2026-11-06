@@ -22,7 +22,7 @@ import { ExternalEvent, ExternalTarget, Link, LINKS_PER_MESSAGE_MAX, Origin } fr
 import { boardEvents } from './events.ts'
 
 // A2's contracts. The board log's events are plain zod in `events.ts`, so a handle on any backend
-// reads them without loading A2; this module and what imports it run only on `a2()`.
+// reads them without loading A2; this module and what imports it run only on the local board's engine.
 
 /** The board's one log. Every board fact is an event in session `board`. */
 export const boardContract = contract({ name: 'board', events: boardEvents })
@@ -252,22 +252,54 @@ const Grant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(
 const Can = z.union([Grant, z.record(z.string().min(1).max(300), Grant)])
 const ClaimValue = z.string().min(1).max(1000)
 
+const Environments = z.array(z.string().min(1).max(100)).max(16)
+
+/** Who a grant names, as the board keeps it: IDs, with the names it knows beside them. */
+const GrantPrincipal = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('user'), userId: z.string().min(1).max(200), email: z.string().max(320).optional() }),
+  // A project on the team the board was on when the grant named it, where the board knew it.
+  z.object({ kind: z.literal('project'), projectId: z.string().min(1).max(200), name: z.string().max(200).optional(), environments: Environments, teamId: z.string().min(1).max(200).optional() }),
+  z.object({
+    kind: z.literal('github'),
+    repository: z.string().min(1).max(200),
+    repositoryId: z.string().min(1).max(64).optional(),
+    workflow: z.string().min(1).max(300).optional(),
+    branch: z.string().min(1).max(255).optional(),
+    event: z.string().min(1).max(64).optional(),
+  }),
+  z.object({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
+  z.object({ kind: z.literal('all-users') }),
+  z.object({ kind: z.literal('all-projects'), environments: Environments }),
+  z.object({ kind: z.literal('app'), clientId: z.string().min(1).max(200), name: z.string().max(200).optional() }),
+  z.object({ kind: z.literal('all-apps') }),
+  z.object({ kind: z.literal('everyone') }),
+])
+/** A grant's `can`, as written: each pattern and `'all'` or its permissions. */
+const GrantCan = z.record(z.string().min(1).max(300), Grant)
+
 /**
  * Who the board trusts beside its code's rules, outside the board log: grants, and the tokens it
- * issued, of which only a hash is kept. Session `access`. A grant's and a token's ID is the index
- * of the event that made it.
+ * issued, of which only a hash is kept. Session `access`. A token's ID is the index of the event
+ * that made it; a grant's comes from the fold, counting from the one the board starts with.
  */
 export const accessContract = contract({
   name: 'board-access',
   events: {
-    /** A grant, or a new `can` for the grant with this issuer and claims. */
+    /** From before grants named principals: kept so older logs load, and folded into nothing. */
     'grant.set': z.object({
       issuer: z.string().min(1).max(1000),
       claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])),
       can: Can,
       by: ActorId,
     }),
+    /** From before grants named principals: folded into nothing, so it can't take a grant made since. */
     'grant.revoked': z.object({ id: z.number().int().positive(), by: ActorId }),
+    /** A new grant: who it names, and what it lets them do. */
+    'grant.created': z.object({ principals: z.array(GrantPrincipal).min(1).max(32), can: GrantCan, by: ActorId }),
+    /** A grant as it is now, after an update. */
+    'grant.updated': z.object({ id: z.number().int().positive(), principals: z.array(GrantPrincipal).min(1).max(32), can: GrantCan, by: ActorId }),
+    /** A grant revoked. */
+    'grant.deleted': z.object({ id: z.number().int().positive(), by: ActorId }),
     'token.minted': z.object({
       /** The secret's SHA-256, hex. */
       hash: z.string().regex(/^[0-9a-f]{64}$/),

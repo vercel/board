@@ -4,19 +4,34 @@ import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
 import { board as mount, type Middleware } from '../src/server/index.ts'
-import { githubActions, vercelProject, oidcTokens } from '../src/access/index.ts'
-import { a2 } from '../src/backend-a2/index.ts'
+import type { GrantInput } from '../src/api/routes.ts'
 import { slack } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
-import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testBoard, workflowToken } from './harness.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { fakeQueue } from './queue.ts'
 
 /** The front project's feedback intake: it starts threads in feedback/ and reads nothing. */
-const intake = vercelProject({ project: 'prj_marketing', can: { 'feedback/': ['post'] } })
+const intake = { principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { 'feedback/': ['post'] } } satisfies GrantInput
 
-async function setup(access = [intake]) {
-  const board = testBoard({ access })
+/** What acme/web's workflows may do. */
+const www = (can: GrantInput['can']) => ({ principals: [{ kind: 'github', repository: 'acme/web' }], can }) satisfies GrantInput
+
+/** Sets what the grant naming acme/web gives: it changes that one grant. */
+async function setWww(board: ReturnType<typeof testBoard>, can: GrantInput['can']) {
+  const named = (await board.grants()).find((one) => one.principals.some((principal) => principal.kind === 'github' && principal.repository === 'acme/web'))
+  await board.updateGrant(named!.id, { can })
+}
+
+/** A board that keeps `grants`, set before any test request. */
+async function granting(grants: GrantInput[], options: Parameters<typeof testBoard>[0] = {}) {
+  const board = testBoard(options)
+  for (const grant of grants) await board.createGrant(grant)
+  return board
+}
+
+async function setup(grants: GrantInput[] = [intake]) {
+  const board = await granting(grants)
   const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
   const front = caller(board.fetch, await deploymentToken())
   return { board, julian, front }
@@ -68,13 +83,13 @@ describe('a write-only source', () => {
     const { front } = await setup()
     const labeled = await front('POST', '/messages', { channel: 'feedback', text: 'slow', labels: { kind: 'task' } })
     expect(labeled).toMatchObject({ status: 403, body: { error: { message: "this token can't label in feedback" } } })
-    const { front: labeler } = await setup([vercelProject({ project: 'prj_marketing', can: { 'feedback/': ['post', 'label'] } })])
+    const { front: labeler } = await setup([{ ...intake, can: { 'feedback/': ['post', 'label'] } }])
     expect((await labeler('POST', '/messages', { channel: 'feedback', text: 'slow', labels: { kind: 'task' } })).status).toBe(201)
   })
 
   it('streams bare cursors and nothing else', async () => {
     // A stream's cursor moves past what its caller can't see when a page of events ends: here, as it closes.
-    const board = testBoard({ access: [intake], streamMaxMs: 1000 })
+    const board = await granting([intake], { streamMaxMs: 1000 })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const controller = new AbortController()
     const response = await board.fetch(
@@ -83,11 +98,17 @@ describe('a write-only source', () => {
         signal: controller.signal,
       }),
     )
+    expect(response.status).toBe(200)
     const posted = (await julian('POST', '/messages', { channel: 'feedback', text: 'triaged' })).body.message.id
     const reader = response.body!.getReader()
     const decoder = new TextDecoder()
     let text = ''
-    while (!text.includes(`id: ${posted}\n`)) text += decoder.decode((await reader.read()).value)
+    while (!text.includes(`id: ${posted}\n`)) {
+      const { value, done } = await reader.read()
+      if (done) break
+      text += decoder.decode(value)
+    }
+    expect(text).toContain(`id: ${posted}\n`)
     expect(text).not.toContain('event: board')
     expect(text).not.toContain('triaged')
     controller.abort()
@@ -105,7 +126,7 @@ describe('a write-only source', () => {
     const retried = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @julian', id: posted.body.message.thread })
     expect(retried.body.message).toMatchObject({ id: posted.body.message.id, mentions: [] })
     // So does a retry that middleware answers from what landed.
-    const guarded = testBoard({ access: [intake], middleware: [async ({ next }) => next()] })
+    const guarded = await granting([intake], { middleware: [async ({ next }) => next()] })
     await caller(guarded.fetch, await personToken(), { 'x-board-handle': 'julian' })('POST', '/messages', { channel: 'dev', text: 'hi' })
     const guardedFront = caller(guarded.fetch, await deploymentToken())
     const first = await guardedFront('POST', '/messages', { channel: 'feedback', text: 'thanks @julian' })
@@ -125,7 +146,7 @@ describe('a write-only source', () => {
 
   for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {
     it(`gets back a retry as it landed, not what others added since (${middleware ? 'with' : 'without'} middleware)`, async () => {
-      const board = testBoard({ access: [intake], ...(middleware ? { middleware } : {}) })
+      const board = await granting([intake], middleware ? { middleware } : {})
       const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
       const front = caller(board.fetch, await deploymentToken())
       const sent = { channel: 'feedback/front', text: 'checkout is slow', id: 'feedback-checkout' }
@@ -145,7 +166,7 @@ describe('a write-only source', () => {
   }
 
   it('doesn’t tell a write-only scheduler which handles match no one', async () => {
-    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [intake] })
+    const board = await granting([intake], { scheduler: fakeQueue().scheduler })
     const front = caller(board.fetch, await deploymentToken())
     const scheduled = await front('POST', '/schedules', { channel: 'feedback', text: 'thanks @nobody', in: '1h' })
     expect(scheduled.status).toBe(201)
@@ -165,8 +186,7 @@ describe('a write-only source', () => {
 
 describe('attachments', () => {
   it('are readable by their uploader, and where a message carrying them is', async () => {
-    const access = [intake, githubActions({ repository: 'basehub-ai/www', can: { 'feedback/': ['post'], ci: ['read'] } })]
-    const { board, julian, front } = await setup(access)
+    const { board, julian, front } = await setup([intake, www({ 'feedback/': ['post'], ci: ['read'] })])
     const ci = caller(board.fetch, await workflowToken())
     const file = await upload(board, await deploymentToken(), 'repro steps')
     expect(file.status).toBe(201)
@@ -184,7 +204,7 @@ describe('attachments', () => {
   })
 
   it('go into a schedule only where its creator may read them', async () => {
-    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: { ci: ['read', 'post'] } })] })
+    const board = await granting([www({ ci: ['read', 'post'] })], { scheduler: fakeQueue().scheduler })
     const file = await upload(board, await personToken(), 'the plan')
     await caller(board.fetch, await personToken())('POST', '/messages', { channel: 'security', text: 'plan', attachments: [file.id] })
     const ci = caller(board.fetch, await workflowToken())
@@ -194,7 +214,7 @@ describe('attachments', () => {
   })
 
   it('need post somewhere to upload', async () => {
-    const { board } = await setup([githubActions({ repository: 'basehub-ai/www', can: ['read'] })])
+    const { board } = await setup([www({ '*': ['read'] })])
     expect((await upload(board, await workflowToken(), 'x')).status).toBe(403)
   })
 })
@@ -251,9 +271,8 @@ describe('links', () => {
 
   it('show nothing of it on any route', async () => {
     const s = fakePlatform('slack')
-    const board = testBoard({
+    const board = await granting([{ principals: [{ kind: 'project', project: 'prj_sync', environments: ['production'] }], can: { open: 'all', security: ['read'] } }], {
       sync: { slack: slack({ adapter: s.adapter }, channels({ C2: 'security' })) },
-      access: [vercelProject({ project: 'prj_sync', can: { open: 'all', security: ['read'] } })],
     })
     const webhook = (body: unknown) =>
       board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
@@ -288,9 +307,8 @@ describe('sync', () => {
   /** security/ mirrors Slack's C1, where a thread is already on the board; a workflow syncs in ci/ only. */
   async function mirrored() {
     const s = fakePlatform('slack')
-    const board = testBoard({
+    const board = await granting([www({ 'ci/': ['read', 'post', 'sync'] })], {
       sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'security' })) },
-      access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post', 'sync'] } })],
     })
     const webhook = (body: unknown) =>
       board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
@@ -334,16 +352,18 @@ describe('sync', () => {
   })
 })
 
-describe('one principal, two rules', () => {
+describe('one principal, two grants', () => {
   // A repo's workflows share `github:repo:<id>`: deploy.yml reads and posts in ci/, a pull request's run only posts there.
-  const rules = [
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', event: 'push', can: { 'ci/': ['read', 'post'] } }),
-    githubActions({ repository: 'basehub-ai/www', event: 'pull_request', can: { 'ci/': ['post'] } }),
-  ]
-  const pullRequest = { event_name: 'pull_request', ref: 'refs/pull/7/merge', workflow_ref: 'basehub-ai/www/.github/workflows/test.yml@refs/pull/7/merge' }
+  const deployYml = { kind: 'github' as const, repository: 'acme/web', event: 'push', workflow: 'deploy.yml', branch: 'main' }
+  const pullRequests = { kind: 'github' as const, repository: 'acme/web', event: 'pull_request' }
+  const grants = [
+    { principals: [deployYml], can: { 'ci/': ['read', 'post'] } },
+    { principals: [pullRequests], can: { 'ci/': ['post'] } },
+  ] satisfies GrantInput[]
+  const pullRequest = { event_name: 'pull_request', ref: 'refs/pull/7/merge', workflow_ref: 'acme/web/.github/workflows/test.yml@refs/pull/7/merge' }
 
   it('keep what the one that reads wrote from the one that can’t', async () => {
-    const board = testBoard({ scheduler: fakeQueue().scheduler, access: rules })
+    const board = await granting(grants, { scheduler: fakeQueue().scheduler })
     const julian = caller(board.fetch, await personToken())
     const deploy = caller(board.fetch, await workflowToken())
     const pr = caller(board.fetch, await workflowToken(pullRequest))
@@ -371,13 +391,13 @@ describe('one principal, two rules', () => {
 
   for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {
     it(`keep a post the one that reads wrote from the other's retry of its id (${middleware ? 'with' : 'without'} middleware)`, async () => {
-      const board = testBoard({
-        access: [
-          githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', event: 'push', can: { 'ci/': ['read', 'post', 'label'] } }),
-          githubActions({ repository: 'basehub-ai/www', event: 'pull_request', can: { 'ci/': ['post'] } }),
+      const board = await granting(
+        [
+          { principals: [deployYml], can: { 'ci/': ['read', 'post', 'label'] } },
+          { principals: [pullRequests], can: { 'ci/': ['post'] } },
         ],
-        ...(middleware ? { middleware } : {}),
-      })
+        middleware ? { middleware } : {},
+      )
       const julian = caller(board.fetch, await personToken())
       const deploy = caller(board.fetch, await workflowToken())
       const pr = caller(board.fetch, await workflowToken(pullRequest))
@@ -397,11 +417,11 @@ describe('one principal, two rules', () => {
   }
 
   it('re-checks post on what it wrote', async () => {
-    const store = memory()
-    const before = testBoard({ store, access: [githubActions({ repository: 'basehub-ai/www', can: { ci: ['post'] } })] })
-    const id = (await caller(before.fetch, await workflowToken())('POST', '/messages', { channel: 'ci', text: 'nightly' })).body.message.id
-    const after = testBoard({ store, access: [githubActions({ repository: 'basehub-ai/www', can: { dev: ['post'] } })] })
-    const ci = caller(after.fetch, await workflowToken())
+    const board = await granting([www({ ci: ['post'] })])
+    const ci = caller(board.fetch, await workflowToken())
+    const id = (await ci('POST', '/messages', { channel: 'ci', text: 'nightly' })).body.message.id
+    // Setting its grant again changes what it gives.
+    await setWww(board, { dev: ['post'] })
     expect(await ci('POST', `/messages/${id}/edit`, { text: 'nightly, again' })).toMatchObject({ status: 403, body: { error: { message: "this token can't post in ci" } } })
     expect((await ci('POST', `/messages/${id}/delete`, {})).status).toBe(403)
   })
@@ -415,58 +435,60 @@ describe('schedules', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  /** Two deployments of the same board, before and after its access changed: one store, one queue. */
-  async function deploys(before: Parameters<typeof githubActions>[0]['can'], after: Parameters<typeof githubActions>[0]['can']) {
+  /** A workflow's schedule, made while its grant gives `before` and due once the grant gives `after`. */
+  async function regranted(before: GrantInput['can'], after: GrantInput['can']) {
     const queue = fakeQueue()
-    const store = memory()
-    const first = testBoard({ store, scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: before })] })
-    const ci = caller(first.fetch, await workflowToken())
+    const board = await granting([www(before)], { scheduler: queue.scheduler })
+    const ci = caller(board.fetch, await workflowToken())
     const scheduled = await ci('POST', '/schedules', { channel: 'ci', text: 'nightly: green', in: '1h' })
     expect(scheduled.status).toBe(201)
-    const second = testBoard({ store, scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: after })] })
+    await setWww(board, after)
     await new Promise((resolve) => setTimeout(resolve, 20))
     vi.setSystemTime(T0 + 61 * 60_000)
     await queue.fire()
     await new Promise((resolve) => setTimeout(resolve, 20))
-    const julian = caller(second.fetch, await personToken())
+    const julian = caller(board.fetch, await personToken())
     const [schedule] = (await julian('GET', '/schedules?all=1')).body.schedules
     return { schedule, messages: (await julian('GET', '/messages?channel=ci')).body.messages }
   }
 
   it('send with what their creator may do now', async () => {
-    const { schedule, messages } = await deploys({ ci: ['post'] }, { ci: ['read', 'post'] })
+    const { schedule, messages } = await regranted({ ci: ['post'] }, { ci: ['read', 'post'] })
     expect(schedule).toMatchObject({ state: 'done', sent: 1 })
     expect(messages).toMatchObject([{ text: 'nightly: green', by: { principal: 'github:repo:123456' } }])
   })
 
   it('are canceled as revoked once their creator can’t post', async () => {
-    const { schedule, messages } = await deploys({ ci: ['post'] }, { ci: ['read'] })
+    const { schedule, messages } = await regranted({ ci: ['post'] }, { ci: ['read'] })
     expect(schedule).toMatchObject({ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } })
     expect(messages).toEqual([])
   })
 
-  it('are revoked by a later deployment even while the earlier one still gets their timers', async () => {
+  it('are sent by the latest deployment, under the grants as they are then, even while an earlier one still gets their timers', async () => {
     const store = memory()
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
-    const deploy = (id: string, can: Parameters<typeof githubActions>[0]['can']) => {
+    const deploy = (id: string) => {
       vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
       const queue = fakeQueue()
-      const deployed = testBoard({ store, scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can })] })
+      const deployed = testBoard({ store, scheduler: queue.scheduler })
       vi.unstubAllEnvs()
-      return { queue, fetch: deployed.fetch }
+      return { queue, board: deployed, fetch: deployed.fetch }
     }
-    const before = deploy('dpl_before', { ci: ['post'] })
+    const before = deploy('dpl_before')
+    await before.board.createGrant(www({ ci: ['post'] }))
     expect((await caller(before.fetch, await workflowToken())('POST', '/schedules', { channel: 'ci', text: 'nightly: green', in: '1h' })).status).toBe(201)
-    const after = deploy('dpl_after', { ci: ['read'] })
+    const after = deploy('dpl_after')
     const julian = async (method: string, path: string) => caller(after.fetch, await personToken())(method, path)
     await julian('GET', '/me')
     await vi.waitFor(() => expect(after.queue.timers).toHaveLength(1))
 
+    // The earlier deployment's timer sends nothing, though its creator may still post: the later one took the schedules over.
     vi.setSystemTime(T0 + 61 * 60_000)
     await before.queue.fire()
     await settle()
     expect((await julian('GET', '/messages?channel=ci')).body.messages).toEqual([])
 
+    await setWww(after.board, { ci: ['read'] })
     await after.queue.fire()
     await vi.waitFor(async () =>
       expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }]),
@@ -476,7 +498,7 @@ describe('schedules', () => {
 
   it('are canceled by their creator, or by manage', async () => {
     const queue = fakeQueue()
-    const board = testBoard({ scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: { ci: ['post', 'read'] } })] })
+    const board = await granting([www({ ci: ['post', 'read'] })], { scheduler: queue.scheduler })
     const ci = caller(board.fetch, await workflowToken())
     const julian = caller(board.fetch, await personToken())
     const mine = (await ci('POST', '/schedules', { channel: 'ci', text: 'mine', in: '1h' })).body.schedule.id
@@ -500,8 +522,8 @@ describe('schedules', () => {
   it('keep plain data in their state, which A2 clones and snapshots', () => {
     const as = {
       author: { actor: 'github:repo:123456', principal: 'github:repo:123456', profile: null, session: null },
-      principal: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'basehub-ai/www', scope: 'ci=post' },
-      actor: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'basehub-ai/www', name: 'basehub-ai/www', avatar: null },
+      principal: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'acme/web', scope: 'ci=post' },
+      actor: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'acme/web', name: 'acme/web', avatar: null },
     }
     const payload = { channel: 'ci', re: null, text: 'nightly', labels: {}, noSync: false, first: T0, every: null, until: null, times: null, as }
     const event = { index: 1, type: 'schedule.created', createdAt: T0, payload } as unknown as Parameters<typeof foldSchedules>[1]
@@ -535,26 +557,6 @@ describe('schedules', () => {
     }
   })
 
-  it('send from a project named without its team, where the scheduler can’t work the team out', async () => {
-    vi.stubEnv('VERCEL_ORG_ID', '')
-    vi.stubEnv('VERCEL_OIDC_TOKEN', '')
-    try {
-      // The board route and the scheduler route are two functions: the one that sends never sees a request.
-      const store = memory()
-      const queue = fakeQueue()
-      const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { access, project: { id: PROJECT_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL }
-      const route = mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
-      mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
-      const platform = await deploymentToken('board', PROJECT_ID)
-      const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
-      expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)
-      expect(await sendAndRead(route.fetch, queue)).toMatchObject({ state: 'done', sent: 1 })
-    } finally {
-      vi.unstubAllEnvs()
-    }
-  })
-
   it('from before the board kept claims are re-checked from the principal ID', async () => {
     vi.stubEnv('VERCEL_ENV', 'production')
     try {
@@ -562,7 +564,6 @@ describe('schedules', () => {
       const callers = {
         own: () => deploymentToken('board', PROJECT_ID),
         byId: () => deploymentToken('marketing', 'prj_marketing'),
-        byName: () => deploymentToken('docs', 'prj_docs'),
         workflow: () => workflowToken(),
       }
       for (const [who, token] of Object.entries(callers)) {
@@ -581,12 +582,11 @@ describe('schedules', () => {
             options,
           )) as typeof log.append
         const queue = fakeQueue()
-        const access = [
-          vercelProject({ project: 'prj_marketing', can: 'all' }),
-          vercelProject({ project: 'docs', can: 'all' }),
-          githubActions({ repository: 'basehub-ai/www', can: 'all' }),
+        const grants: GrantInput[] = [
+          { principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } },
+          www({ '*': 'all' }),
         ]
-        const board = testBoard({ store, scheduler: queue.scheduler, access })
+        const board = await granting(grants, { store, scheduler: queue.scheduler })
         expect((await caller(board.fetch, await token())('POST', '/schedules', { channel: 'dev', text: who, in: '1h' })).status).toBe(201)
         const schedule = await sendAndRead(board.fetch, queue)
         sent[who] = { sent: schedule.sent, reason: schedule.canceled?.reason ?? null }
@@ -595,7 +595,6 @@ describe('schedules', () => {
       expect(sent).toEqual({
         own: { sent: 1, reason: null },
         byId: { sent: 1, reason: null },
-        byName: { sent: 0, reason: 'revoked' },
         workflow: { sent: 0, reason: 'revoked' },
       })
     } finally {

@@ -1,6 +1,6 @@
-import type { Me, MessageView, RegistrationView } from '../api/routes.ts'
-import { BoardError } from '../client/client.ts'
-import { compileAccess } from '../server/access.ts'
+import type { Explanation, GrantView, Me, MessageView, RegistrationView } from '../api/routes.ts'
+import { BoardError, type ExplainPrincipal } from '../client/client.ts'
+import { compileAccess, type Permission } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
 
 /**
@@ -37,6 +37,16 @@ export type ConformanceOptions = {
    * that check is skipped.
    */
   withToken?: (secret: string) => Board
+  /**
+   * Whom the grants checks name. A board that verifies tokens itself (`vb serve`) takes the made-up
+   * IDs they use without it; one that looks names up, as Vercel's API does, needs real ones on its
+   * team, or skips the checks that name them: a `project` (its name or ID), a GitHub `repository`
+   * no grant names, a `viewer` (a person's email or ID whose team role is viewer), to check
+   * that a role caps what grants give, and an `app` installed on the board's team (its slug or
+   * client ID), which a local board has none of. None may be the run's own: it throws before it
+   * writes.
+   */
+  principals?: { project?: string; repository?: string; viewer?: string; app?: string }
 }
 
 class Mismatch extends Error {}
@@ -95,14 +105,17 @@ type Context = {
   reply?: MessageView
   posted: string[]
   withToken?: (secret: string) => Board
+  principals: Principals
+  /** The board's own Vercel team, as its discovery names it. */
+  team: string | null
 }
 
 type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) => Promise<void | string> }
 
 /**
- * The groups a board may keep none of, saying so with a 501: a board on `a2()` without a scheduler
- * answers `no_scheduler`, and without a blob store `no_files`; one whose `access` is one function keeps
- * no grants, `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
+ * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
+ * `no_scheduler`, and without a blob store `no_files`; a backend of one's own that keeps no grants
+ * answers `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
  * and fails.
  */
 const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])
@@ -112,17 +125,144 @@ const needRoot = (ctx: Context) => {
   return { root: ctx.root, reply: ctx.reply }
 }
 
-/** A grant for a project that doesn't exist, from an environment its deployments would have: it lets nobody in. */
-const grantFor = (ctx: Context) => ({ issuer: 'vercel', claims: { environment: 'preview', project_id: `prj_conformance${ctx.labels.conformance}` } })
+/**
+ * Who the grants checks name: `principals`' own, or made-up IDs, which a board that verifies tokens
+ * itself takes. A grant naming them lets nobody in.
+ */
+type Principals = { project: string; repository: string; viewer: string | null; app: string | null }
 
-/** Sets the check's grant, or says why it can't: changing who the board trusts takes `manage` in every channel. */
-async function firstGrant(ctx: Context): Promise<Awaited<ReturnType<Board['createGrant']>> | { skip: string }> {
-  try {
-    return await ctx.board.createGrant(grantFor(ctx))
-  } catch (error) {
-    if (error instanceof BoardError && error.status === 403) return { skip: "this token can't change the board's grants" }
-    throw error
+/** A check's project, in its environments. */
+const projectFor = (ctx: Context, environments = ['preview']) => ({ kind: 'project' as const, project: ctx.principals.project, environments })
+
+/**
+ * The subtree every grant the grants checks make sits in, `conformance/grants/`, and every channel
+ * they ask about: the same for every run, so a run leaves no channel behind, and no grant reaches
+ * outside it. Two runs on one board at once see each other's grants there.
+ */
+const subtreeOf = (ctx: Context) => `${ctx.channel}/grants/`
+
+/** The check's grant: that project may post in the subtree's `ci/`. */
+const grantFor = (ctx: Context) => ({ principals: [projectFor(ctx)], can: { [`${subtreeOf(ctx)}ci/`]: ['post'] } }) as const
+
+/** A check that can't run here, and why: it's skipped, not failed. */
+class Skip extends Error {}
+
+/** A board that looks names up and has none for one a check named: what to pass instead. */
+function unnamed(error: unknown): Skip | null {
+  if (!(error instanceof BoardError) || error.status !== 400 || !error.code.endsWith('_not_found')) return null
+  return new Skip(`this board looks names up and found none for one the check named (${error.message}): pass principals that are real on its team`)
+}
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+type GrantInput = Parameters<Board['createGrant']>[0]
+
+/** What a grants check makes things with: each is revoked when it ends, whatever happens. */
+type Grants = {
+  /** Makes a grant, as this run or as `by`. The first this run makes tells whether it may change grants here at all: a 403 skips the check. */
+  make(input: GrantInput, by?: Board): Promise<GrantView>
+  /** That `by` is refused a grant, with a 403: one a board wrongly makes is revoked too. */
+  deny(by: Board, input: GrantInput, what: string): Promise<void>
+  /** A token this run mints with `can`, as a handle: a board that mints none (501, 404, or 403) skips the check. */
+  mint(can: Record<string, 'all' | readonly Permission[]>): Promise<Board>
+  /**
+   * A grant that keeps this run in `pattern` with `manage`, so it can lift an `everyone` grant
+   * there, which would narrow it too: its user, or its project in its environment.
+   */
+  keep(pattern: string): Promise<void>
+}
+
+/**
+ * Runs `check` with what it makes grants and tokens with, and revokes them all afterwards, the
+ * newest grant first, so one that closes a pattern goes while the one keeping this run in is there.
+ * A revoke that fails fails the check: what it made would stay on the board.
+ */
+async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void | string>): Promise<void | string> {
+  const made: string[] = []
+  const tokens: string[] = []
+  const grants: Grants = {
+    async make(input, by) {
+      try {
+        const { grant } = await (by ?? ctx.board).createGrant(input)
+        made.push(grant.id)
+        return grant
+      } catch (error) {
+        if (!by && made.length === 0 && error instanceof BoardError && error.status === 403) throw new Skip("this token can't change the board's grants")
+        throw unnamed(error) ?? error
+      }
+    },
+    async deny(by, input, what) {
+      try {
+        const { grant } = await by.createGrant(input)
+        made.push(grant.id)
+      } catch (error) {
+        if (error instanceof BoardError && error.status === 403) return
+        throw unnamed(error) ?? new Mismatch(`${what}: expected 403, got ${error instanceof BoardError ? `${error.status} ${error.code}` : messageOf(error)}`)
+      }
+      throw new Mismatch(`${what}: expected 403, and it made the grant`)
+    },
+    async mint(can) {
+      if (!ctx.withToken) throw new Skip("this run can't call the board with a token's secret")
+      try {
+        const { token, secret } = await ctx.board.createToken({ name: `conformance-${ctx.labels.conformance}-grants`, can: can as never, expires: '1h' })
+        tokens.push(token.id)
+        return ctx.withToken(secret)
+      } catch (error) {
+        if (error instanceof BoardError && [403, 404, 501].includes(error.status)) throw new Skip(`this board mints no tokens to check with: ${error.message}`)
+        throw error
+      }
+    },
+    async keep(pattern) {
+      const [source, kind, id, environment] = ctx.me.principal.split(':')
+      if (source === 'board') return
+      const self =
+        ctx.me.kind === 'person'
+          ? { kind: 'user' as const, userId: ctx.me.principal.split(':').slice(2).join(':') }
+          : kind === 'project' && id && environment
+            ? { kind: 'project' as const, project: id, environments: [environment] }
+            : kind === 'app' && id
+              ? { kind: 'app' as const, app: id }
+              : null
+      if (!self) throw new Skip("closing a pattern to everyone would close it to this run too, which no grant could keep in: it's neither a person, a project, nor an app")
+      await grants.make({ principals: [self], can: { [pattern]: 'all' } })
+    },
   }
+  let result: void | string = undefined
+  let failure: unknown = null
+  try {
+    result = await check(grants)
+  } catch (error) {
+    if (error instanceof Skip) result = error.message
+    else failure = error
+  }
+  const left: string[] = []
+  for (const id of made.reverse())
+    await ctx.board.revokeGrant(id).catch((error: unknown) => {
+      left.push(`${id} (${messageOf(error)})`)
+    })
+  for (const id of tokens)
+    await ctx.board.revokeToken(id).catch((error: unknown) => {
+      left.push(`token ${id} (${messageOf(error)})`)
+    })
+  if (left.length > 0) throw new Mismatch(`${failure ? `${messageOf(failure)}; and it ` : ''}couldn't revoke what it made: ${left.join(', ')}`)
+  if (failure) throw failure
+  return result
+}
+
+/** What decides `channel` for `principal` (the caller, without one), or a skip where the board can't find it by name. */
+async function explain(ctx: Context, channel: string, principal?: ExplainPrincipal): Promise<Explanation> {
+  try {
+    return await ctx.board.explain(channel, principal)
+  } catch (error) {
+    throw unnamed(error) ?? error
+  }
+}
+
+const sortedOf = (values: readonly string[] | undefined) => [...(values ?? [])].sort()
+
+/** That `actual` shows as `expected` does: a value compared as JSON, shown once when it isn't. */
+function alike(actual: unknown, expected: unknown, what: string) {
+  if (show(actual) !== show(expected)) throw new Mismatch(`${what}: expected ${show(expected)}, got ${show(actual)}`)
 }
 
 /** The sync key the sync checks register, a platform of their own, so nothing reaches a real one. */
@@ -471,91 +611,235 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
-    name: 'grants a project, lists it, takes the same grant again as one, and revokes it',
-    run: async (ctx) => {
-      const asked = grantFor(ctx)
-      const first = await firstGrant(ctx)
-      if ('skip' in first) return first.skip
-      try {
-        isRef(first.grant.id, "a grant's id")
-        same(first.created, true, 'a new grant: created')
-        same(first.grant.issuer, 'vercel', "the grant's issuer")
-        same(first.grant.claims.project_id, asked.claims.project_id, "the grant's project_id")
-        check(first.grant.can['*']?.includes('post'), `a grant with no can should let them post everywhere, got ${show(first.grant.can)}`)
-        same(first.grant.by, ctx.me.actor, "the grant's by")
-        const again = await ctx.board.createGrant(asked)
-        same(again.created, false, 'the same issuer and claims again: created')
-        same(again.grant.id, first.grant.id, 'the same issuer and claims again: its id')
-        same((await ctx.board.grants()).filter((grant) => grant.id === first.grant.id).length, 1, 'grants listing it')
-      } catch (error) {
-        await ctx.board.revokeGrant(first.grant.id).catch(() => {})
-        throw error
-      }
-      same((await ctx.board.revokeGrant(first.grant.id)).revoked, true, 'revoking it')
-      same((await ctx.board.revokeGrant(first.grant.id)).revoked, false, 'revoking it again')
-      check(!(await ctx.board.grants()).some((grant) => grant.id === first.grant.id), "grants shouldn't list it once it's revoked")
+    name: 'grants a principal, lists it, and revokes it',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make }) => {
+        const grant = await make(grantFor(ctx))
+        isRef(grant.id, "a grant's id")
+        const [project] = grant.principals
+        check(
+          grant.principals.length === 1 && project?.kind === 'project' && (project.projectId === ctx.principals.project || project.name === ctx.principals.project),
+          `the grant's principals: expected the project ${ctx.principals.project}, got ${show(grant.principals)}`,
+        )
+        alike(project.environments, ['preview'], "the project's environments")
+        alike(grant.can, { [`${subtreeOf(ctx)}ci/`]: ['post'] }, "the grant's can")
+        same((await ctx.board.grants()).filter((listed) => listed.id === grant.id).length, 1, 'grants listing it')
+        same((await ctx.board.revokeGrant(grant.id)).revoked, true, 'revoking it')
+        same((await ctx.board.revokeGrant(grant.id)).revoked, false, 'revoking it again')
+        check(!(await ctx.board.grants()).some((listed) => listed.id === grant.id), "grants shouldn't list it once it's revoked")
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'makes another grant for the same principals, and changes one by its ID',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make }) => {
+        const first = await make(grantFor(ctx))
+        const again = await make(grantFor(ctx))
+        check(again.id !== first.id, `the same principals again should be another grant, got ${again.id} twice`)
+        const { repository } = ctx.principals
+        const ci = `${subtreeOf(ctx)}ci/`
+        // A board that looks names up and has none for the repository skips the rest.
+        const update = async (change: Parameters<Board['updateGrant']>[1]) => {
+          try {
+            return await ctx.board.updateGrant(first.id, change)
+          } catch (error) {
+            throw unnamed(error) ?? error
+          }
+        }
+        // The project again joins the one it names: its environments together.
+        const added = await update({ add: [{ kind: 'github', repository }, projectFor(ctx, ['production'])], can: { [ci]: ['read', 'post'] } })
+        same(added.grant.id, first.id, "the updated grant's id")
+        alike(added.grant.principals.map((principal) => principal.kind), ['project', 'github'], 'principals after adding a repository, and the project again')
+        const project = added.grant.principals[0]
+        alike(sortedOf(project?.kind === 'project' ? project.environments : undefined), sortedOf(['preview', 'production']), "the project's environments, after adding it again")
+        alike(added.grant.can, { [ci]: ['read', 'post'] }, "the updated grant's can")
+        // A project to remove is the project, whatever its environments.
+        const removed = await update({ remove: [{ kind: 'project', project: ctx.principals.project }] })
+        alike(removed.grant.principals.map((principal) => principal.kind), ['github'], 'principals after removing the project')
+        await rejects(update({ remove: [{ kind: 'project', project: ctx.principals.project }] }), 400, 'not_in_grant', 'removing a principal the grant no longer names')
+        await rejects(update({ remove: [{ kind: 'github', repository }] }), 400, 'grant_empty', 'removing the last principal')
+        await rejects(ctx.board.updateGrant(`${first.id}0`, { can: { [ci]: ['read'] } }), 404, 'grant_not_found', 'updating a grant that was never made')
+      }),
+  },
+  {
+    group: 'grants',
+    name: "keeps a grant's can as written, a pattern with no permissions included",
+    run: (ctx) =>
+      withGrants(ctx, async ({ make }) => {
+        const subtree = subtreeOf(ctx)
+        const can = { [subtree]: ['read'], [`${subtree}hidden/`]: [] } as const
+        const grant = await make({ principals: [projectFor(ctx, ['production', 'preview'])], can })
+        alike(grant.can, can, "the grant's can")
+        const listed = (await ctx.board.grants()).find((found) => found.id === grant.id)
+        alike(listed?.can, can, "the listed grant's can")
+        const project = listed?.principals[0]
+        alike(sortedOf(project?.kind === 'project' ? project.environments : undefined), sortedOf(['preview', 'production']), "the project's environments")
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'lets the most specific pattern decide, then the closest principal there, and adds up ties',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make, keep }) => {
+        const subtree = subtreeOf(ctx)
+        const closed = `${subtree}closed/`
+        const channel = `${closed}thread`
+        const project = projectFor(ctx, ['production'])
+        const who = { project: ctx.principals.project, environment: 'production' }
+        await keep(closed)
+        await make({ principals: [project], can: { [subtree]: ['read', 'post'] } })
+        const lock = await make({ principals: [{ kind: 'everyone' }], can: { [closed]: [] } })
+        // A grant naming it on the subtree doesn't help where a more specific one closes it.
+        const shut = await explain(ctx, channel, who)
+        same(shut.pattern, closed, `the pattern that decides ${channel}`)
+        check(shut.over.includes(subtree), `${closed} should win over ${subtree}, got ${show(shut.over)}`)
+        same(shut.level, 'everyone', `the level that decides ${channel}`)
+        check(shut.grants.some((grant) => grant.id === lock.id), `everyone's grant should decide, got ${show(shut.grants.map((grant) => grant.id))}`)
+        alike(shut.can, [], `what the project may do in ${channel}`)
+        const reads = await make({ principals: [project], can: { [closed]: ['read'] } })
+        const posts = await make({ principals: [project], can: { [closed]: ['post'] } })
+        const open = await explain(ctx, channel, who)
+        same(open.level, 'principal', `the level that decides ${channel} once grants name the project there`)
+        alike(sortedOf(open.grants.map((grant) => grant.id)), sortedOf([reads.id, posts.id]), 'the grants that decide, which add up')
+        alike(open.can, ['read', 'post'], 'what they give together')
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'lets everyone narrow what something else lets in, and lets no one in itself',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make, keep }) => {
+        const subtree = subtreeOf(ctx)
+        const inner = `${subtree}inner/`
+        const channel = `${inner}thread`
+        await keep(inner)
+        await make({ principals: [{ kind: 'everyone' }], can: { [inner]: ['read'] } })
+        const outsider = await explain(ctx, channel, { github: ctx.principals.repository })
+        same(outsider.pattern, null, "the pattern that decides for a repository's runs nothing else lets in")
+        alike(outsider.can, [], "what everyone's grant gives them")
+        if (ctx.team === null) return 'this board names no team, so no project is on it for all-projects'
+        const who = { project: ctx.principals.project, environment: 'production' }
+        const every = { kind: 'all-projects' as const, environments: ['production'] }
+        // A grant for every project names this run too, when it's one: it keeps manage here to revoke it.
+        await keep(subtree)
+        await make({ principals: [every], can: { [subtree]: ['read', 'post'] } })
+        const narrowed = await explain(ctx, channel, who)
+        same(narrowed.level, 'everyone', `the level that decides ${channel} for a project every project's grant lets in`)
+        alike(narrowed.can, ['read'], 'what it may do there')
+        const group = await make({ principals: [every], can: { [inner]: ['post'] } })
+        const widened = await explain(ctx, channel, who)
+        same(widened.level, 'group', `the level that decides ${channel} once every project's grant names it`)
+        alike(widened.grants.map((grant) => grant.id), [group.id], 'the grant that decides')
+        alike(widened.can, ['post'], 'what it gives, the closer level alone')
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'caps a person by their team role, so a viewer reads but neither posts nor manages',
+    run: (ctx) => {
+      const { viewer } = ctx.principals
+      if (viewer === null) return Promise.resolve('name a viewer in principals to check it: a board without team roles caps no one')
+      return withGrants(ctx, async ({ make }) => {
+        const subtree = subtreeOf(ctx)
+        await make({ principals: [viewer.includes('@') ? { kind: 'user', email: viewer } : { kind: 'user', userId: viewer }], can: { [subtree]: 'all' } })
+        const explained = await explain(ctx, `${subtree}thread`, { user: viewer })
+        same(explained.level, 'principal', `the level that decides ${subtree}thread for the viewer`)
+        check(explained.capped !== null, `the viewer's role should cap what the grant gives, got capped ${show(explained.capped)}`)
+        // What a viewer may do is the team's to say; reading, and not posting or managing, is what's checked.
+        check(explained.can.includes('read') && !explained.can.includes('post') && !explained.can.includes('manage'), `what a viewer may do with a grant of all: expected read, and neither post nor manage, got ${show(explained.can)}`)
+      })
     },
   },
   {
     group: 'grants',
-    name: "changes a grant's can when it's set again",
-    run: async (ctx) => {
-      const first = await firstGrant(ctx)
-      if ('skip' in first) return first.skip
-      const { grant } = first
-      try {
-        const narrowed = await ctx.board.createGrant({ ...grantFor(ctx), can: { [ctx.channel]: ['post'] } })
-        same(narrowed.created, false, 'setting its can: created')
-        same(narrowed.grant.id, grant.id, 'setting its can: its id')
-        same(show(narrowed.grant.can), show({ [ctx.channel]: ['post'] }), "the grant's can")
-      } finally {
-        await ctx.board.revokeGrant(grant.id).catch(() => {})
-      }
+    name: 'names an app by its slug or client ID, keeps it by client ID, and every app as a group',
+    run: (ctx) => {
+      const { app } = ctx.principals
+      if (app === null) return Promise.resolve('name an app in principals to check it: a local board has no apps')
+      return withGrants(ctx, async ({ make, keep }) => {
+        const apps = `${subtreeOf(ctx)}apps/`
+        // Every app there would be this run too, if it's an app: kept in, so it can revoke the grant after.
+        if (ctx.me.principal.startsWith('vercel:app:')) await keep(apps)
+        const grant = await make({ principals: [{ kind: 'app', app }], can: { [apps]: ['post'] } })
+        const [named] = grant.principals
+        check(
+          grant.principals.length === 1 && named?.kind === 'app' && (named.clientId === app || named.name === app),
+          `the grant's principals: expected the app ${app}, got ${show(grant.principals)}`,
+        )
+        const swapped = await ctx.board.updateGrant(grant.id, { add: [{ kind: 'all-apps' }], remove: [{ kind: 'app', app }] })
+        alike(swapped.grant.principals, [{ kind: 'all-apps' }], 'principals after adding every app and removing the one')
+      })
     },
   },
   {
     group: 'grants',
-    name: "grants a GitHub repository's workflows, and another team's project",
-    run: async (ctx) => {
-      const first = await firstGrant(ctx)
-      if ('skip' in first) return first.skip
-      const made = [first.grant.id]
-      try {
-        const github = await ctx.board.createGrant({ issuer: 'github', claims: { repository: `acme/conformance-${ctx.labels.conformance}` }, can: { [ctx.channel]: ['post'] } })
-        made.push(github.grant.id)
-        same(github.grant.issuer, 'github', "the GitHub grant's issuer")
-        const theirs = await ctx.board.createGrant({
-          issuer: 'vercel',
-          claims: { environment: 'production', owner_id: `team_conformance${ctx.labels.conformance}`, project_id: `prj_conformance${ctx.labels.conformance}x` },
-        })
-        made.push(theirs.grant.id)
-        same(theirs.grant.claims.owner_id, `team_conformance${ctx.labels.conformance}`, "another team's grant's owner_id")
-        const listed = new Set((await ctx.board.grants()).map((grant) => grant.id))
-        check(made.every((id) => listed.has(id)), `grants should list ${made.join(', ')}`)
-      } finally {
-        for (const id of made) await ctx.board.revokeGrant(id).catch(() => {})
-      }
-    },
+    name: 'takes manage at each pattern a grant names to change it, and at * to list them',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make, deny, mint }) => {
+        const subtree = subtreeOf(ctx)
+        const inner = `${subtree}inner/`
+        const poster = await mint({ '*': ['read', 'post'] })
+        // Whether this run may change grants at all, before it asks a token to.
+        const probe = await make(grantFor(ctx))
+        await deny(poster, grantFor(ctx), 'a grant made without manage')
+        await refused(poster.updateGrant(probe.id, { can: { [`${subtree}ci/`]: ['read'] } }), 403, 'an update without manage')
+        await refused(poster.revokeGrant(probe.id), 403, 'a revoke without manage')
+        await refused(poster.grants(), 403, 'listing grants without manage at *')
+        await refused(poster.explain(`${subtree}thread`, { project: ctx.principals.project }), 403, "explaining a principal's access without manage at *")
+        alike((await poster.explain(`${subtree}thread`)).grants, [], 'which grants decide, for a caller that may not list them')
+        const manager = await mint({ '*': ['read', 'post', 'react', 'label', 'sync'], [inner]: 'all' })
+        const grant = await make({ principals: [projectFor(ctx)], can: { [inner]: ['read'] } }, manager)
+        await deny(manager, { principals: [projectFor(ctx)], can: { [subtree]: ['read'] } }, `a grant on ${subtree} made with manage only at ${inner}`)
+        await refused(manager.updateGrant(grant.id, { can: { [subtree]: ['read'] } }), 403, `moving a grant to ${subtree} with manage only at ${inner}`)
+        await refused(manager.grants(), 403, `listing grants with manage only at ${inner}`)
+        same((await manager.revokeGrant(grant.id)).revoked, true, `revoking a grant on ${inner} with manage there`)
+      }),
   },
   {
     group: 'grants',
-    name: "keeps two environments of one project as two grants, and revokes one without the other",
-    run: async (ctx) => {
-      const first = await firstGrant(ctx)
-      if ('skip' in first) return first.skip
-      const made = [first.grant.id]
-      try {
-        const production = await ctx.board.createGrant({ ...grantFor(ctx), claims: { ...grantFor(ctx).claims, environment: 'production' } })
-        made.push(production.grant.id)
-        same(production.created, true, 'another environment: created')
-        check(production.grant.id !== first.grant.id, 'another environment should be another grant')
-        same((await ctx.board.revokeGrant(first.grant.id)).revoked, true, 'revoking the preview grant')
-        const listed = (await ctx.board.grants()).map((grant) => grant.id)
-        check(listed.includes(production.grant.id) && !listed.includes(first.grant.id), `grants should list ${production.grant.id} and not ${first.grant.id}, got ${show(listed)}`)
-      } finally {
-        for (const id of made) await ctx.board.revokeGrant(id).catch(() => {})
-      }
-    },
+    name: "lets no token grant past its own can, even where everyone's grant closes it",
+    run: (ctx) =>
+      withGrants(ctx, async ({ make, deny, mint, keep }) => {
+        const subtree = subtreeOf(ctx)
+        const secret = `${subtree}secret/`
+        const run = { kind: 'github' as const, repository: ctx.principals.repository }
+        const narrowed = await mint({ '*': 'all', [secret]: [] })
+        await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a token kept out of ${secret}`)
+        // A lock there binds whoever it names as much as the token, until it's lifted: the token's own limit still counts.
+        await keep(secret)
+        await make({ principals: [{ kind: 'everyone' }], can: { [secret]: [] } })
+        await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a token kept out of ${secret}, once everyone is too`)
+        // What it may manage, it grants.
+        await make({ principals: [run], can: { [`${subtree}ci/`]: ['post'] } }, narrowed)
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'lets no token let anyone in where everyone gets more than the token has',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make, deny, mint, keep }) => {
+        const subtree = subtreeOf(ctx)
+        const open = `${subtree}open/`
+        const narrowed = await mint({ '*': 'all', [open]: [] })
+        await keep(open)
+        await make({ principals: [{ kind: 'everyone' }], can: { [open]: ['read'] } })
+        // Anyone it lets in, anywhere, would read open/ through everyone's grant.
+        await deny(narrowed, { principals: [{ kind: 'github', repository: ctx.principals.repository }], can: { [`${subtree}ci/`]: ['post'] } }, `a grant from a token kept out of ${open}, which everyone reads`)
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'lets a member grant on a pattern after a lock under it',
+    // A skip, saying why: the run would be the member, shut out under the lock, and only the
+    // board's owner or a grant on the run there, which would keep it in, could lift the lock after.
+    run: async () => "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it",
+  },
+  {
+    group: 'grants',
+    name: 'lets a project on another team in, in its environments',
+    // A skip, saying why, so a report shows it's left out on purpose.
+    run: async () => "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later",
   },
   {
     group: 'tokens',
@@ -808,7 +1092,53 @@ const CHECKS: Check[] = [
   },
 ]
 
-/** Runs the checks against `board`, in order, and reports each. It never throws for what the board answers. */
+/**
+ * Why `principals` can't be the ones the grants checks name: one that is this run's own (its
+ * project, or its repository from a GitHub run) would have the checks change what the run itself
+ * may do, part way through. Null when they're another's.
+ */
+function namesCaller(me: Me, principals: ConformanceOptions['principals']): string | null {
+  const [source, kind, id] = me.principal.split(':')
+  const project = principals?.project
+  if (project !== undefined && source === 'vercel' && kind === 'project' && (project === id || project === me.handle))
+    return `principals.project is this run's own project, ${project}: the grants checks would change what this run may do. Name another project on the team.`
+  const repository = principals?.repository?.toLowerCase()
+  if (repository !== undefined && me.kind === 'workflow' && repository === me.handle.toLowerCase())
+    return `principals.repository is this run's own repository, ${principals!.repository}: the grants checks would change what this run may do. Name another repository.`
+  const app = principals?.app
+  if (app !== undefined && source === 'vercel' && kind === 'app' && (app === id || app === me.handle))
+    return `principals.app is this run's own app, ${app}: the grants checks would change what this run may do. Name another app on the team.`
+  return null
+}
+
+/**
+ * Why `project`, a name the board looks up, can't be the one the grants checks name: it's this run's
+ * own. A name can't be told apart before the board resolves it, so this makes one grant that
+ * changes nothing for the run (the project's deployments in another environment, posting in the
+ * subtree's `ci/`), reads the project it resolved to, and revokes it. Null when it's another's, or
+ * when the board made no such grant, which the grants checks then say why.
+ */
+async function ownProjectByName(board: Board, me: Me, channel: string, project: string | undefined): Promise<string | null> {
+  const [source, kind, id, environment] = me.principal.split(':')
+  if (project === undefined || source !== 'vercel' || kind !== 'project' || project === id) return null
+  let grant: GrantView
+  try {
+    ;({ grant } = await board.createGrant({ principals: [{ kind: 'project', project, environments: [environment === 'preview' ? 'development' : 'preview'] }], can: { [`${channel}/grants/ci/`]: ['post'] } }))
+  } catch {
+    return null
+  }
+  // A revoke that fails throws: the run mustn't go on with it, or leave it unsaid.
+  await board.revokeGrant(grant.id)
+  const [named] = grant.principals
+  return named?.kind === 'project' && named.projectId === id
+    ? `principals.project is this run's own project, ${project} (${id}): the grants checks would change what this run may do. Name another project on the team.`
+    : null
+}
+
+/**
+ * Runs the checks against `board`, in order, and reports each. It never throws for what the board
+ * answers; it throws before it writes anything when `principals` names the run itself.
+ */
 export async function conformance(board: Board, options: ConformanceOptions = {}): Promise<ConformanceReport> {
   const checks: CheckResult[] = []
   const discovery = await board.discovery().catch((error: unknown) => error as Error)
@@ -826,15 +1156,27 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
   const url = (discovery as { url: string }).url
   checks.push({ group: 'core', name: 'says in its discovery where it is', status: 'passed' })
   const me = await board.me()
+  const own = namesCaller(me, options.principals)
+  if (own !== null) throw new TypeError(own)
   const channel = options.channel ?? 'conformance'
+  const ownByName = await ownProjectByName(board, me, channel, options.principals?.project)
+  if (ownByName !== null) throw new TypeError(ownByName)
+  const label = crypto.randomUUID().slice(0, 8)
   const ctx: Context = {
     board,
     channel,
-    labels: { conformance: crypto.randomUUID().slice(0, 8) },
+    labels: { conformance: label },
     start: (await board.messages({ channel, limit: 1 })).cursor,
     me,
     posted: [],
     ...(options.withToken ? { withToken: options.withToken } : {}),
+    principals: {
+      project: options.principals?.project ?? `prj_conformance${label}`,
+      repository: options.principals?.repository ?? `acme/conformance-${label}`,
+      viewer: options.principals?.viewer ?? null,
+      app: options.principals?.app ?? null,
+    },
+    team: (discovery as { team_id?: string | null }).team_id ?? null,
   }
   try {
     for (const { group, name, run } of CHECKS) {
@@ -843,6 +1185,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
         checks.push(skipped ? { group, name, status: 'skipped', detail: skipped } : { group, name, status: 'passed' })
       } catch (error) {
         if (OPTIONAL.has(group) && error instanceof BoardError && error.status === 501) checks.push({ group, name, status: 'skipped', detail: `not kept here: ${error.message}` })
+        // Vercel's API takes no board token for watchers yet: a run on one can't check them.
+        else if (group === 'watchers' && error instanceof BoardError && error.code === 'board_token_unsupported') checks.push({ group, name, status: 'skipped', detail: "a board token can't register watchers yet" })
         else checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }

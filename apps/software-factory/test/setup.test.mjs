@@ -4,9 +4,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import pkg from "@vercel/board/package.json" with { type: "json" };
 import { TOOLS } from "../app/api/board/[[...path]]/harness.ts";
 
-const { version } = JSON.parse(readFileSync(new URL("../../../packages/board/package.json", import.meta.url), "utf8"));
+// The release this deployment was built with: its installed `@vercel/board`, as setup installs it.
+const { version } = pkg;
 
 // A sandbox, as setup sees it: pnpm there, no gh, and a network where GitHub's API refuses it
 // (sandboxes share its unauthenticated rate limit) but release downloads work. npm, as far as

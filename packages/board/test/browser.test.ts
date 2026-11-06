@@ -5,7 +5,6 @@ import { idempotentId } from 'experimental-a2'
 import { build } from 'tsdown'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { vercelProject } from '../src/access/index.ts'
 import type { MessageView } from '../src/api/routes.ts'
 import { http } from '../src/backend-http/index.default.ts'
 import { derivedId } from '../src/client/ids.ts'
@@ -59,12 +58,11 @@ async function bundle(lines: string[], check: (dir: string, files: Record<string
 }
 
 describe('board() in a browser', () => {
-  it('bundles with http() and nothing from Node, as a browser resolves the package', async () => {
+  it('bundles board({ fetch }) and nothing from Node, as a browser resolves the package', async () => {
     await bundle(
       [
         "import { board } from '@vercel/board'",
-        "import { http } from '@vercel/board/backend-http'",
-        "export const team = board({ backend: http('https://board.example.com/api/board') })",
+        "export const team = board({ fetch: (input, init) => fetch(input, { ...init, credentials: 'include' }) })",
         "export const posted = (text: string) => team.as('page').post('dev', text)",
       ],
       async (dir, files) => {
@@ -73,7 +71,7 @@ describe('board() in a browser', () => {
         const all = Object.values(files).join('\n')
         expect(all).not.toContain('BOARD_TOKEN')
         expect(all).not.toContain('jwtVerify')
-        // Nor A2: a handle over http() never loads the engine a2() runs on.
+        // Nor A2: a handle on Vercel's board never loads the engine local() runs on.
         expect(all).not.toContain('contract name must be a non-empty string')
         expect(all).not.toContain('reducer name must be a non-empty string')
         expect(all).not.toContain('createRemoteJWKSet')
@@ -84,12 +82,31 @@ describe('board() in a browser', () => {
     )
   }, 60_000)
 
-  it('bundles a board that syncs and watches, with a provider of its own, and nothing from Node', async () => {
+  it("bundles Vercel's board by its name, through a fetch of the page's own, with nothing from Node", async () => {
     await bundle(
       [
         "import { board } from '@vercel/board'",
-        "import { http } from '@vercel/board/backend-http'",
+        "export const team = board({ name: 'security', fetch: (input, init) => fetch(input, { ...init, credentials: 'include' }) })",
+        "export const posted = (text: string) => team.post('dev', text)",
+      ],
+      async (dir, files) => {
+        expect(await nodeImports(dir)).toEqual([])
+        const all = Object.values(files).join('\n')
+        // vercel()'s own default build: it finds no credentials or team in the environment.
+        expect(all).toContain('/v1/messageboard')
+        expect(all).not.toContain('VERCEL_OIDC_TOKEN')
+        expect(all).not.toContain('jwtVerify')
+      },
+    )
+  }, 60_000)
+
+  it('bundles a board that syncs and watches, with a provider and a backend of its own, and nothing from Node', async () => {
+    await bundle(
+      [
+        "import { board, type Backend } from '@vercel/board'",
         "import { SyncProvider } from '@vercel/board/sync'",
+        '// A backend of its own, which answers the protocol somewhere: what a board that syncs in a browser runs on.',
+        "const elsewhere = { routes: [], keeps: false, bind() {} } as unknown as Backend",
         'class Push extends SyncProvider {',
         "  constructor() { super({ platform: 'push', canStartThreads: true }) }",
         "  async receive() { return new Response('ok') }",
@@ -98,7 +115,7 @@ describe('board() in a browser', () => {
         "  async post(target: string) { return { thread: `${target}:1`, message: '1' } }",
         '  event(context: any) { return context.event }',
         '}',
-        "export const page = board({ backend: http('https://board.example.com/api/board'), sync: { push: new Push() }, watch: { seen: { tail: 'support', run: async () => {} } } })",
+        "export const page = board({ backend: elsewhere, sync: { push: new Push() }, watch: { seen: { tail: 'support', run: async () => {} } } })",
       ],
       async (dir, files) => {
         expect(await nodeImports(dir)).toEqual([])
@@ -164,13 +181,14 @@ class Push extends SyncProvider<z.infer<typeof Schema>> {
   }
 }
 
-describe('a board on http() with no URL of its own, as a page runs one', () => {
+describe('a board on another one with no URL of its own, on the internal http() of the default build', () => {
   it('syncs and watches, pulling what it can’t be woken for', async () => {
-    const team = testBoard({ access: [vercelProject({ project: 'prj_page', can: 'all' })] })
+    const team = testBoard()
+    await team.createGrant({ principals: [{ kind: 'project', project: 'prj_page', environments: ['production'] }], can: { '*': 'all' } })
     const backend = http(BOARD_URL, { fetch: bearer((input, init) => team.fetch(new Request(input, init)), pageToken) })
     const push = new Push()
     const seen: string[] = []
-    // The default build, as a page gets it: no URL, so nothing can wake it.
+    // The default build: no URL, so nothing can wake it.
     const page = board({ backend, sync: { push }, watch: { seen: { tail: 'support', run: ({ event }) => void (event.message && seen.push(event.message.text)) } } })
     const julian = caller(team.fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
     const support = async () => (await julian('GET', '/messages?channel=support')).body.messages as MessageView[]

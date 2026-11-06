@@ -66,6 +66,8 @@ export const options = {
   // Global: every command takes them.
   url: { type: 'string', value: 'url', description: "the board at this URL, not the one the environment points at" },
   scope: { type: 'string', value: 'team', description: "a team's board in Vercel's API, by its slug or ID" },
+  name: { type: 'string', value: 'board', description: "the team's board with this name, on --scope's team" },
+  ensure: { type: 'boolean', description: 'with --name: make that board if the team has none by that name' },
   team: { type: 'string', value: 'team', description: 'the same as --scope', hidden: true },
   as: { type: 'string', value: 'profile', description: "write as a profile, such as an agent's name" },
   avatar: { type: 'string', value: 'url', description: "the profile's avatar, with --as" },
@@ -96,8 +98,41 @@ export const options = {
   until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
-  can: { type: 'string', value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
-  claim: { type: 'string', multiple: true, value: 'k=v', description: 'a claim its tokens carry; the same name again is any of them' },
+  can: { type: 'string', multiple: true, value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
+  // Grants: whom one names, each flag a principal, with the modifiers after it.
+  user: { type: 'string', multiple: true, value: 'email', description: 'a person on the team' },
+  project: { type: 'string', multiple: true, short: 'p', value: 'name|id', description: "a project's deployments" },
+  github: { type: 'string', multiple: true, value: 'owner/repo', description: "GitHub Actions' runs in a repository" },
+  oidc: { type: 'string', multiple: true, value: 'issuer', description: "an issuer's tokens, by its URL" },
+  'all-users': { type: 'boolean', description: 'every person on the team' },
+  'all-projects': { type: 'boolean', description: "every project's deployments on the team" },
+  app: { type: 'string', multiple: true, value: 'slug|id', description: 'an app installed on the team' },
+  'all-apps': { type: 'boolean', description: 'every app installed on the team' },
+  everyone: { type: 'boolean', description: 'everyone let in some other way, and no one new' },
+  environment: { type: 'string', multiple: true, short: 'e', value: 'environment', description: 'where its --project runs' },
+  workflow: { type: 'string', multiple: true, value: 'file', description: "its --github's workflow, e.g. ci.yml" },
+  'git-branch': { type: 'string', multiple: true, value: 'branch', description: "its --github's branch" },
+  event: { type: 'string', multiple: true, value: 'event', description: "its --github's event, e.g. push" },
+  claim: { type: 'string', multiple: true, value: 'k=v', description: "a claim its --oidc's tokens carry" },
+  'add-user': { type: 'string', multiple: true, value: 'email', description: 'add a person' },
+  'add-project': { type: 'string', multiple: true, value: 'name|id', description: "add a project's deployments" },
+  'add-github': { type: 'string', multiple: true, value: 'owner/repo', description: "add a repository's runs" },
+  'add-oidc': { type: 'string', multiple: true, value: 'issuer', description: "add an issuer's tokens" },
+  'add-all-users': { type: 'boolean', description: 'add every person on the team' },
+  'add-all-projects': { type: 'boolean', description: 'add every project on the team' },
+  'add-app': { type: 'string', multiple: true, value: 'slug|id', description: 'add an app' },
+  'add-all-apps': { type: 'boolean', description: 'add every app on the team' },
+  'add-everyone': { type: 'boolean', description: 'add everyone something else lets in' },
+  'remove-user': { type: 'string', multiple: true, value: 'email', description: 'remove a person' },
+  'remove-project': { type: 'string', multiple: true, value: 'name|id', description: 'remove a project, whatever its environments' },
+  'remove-github': { type: 'string', multiple: true, value: 'owner/repo', description: "remove a repository's runs" },
+  'remove-oidc': { type: 'string', multiple: true, value: 'issuer', description: "remove an issuer's tokens" },
+  'remove-all-users': { type: 'boolean', description: 'remove every person on the team' },
+  'remove-all-projects': { type: 'boolean', description: 'remove every project on the team' },
+  'remove-app': { type: 'string', multiple: true, value: 'slug|id', description: 'remove an app' },
+  'remove-all-apps': { type: 'boolean', description: 'remove every app on the team' },
+  'remove-everyone': { type: 'boolean', description: 'remove everyone' },
+  private: { type: 'boolean', description: 'closed to everyone but you, in the same write' },
   profile: { type: 'string', value: 'name', description: 'the profile every request with it writes as' },
   session: { type: 'string', value: 'id', description: 'the session every request with it writes from' },
   expires: { type: 'string', value: 'duration', description: 'how long it lives (default: 30d, at most 90d)' },
@@ -122,7 +157,7 @@ export const option = (name: OptionName, description?: string, value?: string): 
 export const filters: readonly CliOption[] = (['re', 'by', 'source', 'label', 'text', 'mentions', 'after'] as const).map((name) => option(name))
 
 /** What every command takes. */
-export const globalOptions: readonly CliOption[] = (['url', 'scope', 'team', 'as', 'avatar', 'human', 'handle', 'json', 'help', 'version'] as const).map((name) =>
+export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'ensure', 'team', 'as', 'avatar', 'human', 'handle', 'json', 'help', 'version'] as const).map((name) =>
   option(name),
 )
 
@@ -188,7 +223,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'grants',
-    description: "who the board lets in beside its code's rules: tokens from an OIDC issuer with these claims",
+    description: 'who may do what where, grant by grant',
     arguments: [],
     options: [],
     runsWithoutSubcommand: true,
@@ -204,12 +239,43 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       },
       {
         name: 'create',
-        description: 'let them in, or change what they may do',
-        arguments: [{ name: 'issuer', required: true, description: 'vercel, github, or an https URL' }],
-        options: [option('claim'), option('can')],
+        description: 'let principals do what --can says, where it says',
+        arguments: [],
+        options: [
+          ...(['user', 'project', 'github', 'oidc', 'app', 'all-users', 'all-projects', 'all-apps', 'everyone'] as const).map((name) => option(name)),
+          option('environment', 'where its --project runs (default: production)'),
+          ...(['workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
+          option('can', 'what they may do, repeated: perms, all, or none', 'pattern=perms'),
+        ],
         examples: [
-          { name: 'let a workflow post in ci/', value: 'grants create github --claim repository=acme/web --can ci/=read,post' },
-          { name: "let a project's production post feedback", value: 'grants create vercel --claim project_id=prj_123 --claim environment=production --can feedback/=post' },
+          { name: 'close security/ to everyone', value: "grants create --everyone --can 'security/=none'" },
+          { name: 'and let two people in', value: "grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
+          { name: "a project's production and previews", value: "grants create --project sec --environment production,preview --can 'security/=read,post'" },
+          { name: "two repositories' workflows", value: "grants create --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml --can 'ci/=post'" },
+          { name: "another issuer's tokens", value: "grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'" },
+        ],
+      },
+      {
+        name: 'update',
+        description: 'add or remove principals, or replace its --can',
+        arguments: [{ name: 'grant', required: true, description: 'its ID, as grants shows it (g3)' }],
+        options: [
+          ...(['add-user', 'add-project', 'add-github', 'add-oidc', 'add-app', 'add-all-users', 'add-all-projects', 'add-all-apps', 'add-everyone', 'remove-user', 'remove-project', 'remove-github', 'remove-oidc', 'remove-app', 'remove-all-users', 'remove-all-projects', 'remove-all-apps', 'remove-everyone', 'environment', 'workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
+          option('can', 'replaces what it lets them do', 'pattern=perms'),
+        ],
+        examples: [
+          { name: 'let another person in', value: 'grants update g4 --add-user carol@acme.com' },
+          { name: 'drop a project, and narrow it', value: "grants update g5 --remove-project sec --can 'security/=read'" },
+        ],
+      },
+      {
+        name: 'explain',
+        description: 'which grant decides a channel, for you or anyone',
+        arguments: [{ name: 'channel', required: true, description: 'a channel, such as security/incidents' }],
+        options: [...(['user', 'project', 'github', 'oidc', 'app', 'environment', 'workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name))],
+        examples: [
+          { name: 'what you may do in a channel', value: 'grants explain security/incidents' },
+          { name: 'what someone else may', value: 'grants explain --user bob@acme.com security/incidents' },
         ],
       },
       {
@@ -242,8 +308,11 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'create',
         description: 'a channel, before anything posts to it (one that exists stays as it is)',
         arguments: [{ name: 'channel', required: true, description: 'its path, such as dev/alerts' }],
-        options: [],
-        examples: [{ name: 'make a channel for alerts', value: 'channels create dev/alerts' }],
+        options: [option('private')],
+        examples: [
+          { name: 'make a channel for alerts', value: 'channels create dev/alerts' },
+          { name: 'one only you can see, until you grant others', value: 'channels create security --private' },
+        ],
       },
     ],
   },
@@ -436,7 +505,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'conformance',
-    description: 'check that the board speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
+    description: 'check that a board you name speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
     arguments: [],
     options: [option('channel', 'the channel to check in (default: conformance)')],
     examples: [{ name: 'check the board', value: 'conformance' }],

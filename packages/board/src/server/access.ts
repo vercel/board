@@ -7,6 +7,18 @@ import { forbidden } from './errors.ts'
  * `manage` is the board's own bookkeeping (inbox, sources).
  */
 export const PERMISSIONS = ['read', 'post', 'react', 'label', 'sync', 'manage'] as const
+
+/**
+ * A `can`, a channel pattern, a permission, or a scope that doesn't parse, saying what to write
+ * instead: what a board answers 400 for. Its `code` is `invalid_can`.
+ */
+export class InvalidCan extends Error {
+  readonly code = 'invalid_can'
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidCan'
+  }
+}
 export type Permission = (typeof PERMISSIONS)[number]
 
 /**
@@ -48,11 +60,11 @@ export function parsePattern(pattern: string): Pattern {
         : ChannelPath.safeParse(before).success
           ? `write ${before}/ for ${before} and its subtree`
           : SHAPE
-    throw new Error(`invalid channel pattern ${pattern}: ${hint}`)
+    throw new InvalidCan(`invalid channel pattern ${pattern}: ${hint}`)
   }
   const subtree = pattern.endsWith('/')
   const path = subtree ? pattern.slice(0, -1) : pattern
-  if (!ChannelPath.safeParse(path).success) throw new Error(`invalid channel pattern ${pattern || '(empty)'}: ${SHAPE}`)
+  if (!ChannelPath.safeParse(path).success) throw new InvalidCan(`invalid channel pattern ${pattern || '(empty)'}: ${SHAPE}`)
   return subtree ? { kind: 'subtree', path } : { kind: 'exact', path }
 }
 
@@ -63,7 +75,7 @@ const key = (pattern: Pattern) =>
 export function expand(grant: Grant): ReadonlySet<Permission> {
   const out = new Set<Permission>()
   const add = (permission: Permission) => {
-    if (!ORDER.has(permission)) throw new Error(`unknown permission ${String(permission)}: use ${PERMISSIONS.join(', ')}`)
+    if (!ORDER.has(permission)) throw new InvalidCan(`unknown permission ${String(permission)}: use ${PERMISSIONS.join(', ')}`)
     if (out.has(permission)) return
     out.add(permission)
     for (const implied of IMPLIES[permission]) add(implied)
@@ -161,6 +173,12 @@ export type Access = {
   everywhere(permission: Permission): boolean
   /** `permission` in some channel. */
   anywhere(permission: Permission): boolean
+  /**
+   * `permission` where `pattern` itself decides: at `*`, what `*` gives, whatever a more specific
+   * pattern says; at `security/`, what covers `security` as a subtree. `checkGrantChange` checks
+   * `manage` this way.
+   */
+  at(permission: Permission, pattern: ChannelPattern): boolean
   /** Only what both this and `scope` allow, channel by channel. It never widens. */
   narrow(scope: Can | Access): Access
   /** Each pattern and its permissions, `*` first and the rest sorted; an empty `*` is left out. */
@@ -168,6 +186,8 @@ export type Access = {
 }
 
 const RULES = Symbol('board.access')
+/** How many channels an access remembers whether it may read. */
+const READABLE_MAX = 4096
 type Compiled = Access & { readonly [RULES]: Rules }
 const isAccess = (value: Can | Access): value is Compiled => typeof value === 'object' && RULES in value
 
@@ -175,18 +195,27 @@ function fromRules(rules: Rules): Access {
   const entries = entriesIn(rules)
   const everywhere = (permission: Permission) =>
     (rules.all?.has(permission) ?? false) && entries.every(([, permissions]) => permissions.has(permission))
+  // One that names nothing but `*` answers the same everywhere, so it remembers nothing; another
+  // remembers at most READABLE_MAX channels, starting over when it's full, so a long-lived one
+  // (FULL_ACCESS, a rule's) doesn't keep every channel name it was ever asked about.
+  const uniform = rules.exact.size === 0 && rules.subtrees.length === 0 ? (rules.all?.has('read') ?? false) : null
   const readable = new Map<string, boolean>()
   const compiled: Compiled = {
     [RULES]: rules,
     can: (permission, channel) => resolve(rules, channel).has(permission),
     readable(channel) {
+      if (uniform !== null) return uniform
       let found = readable.get(channel)
-      if (found === undefined) readable.set(channel, (found = resolve(rules, channel).has('read')))
+      if (found === undefined) {
+        if (readable.size >= READABLE_MAX) readable.clear()
+        readable.set(channel, (found = resolve(rules, channel).has('read')))
+      }
       return found
     },
     readsAll: everywhere('read'),
     everywhere,
     anywhere: (permission) => entries.some(([, permissions]) => permissions.has(permission)),
+    at: (permission, pattern) => at(rules, parsePattern(pattern)).has(permission),
     narrow(scope) {
       const other = isAccess(scope) ? scope[RULES] : canonical(entriesOf(scope as Can))
       // `*` and every pattern either side names: each governs channels where both answers are fixed.
@@ -232,6 +261,112 @@ export function union(accesses: readonly Access[]): Access {
   return fromRules(canonical([...patterns.values()].map((pattern) => [pattern, new Set(rules.flatMap((side) => [...at(side, pattern)]))] as const)))
 }
 
+/** A grant's `can` as it was written: each pattern and `'all'` or its permissions, `[]` for none. */
+export type WrittenCan = Readonly<Record<ChannelPattern, 'all' | readonly Permission[]>>
+
+/**
+ * A grant's `can`, checked and kept as written, patterns and all, since each pattern counts where
+ * grants meet: `{ 'security/': [] }` closes `security/` though it gives nothing. Its lists are
+ * sorted, without repeats. A bad pattern or permission throws, saying what to write.
+ */
+export function writtenCan(can: unknown, max = 64): WrittenCan {
+  if (typeof can !== 'object' || can === null || Array.isArray(can))
+    throw new InvalidCan("a grant's can is a map from channel pattern to permissions, like { 'ci/': ['read', 'post'] }")
+  const entries = Object.entries(can as Record<string, unknown>)
+  if (entries.length === 0) throw new InvalidCan("a grant's can names at least one channel pattern, like { '*': ['read'] }")
+  if (entries.length > max) throw new InvalidCan(`a grant's can names at most ${max} channel patterns`)
+  const out: Record<ChannelPattern, 'all' | Permission[]> = {}
+  for (const [pattern, grant] of entries.sort(([a], [b]) => (a === '*' ? -1 : b === '*' ? 1 : a.localeCompare(b)))) {
+    parsePattern(pattern)
+    if (grant === 'all') {
+      out[pattern] = 'all'
+      continue
+    }
+    if (!Array.isArray(grant)) throw new InvalidCan(`${pattern} takes 'all' or a list of permissions: ${PERMISSIONS.join(', ')}`)
+    for (const permission of grant)
+      if (!ORDER.has(permission as Permission)) throw new InvalidCan(`unknown permission ${String(permission)} at ${pattern}: use ${PERMISSIONS.join(', ')}, or all`)
+    out[pattern] = [...new Set(grant as Permission[])].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!)
+  }
+  return out
+}
+
+/** Each pattern a written `can` names. */
+export const patternsOf = (can: WrittenCan): ChannelPattern[] => Object.keys(can)
+
+/**
+ * How close a grant's principal is to a caller: one named principal (a user, a project, a
+ * repository's workflows, an issuer's claims), a group of them (`all-users`, `all-projects`), or
+ * `everyone`. The closest decides where grants name the same pattern.
+ */
+export const LEVELS = ['principal', 'group', 'everyone'] as const
+export type Level = (typeof LEVELS)[number]
+
+/** A grant that matched a caller: how close its principal is, and what its `can` gives at each pattern. */
+export type Matched<Source = unknown> = { level: Level; can: Can; source: Source }
+
+/** What `decide` found for one channel: the pattern that won, the others it won over, the level that won there, the sources at it, and what they give. */
+export type Decision<Source = unknown> = {
+  pattern: ChannelPattern | null
+  /** The other patterns the matched grants name that cover the channel, most specific first. */
+  over: ChannelPattern[]
+  level: Level | null
+  sources: Source[]
+  permissions: readonly Permission[]
+}
+
+const RANK = new Map(LEVELS.map((level, index) => [level, index]))
+
+/** Each pattern a `can` names, with what it gives, implications included. */
+const namedIn = (can: Can): Entry[] => entriesOf(can)
+
+/**
+ * For each pattern any matched grant names: the closest level among the grants naming it, and
+ * what those grants give there, added up.
+ */
+function closest<Source>(matched: readonly Matched<Source>[]) {
+  const byPattern = new Map<string, { pattern: Pattern; level: Level; permissions: Set<Permission>; sources: Source[] }>()
+  for (const grant of matched)
+    for (const [pattern, permissions] of namedIn(grant.can)) {
+      const name = key(pattern)
+      const found = byPattern.get(name)
+      if (!found || RANK.get(grant.level)! < RANK.get(found.level)!)
+        byPattern.set(name, { pattern, level: grant.level, permissions: new Set(permissions), sources: [grant.source] })
+      else if (found.level === grant.level) {
+        for (const permission of permissions) found.permissions.add(permission)
+        if (!found.sources.includes(grant.source)) found.sources.push(grant.source)
+      }
+    }
+  return byPattern
+}
+
+/**
+ * What a caller may do from the grants that match it. At each channel, the most specific pattern
+ * any of them names decides (an exact channel, then the longest subtree, then `*`); among the
+ * grants naming that pattern, the closest principal does; and grants tied there add up.
+ */
+export function combine(matched: readonly Matched[]): Access {
+  return fromRules(canonical([...closest(matched).values()].map(({ pattern, permissions }) => [pattern, permissions] as const)))
+}
+
+/** Which pattern, level, and grants decide `channel` for a caller, and what they give: `combine`'s answer, explained. */
+export function decide<Source>(matched: readonly Matched<Source>[], channel: string): Decision<Source> {
+  const byPattern = closest(matched)
+  const covering = [...byPattern.values()].filter(({ pattern }) =>
+    pattern.kind === 'all' ? true : pattern.kind === 'exact' ? pattern.path === channel : under(channel, pattern.path),
+  )
+  // An exact channel, then the longest subtree, then `*`.
+  const specificity = ({ pattern }: { pattern: Pattern }) => (pattern.kind === 'exact' ? Infinity : pattern.kind === 'subtree' ? pattern.path.length : -1)
+  const [winner, ...beaten] = covering.sort((a, b) => specificity(b) - specificity(a))
+  if (!winner) return { pattern: null, over: [], level: null, sources: [], permissions: [] }
+  return {
+    pattern: key(winner.pattern),
+    over: beaten.map(({ pattern }) => key(pattern)),
+    level: winner.level,
+    sources: winner.sources,
+    permissions: [...winner.permissions].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!),
+  }
+}
+
 /** An access as `x-board-scope` writes it, `dev/=read,post;ci/=read`, or `*=` for nothing: what a stored principal keeps. */
 export function scopeOf(access: Access): string {
   const entries = Object.entries(access.summary()).map(([pattern, permissions]) => `${pattern}=${permissions.join(',')}`)
@@ -246,17 +381,17 @@ export function scopeOf(access: Access): string {
  * nothing by sending it.
  */
 export function parseScope(header: string): Can {
-  if (header.length > SCOPE_MAX) throw new Error(`x-board-scope is longer than ${SCOPE_MAX} characters`)
+  if (header.length > SCOPE_MAX) throw new InvalidCan(`x-board-scope is longer than ${SCOPE_MAX} characters`)
   const out: Record<ChannelPattern, Grant> = {}
   const entries = header.split(';').map((entry) => entry.trim())
-  if (entries.every((entry) => entry === '')) throw new Error('x-board-scope is empty: write pattern=permissions, like dev/=read,post')
+  if (entries.every((entry) => entry === '')) throw new InvalidCan('x-board-scope is empty: write pattern=permissions, like dev/=read,post')
   for (const entry of entries) {
     if (entry === '') continue
     const split = entry.indexOf('=')
-    if (split < 0) throw new Error(`x-board-scope entry ${entry} needs =: write pattern=permissions, like dev/=read,post`)
+    if (split < 0) throw new InvalidCan(`x-board-scope entry ${entry} needs =: write pattern=permissions, like dev/=read,post`)
     const pattern = entry.slice(0, split).trim()
     const list = entry.slice(split + 1).trim()
-    if (Object.hasOwn(out, pattern)) throw new Error(`x-board-scope lists ${pattern} twice`)
+    if (Object.hasOwn(out, pattern)) throw new InvalidCan(`x-board-scope lists ${pattern} twice`)
     parsePattern(pattern)
     const permissions = list === '' ? [] : list.split(',').map((permission) => permission.trim())
     if (permissions.length === 1 && permissions[0] === 'all') {
@@ -265,7 +400,7 @@ export function parseScope(header: string): Can {
     }
     for (const permission of permissions)
       if (!ORDER.has(permission as Permission))
-        throw new Error(`x-board-scope: unknown permission ${permission || '(empty)'}: use ${PERMISSIONS.join(', ')}, or all`)
+        throw new InvalidCan(`x-board-scope: unknown permission ${permission || '(empty)'}: use ${PERMISSIONS.join(', ')}, or all`)
     out[pattern] = permissions as Permission[]
   }
   return out
@@ -309,4 +444,75 @@ export function authorize<P extends Permission>(
   if (hidden && !access.readable(channel)) throw hidden()
   if (!access.can(permission, channel)) throw forbidden(`this token can't ${PHRASE[permission](channel)}`)
   return Object.freeze({ permission, channel }) as unknown as Proof<P>
+}
+
+/** A grant as `checkGrantChange` reads it: whom it names, by kind, and what it gives where. */
+export type GrantShape = { readonly principals: readonly { readonly kind: string }[]; readonly can: WrittenCan }
+
+/** A change that makes or widens a grant, as `checkGrantChange` judges it. */
+export type GrantChange = {
+  /**
+   * What the caller may do, narrowed by its token, on the grants the change applies to: what
+   * `GET /me` says. For an owner a token narrows, what its token's `can` gives.
+   */
+  caller: Access
+  /**
+   * What the caller may do by its own limits alone: `caller` without `everyone` grants, so its role,
+   * the grants that name it or a group it's in, and its token. For an owner a token narrows, `caller`.
+   */
+  own: Access
+  /** An owner no token narrows, whom nothing here limits. */
+  owner?: boolean
+  /** Every grant as it would be after the change, the changed one included. */
+  after: readonly GrantShape[]
+  /** The grant made or widened, as it would be after the change: judged by reach and admission. */
+  changed?: { readonly can: WrittenCan }
+  /**
+   * A grant revoked, or the one principals are removed from, or an update's grant as it was:
+   * judged by reach alone. Lifting what it held back widens whoever it named, but lets no one new in.
+   */
+  revoked?: { readonly can: WrittenCan }
+}
+
+/** Why `checkGrantChange` refuses a change, and where: `pattern` is the spot it failed at. */
+export type GrantChangeRefusal = { reason: 'reach'; pattern: ChannelPattern; permission: 'manage' } | { reason: 'admission'; pattern: ChannelPattern; permission: Permission }
+
+/** Whether `other` is a pattern more specific than `pattern`, and under it. */
+const isUnder = (other: string, pattern: string) =>
+  other !== pattern && (pattern === '*' || (pattern.endsWith('/') && (other === pattern.slice(0, -1) || other.startsWith(pattern))))
+
+/**
+ * Whether a caller may change grants so: make or widen one (`changed`), or revoke one or remove
+ * from it (`revoked`). You can't grant what you don't have. Your token's and your own grants'
+ * limits count, an `everyone` lock doesn't, and anyone you let in gets what `everyone` gets. Null
+ * when it may; otherwise why not, and where.
+ *
+ * - **Reach:** `manage` at each of the changed grant's patterns, by `caller` and by `own`, and at
+ *   every more specific spot under them by `own`. A lock binds whoever the grant names as much as
+ *   the caller, now and once it's lifted, so it doesn't count against the caller there; the
+ *   caller's own limits do. At the grant's own patterns it counts too: there the grant would meet
+ *   the lock at the same pattern, and its principal is closer.
+ * - **Admission:** wherever `everyone` gives something, `caller` has it too, since any principal a
+ *   grant lets in gets what `everyone` gives. A revoke or a removal lets no one in, so it's judged
+ *   by reach alone, at the patterns of the grant as it was.
+ *
+ * It looks only at the spots where access can change: the grants' patterns, the `everyone`
+ * grants', and the caller's own, from `summary()`. It does no I/O, so a board and Vercel's API run
+ * the same rule.
+ */
+export function checkGrantChange(change: GrantChange): GrantChangeRefusal | null {
+  if (change.owner) return null
+  const { caller, own } = change
+  const everyone = change.after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone'))
+  const lifted = Object.keys(change.revoked?.can ?? {})
+  const made = Object.keys(change.changed?.can ?? {})
+  const spots = [...new Set([...lifted, ...made, ...everyone.flatMap((grant) => Object.keys(grant.can)), ...Object.keys(caller.summary()), ...Object.keys(own.summary())])]
+  for (const pattern of new Set([...lifted, ...made])) {
+    if (!caller.at('manage', pattern) || !own.at('manage', pattern)) return { reason: 'reach', pattern, permission: 'manage' }
+    for (const spot of spots) if (isUnder(spot, pattern) && !own.at('manage', spot)) return { reason: 'reach', pattern: spot, permission: 'manage' }
+  }
+  if (made.length === 0) return null
+  const gives = combine(everyone.map((grant) => ({ level: 'everyone' as const, can: grant.can, source: null })))
+  for (const spot of spots) for (const permission of PERMISSIONS) if (gives.at(permission, spot) && !caller.at(permission, spot)) return { reason: 'admission', pattern: spot, permission }
+  return null
 }

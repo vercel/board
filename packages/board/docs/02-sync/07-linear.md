@@ -16,18 +16,9 @@ connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
 import { linear, teams } from '@vercel/board/sync-linear'
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 const team = board({
-  backend,
   sync: {
     linear: linear('linear/acme', teams({
       ENG: 'dev',        // ENG-123 and the rest of the team's issues, both ways
@@ -36,7 +27,6 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 A key is a team's key, the prefix of its issue IDs (`ENG` in `ENG-123`). A value is

@@ -31,28 +31,23 @@ describe('cli tokens and grants', () => {
     expect((await vb(['tokens', 'list'])).stdout).toBe('no tokens\n')
   }, 30_000)
 
-  it('grants a workflow, lists it with its claims, sets its can again, and revokes it', async () => {
-    const granted = await vb(['grants', 'create', 'github', '--claim', 'repository=acme/web', '--claim', 'event_name=push', '--claim', 'event_name=schedule', '--can', 'ci/=read,post'])
-    expect(granted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^granted g\d+\n$/) })
-    const id = granted.stdout.trim().split(' ')[1]!
-    expect((await vb(['grants', 'list'])).stdout).toBe(`${id}  github  event_name=push|schedule repository=acme/web  ci/=read,post\n`)
-    const again = await vb(['grants', 'create', 'github', '--claim', 'repository=acme/web', '--claim', 'event_name=schedule', '--claim', 'event_name=push', '--can', 'ci/=read'])
-    expect(again.stdout).toBe(`updated ${id}\n`)
-    expect((await vb(['grants', 'revoke', id])).stdout).toBe(`revoked ${id}\n`)
-    expect((await vb(['grants', 'list'])).stdout).toBe('no grants\n')
+  it('lists the grants the board starts with, who each names and what it lets them do, and revokes one', async () => {
+    expect((await vb(['grants'])).stdout).toBe(
+      [
+        'g1  --all-users                                                  everything',
+        'g2  --all-projects --environment production,preview,development  read post react label',
+        'g3  --all-apps                                                   read post react label',
+        '',
+      ].join('\n'),
+    )
+    expect((await vb(['grants', 'revoke', 'g2'])).stdout).toBe('revoked g2\n')
+    expect((await vb(['grants', 'revoke', 'g2'])).stdout).toBe('g2 is already gone\n')
+    expect((await vb(['grants', 'list'])).stdout).toBe('g1  --all-users  everything\ng3  --all-apps   read post react label\n')
   }, 30_000)
 
-  it('lists with tokens or grants alone, and names a subcommand they lack', async () => {
+  it('lists with tokens alone, and names a subcommand it lacks', async () => {
     expect((await vb(['tokens', 'create', 'ci-bot', '--can', 'ci/=post'])).code).toBe(0)
     expect(await vb(['tokens'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^t\d+ +ci-bot +ci\/=post +expires in 30d\n$/) })
-    expect((await vb(['grants'])).stdout).toBe('no grants\n')
     expect(await vb(['tokens', 'mint', 'x'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown command mint for vb tokens\.\n/) })
-  })
-
-  it('says what a grant needs before it asks the board', async () => {
-    const bare = await vb(['grants', 'create', 'github'])
-    expect(bare).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Missing the claims github's tokens must carry: pass --claim name=value\.\n/) })
-    const pattern = await vb(['grants', 'create', 'github', '--claim', 'repository=acme/web', '--can', 'ci/*=post'])
-    expect(pattern).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: invalid channel pattern ci\/\*: write ci\/ for ci and its subtree\.\n/) })
   })
 })

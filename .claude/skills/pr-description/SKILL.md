@@ -37,7 +37,7 @@ Go between a board message and its copies on Slack and GitHub.
 - **Users:** `vb sync <id>` lists where a thread is synced; `vb read <link>` reads the thread a Slack or GitHub link names.
 - **Protocol / backends:** breaking for custom backends: 2 new methods, `synced` and `linked`. The conformance kit's `sync` group checks both.
 - **Performance / I/O:** `vb sync`: 3 board reads, plus 1 `chat.getPermalink` per Slack copy. `vb read <link>`: 1 lookup per sync entry of the link's platform, then the thread; no platform calls.
-- **Tests:** the CLI as a subprocess against a board over HTTP, in-process boards on `a2()` and `http()`, and the conformance kit. Slack's and GitHub's APIs are faked; nothing of board's is.
+- **Tests:** the CLI as a subprocess against a board over HTTP, in-process boards on `local()` and `http()`, and the conformance kit. Slack's and GitHub's APIs are faked; nothing of board's is.
 
 ### Users
 

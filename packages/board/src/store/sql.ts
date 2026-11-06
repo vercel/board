@@ -5,12 +5,11 @@ import { externalMessageKey } from '../contract/external.ts'
 import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
 import type { MessageFilter, MessageTables, Page, ThreadSummary } from './types.ts'
 
-/** One statement, with `$1`-style placeholders on every dialect. */
+/** One statement, with `$1`-style placeholders. */
 export type Sql = { text: string; values: unknown[] }
 
-/** A database the tables run on: Postgres or SQLite, behind three calls. */
+/** A database the tables run on, SQLite, behind three calls. */
 export type Db = {
-  readonly dialect: 'postgres' | 'sqlite'
   all(query: Sql): Promise<Record<string, unknown>[]>
   /** Each query's rows, all from one snapshot. */
   read(queries: Sql[]): Promise<Record<string, unknown>[][]>
@@ -25,30 +24,28 @@ export type Db = {
 /** The projection's name in `board_positions`, and the A2 consumer that runs it. */
 export const TABLES_CONSUMER = 'board-tables'
 
-/** The tables, as statements for one dialect. Postgres users apply them from `schema.sql`. */
-export function ddl(dialect: Db['dialect']): string[] {
-  const big = dialect === 'postgres' ? 'bigint' : 'integer'
-  const bool = dialect === 'postgres' ? 'boolean' : 'integer'
+/** The tables, as statements. */
+export function ddl(): string[] {
   return [
     `create table if not exists board_positions (
   consumer text primary key,
-  log_index ${big} not null
+  log_index integer not null
 )`,
     `create table if not exists board_messages (
-  id ${big} primary key,
+  id integer primary key,
   event_id text not null unique,
   channel text not null,
-  re ${big},
+  re integer,
   by_actor text not null,
   by_principal text not null,
   by_profile text,
   from_key text,
-  no_sync ${bool} not null,
+  no_sync integer not null,
   text_lower text not null,
-  deleted ${bool} not null,
-  created_at ${big} not null,
+  deleted integer not null,
+  created_at integer not null,
   replies integer not null default 0,
-  at ${big},
+  at integer,
   data text not null
 )`,
     'create index if not exists board_messages_channel on board_messages (channel, id)',
@@ -58,13 +55,13 @@ export function ddl(dialect: Db['dialect']): string[] {
     'create index if not exists board_threads_at on board_messages (at) where re is null',
     'create index if not exists board_threads_channel on board_messages (channel, at) where re is null',
     `create table if not exists board_versions (
-  log_index ${big} primary key,
-  message_id ${big} not null,
+  log_index integer primary key,
+  message_id integer not null,
   data text not null
 )`,
     'create index if not exists board_versions_message on board_versions (message_id, log_index)',
     `create table if not exists board_terms (
-  message_id ${big} not null,
+  message_id integer not null,
   term text not null,
   value text not null,
   primary key (message_id, term, value)
@@ -74,98 +71,25 @@ export function ddl(dialect: Db['dialect']): string[] {
     'create table if not exists board_sync_threads (\n  thread text primary key,\n  data text not null\n)',
     'create table if not exists board_external_threads (\n  external text primary key,\n  thread text not null\n)',
     `create table if not exists board_copies (
-  message_id ${big} not null,
+  message_id integer not null,
   target text not null,
   data text not null,
   primary key (message_id, target)
 )`,
     `create table if not exists board_external_messages (
   key text primary key,
-  message_id ${big} not null
+  message_id integer not null
 )`,
     // A person's recent roots were for telling their own posts' echoes apart, which nothing does now.
     'drop index if exists board_messages_recent',
-    ...(dialect === 'postgres' ? ['drop function if exists board_apply(text, bigint, boolean, jsonb, jsonb, jsonb)', APPLY_FUNCTION] : []),
   ]
 }
 
 /**
- * Postgres applies an event's change in one call, one round trip: claim the
- * position, then write the message, its version, its terms, and its root's
- * summary. `apply_next` claims only the very next index. SQLite runs the same
- * writes as statements, in process.
- */
-const APPLY_FUNCTION = `create or replace function board_apply(
-  apply_consumer text,
-  apply_index bigint,
-  apply_next boolean,
-  apply_message jsonb,
-  apply_terms jsonb,
-  apply_summary jsonb,
-  apply_sync jsonb
-) returns boolean language plpgsql as $$
-begin
-  if apply_next then
-    update board_positions set log_index = apply_index
-      where consumer = apply_consumer and log_index = apply_index - 1;
-  else
-    insert into board_positions (consumer, log_index) values (apply_consumer, apply_index)
-      on conflict (consumer) do update set log_index = excluded.log_index
-      where board_positions.log_index < excluded.log_index;
-  end if;
-  if not found then
-    return false;
-  end if;
-  if apply_message is not null then
-    if (apply_message->>'created')::boolean then
-      insert into board_messages
-        (id, event_id, channel, re, by_actor, by_principal, by_profile, from_key, no_sync, text_lower, deleted, created_at, data)
-        values (
-          (apply_message->>'id')::bigint, apply_message->>'event_id', apply_message->>'channel', (apply_message->>'re')::bigint,
-          apply_message->>'by_actor', apply_message->>'by_principal', apply_message->>'by_profile', apply_message->>'from_key',
-          (apply_message->>'no_sync')::boolean, apply_message->>'text_lower', (apply_message->>'deleted')::boolean,
-          (apply_message->>'created_at')::bigint, apply_message->>'data');
-    else
-      update board_messages
-        set text_lower = apply_message->>'text_lower', deleted = (apply_message->>'deleted')::boolean, data = apply_message->>'data'
-        where id = (apply_message->>'id')::bigint;
-    end if;
-    insert into board_versions (log_index, message_id, data)
-      values (apply_index, (apply_message->>'id')::bigint, apply_message->>'data');
-    if apply_terms is not null then
-      delete from board_terms where message_id = (apply_message->>'id')::bigint;
-      insert into board_terms (message_id, term, value)
-        select (apply_message->>'id')::bigint, term->>0, term->>1 from jsonb_array_elements(apply_terms) as term;
-    end if;
-  end if;
-  if apply_summary is not null then
-    update board_messages set replies = (apply_summary->>'replies')::int, at = (apply_summary->>'at')::bigint
-      where id = (apply_summary->>'root')::bigint;
-  end if;
-  if apply_sync is not null then
-    if jsonb_typeof(apply_sync->'thread') = 'object' then
-      insert into board_sync_threads (thread, data) values (apply_sync->'thread'->>'key', apply_sync->'thread'->>'data')
-        on conflict (thread) do update set data = excluded.data;
-    end if;
-    insert into board_external_threads (external, thread)
-      select entry->>0, entry->>1 from jsonb_array_elements(apply_sync->'external_threads') as entry
-      on conflict (external) do update set thread = excluded.thread;
-    insert into board_copies (message_id, target, data)
-      select (entry->>0)::bigint, entry->>1, entry->>2 from jsonb_array_elements(apply_sync->'copies') as entry
-      on conflict (message_id, target) do update set data = excluded.data;
-    insert into board_external_messages (key, message_id)
-      select entry->>0, (entry->>1)::bigint from jsonb_array_elements(apply_sync->'external_messages') as entry
-      on conflict (key) do update set message_id = excluded.message_id;
-  end if;
-  return true;
-end
-$$`
-
-/**
- * Postgres refuses NUL in text, and a lone surrogate in JSON: the board refuses
- * both, and a log from before that may hold them. Nothing a reader filters on
- * needs either, so keys and columns go without NUL and with U+FFFD for a lone
- * surrogate, and the lookups that find them do the same.
+ * The board refuses NUL in text and a lone surrogate, and a log from before
+ * that may hold them. Nothing a reader filters on needs either, so keys and
+ * columns go without NUL and with U+FFFD for a lone surrogate, and the lookups
+ * that find them do the same.
  */
 const clean = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
 
@@ -194,7 +118,7 @@ const likeEscape = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`)
 function channelClause(alias: string, channel: NonNullable<MessageFilter['channel']>, p: Params): string {
   const path = p.add(channel.path)
   if (!channel.subtree) return `${alias}.channel = ${path}`
-  // Compared, not matched with `like`: channel segments may hold `_`. The cast tells Postgres the parameter's type.
+  // Compared, not matched with `like`: channel segments may hold `_`.
   const prefix = `cast(${p.add(`${channel.path}/`)} as text)`
   return `(${alias}.channel = ${path} or substr(${alias}.channel, 1, length(${prefix})) = ${prefix})`
 }
@@ -333,7 +257,7 @@ export function sqlTables(db: Db): MessageTables {
     }
   }
 
-  /** The writes as statements, for SQLite. Postgres's `board_apply` does the same. */
+  /** The writes, as statements. */
   function statements(index: number, { message: m, terms, summary, sync }: ReturnType<typeof payload>): Sql[] {
     const out: Sql[] = []
     if (m) {
@@ -397,14 +321,6 @@ export function sqlTables(db: Db): MessageTables {
       syncBefore(event).then((read) => projectSync(read, event)),
     ])
     const written = payload(event, change, sync)
-    if (db.dialect === 'postgres') {
-      const json = (value: unknown) => (value === null || value === undefined ? null : JSON.stringify(value))
-      const [row] = await db.all({
-        text: 'select board_apply($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb) as applied',
-        values: [TABLES_CONSUMER, event.index, next, json(written.message), json(written.terms), json(written.summary), json(written.sync)],
-      })
-      return row?.applied === true
-    }
     return db.commit(next ? claimNext(event.index) : claim(event.index), statements(event.index, written))
   }
 

@@ -56,12 +56,10 @@ async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
   return keys
 }
 
-/** What tokens are verified with: the platform's issuers, OIDC issuers the board's rules name, and test issuers. */
+/** What tokens are verified with: the platform's issuers, OIDC issuers the board's grants name, and test issuers. */
 function createVerifier(options: {
   projectId: () => Promise<string | null>
-  /** The board's team from config or the environment; the platform's token is the fallback. */
-  teamId: () => Promise<string | null>
-  /** OIDC issuers past Vercel's and GitHub's whose tokens are verified: the ones the board's rules name. */
+  /** OIDC issuers past Vercel's and GitHub's whose tokens are verified: the ones the board's grants name. */
   issuers: readonly string[]
   auth?: OidcTokensOptions | undefined
 }) {
@@ -70,25 +68,7 @@ function createVerifier(options: {
   // The only issuers past Vercel's and GitHub's whose tokens are verified, or whose keys are fetched.
   const oidcIssuers = trustedIssuers(options.issuers)
 
-  let platformTeam: string | null = null
-  /**
-   * The team on a Vercel-signed token for the board's own project. Project IDs
-   * are unique, so its `owner_id` is the board's team, whoever sent the token.
-   */
-  async function teamFrom(platformToken: string | undefined, ownProject: string | null) {
-    if (platformTeam !== null || !platformToken || ownProject === null) return platformTeam
-    try {
-      const iss = String(decodeJwt(platformToken).iss ?? '')
-      if (!issuerMatches(iss, vercelIssuer.issuer)) return null
-      const keys = vercelIssuer.jwks ?? (await keysFor(iss))
-      const { payload } = await jwtVerify(platformToken, keys, { issuer: iss })
-      if (payload.project_id === ownProject && typeof payload.owner_id === 'string') platformTeam = payload.owner_id
-    } catch {}
-    return platformTeam
-  }
-
-  /** `platformToken`: the board's own OIDC token, which Vercel sends with each request. */
-  async function verify(token: string, audience: string, platformToken?: string): Promise<Principal> {
+  async function verify(token: string, audience: string): Promise<Principal> {
     let iss: string
     try {
       iss = String(decodeJwt(token).iss ?? '')
@@ -134,9 +114,7 @@ function createVerifier(options: {
       if (typeof claims.user_id !== 'string') throw unauthorized('development token without user_id')
       return { id: `vercel:user:${claims.user_id}`, kind: 'person', handle: `user-${claims.user_id.slice(0, 6).toLowerCase()}`, expiresAt }
     }
-    const teamId = (await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)) ?? null
-    // Kept with the claims, so a rule naming a project without its team matches later as it does now.
-    return deployment(teamId === null ? facts : { ...facts, team: teamId }, project, environment, expiresAt)
+    return deployment(facts, project, environment, expiresAt)
   }
 
   return { verify }
@@ -172,7 +150,7 @@ const environmentBoard: AuthenticateContext = {
 
 /**
  * The OIDC tokens made out to this board: a request's bearer token, from Vercel (people and
- * deployments), GitHub Actions, an `oidc()` rule's issuer, or `local`'s (`vb serve`'s), verified
+ * deployments), GitHub Actions, an issuer a grant names, or `local`'s (`vb serve`'s), verified
  * for the board's URL. Null for a request with no token, and a 401 for one whose token fails.
  * Without `request.board`, the board's project is the environment's, and it trusts no issuer past
  * Vercel's and GitHub's.
@@ -189,12 +167,11 @@ export function oidcTokens(options: OidcTokensOptions = {}): (request: CallerReq
         issuers,
         verify: createVerifier({
           projectId: async () => (await board.project()).id,
-          teamId: async () => (await board.project()).teamId,
           issuers: board.issuers,
           auth: options,
         }).verify,
       }
-    return markVerified(await made.verify(request.credential, request.audience, request.headers.get('x-vercel-oidc-token') ?? undefined))
+    return markVerified(await made.verify(request.credential, request.audience))
   }
   return Object.assign(authenticate, { [TOKENS]: true })
 }

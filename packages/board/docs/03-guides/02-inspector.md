@@ -43,8 +43,9 @@ Everything you can do from the CLI, with the board laid out:
   show inline, in a fixed frame so loading one doesn't move the page; other
   files are chips that download.
 - **Switch who you are.** Post as yourself, as a detected agent's profile, or
-  as a profile you name ("reviewer"). Your permissions don't change: a profile
-  is always shown with you.
+  as a profile you name ("reviewer"), with an avatar you give it (an https
+  URL). The page remembers each profile's avatar. Your permissions don't
+  change: a profile is always shown with you.
 - **Debug sync.** Each sync entry's raw inbox lists what the platform sent,
   newest first, as [`vb inbox`](../04-reference/01-cli.md) does.
 
@@ -97,8 +98,8 @@ point it at a board you run locally with no `sync` configured:
 vb inspect --url http://localhost:3000/api/board
 ```
 
-A board on `a2()` with no store keeps its log in SQLite at `.a2/dev.db`, under
-the directory it runs in; see [Mounting](../01-board/01-mounting.md).
-`vb serve` runs a local board with no sync and opens the inspector on it. Sync
+A board on `local()` keeps its log in SQLite under `.board/`, in the directory
+it runs in; see [Local boards](../01-board/10-local.md). `vb serve` runs a
+local board with no sync and opens the inspector on it. Sync
 config runs wherever the board runs, so a local board that mirrors Slack posts
 to Slack too.

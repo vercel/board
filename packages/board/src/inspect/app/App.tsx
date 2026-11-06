@@ -5,7 +5,7 @@ import { who } from '../../cli/format.ts'
 import * as board from './board.ts'
 import { Composer } from './composer.tsx'
 import { Feed, Toasts } from './feed.tsx'
-import { Messages, Pendings, type RowOptions } from './message.tsx'
+import { Avatar, Messages, Pendings, type RowOptions } from './message.tsx'
 import { Ago, here, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
 import { byWritten, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
@@ -314,31 +314,56 @@ function Sidebar({ state, current, onCollapse }: { state: State; current: Route;
 
 const AGENTS = ['claude', 'codex', 'grok']
 
-/** Who you post as: yourself, one of your agents' profiles, or any profile you name. */
+/** The profile `name`, with the avatar you last gave it. */
+function remembered(name: string): board.Profile {
+  const avatar = board.avatarOf(name)
+  return avatar ? { name, avatar } : { name }
+}
+
+/** Who you post as: yourself, one of your agents' profiles, or any profile you name, with the avatar you give it. */
 function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
-  const [naming, setNaming] = useState(false)
+  // The profile you're naming or changing, as it starts out; null while the menu shows.
+  const [editing, setEditing] = useState<board.Profile | null>(null)
   const person = me.handle.split('/')[0]
-  const choose = (profile: string | null) => void board.setProfile(profile)
-  if (naming)
+  const choose = (name: string | null) => void board.setProfile(name === null ? null : remembered(name))
+  if (editing)
     return (
       <form
         className="whoami naming"
         onSubmit={(event) => {
           event.preventDefault()
-          const name = new FormData(event.currentTarget).get('profile')?.toString().trim()
-          if (name) choose(name)
-          setNaming(false)
+          const form = new FormData(event.currentTarget)
+          const name = form.get('profile')?.toString().trim()
+          const avatar = form.get('avatar')?.toString().trim()
+          if (name) void board.setProfile({ name, ...(avatar ? { avatar } : {}) })
+          setEditing(null)
         }}
+        onKeyDown={(event) => event.key === 'Escape' && setEditing(null)}
+        // Leaving the form puts it away; moving between its fields doesn't.
+        onBlur={(event) => !event.currentTarget.contains(event.relatedTarget) && setEditing(null)}
       >
         <input
           name="profile"
           autoFocus
+          defaultValue={editing.name}
           placeholder="profile name, e.g. reviewer"
-          pattern="[A-Za-z0-9-]+"
-          title="letters, numbers, and hyphens"
-          onKeyDown={(event) => event.key === 'Escape' && setNaming(false)}
-          onBlur={() => setNaming(false)}
+          pattern="[A-Za-z][A-Za-z0-9\-]{0,31}"
+          title="a letter, then up to 31 letters, numbers, and hyphens"
+          required
         />
+        <input
+          name="avatar"
+          type="url"
+          defaultValue={editing.avatar ?? ''}
+          placeholder="avatar URL, https://… (optional)"
+          // What the board takes: https, or http on this machine.
+          pattern="https://.+|http://(localhost|127\.0\.0\.1)([:\/].*)?"
+          title="an https URL (http only on localhost)"
+        />
+        {/* Safari and Firefox don't focus a button you click: without this, the field's blur closes the form before the click. */}
+        <button type="submit" className="send small" onMouseDown={(event) => event.preventDefault()}>
+          post as this
+        </button>
       </form>
     )
   const item = (label: string, profile: string | null) => (
@@ -356,6 +381,7 @@ function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
         title="post as"
         trigger={
           <>
+            <Avatar name={who(me)} url={me.avatar} size={24} />
             <span className="grow">
               <span className="as">as {who(me)}</span>
               <span className="faint url">{url.replace(/^https?:\/\//, '')}</span>
@@ -368,8 +394,13 @@ function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
         {AGENTS.map((agent) => item(agent, agent))}
         {me.profile !== null && !AGENTS.includes(me.profile) && item(me.profile, me.profile)}
         <MenuSeparator />
-        <MenuItem onClick={() => setNaming(true)}>another profile…</MenuItem>
-        {board.getProfile() !== undefined && <MenuItem onClick={() => void board.setProfile(undefined)}>as vb inspect started</MenuItem>}
+        {me.profile !== null && (
+          <MenuItem onClick={() => setEditing(remembered(me.profile!))}>
+            {me.profile}'s name and avatar…
+          </MenuItem>
+        )}
+        <MenuItem onClick={() => setEditing({ name: '' })}>another profile…</MenuItem>
+        {board.getProfile() !== undefined && <MenuItem onClick={() => void board.setProfile(undefined)}>as inspect started</MenuItem>}
       </Menu>
     </div>
   )
@@ -407,7 +438,7 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
       <FilterChips filter={filter} onChange={props.filters.setFilter} />
       <Feed scope="activity" first={messages[0]?.id ?? ''} last={`${messages.at(-1)?.id ?? ''}+${pending.length}`}>
         {messages.length === 0 && pending.length === 0 && (
-          <p className="empty">{filtering(filter) ? 'nothing matches these filters' : 'nothing here yet: start a thread below'}</p>
+          <p className="empty">{filtering(filter) ? 'nothing matches these filters' : state.cursor === null ? 'loading…' : 'nothing here yet: start a thread below'}</p>
         )}
         <Messages
           messages={messages}

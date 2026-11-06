@@ -13,8 +13,9 @@ export const CSS = `
   --hairline: #d9d9d9;
   --shade: #f0f0f0;
   --shade-hover: #e3e3e3;
-  --accent: rgb(255, 108, 2);
-  --accent-transparent: rgba(255, 108, 2, 0.2);
+  /* The accent is the ink itself: black, and white in the dark. */
+  --accent: #040404;
+  --accent-transparent: rgba(4, 4, 4, 0.14);
   --label: #fafafa;
   --red: #c70000;
   --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -30,6 +31,9 @@ export const CSS = `
     --hairline: #252525;
     --shade: #161616;
     --shade-hover: #1b1b1b;
+    --accent: #fafafa;
+    --accent-transparent: rgba(250, 250, 250, 0.22);
+    --label: #040404;
     --red: #ff7b72;
   }
 }
@@ -53,7 +57,7 @@ input, textarea { font: inherit; color: var(--bright); letter-spacing: inherit; 
 a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outline: 2px dashed var(--accent); outline-offset: 2px; }
 
 .boot { display: grid; place-items: center; height: 100dvh; color: var(--faint); }
-.boot.error, .error { color: var(--accent); }
+.boot.error, .error { color: var(--red); }
 .empty, .error { padding: 20px; margin: 0; color: var(--faint); }
 .faint { color: var(--faint); }
 .grow { flex: 1; min-width: 0; }
@@ -96,7 +100,8 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .whoami:hover, .whoami[data-popup-open] { background: var(--shade); color: var(--bright); }
 .whoami .grow { display: grid; }
 .whoami .as, .whoami .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.whoami.naming { margin-top: auto; }
+.whoami.naming { margin-top: auto; flex-direction: column; align-items: stretch; }
+.whoami.naming .send { align-self: flex-end; }
 .whoami.naming input { width: 100%; height: 28px; padding: 0 8px; border: 0; outline: 1px solid var(--muted); background: var(--shade); font-size: 12px; }
 .choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .choice svg { color: var(--accent); }
@@ -188,8 +193,8 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .text > :last-child { margin-bottom: 0; }
 .text > p:last-child, .text > p:has(+ .edited) { display: inline; }
 .text p { margin: 0 0 6px; }
-.text a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; overflow-wrap: anywhere; }
-.text a:hover { text-decoration: underline; }
+.text a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.text a:hover { text-decoration-color: currentColor; }
 .text strong { color: var(--bright); font-weight: 600; }
 .text h1, .text h2, .text h3, .text h4 { margin: 8px 0 4px; color: var(--bright); font-size: 14px; font-weight: 600; }
 .text ul, .text ol { margin: 2px 0 6px; padding-left: 20px; }
@@ -223,7 +228,7 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .mention { color: var(--accent); font-weight: 600; }
 .removed { color: var(--faint); font-style: italic; }
 .edited { color: var(--faint); font-size: 11px; }
-.undelivered { margin-top: 4px; font-size: 11px; color: var(--accent); }
+.undelivered { margin-top: 4px; font-size: 11px; color: var(--red); }
 .undelivered button { text-decoration: underline; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
@@ -249,8 +254,8 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .link-embed { padding: 2px 0 2px 10px; border-left: 2px solid var(--hairline); }
 .link-meta { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--muted); }
 .link-meta .author { font-size: 13px; }
-.link-meta a, .link-file a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
-.link-meta a:hover, .link-file a:hover { text-decoration: underline; }
+.link-meta a, .link-file a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.link-meta a:hover, .link-file a:hover { text-decoration-color: currentColor; }
 .link-file { display: flex; gap: 4px; align-items: center; margin-top: 2px; font-size: 12px; color: var(--muted); }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .attachment-media { display: block; width: 320px; max-width: 100%; height: 200px; border: 1px solid var(--hairline); background: var(--shade); overflow: hidden; }
@@ -324,7 +329,8 @@ button.file:hover { background: var(--shade-hover); color: var(--bright); }
 }
 .item[data-highlighted] { background: var(--shade); color: var(--bright); }
 .item.danger, .item.danger[data-highlighted] { color: var(--red); }
-.item .hint { margin-left: 12px; }
+/* A hint (a message's ID) gives way first: a long one ends in an ellipsis, not a wide menu. */
+.item .hint { margin-left: 12px; min-width: 0; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; }
 .separator { height: 1px; margin: 4px 0; background: var(--hairline); }
 .empty-item { padding: 6px 8px; color: var(--faint); }
 .emoji-row { display: grid; grid-template-columns: repeat(6, 1fr); }

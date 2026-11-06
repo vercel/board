@@ -13,7 +13,6 @@ import {
   type Permission,
 } from '../src/server/access.ts'
 import * as publicAccess from '../src/access/index.ts'
-import { checkGrant } from '../src/server/auth.ts'
 import { HttpError } from '../src/server/errors.ts'
 
 const CHANNELS = ['dev', 'dev/pi', 'dev/pi/deep', 'devops', 'ci', 'ci/main', 'security', 'security/vuln', 'feedback']
@@ -282,12 +281,11 @@ describe('@vercel/board/access', () => {
     expect(() => {
       defaults.dev = ['manage']
     }).toThrow(TypeError)
-    const grant = checkGrant({ issuer: 'github', claims: { repository: 'acme/app' } }, [])
-    expect(compileAccess(grant.can).anywhere('manage')).toBe(false)
-    expect(compileAccess(grant.can).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
+    expect(compileAccess(publicAccess.DEFAULT_CAN).anywhere('manage')).toBe(false)
+    expect(compileAccess(publicAccess.DEFAULT_CAN).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
   })
 
-  it('gives a grant or a token that names no can read, post, react, and label everywhere', () => {
+  it('gives a token that names no can read, post, react, and label everywhere', () => {
     expect(publicAccess.compileAccess(publicAccess.DEFAULT_CAN).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
   })
 

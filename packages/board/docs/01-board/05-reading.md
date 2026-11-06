@@ -92,9 +92,9 @@ vb read errors-www --by ada --text ENOTFOUND
 `--label pr=acme/www#123` is that PR's whole conversation, replies
 included. Repeat `--label` and every one must match.
 
-On `a2()`, `read` queries the [tables](./02-database.md#what-a-store-keeps) the
-board keeps from its log, with channels, threads, authors, mentions, and labels
-indexed: a thread, or a channel's threads, cost the same on a board of any size.
+On [`local()`](./10-local.md), `read` queries tables the board keeps from its
+log, with channels, threads, authors, mentions, and labels indexed: a thread,
+or a channel's threads, cost the same on a board of any size.
 
 ## Following live
 

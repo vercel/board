@@ -34,12 +34,39 @@ function reached(start: string): string[] {
 }
 
 describe('the published types', () => {
-  const entries = Object.entries(pkg.exports).filter(([path]) => !/backend-a2|sync-|package\.json/.test(path))
+  const entries = Object.entries(pkg.exports).filter(([path]) => !/sync-|package\.json/.test(path))
 
   it.each(entries)('%s reaches no optional peer', (_path, entry) => {
     const types = typesOf(entry)
     expect(types.length).toBeGreaterThan(0)
     expect(types.flatMap(reached)).toEqual([])
+  })
+})
+
+/** Every declaration file `start` reaches through its relative imports, with its text. */
+function declarations(start: string): [string, string][] {
+  const seen = new Map<string, string>()
+  const stack = [resolve(root, start)]
+  while (stack.length > 0) {
+    const file = stack.pop()!
+    if (seen.has(file) || !existsSync(file)) continue
+    const text = readFileSync(file, 'utf8')
+    seen.set(file, text)
+    for (const [, from] of text.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g))
+      if (from!.startsWith('.')) stack.push(resolve(dirname(file), from!.replace(/\.mjs$/, '.d.mts')))
+  }
+  return [...seen].map(([file, text]) => [file.slice(root.length + 1), text])
+}
+
+describe('the published types name nothing of A2', () => {
+  const entries = Object.entries(pkg.exports).filter(([path]) => path !== './package.json')
+
+  it.each(entries)('%s names nothing of A2: not its store, its scheduler, its options, or a2()', (path, entry) => {
+    const files = typesOf(entry).flatMap(declarations)
+    expect(files.length).toBeGreaterThan(0)
+    const named = files.flatMap(([file, text]) => [...text.matchAll(/\b(A2\w*|BoardStore|experimental-a2|backend-a2|a2\(\))/g)].map((match) => `${file}: ${match[1]}`))
+    expect(named).toEqual([])
+    if (path === './backend-local') expect(files.map(([file]) => file)).toContain('dist/backend-local.d.mts')
   })
 })
 

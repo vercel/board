@@ -10,16 +10,20 @@ import {
 const MAX_DELAY = 2 ** 31 - 1
 
 /**
- * A scheduler in this process (`@vercel/board/backend-a2/scheduler-local`): each task runs at its time on
- * a timer, so retries, leases, wake-ups, and scheduled messages work with nothing else running.
- * Its timers live in the process, and a restart drops the pending ones, so it's for development,
- * `vb serve`, tests, and long-running servers, never serverless functions, which stop between
- * requests: there, use `vercelQueues()` or `qstash()`.
+ * A scheduler in this process, `local()`'s: each task runs at its time on a timer, so retries,
+ * leases, wake-ups, and scheduled messages work with nothing else running. Its timers live in the
+ * process, and a restart drops the pending ones, so it's for development, `vb serve`, tests, and
+ * long-running servers, never serverless functions, which stop between requests.
  */
-export function localScheduler(): A2Scheduler {
+/** The local scheduler, which `stop()` stops: its timers cleared, nothing pending. */
+export type LocalScheduler = A2Scheduler & { stop(): void }
+
+export function localScheduler(): LocalScheduler {
   let servers: readonly DrainableServer[] = []
   // The same task asked for twice runs once, as a queue's deduplication would.
   const pending = new Set<string>()
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+  let stopped = false
 
   async function run(task: SchedulerTask) {
     const server = servers.find((candidate) => candidate.contract.name === task.contract)
@@ -31,6 +35,8 @@ export function localScheduler(): A2Scheduler {
 
   return {
     async schedule(task) {
+      // Once stopped, what's asked for stays in the log: whoever opens it next catches up.
+      if (stopped) return
       const key = task.kind === 'drain' ? `drain\u001f${task.contract}\u001f${task.sessionId}\u001f${task.dueAt}` : task.id
       if (pending.has(key)) return
       pending.add(key)
@@ -38,15 +44,23 @@ export function localScheduler(): A2Scheduler {
       const arm = () => {
         const wait = task.dueAt - Date.now()
         const timer = setTimeout(() => {
+          timers.delete(timer)
           if (wait > MAX_DELAY) return arm()
           pending.delete(key)
           // A failed drain is A2's to retry on the next write; here it's only said.
           run(task).catch((error) => console.error('[board] a scheduled task failed:', error))
         }, Math.min(Math.max(0, wait), MAX_DELAY))
+        timers.add(timer)
         // A pending timer doesn't keep the process alive: a dev server's own socket does that.
         timer.unref?.()
       }
       arm()
+    },
+    stop() {
+      stopped = true
+      for (const timer of timers) clearTimeout(timer)
+      timers.clear()
+      pending.clear()
     },
     handler(...mounted) {
       servers = mounted

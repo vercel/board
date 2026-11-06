@@ -1,14 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
-import { http } from '../src/backend-http/index.ts'
-import { createBoardClient } from '../src/client/client.ts'
 import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
+import { vercel as nodeVercel } from '../src/backend-vercel/index.ts'
 import { conformance } from '../src/conformance/index.ts'
-import { compileAccess, type Can } from '../src/server/access.ts'
+import { boardEvents } from '../src/contract/events.ts'
+import { watchersHash } from '../src/server/registry.ts'
+import type { Authenticate } from '../src/access/index.ts'
+import { compileAccess } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
 import type { Middleware } from '../src/server/middleware.ts'
+import { slack } from '../src/sync/slack.ts'
+import { channels, render } from '../src/sync/fn.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
+import { fakePlatform } from './sync-fixtures.ts'
 
 const API = 'http://localhost'
 
@@ -16,54 +21,34 @@ const API = 'http://localhost'
 const handleOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
   board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal), files: api.files }) })
 
-const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', name: 'Ada' } as const
-/** The project's own deployment, as its agent calls the board it runs with that deployment's token. */
-const FACTORY = { id: 'vercel:project:prj_pong:production', kind: 'deployment', handle: 'factory', name: 'factory' } as const
+/** Someone a host's verifier would name: a request from her is still no one's this board serves. */
+const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } as const
 
-/**
- * A vercel() board that serves its callers over HTTP, as the factory's does, with `middleware`:
- * `factory` is the project itself (its deployment's token), `ada` anyone else. `via` is a handle on
- * it as one of them, and `client` a client as one of them that reaches Vercel's storage itself.
- */
-function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middleware[]) {
-  const callers = { factory: FACTORY, ada: ADA }
-  const pong = board({
-    backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
-    url: 'https://pong.example/api/board',
-    authenticate: async (request) => callers[request.headers.get('authorization')?.replace(/^Bearer /, '') as keyof typeof callers] ?? null,
-    access: [() => 'all'],
-    middleware,
-  })
-  const via = (name: keyof typeof callers) =>
-    board({
-      backend: http('https://pong.example/api/board', {
-        fetch: (input, init) => {
-          const headers = new Headers(init?.headers)
-          headers.set('authorization', `Bearer ${name}`)
-          return pong.fetch(new Request(input, { ...init, headers }))
-        },
-      }),
-    }).as(null)
-  const client = (name: keyof typeof callers) =>
-    createBoardClient({ url: 'https://pong.example/api/board', token: name, fetch: ((input, init) => pong.fetch(new Request(input, init))) as typeof fetch, storeFetch: api.files })
-  return { pong, via, client }
+/** The project's own board on Vercel's, as its deployment runs it, with `middleware`: what board() serves is its own code. */
+const PONG_URL = 'https://pong.example/api/board'
+function pongBoard(api: ReturnType<typeof fakeMessageboard>, middleware: Middleware[] = [], options: { authenticate?: Authenticate } = {}) {
+  return board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }), url: PONG_URL, middleware, ...options })
 }
 
-/** A caller board() verified, with `can`: what a board with an `access` passes its backend. Ada by default. */
-const verified = (can: Can, who: { id: string; kind: string; handle: string; name: string } = ADA) =>
-  ({
-    identity: {
-      principal: { id: who.id, access: compileAccess(can), expiresAt: null },
-      author: { actor: who.id, principal: who.id, profile: null, session: null },
-      actor: { id: who.id, kind: who.kind, handle: who.handle, name: who.name, avatar: null },
-    },
-    origin: { via: null },
-  }) as unknown as Caller
+/** Every match a handle's registration has, each acked as it's pulled: a thread's next waits for the ack before it. */
+async function drain(handle: ReturnType<typeof handleOn>) {
+  const all: Awaited<ReturnType<typeof handle.matches>> = []
+  for (let pulled = await handle.matches({}); pulled.length > 0; pulled = await handle.matches({})) {
+    for (const match of pulled) {
+      await handle.ack(match.id, { lease: match.lease })
+    }
+    all.push(...pulled)
+  }
+  return all
+}
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
+  it("passes the conformance kit's core, schedules, grants, attachments, and watchers, and skips sync for a person, whom Vercel's API lets sync nowhere", async () => {
     const api = fakeMessageboard()
-    const report = await conformance(handleOn(api), { withToken: () => handleOn(api) })
+    // The API looks names up, so the grants checks name a project, a repository, a viewer, and an app its team has.
+    // A board token is its board's, so the handle it's sent on names the board.
+    const withToken = (secret: string) => board({ backend: vercel({ team: 'team_test', api: API, board: 'brd_test', fetch: as(api, secret), files: api.files }) })
+    const report = await conformance(handleOn(api), { withToken, principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com', app: 'ship' } })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -86,23 +71,60 @@ describe('vercel()', () => {
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
-      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
-      // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
-      'grants: grants a project, lists it, takes the same grant again as one, and revokes it': 'failed',
-      "grants: changes a grant's can when it's set again": 'failed',
-      "grants: grants a GitHub repository's workflows, and another team's project": 'failed',
-      'grants: keeps two environments of one project as two grants, and revokes one without the other': 'failed',
-      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
-      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
+      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
+      'grants: grants a principal, lists it, and revokes it': 'passed',
+      'grants: makes another grant for the same principals, and changes one by its ID': 'passed',
+      "grants: keeps a grant's can as written, a pattern with no permissions included": 'passed',
+      'grants: lets the most specific pattern decide, then the closest principal there, and adds up ties': 'passed',
+      'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'passed',
+      'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
+      'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
+      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'passed',
+      "grants: lets no token grant past its own can, even where everyone's grant closes it": 'passed',
+      'grants: lets no token let anyone in where everyone gets more than the token has': 'passed',
+      'grants: lets a member grant on a pattern after a lock under it': 'skipped',
+      'grants: lets a project on another team in, in its environments': 'skipped',
+      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'passed',
+      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
-      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',
-      "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'failed',
-      'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
-      'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
+      "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
+      'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
+      'sync: keeps noSync on a post and a reply, so sync sends neither': 'passed',
     })
+    // It leaves the grants as it found them.
+    expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
   }, 30_000)
+
+  it('answers only wake-ups and webhooks: it verifies no request, and none reaches the API, while its own code writes as the project', async () => {
+    const api = fakeMessageboard()
+    const authenticate = vi.fn(async () => ADA)
+    const pong = pongBoard(api, [], { authenticate })
+    const nothing = { error: { code: 'not_found', message: `${PONG_URL} answers only wake-ups and webhooks` } }
+    for (const [method, path, body] of [
+      ['GET', '/', undefined],
+      ['GET', '/me', undefined],
+      ['GET', '/messages', undefined],
+      ['POST', '/messages', { channel: 'dev', text: 'hi' }],
+      ['POST', '/attachments/uploads', { name: 'big.mp4', type: 'video/mp4', size: 10_000_000 }],
+      ['POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }] }],
+      ['POST', '/inbox/slack', { events: [] }],
+    ] as const) {
+      const response = await pong.fetch(
+        new Request(`${PONG_URL}${path}`, {
+          method,
+          headers: { authorization: 'Bearer ada', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      )
+      expect([`${method} ${path}`, response.status, await response.json()]).toEqual([`${method} ${path}`, 404, nothing])
+    }
+    expect(authenticate).not.toHaveBeenCalled()
+    expect(api.requests).toEqual([])
+    expect((await pong.post('dev', 'from the app')).by.principal).toBe('vercel:project:prj_pong:production')
+  })
 
   it("refuses a reply after a message in another thread, which as a sequence would name one in its own", async () => {
     const api = fakeMessageboard()
@@ -241,7 +263,7 @@ describe('vercel()', () => {
     expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
   })
 
-  it('makes a channel in the API before anything posts to it, once, and only for a caller that reads and posts there', async () => {
+  it('makes a channel in the API before anything posts to it, once', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
     expect(await team.createChannel('dev/alerts')).toEqual({ channel: { path: 'dev/alerts' }, created: true })
@@ -250,14 +272,8 @@ describe('vercel()', () => {
     await team.post('ops', { text: 'hi' })
     expect(await team.createChannel('ops')).toMatchObject({ created: false })
     expect(await handleOn(api, 'user:u_ada').createChannel('dev/alerts')).toMatchObject({ created: false })
-
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
-    const signal = new AbortController().signal
-    await expect(backend.createChannel(verified({ 'feedback/': ['post'] }), { path: 'feedback/acme' }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.createChannel(verified({ 'dev/': ['read'] }), { path: 'dev/web' }, signal)).rejects.toMatchObject({ status: 403 })
-    expect(await backend.createChannel(verified({ 'dev/': ['read', 'post'] }), { path: 'dev/web' }, signal)).toMatchObject({ created: true })
-    // What it refused never reached the API: the board's own general, and what it made.
-    expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'dev/web', 'general', 'ops'])
+    // The board's own general, and what it made: each once.
+    expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'general', 'ops'])
   })
 
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
@@ -281,102 +297,39 @@ describe('vercel()', () => {
     expect(api.requests.filter((r) => /\/threads$/.test(r))).toHaveLength(1)
   })
 
-  it("keeps a verified caller to its grants, which the API can't check for it", async () => {
+  it("uploads its own code's files, one bigger than a request straight to Vercel's storage, and posts them through board()'s middleware", async () => {
     const api = fakeMessageboard()
-    const team = handleOn(api, 'project:prj_pong:production')
-    const dev = await team.post('dev', { text: 'dev' })
-    const ops = await team.post('ops', { text: 'ops' })
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
-    const ada = verified({ 'dev/': ['read', 'post'] })
-    const signal = new AbortController().signal
-    const read = async (query: object) => (await backend.messages(ada, query as never, signal)).messages.map((m) => m.text)
-    expect(await read({})).toEqual(['dev'])
-    expect(await read({ channel: 'ops' })).toEqual([])
-    expect((await backend.channels(ada, {}, signal)).channels.map((c) => c.path)).toEqual(['dev'])
-    await expect(backend.message(ada, { id: ops.id }, signal)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
-    await expect(backend.post(ada, { channel: 'ops', text: 'hi' } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.post(ada, { re: ops.id, text: 'hi' } as never, signal)).rejects.toMatchObject({ status: 404 })
-    await expect(backend.post(ada, { channel: 'dev', text: 'hi', labels: { state: 'open' } } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.react(ada, { id: dev.id, emoji: 'eyes' }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.label(ada, { id: dev.id, set: { state: 'open' } }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.events(ada, { channel: 'ops' } as never, signal)).resolves.toMatchObject({ events: [] })
-    await backend.post(ada, { channel: 'dev', text: 'hi' } as never, signal)
-    expect(await read({ channel: 'dev' })).toEqual(['dev', 'hi'])
-    // Only who it sees where it reads, and itself: never someone who writes only where it doesn't.
-    await handleOn(api, 'user:u_ops').post('ops', { text: 'ops only' })
-    const ids = async (caller: Caller) => (await backend.actors(caller, {}, signal)).actors.map((a) => a.id).sort()
-    expect(await ids(ada)).toEqual(['vercel:project:prj_pong:production', 'vercel:project:prj_pong:production+ada', 'vercel:user:u_ada'])
-    expect(await ids(verified('all'))).toContain('vercel:user:u_ops')
-  })
-
-  it("gives a verified caller a file only through a message it reads, and none once that message is deleted", async () => {
-    const api = fakeMessageboard()
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
-    const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
-    const ada = verified({ 'dev/': ['read'] })
-    const signal = new AbortController().signal
-    const upload = async () => (await backend.upload(project, { data: new TextEncoder().encode('log'), name: 'a.log', type: 'text/plain' }, signal)).attachment
-    const unposted = await upload()
-    await expect(backend.attachment(ada, { id: unposted.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
-    const file = await upload()
-    const { message } = await backend.post(project, { channel: 'dev', text: '', attachments: [file.id] } as never, signal)
-    await expect(backend.attachment(ada, { id: file.id }, signal)).resolves.toMatchObject({ attachment: { id: file.id } })
-    await backend.delete(project, { id: message.id }, signal)
-    await expect(backend.attachment(project, { id: file.id }, signal)).resolves.toMatchObject({ attachment: { id: file.id } })
-    await expect(backend.attachment(ada, { id: file.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
-  })
-
-  it("refuses a verified caller's post or reply with files, which could only be the project's", async () => {
-    const api = fakeMessageboard()
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
-    const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
-    const ada = verified({ 'dev/': ['read', 'post'] })
-    const signal = new AbortController().signal
-    const { attachment: file } = await backend.upload(project, { data: new TextEncoder().encode('log'), name: 'a.log', type: 'text/plain' }, signal)
-    const { message: root } = await backend.post(project, { channel: 'dev', text: 'root' } as never, signal)
-    await expect(backend.post(ada, { channel: 'dev', text: '', attachments: [file.id] } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.post(ada, { re: root.id, text: '', attachments: [file.id] } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.attachment(ada, { id: file.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
-    await expect(backend.post(project, { re: root.id, text: '', attachments: [file.id] } as never, signal)).resolves.toMatchObject({ message: { attachments: [{ id: file.id }] } })
-  })
-
-  it('lets a caller that is the project upload files, past a request straight to storage, and post them, and refuses anyone else', async () => {
-    const api = fakeMessageboard()
-    // Any middleware has board() look up a post's files first, as the caller, before they're posted.
+    // Any middleware has board() look up a post's files first, before they're posted.
     const screened: string[][] = []
-    const { client } = gateway(api, [
+    const pong = pongBoard(api, [
       async ({ write, next }) => {
         if (write.kind === 'post') screened.push(write.attachments.map((file) => file.name))
         await next()
       },
     ])
-    const factory = client('factory')
-    const log = await factory.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })
-    // Bigger than a request takes: the client sends it to Vercel's storage on the URL the API signs.
-    const video = new Uint8Array(ATTACHMENT_BYTES_MAX + 1).fill(7)
-    const after = await factory.upload({ data: video, name: 'after.mp4', type: 'video/mp4' })
-    expect(api.requests.filter((r) => r.endsWith('/complete'))).toHaveLength(2)
-    const posted = await factory.post('dev', { text: 'before and after', attachments: [log.id, after.id] })
-    expect(posted.attachments.map((file) => file.id)).toEqual([log.id, after.id])
-    expect(screened).toEqual([['a.log', 'after.mp4']])
-    expect(Buffer.from(await (await factory.download(after.id)).arrayBuffer()).equals(Buffer.from(video))).toBe(true)
-    // Anyone else would be uploading and posting the project's files.
-    const ada = client('ada')
-    await expect(ada.upload({ data: new TextEncoder().encode('log'), name: 'b.log' })).rejects.toMatchObject({ status: 403 })
-    await expect(ada.upload({ data: video, name: 'big.mp4', type: 'video/mp4' })).rejects.toMatchObject({ status: 403 })
-    const unposted = await factory.upload({ data: new TextEncoder().encode('mine'), name: 'c.log' })
-    // Its file isn't one Ada may have: as missing to her as one that isn't there.
-    await expect(ada.post('dev', { text: 'not mine', attachments: [unposted.id] })).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
+    // The handle sends a file bigger than a request takes to the URL the API signs, with plain fetch.
+    vi.stubGlobal('fetch', api.files)
+    try {
+      const log = await pong.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })
+      const video = new Uint8Array(ATTACHMENT_BYTES_MAX + 1).fill(7)
+      const after = await pong.upload({ data: video, name: 'after.mp4', type: 'video/mp4' })
+      expect(api.requests.filter((r) => r.endsWith('/complete'))).toHaveLength(2)
+      const posted = await pong.post('dev', { text: 'before and after', attachments: [log.id, after.id] })
+      expect(posted.attachments.map((file) => file.id)).toEqual([log.id, after.id])
+      expect(screened).toEqual([['a.log', 'after.mp4']])
+      expect(Buffer.from(await (await pong.download(after.id)).arrayBuffer()).equals(Buffer.from(video))).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
-  it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for, and anyone else finishing the project's", async () => {
+  it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for", async () => {
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
     const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
     const signal = new AbortController().signal
     const file = { name: 'big.mp4', type: 'video/mp4', size: 5 * 1024 * 1024 }
     await expect(backend.uploadStart(project, file, signal)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
-    const ticket = await backend.uploadStart(project, { ...file, sha256: `${'A'.repeat(43)}=` }, signal)
-    await expect(backend.uploadFinish(verified('all'), { id: ticket.id }, signal)).rejects.toMatchObject({ status: 403 })
+    expect(await backend.uploadStart(project, { ...file, sha256: `${'A'.repeat(43)}=` }, signal)).toMatchObject({ id: expect.any(String), url: expect.any(String) })
   })
 
   it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {
@@ -400,13 +353,211 @@ describe('vercel()', () => {
     expect((await other.poll({ channel: 'busy', after: events.cursor })).events).toEqual([])
   })
 
+  it("reads the latest across channels from each channel's page at once, with a cursor the feed goes on from", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const first = await team.post('dev', { text: 'dev one' })
+    await team.post('ops', { text: 'ops one' })
+    await team.reply(first.id, { text: 'dev reply' })
+    await team.post('web', { text: 'web one' })
+    await team.post('ops', { text: 'ops two' })
+    const channels = (await team.channels()).length
+    api.requests.length = 0
+    const latest = await team.messages({ limit: 4 })
+    expect(latest.messages.map((m) => m.text)).toEqual(['ops one', 'dev reply', 'web one', 'ops two'])
+    // One page of each channel's messages, at once: no thread is read message by message.
+    expect(api.requests.filter((r) => r === 'GET /boards/brd_test/messages')).toHaveLength(channels)
+    expect(api.requests.filter((r) => r.includes('/threads/') || r.endsWith('/changes'))).toEqual([])
+    // The feed goes on from what it read: the next post, and nothing it already had.
+    await team.post('dev', { text: 'later' })
+    expect((await team.poll({ after: latest.cursor })).events.map((e) => e.message?.text)).toEqual(['later'])
+  })
+
+  it('answers across channels with every message newer than the oldest it has, where a channel has more than one page', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.post('quiet', { text: 'quiet before' })
+    for (let i = 1; i <= 130; i++) await team.post('busy', { text: `m${i}` })
+    await team.post('quiet', { text: 'quiet after' })
+    // The API lists busy's newest 100, back to m31. Quiet's older message would sit past m1 to m30,
+    // which the read never saw, as if nothing came between: so it stops at m31.
+    const latest = await team.messages({ limit: 200 })
+    expect(latest.messages.map((m) => m.text)).toEqual([...Array.from({ length: 100 }, (_, i) => `m${i + 31}`), 'quiet after'])
+  }, 30_000)
+
   it("makes the team's board the first time a person uses it, and tells a project it needs a grant", async () => {
     const pong = handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production')
-    await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({ status: 404, code: 'no_board' })
+    await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_not_granted',
+      message: "this project has no access to the team's board (prj_pong, production).",
+      hint: "Grant it: vb grants create --project prj_pong --environment production --can '*=read,post,react,label'",
+    })
     const api = fakeMessageboard({ boardId: null })
     await handleOn(api).post('dev', { text: 'hello' })
     expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
+  })
+
+  it('says what the API says its credentials may do, and until when, and what any it lets in may when it says neither', async () => {
+    const said = async (handle: ReturnType<typeof handleOn>) => {
+      const { can, expiresAt } = await handle.me()
+      return { can, expiresAt }
+    }
+    const everything = { can: { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] }, expiresAt: null }
+    // A person may do what their team role lets them; a project, what any credentials the API lets in may.
+    const api = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
+    expect(await said(handleOn(api, 'user:u_jb'))).toEqual(everything)
+    expect(await said(handleOn(api, 'user:u_ada'))).toEqual({ can: { '*': ['read', 'react'] }, expiresAt: null })
+    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+    for (const role of ['member', 'developer'] as const) expect(await said(handleOn(fakeMessageboard({ roles: { u_jb: role } })))).toEqual(everything)
+    // Credentials it says less of, and until when, as it will of board tokens: board's own permissions, as it gives them.
+    const expiresAt = Date.now() + 59 * 60_000
+    const narrowed = fakeMessageboard({ me: { 'user:u_jb': { can: { 'pings/': ['read', 'post'], 'dev/': ['read', 'fly'] }, expiresAt } } })
+    expect(await said(handleOn(narrowed))).toEqual({ can: { 'pings/': ['read', 'post'], 'dev/': ['read'] }, expiresAt: new Date(expiresAt).toISOString() })
+    // As board's own me says it: a pattern board can't read dropped, so the summary compiles, what
+    // each permission implies, as label does read, and a pattern left with nothing left out.
+    const odd = fakeMessageboard({ me: { 'user:u_jb': { can: { 'dev*': ['label'], ops: ['label'], 'ci/': ['fly'] }, expiresAt: null } } })
+    const { can } = await said(handleOn(odd))
+    expect(can).toEqual({ ops: ['read', 'label'] })
+    expect(compileAccess(can).summary()).toEqual(can)
+    // Epoch seconds, as a JWT's exp, aren't 1970: under 10^12, a number is read as seconds.
+    const seconds = Math.floor(expiresAt / 1000)
+    const jwtStyle = fakeMessageboard({ me: { 'user:u_jb': { can: { '*': ['read'] }, expiresAt: seconds } } })
+    expect((await said(handleOn(jwtStyle))).expiresAt).toBe(new Date(seconds * 1000).toISOString())
+    // An API that says neither, as before it sent them: what any credentials it lets in may do, with no expiry.
+    expect(await said(handleOn(fakeMessageboard({ me: false }), 'user:u_jb'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+  })
+
+  it("sends a board token you set, in Node, ahead of VERCEL_TOKEN and the deployment's OIDC token", async () => {
+    for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+    const api = fakeMessageboard({ tokens: { k7Qe2mXa9vLp: 'user:u_ada' } })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const who = async () => (await board({ backend: nodeVercel() }).me()).principal
+    try {
+      vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+      expect(await who()).toBe('vercel:project:prj_pong:production')
+      vi.stubEnv('BOARD_TOKEN', 'k7Qe2mXa9vLp')
+      expect(await who()).toBe('vercel:user:u_ada')
+      // On a deployment, with no VERCEL_TOKEN: its OIDC token, which isn't one here, is never read.
+      vi.stubEnv('VERCEL_TOKEN', '')
+      vi.stubEnv('VERCEL', '1')
+      vi.stubEnv('VERCEL_OIDC_TOKEN', 'not-an-oidc-token')
+      expect(await who()).toBe('vercel:user:u_ada')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  describe('a board by its name', () => {
+    /** A handle on the team's board named `name`, through vercel(), as `principal`. */
+    const named = (api: ReturnType<typeof fakeMessageboard>, name: string, principal = 'user:u_jb') =>
+      board({ name, backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
+    const lookups = (api: ReturnType<typeof fakeMessageboard>, request: string) => api.requests.filter((made) => made === request).length
+
+    it('uses the board with that name, whatever its case, apart from the default board, and looks it up once', async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+      const security = named(api, 'security')
+      await security.post('dev', { text: 'rotate the keys' })
+      await security.post('dev', { text: 'done' })
+      expect(lookups(api, 'GET /boards')).toBe(1)
+      expect((await named(api, 'SECURITY').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages).toEqual([])
+      expect(await security.discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_sec?teamId=team_test` })
+      // The default board is named General, so its name finds it too.
+      expect(await named(api, 'general').discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
+    })
+
+    it('makes the board the first time its project uses it, granted to that project in its environment', async () => {
+      const api = fakeMessageboard()
+      await named(api, 'security', 'project:prj_pong:production').post('dev', { text: 'from pong' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // Another process of the project finds it, and makes nothing.
+      await named(api, 'security', 'project:prj_pong:production').post('dev', { text: 'again' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // It's the team's: a person reads it.
+      expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from pong', 'again'])
+      // The project's preview isn't granted it, and is told who fixes that.
+      await expect(named(api, 'security', 'project:prj_pong:preview').post('dev', { text: 'from a preview' })).rejects.toMatchObject({
+        status: 403,
+        code: 'board_not_granted',
+        origin: 'handle',
+        message: 'this project has no access to board security (prj_pong, preview).',
+        hint: "Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'",
+      })
+    })
+
+    it('makes the board for a person too, by default, once, as the team sees it', async () => {
+      const api = fakeMessageboard()
+      await named(api, 'security').post('dev', { text: 'rotate the keys' })
+      // Another process finds it by its name, and makes nothing more.
+      await named(api, 'security').post('dev', { text: 'done' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // It's the team's: someone else reads it by its name.
+      expect((await named(api, 'security', 'user:u_ada').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+    })
+
+    it('makes none for a caller that says ensure: false, and says there is none it can see', async () => {
+      const api = fakeMessageboard()
+      const found = (principal: string) => board({ name: 'security', ensure: false, backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
+      for (const principal of ['user:u_jb', 'project:prj_pong:production'])
+        await expect(found(principal).post('dev', { text: 'hi' })).rejects.toMatchObject({
+          status: 404,
+          code: 'no_board',
+          origin: 'handle',
+          message: 'no board named security on this team, or none you can see.',
+        })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+    })
+
+    it("says a name is another board's that you can't see, and makes none", async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'vault', id: 'brd_vault', members: ['u_ada'] }] })
+      const ensured = board({ name: 'Vault', ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') }) })
+      await expect(ensured.post('dev', { text: 'hi' })).rejects.toMatchObject({
+        status: 409,
+        code: 'board_name_taken',
+        origin: 'handle',
+        message: 'the board name Vault is taken.',
+        hint: 'Pick another name, or ask whoever can see it for access.',
+      })
+      // Its member still reads it, and nothing was posted there.
+      expect((await named(api, 'vault', 'user:u_ada').messages({ channel: 'dev' })).messages).toEqual([])
+    })
+
+    it('takes ensure only with a name', () => {
+      expect(() => board({ ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') }) })).toThrow('ensure makes the board `name` names: pass name too')
+    })
+
+    it('takes the first board the API lists for a name an older board shares, and makes none', async () => {
+      // The API lists the oldest first: here the default board, General, made before brd_old.
+      const api = fakeMessageboard({ boards: [{ name: 'general', id: 'brd_old', granted: ['prj_pong:production'] }] })
+      for (const principal of ['user:u_jb', 'project:prj_pong:production']) await named(api, 'General', principal).post('dev', { text: `from ${principal}` })
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from user:u_jb', 'from project:prj_pong:production'])
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+    })
+
+    it("takes another team's board by its team and name, or that team's default board by its team alone", async () => {
+      const api = fakeMessageboard({ slug: 'acme', boards: [{ name: 'security' }] })
+      const teams: (string | null)[] = []
+      const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { searchParams } = new URL(String(input instanceof Request ? input.url : input))
+        teams.push(searchParams.get('slug') ?? searchParams.get('teamId'))
+        return as(api, 'user:u_jb')(input, init)
+      }) as typeof globalThis.fetch
+      await board({ team: 'acme', name: 'security', backend: vercel({ api: API, fetch }) }).post('dev', { text: 'for acme security' })
+      await board({ team: 'acme', backend: vercel({ api: API, fetch }) }).post('dev', { text: "on acme's default board" })
+      expect(new Set(teams)).toEqual(new Set(['acme']))
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(["on acme's default board"])
+      expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['for acme security'])
+      // vercel()'s own team is board()'s, or nothing binds.
+      board({ team: 'acme', backend: vercel({ team: 'acme', api: API, fetch }) })
+      expect(() => board({ team: 'acme', backend: vercel({ team: 'team_test', api: API, fetch }) })).toThrow('name the team once')
+      // Its own board ID wins over the name, as the CLI's URL form passes it.
+      const byId = board({ name: 'nope', backend: vercel({ board: 'brd_test', team: 'acme', api: API, fetch }) })
+      expect((await byId.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(["on acme's default board"])
+    })
   })
 
   it("says the team's ID in its discovery, though it's named by its slug", async () => {
@@ -539,6 +690,16 @@ describe('vercel()', () => {
     await pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST', headers: { 'x-board-watchers': hash } }))
     expect(registered()).toBe(before)
   })
+
+  it("passes the conformance kit's sync as a project, through Vercel's API's sync routes", async () => {
+    const report = await conformance(handleOn(fakeMessageboard(), 'project:prj_pong:production'))
+    expect(Object.fromEntries(report.checks.filter((check) => check.group === 'sync').map((check) => [check.name, check.status]))).toEqual({
+      "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'passed',
+      "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
+      'hands a sync each message change as a match of its @sync watcher': 'passed',
+      'keeps noSync on a post and a reply, so sync sends neither': 'passed',
+    })
+  }, 30_000)
 
   it("passes the conformance kit's watchers as a project too, registering a path on its own project", async () => {
     const report = await conformance(handleOn(fakeMessageboard(), 'project:prj_pong:production'))
@@ -679,82 +840,25 @@ describe('vercel()', () => {
     expect(api.schedules.size).toBe(0)
   })
 
-  it('lets a verified caller that is the project edit, delete, schedule, and cancel where it posts, and nowhere else', async () => {
-    const api = fakeMessageboard()
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
-    const pong = handleOn(api, 'project:prj_pong:production')
-    const dev = await pong.post('dev', { text: 'dev' })
-    const ops = await pong.post('ops', { text: 'ops' })
-    const secret = await pong.post('secret', { text: 'secret' })
-    const inDev = await pong.as('claude').schedule({ re: dev.id }, { text: 'dev later', in: '1h' })
-    const inOps = await pong.schedule({ re: ops.id }, { text: 'ops later', in: '1h' })
-    const inSecret = await pong.schedule({ re: secret.id }, { text: 'secret later', in: '1h' })
-    const factory = verified({ 'dev/': ['read', 'post'], ops: ['read'] }, FACTORY)
-    const signal = new AbortController().signal
-    // What the project wrote, under any of its profiles, where the caller posts.
-    await backend.edit(factory, { id: dev.id, text: 'dev, edited' }, signal)
-    expect((await pong.thread(dev.id)).message.text).toBe('dev, edited')
-    const { schedule } = await backend.schedule(factory, { re: dev.id, text: 'mine', in: '1h' } as never, signal)
-    expect(schedule).toMatchObject({ re: dev.id, by: { principal: FACTORY.id, profile: 'factory' } })
-    await expect(backend.cancelSchedule(factory, { id: inDev.id }, signal)).resolves.toMatchObject({ canceled: true })
-    const reply = await pong.reply(dev.id, { text: 'a reply' })
-    await backend.delete(factory, { id: reply.id }, signal)
-    expect((await pong.thread(dev.id)).replies[0]).toMatchObject({ id: reply.id, deleted: true })
-    // Where it only reads, 403; where it can't read, as missing as anything else there.
-    await expect(backend.edit(factory, { id: ops.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.delete(factory, { id: ops.id }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.schedule(factory, { re: ops.id, text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.schedule(factory, { channel: 'ops', text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.cancelSchedule(factory, { id: inOps.id }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.edit(factory, { id: secret.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
-    await expect(backend.cancelSchedule(factory, { id: inSecret.id }, signal)).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
-    expect((await pong.thread(ops.id)).message.text).toBe('ops')
-    expect(api.schedules.get(inOps.id)?.state).toBe('pending')
-    // And it lists only the schedules where it reads.
-    expect((await backend.schedules(factory, {}, signal)).schedules.map((s) => s.id)).toEqual([inOps.id, schedule.id])
-    expect((await backend.schedules(factory, { re: secret.id }, signal)).schedules).toEqual([])
-  })
-
-  it('refuses any other caller it serves an edit, delete, schedule, or cancel, which would change what the project wrote for others', async () => {
-    const api = fakeMessageboard()
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
-    const pong = handleOn(api, 'project:prj_pong:production')
-    const dev = await pong.post('dev', { text: 'dev' })
-    const later = await pong.schedule({ re: dev.id }, { text: 'later', in: '1h' })
-    const ada = verified('all')
-    const signal = new AbortController().signal
-    await expect(backend.edit(ada, { id: dev.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.delete(ada, { id: dev.id }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.schedule(ada, { re: dev.id, text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.cancelSchedule(ada, { id: later.id }, signal)).rejects.toMatchObject({ status: 403 })
-    expect((await pong.thread(dev.id)).message).toMatchObject({ text: 'dev', deleted: false })
-    expect([...api.schedules.values()].map((s) => [s.id, s.state])).toEqual([[later.id, 'pending']])
-    // It still posts, reacts, and reads them, as the project.
-    await expect(backend.post(ada, { re: dev.id, text: 'a reply' } as never, signal)).resolves.toMatchObject({ message: { by: { profile: 'ada' } } })
-    expect((await backend.schedules(ada, {}, signal)).schedules.map((s) => s.id)).toEqual([later.id])
-  })
-
-  it("runs board()'s middleware on an edit by a caller that is the project, and refuses anyone else's before it", async () => {
+  it("runs board()'s middleware on its own code's edit", async () => {
     const api = fakeMessageboard()
     const screened: string[] = []
-    const { via } = gateway(api, [
+    const pong = pongBoard(api, [
       async ({ write, next }) => {
         screened.push(`${write.kind} ${write.text}`)
         await next({ text: write.text.toUpperCase() })
       },
     ])
-    const factory = via('factory')
-    const { id } = await factory.post('dev', { text: 'hello' })
-    await factory.edit(id, 'edited')
-    await expect(via('ada').edit(id, 'sneaky')).rejects.toMatchObject({ status: 403 })
+    const { id } = await pong.post('dev', { text: 'hello' })
+    await pong.edit(id, 'edited')
     expect(screened).toEqual(['post hello', 'edit edited'])
-    expect((await factory.thread(id)).message.text).toBe('EDITED')
+    expect((await pong.thread(id)).message.text).toBe('EDITED')
   })
 
   it("screens a schedule's message through board()'s middleware when it's made, since Vercel's API posts its sends", async () => {
     const api = fakeMessageboard()
     const screened: string[] = []
-    const { pong, via } = gateway(api, [
+    const pong = pongBoard(api, [
       async ({ write, respond, next }) => {
         screened.push(`${write.kind} ${write.channel} ${write.text}`)
         // As the factory's memory judge does: a note it rejects never lands.
@@ -764,34 +868,457 @@ describe('vercel()', () => {
     ])
     const root = await pong.post('dev', { text: 'root' })
     const own = await pong.schedule({ re: root.id }, { text: 'check in', in: '1h' })
-    const agent = await via('factory').schedule({ re: root.id }, { text: 'check later', in: '2h' })
+    const agent = await pong.as('claude').schedule({ re: root.id }, { text: 'check later', in: '2h' })
     expect([own.id, agent.id].map((id) => api.schedules.get(id)?.text)).toEqual(['CHECK IN', 'CHECK LATER'])
-    await expect(via('factory').schedule('memory/notes', { text: 'remember this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
+    await expect(pong.as('claude').schedule('memory/notes', { text: 'remember this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
     await expect(pong.schedule('memory/notes', { text: 'and this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
     expect(api.schedules.size).toBe(2)
     expect(screened).toEqual(['post dev root', 'post dev check in', 'post dev check later', 'post memory/notes remember this', 'post memory/notes and this'])
   })
 
-  it('refuses watchers for a caller it serves, which would replace the deployment\'s own', async () => {
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
-    const signal = new AbortController().signal
-    await expect(backend.register(verified('all'), { url: null, watch: { w: { tail: 'general' } } } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.matches(verified('all'), {}, signal)).rejects.toMatchObject({ status: 403 })
+  it("answers the API's own sync refusals with the board's codes", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const ping = handleOn(api, 'project:prj_ping:production')
+    const julian = handleOn(api)
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'linear:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const event = { kind: 'message' as const, channel: 'linear:C1', thread: 'linear:C1:1', subthread: null, message: '1', isRoot: true, text: 'hi', context: null, author }
+    await expect(pong.inboxPush('slack', [{ id: 'e1', event, raw: null }])).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    await expect(ping.syncImport({ op: 'seen', author: { ...author, id: 'slack:user:U1' } })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    await expect(julian.register({ url: null, watch: {}, sync: [{ key: 'linear', platform: 'linear' }] })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    // A conflict or a write too big, on sync's routes and nowhere else.
+    const refusing = (path: RegExp, status: number, code: string) =>
+      handleOn({ ...api, fetch: async (input: RequestInfo | URL, init?: RequestInit) => (path.test(new URL(new Request(input, init).url).pathname) ? Response.json({ error: { code, message: code } }, { status }) : api.fetch(input, init)) }, 'project:prj_pong:production')
+    const origin = { thread: 'slack:C1:1', subthread: null, message: '1', context: null }
+    await expect(refusing(/\/sync\/imports$/, 413, 'mutation_too_large').syncImport({ op: 'post', author: { ...author, id: 'slack:user:U1' }, from: 'slack', channel: 'general', text: 'hi', origin })).rejects.toMatchObject({ status: 413, code: 'too_large' })
+    await expect(refusing(/\/sync\/receipts$/, 409, 'operation_conflict').syncReceipt({ kind: 'thread', message: 'msg_00000000-0000-0000-0000-000000000000_1', target: 'slack:C1', targetKind: 'channel', cause: 'request' })).rejects.toMatchObject({ status: 409, code: 'conflict' })
+    await expect(refusing(/\/threads$/, 403, 'foreign_author').post('general', { text: 'hi' })).rejects.toMatchObject({ status: 403, code: 'foreign_author' })
   })
 
-  it("sends grants and tokens to Vercel's API as the protocol has them, which answers what it doesn't keep yet", async () => {
+  it("names the sync a platform user's edit, delete, or reaction came through as its from, and none for one a sync makes as the user", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const origin = { thread: 'slack:C1:1', subthread: null, message: '1', context: null }
+    const { message } = await pong.syncImport({ op: 'post', author, from: 'slack', channel: 'general', text: 'from slack', origin })
+    await pong.syncImport({ op: 'edit', author, from: 'slack', origin, text: 'edited on slack' })
+    await pong.syncImport({ op: 'react', author, from: 'slack', origin, emoji: 'eyes' })
+    await handleOn(api).react(message!, 'tada')
+    // A sync callback's own write as the user syncs out everywhere, Slack included.
+    await pong.syncImport({ op: 'edit', author, from: null, message: message!, text: 'edited by the sync, as Julián' })
+    await pong.syncImport({ op: 'delete', author, from: 'slack', origin })
+    expect((await drain(pong)).map((match) => [match.event.type, (match.event.payload as { from: string | null }).from])).toEqual([
+      ['message.posted', 'slack'],
+      ['message.edited', 'slack'],
+      ['reaction.added', 'slack'],
+      ['reaction.added', null],
+      ['message.edited', null],
+      ['message.deleted', 'slack'],
+    ])
+  })
+
+  it("syncs Slack through the engine from its first webhook, a file as a link to it on Slack, and a board reply back to Slack", async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'general' })) },
+    })
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    s.served.set('https://files.slack.test/shot.png', png)
+    // The deployment's first request: nothing has registered its sync key with the API yet.
+    const webhook = await pong.fetch(
+      new Request(`${PONG_URL}/webhooks/slack`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'message', threadId: 'slack:C1:300', id: '300', text: 'the export page', user: 'U_ADA',
+          files: [{ name: 'shot.png', mimeType: 'image/png', url: 'https://files.slack.test/shot.png', size: png.byteLength }],
+        }),
+      }),
+    )
+    expect(webhook.status).toBe(200)
+    const julian = handleOn(api)
+    await vi.waitFor(async () => {
+      const { messages } = await julian.messages({ channel: 'general' })
+      expect(messages.map((message) => [message.from, message.text, message.attachments])).toEqual([
+        ['slack', "the export page\n\n📎 [shot.png](https://files.slack.test/shot.png) (7 B) didn't come over: Vercel's board takes no files from sync yet", []],
+      ])
+    })
+    // Vercel's API keeps no file for it.
+    expect(api.requests.filter((request) => request.includes('/attachments'))).toEqual([])
+    const [root] = (await julian.messages({ channel: 'general' })).messages
+    await julian.reply(root!.id, { text: 'looking' })
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([['slack:C1:300', expect.stringContaining('looking')]]))
+  })
+
+  it('reads, joins, and shows typing on Slack through its own sync, which has the app to do it with', async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const web = {
+      conversations: {
+        list: async () => ({}),
+        info: async ({ channel }: { channel: string }) => ({ channel: { id: channel, name: channel === 'C1' ? 'general' : 'random', is_member: channel === 'C1' } }),
+        history: async () => ({ messages: [{ ts: '1700000000.000100', user: 'U_ADA', text: 'deploy is red' }] }),
+        join: async () => ({}),
+      },
+      users: { info: async () => ({ user: { real_name: 'Ada' } }) },
+    }
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter, client: async () => web as never, join: true }, channels({ C1: 'general' })) },
+    })
+    expect(await pong.readSource('slack', 'C1')).toMatchObject({ channel: 'C1', name: 'general', messages: [{ author: 'Ada', text: 'deploy is red' }] })
+    expect(await pong.joinSource('slack', 'C2')).toEqual({ channel: 'C2', name: 'random', joined: true })
+    await pong.fetch(
+      new Request(`${PONG_URL}/webhooks/slack`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'the export page', user: 'U_ADA' }),
+      }),
+    )
+    const [root] = await vi.waitUntil(async () => {
+      const { messages } = await handleOn(api).messages({ channel: 'general' })
+      return messages.length > 0 && messages
+    })
+    await pong.typing(root!.id)
+    expect(s.typing).toEqual(['slack:C1:300'])
+  })
+
+  it("edits a Slack copy when a label its renderer shows changes, a label taken off included", async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
+    const pong = board({
+      backend,
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter }, render(({ message }) => `[${message.labels.state ?? '-'}] ${message.text}`, channels({ C1: 'general' }))) },
+    })
+    await backend.registerWatchers()
+    const wake = () => pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    const julian = handleOn(api)
+    const pr = await julian.post('general', { text: 'PR #1', labels: { state: 'draft' } })
+    await wake()
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '[draft] PR #1' })]))
+    await julian.label(pr.id, { set: { state: 'merged' } })
+    await wake()
+    await vi.waitFor(() => expect(s.edits.map((edit) => edit.text)).toEqual([JSON.stringify({ markdown: '[merged] PR #1' })]))
+    await julian.label(pr.id, { unset: ['state'] })
+    await wake()
+    await vi.waitFor(() => expect(s.edits.map((edit) => edit.text)).toEqual([JSON.stringify({ markdown: '[merged] PR #1' }), JSON.stringify({ markdown: '[-] PR #1' })]))
+  })
+
+  it("hands a thread's new target to the sync that owns its key as thread.synced, about the thread's root", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const ping = handleOn(api, 'project:prj_ping:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    await ping.register({ url: null, watch: {}, sync: [{ key: 'linear', platform: 'linear' }] })
+    const root = await pong.post('general', { text: 'sync me' })
+    await pong.reply(root.id, { text: 'a reply' })
+    await pong.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C1', targetKind: 'channel', cause: 'request' })
+    const synced = (await drain(pong)).filter((match) => match.event.type === 'thread.synced')
+    expect(synced.map((match) => [match.watcher, match.event.message?.id])).toEqual([['@sync', root.id]])
+    const payload = boardEvents['thread.synced'].parse(synced[0]!.event.payload)
+    expect(payload).toMatchObject({ thread: root.thread, target: 'slack:C1', kind: 'channel', cause: 'request', by: { actor: 'vercel:project:prj_pong:production' } })
+    expect((await drain(ping)).filter((match) => match.event.type === 'thread.synced')).toEqual([])
+  })
+
+  it('filters its config watchers by --source, which the API can’t match, and a read by where its messages came from', async () => {
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const run = (watcher: string) => async ({ event }: { event: { message?: { text: string } | null } }) => {
+      ran.push(`${watcher}: ${event.message!.text}`)
+    }
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+      url: 'https://pong.example/api/board',
+      basePath: '/api/board',
+      watch: { imported: { tail: 'general --source slack', run: run('imported') }, written: { tail: 'general --source board', run: run('written') } },
+    })
+    await pong.me()
+    while (!api.registrations.has('vercel:project:prj_pong:production')) await new Promise((resolve) => setTimeout(resolve, 5))
+    const ping = handleOn(api, 'project:prj_ping:production')
+    await ping.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    await ping.syncImport({ op: 'post', author, from: 'slack', channel: 'general', text: 'from slack', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    await handleOn(api).post('general', { text: 'on the board' })
+    await pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST' }))
+    expect(ran.sort()).toEqual(['imported: from slack', 'written: on the board'])
+    const read = async (from: string) => (await handleOn(api).messages({ channel: 'general', from })).messages.map((message) => message.text)
+    expect(await read('slack')).toEqual(['from slack'])
+    expect(await read('board')).toEqual(['on the board'])
+    // A thread read finds the threads with a message from there, as a read of messages does.
+    const threads = async (from: string) => (await handleOn(api).threads({ channel: 'general', from })).threads.map((thread) => thread.message.text)
+    expect(await threads('slack')).toEqual(['from slack'])
+    expect(await threads('board')).toEqual(['on the board'])
+  })
+
+  it("reads one channel's inbox events from as many as the API lists, so another channel's newer ones don't crowd them out", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const pushed = (channel: string, message: string) => ({ id: `${channel}/${message}`, event: { kind: 'message' as const, channel, thread: `${channel}:1`, subthread: null, message, isRoot: true, text: 'hi', context: null, author }, raw: null })
+    await pong.inboxPush('slack', [pushed('slack:C1', '1'), pushed('slack:C2', '1'), pushed('slack:C2', '2')])
+    expect((await pong.inbox('slack', { channel: 'slack:C1', limit: 1 })).map((entry) => entry.id)).toEqual(['slack:C1/1'])
+    expect((await pong.inbox('slack', { limit: 2 })).map((entry) => entry.id)).toEqual(['slack:C2/2', 'slack:C2/1'])
+  })
+
+  it('hashes a registration with its sync entries, as a board on http() does', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const watch = { w: { tail: 'general', when: 'matches' as const } }
+    await pong.register({ url: null, watch })
+    expect(api.registrations.get('vercel:project:prj_pong:production')!.hash).toBe(watchersHash(watch))
+    await pong.register({ url: null, watch, sync: [{ key: 'slack', platform: 'slack' }] })
+    expect(api.registrations.get('vercel:project:prj_pong:production')!.hash).toBe(watchersHash(watch, [{ key: 'slack', platform: 'slack' }]))
+  })
+
+  it("refuses a project it names by name that turns out to be the run's own, after one grant it revokes", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'project', project: 'web', environments: ['production'] }], can: { '*': 'all' } })
+    const before = [...api.grants.keys()]
+    // web's own deployment names web: only the API knows that's prj_web, so the kit asks it with a grant that changes nothing for the run.
+    await expect(conformance(handleOn(api, 'project:prj_web:production'), { principals: { project: 'web', repository: 'acme/api' } })).rejects.toThrow(
+      "principals.project is this run's own project, web (prj_web)",
+    )
+    expect([...api.grants.keys()]).toEqual(before)
+  })
+
+  it("fails a board whose team role lets a viewer post, in the conformance kit's viewer check", async () => {
+    const api = fakeMessageboard()
+    const real = as(api, 'user:u_jb')
+    // The API, but its explain lets the viewer post.
+    const posting: typeof fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const response = await real(request)
+      if (!new URL(request.url).pathname.endsWith('/grants/explain')) return response
+      const text = (await response.text()).replace('"can":["read","react"]', '"can":["read","post","react"]')
+      return new Response(text, { status: response.status, headers: response.headers })
+    }
+    const handle = board({ backend: vercel({ team: 'team_test', api: API, fetch: posting, files: api.files }) })
+    const report = await conformance(handle, { principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com' } })
+    expect(report.checks.find((check) => check.name.startsWith('caps a person by their team role'))).toMatchObject({
+      status: 'failed',
+      detail: 'what a viewer may do with a grant of all: expected read, and neither post nor manage, got ["read","post","react"]',
+    })
+  })
+
+  it('keeps an app run in while it checks apps, so it revokes all it made', async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { '*': 'all' } })
+    const before = [...api.grants.keys()]
+    const report = await conformance(handleOn(api, 'app:oac_2'), { principals: { project: 'prj_board', repository: 'acme/api', app: 'ship' } })
+    expect(report.checks.find((check) => check.name.startsWith('names an app'))).toMatchObject({ status: 'passed' })
+    expect([...api.grants.keys()]).toEqual(before)
+  })
+
+  it("gives back what Vercel's API refuses under the grant rules as the board's, grant_forbidden", async () => {
+    const pong = handleOn(fakeMessageboard(), 'project:prj_pong:production')
+    await expect(pong.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', origin: 'board' })
+    await expect(pong.createGrant({ principals: [{ kind: 'everyone' }], can: { 'dev/': [] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', message: expect.stringContaining('takes manage') })
+  })
+
+  it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)
-    await expect(jb.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
-    await expect(jb.createToken({ name: 'widget', can: { 'feedback/': ['post'] } })).rejects.toMatchObject({ status: 404 })
-    expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/brd_test/grants', 'POST /boards/brd_test/tokens']))
+    expect(await jb.grants()).toEqual([
+      { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: true, by: null, at: null },
+      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+      { id: 'g3', principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+    ])
+    const { grant } = await jb.createGrant({
+      principals: [
+        { kind: 'user', email: 'ada@acme.com' },
+        { kind: 'project', project: 'web', environments: ['production'] },
+        { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' },
+        { kind: 'app', app: 'ship' },
+      ],
+      can: { 'security/': 'all' },
+    })
+    expect(grant.principals).toEqual([
+      { kind: 'user', userId: 'u_ada', email: 'ada@acme.com' },
+      { kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production'], teamId: 'team_test' },
+      { kind: 'github', repositoryId: '700001', repository: 'acme/web', workflow: 'ci.yml' },
+      { kind: 'app', clientId: 'oac_1', name: 'ship' },
+    ])
+    // A project it names already gets the new environments.
+    const joined = await jb.updateGrant(grant.id, { add: [{ kind: 'project', project: 'prj_web', environments: ['preview'] }] })
+    expect(joined.grant.principals[1]).toEqual({ kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production', 'preview'], teamId: 'team_test' })
+    const updated = await jb.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }], remove: [{ kind: 'project', project: 'web' }, { kind: 'app', app: 'oac_1' }] })
+    expect(updated.grant.principals.map((principal) => ('userId' in principal ? principal.userId : principal.kind))).toEqual(['u_ada', 'github', 'u_bob'])
+    expect(await jb.explain('security/incidents', { user: 'bob@acme.com' })).toEqual({
+      channel: 'security/incidents',
+      pattern: 'security/',
+      over: ['*'],
+      level: 'principal',
+      grants: [updated.grant],
+      rule: null,
+      capped: null,
+      can: ['read', 'post', 'react', 'label', 'sync', 'manage'],
+    })
+    // A viewer's role caps what g1 gives them.
+    expect(await jb.explain('dev', { user: 'val@acme.com' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g1' }], capped: 'viewer', can: ['read', 'react'] })
+    // An app on the team, by its slug: g3 lets every one in.
+    expect(await jb.explain('dev', { app: 'ship' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g3' }], can: ['read', 'post', 'react', 'label'] })
+    // Its grant lets the run in, and says nothing of ci.
+    expect(await jb.explain('ci', { github: 'acme/web', workflow: 'ci.yml' })).toMatchObject({ pattern: null, level: null, grants: [], can: [] })
+    await jb.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })
+    expect(await jb.explain('ci', { oidc: 'https://gitlab.com', claims: { project_id: '42' } })).toMatchObject({ pattern: 'ci/', level: 'principal', can: ['post'] })
+    expect((await jb.revokeGrant(grant.id)).revoked).toBe(true)
+    expect(api.requests).toEqual(
+      expect.arrayContaining([
+        'POST /boards/brd_test/grants',
+        `PATCH /boards/brd_test/grants/${grant.id}`,
+        'GET /boards/brd_test/grants/explain',
+        `POST /boards/brd_test/grants/${grant.id}/revoke`,
+      ]),
+    )
   })
 
-  it("refuses a caller it serves grants and tokens, which would act as whoever its credentials are", async () => {
-    // A person's credentials, which Vercel's API lets change grants: only the board's own code may use them for it.
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })
-    const signal = new AbortController().signal
-    await expect(backend.createGrant(verified('all'), { issuer: 'vercel', claims: { project_id: 'prj_x', environment: 'production' } }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 403 })
+  it("gives back grants' and tokens' times as the protocol has them, though the API answers milliseconds", async () => {
+    const api = fakeMessageboard()
+    const jb = handleOn(api)
+    const before = Date.now()
+    const { grant } = await jb.createGrant({ principals: [{ kind: 'user', email: 'ada@acme.com' }], can: { 'ci/': ['read'] } })
+    expect(Date.parse(grant.at!)).toBeGreaterThanOrEqual(before)
+    expect(grant.at).toBe(new Date(Date.parse(grant.at!)).toISOString())
+    expect((await jb.grants()).find((listed) => listed.id === grant.id)?.at).toBe(grant.at)
+    expect((await jb.explain('ci', { user: 'ada@acme.com' })).grants).toMatchObject([{ id: grant.id, at: grant.at }])
+    expect((await jb.updateGrant(grant.id, { can: { 'ci/': ['read', 'post'] } })).grant.at).toMatch(/^\d{4}-\d\d-\d\dT/)
+    const { token } = await jb.createToken({ name: 'ci', can: { 'ci/': ['post'] }, expires: '1d' })
+    expect(token.at).toBe(new Date(Date.parse(token.at)).toISOString())
+    expect(Date.parse(token.expiresAt) - Date.parse(token.at)).toBe(86_400_000)
+    expect(await jb.tokens()).toMatchObject([{ id: token.id, at: token.at, expiresAt: token.expiresAt }])
+  })
+})
+
+describe("board tokens on Vercel's API", () => {
+  /** A handle on a board that sends `secret`, by the board's ID, as a board token reaches its board. */
+  const holding = (api: ReturnType<typeof fakeMessageboard>, secret: string, id = 'brd_test') =>
+    board({ backend: vercel({ team: 'team_test', api: API, board: id, fetch: as(api, secret), files: api.files }) })
+  /** What the API answers to a request vercel() never makes: a replayed operation ID, or a scope board's schema refuses first. */
+  const raw = async (api: ReturnType<typeof fakeMessageboard>, bearer: string, method: string, path: string, body?: unknown) => {
+    const response = await as(api, bearer)(`${API}/v1/messageboard${path}?teamId=team_test`, { method, headers: { 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })
+    return { status: response.status, body: await response.json() }
+  }
+
+  it("runs the conformance kit on a board token, and skips watchers, which a board token can't register yet", async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api).createToken({ name: 'conformance' })
+    const report = await conformance(holding(api, secret), { withToken: (minted) => holding(api, minted) })
+    expect(report.checks.filter((check) => check.group === 'watchers').map(({ status, detail }) => ({ status, detail }))).toEqual([
+      { status: 'skipped', detail: "a board token can't register watchers yet" },
+      { status: 'skipped', detail: "a board token can't register watchers yet" },
+    ])
+    expect(report.checks.filter((check) => check.group === 'core' || check.group === 'tokens').every((check) => check.status === 'passed')).toBe(true)
+  })
+
+  it('shows a secret once, sends it as it is, and answers a retried mint 409 token_already_minted', async () => {
+    const api = fakeMessageboard()
+    const ada = handleOn(api, 'user:u_ada')
+    const { secret } = await ada.createToken({ name: 'ci' })
+    expect(JSON.stringify(await ada.tokens())).not.toContain(secret)
+    expect((await holding(api, secret).me()).principal).toBe('vercel:user:u_ada')
+    const mint = { operationId: 'op_1', name: 'ci' }
+    expect((await raw(api, 'user:u_ada', 'POST', '/boards/brd_test/tokens', mint)).status).toBe(200)
+    expect(await raw(api, 'user:u_ada', 'POST', '/boards/brd_test/tokens', mint)).toMatchObject({ status: 409, body: { error: { code: 'token_already_minted' } } })
+  })
+
+  it("answers 401 invalid_token for a token that's unknown, revoked, expired, or whose person left the team", async () => {
+    const api = fakeMessageboard()
+    const ada = handleOn(api, 'user:u_ada')
+    const [revoked, expired, left] = await Promise.all(['revoked', 'expired', 'left'].map((name) => ada.createToken({ name })))
+    await ada.revokeToken(revoked!.token.id)
+    api.tokens.get(expired!.token.id)!.expiresAt = Date.now() - 1
+    expect((await holding(api, left!.secret).me()).principal).toBe('vercel:user:u_ada')
+    api.leave('u_ada')
+    for (const secret of ['not-a-token', revoked!.secret, expired!.secret, left!.secret])
+      await expect(holding(api, secret).me()).rejects.toMatchObject({ status: 401, code: 'invalid_token' })
+  })
+
+  it("answers 404 board_not_found on a board that isn't the token's, and says plainly that it reaches no team route", async () => {
+    const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+    const { secret } = await handleOn(api).createToken({ name: 'ci' })
+    await expect(holding(api, secret, 'brd_sec').messages({ channel: 'dev' })).rejects.toMatchObject({ status: 404, code: 'board_not_found' })
+    expect(await raw(api, secret, 'GET', '/boards')).toMatchObject({ status: 403, body: { error: { code: 'board_token_scope' } } })
+    // Finding the team's board is a team route.
+    const unnamed = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, secret), files: api.files }) })
+    await expect(unnamed.messages({ channel: 'dev' })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_token_scope',
+      origin: 'handle',
+      message: 'a board token reaches only its own board, by its ID.',
+    })
+  })
+
+  it('says what a token may do, and until when', async () => {
+    const api = fakeMessageboard()
+    const { token, secret } = await handleOn(api).createToken({ name: 'ci', can: { 'dev/': ['read'] }, expires: '1h' })
+    expect(await holding(api, secret).me()).toMatchObject({ can: { 'dev/': ['read'] }, expiresAt: token.expiresAt })
+    expect(Date.parse(token.expiresAt) - Date.parse(token.at)).toBe(3_600_000)
+  })
+
+  it("says plainly that a board token can't register watchers yet", async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api).createToken({ name: 'ci' })
+    await expect(holding(api, secret).register({ url: null, watch: { open: { tail: 'dev/' } } })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_token_unsupported',
+      origin: 'handle',
+      message: "a board token can't register watchers yet.",
+    })
+    expect(api.registrations.size).toBe(0)
+  })
+
+  it("mints for people, deployments, and tokens, and answers 403 unsupported_principal to apps and development tokens that carry a person", async () => {
+    const api = fakeMessageboard()
+    const { token, secret } = await handleOn(api).createToken({ name: 'ci' })
+    expect((await holding(api, secret).createToken({ name: 'child' })).token.parent).toBe(token.id)
+    expect((await handleOn(api, 'project:prj_pong:production').createToken({ name: 'deploy' })).token.by).toBe('vercel:project:prj_pong:production')
+    for (const principal of ['app:oac_1', 'user:u_jb:development'])
+      await expect(handleOn(api, principal).createToken({ name: 'ci' })).rejects.toMatchObject({ status: 403, code: 'unsupported_principal' })
+  })
+
+  it("holds a token to its can in grants, as its minter's grants and role are", async () => {
+    const api = fakeMessageboard()
+    // Ada is a member, who manages everywhere; her token only reads, and posts in ci/.
+    const { secret } = await handleOn(api, 'user:u_ada').createToken({ name: 'ci', can: { '*': ['read'], 'ci/': ['read', 'post'] } })
+    const token = holding(api, secret)
+    await expect(token.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    await expect(token.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    expect((await handleOn(api, 'user:u_ada').createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).grant.id).toEqual(expect.any(String))
+    // Nor grant over a spot it's kept out of.
+    const kept = holding(api, (await handleOn(api, 'user:u_ada').createToken({ name: 'ci', can: { '*': 'all', 'ci/secret/': [] } })).secret)
+    await expect(kept.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    expect((await kept.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/open/': ['read'] } })).grant.id).toEqual(expect.any(String))
+    // An owner's token too.
+    const owners = holding(api, (await handleOn(api, 'user:u_jb').createToken({ name: 'ci', can: { '*': ['read'] } })).secret)
+    await expect(owners.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+  })
+
+  it('lists and revokes, for a token, only itself and the tokens made from it, and answers a bad scope 400 invalid_scope', async () => {
+    const api = fakeMessageboard()
+    const ada = handleOn(api, 'user:u_ada')
+    const parent = await ada.createToken({ name: 'parent' })
+    const sibling = await ada.createToken({ name: 'sibling' })
+    const child = await holding(api, parent.secret).createToken({ name: 'child' })
+    const ids = async (handle: ReturnType<typeof board>) => (await handle.tokens()).map((listed) => listed.id).sort()
+    expect(await ids(holding(api, parent.secret))).toEqual([parent.token.id, child.token.id].sort())
+    expect(await ids(holding(api, child.secret))).toEqual([child.token.id])
+    await expect(holding(api, parent.secret).revokeToken(sibling.token.id)).rejects.toMatchObject({ status: 404, code: 'token_not_found' })
+    expect(await holding(api, parent.secret).revokeToken(child.token.id)).toEqual({ revoked: true })
+    // Ada sees what acts as her.
+    expect(await ids(ada)).toEqual([parent.token.id, sibling.token.id].sort())
+    expect(await raw(api, 'user:u_ada', 'POST', '/boards/brd_test/tokens', { operationId: 'op_2', name: 'ci', can: { 'dev/': ['fly'] } })).toMatchObject({ status: 400, body: { error: { code: 'invalid_scope' } } })
   })
 })

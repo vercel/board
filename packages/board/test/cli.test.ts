@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -87,13 +86,14 @@ describe('cli', () => {
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
-    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have.
+    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have, or a
+    // BOARD_TOKEN, which it would send there: this run has neither.
     const outside = await tmp('board-vercel-')
     await mkdir(join(outside, '.vercel'))
     await writeFile(join(outside, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_x', projectId: 'prj_x' }))
     const teamBoard = /^error: You're not logged in to Vercel\./
     const noBoard = /^error: No board to use\./
-    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
+    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, BOARD_TOKEN: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
     const checkout = join(outside, 'repo')
     await mkdir(join(checkout, '.git', 'x'), { recursive: true })
     await mkdir(join(checkout, 'src'))
@@ -512,13 +512,13 @@ describe('cli', () => {
   })
 
   it('says what a token can do when it is less than everything', async () => {
-    const board = await serve(
-      testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })] }).fetch,
-    )
+    const granted = testBoard()
+    await granted.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
+    const board = await serve(granted.fetch)
     try {
       const { stdout, code } = await vb(['whoami'], { BOARD_URL: `${board.origin}/api/board`, BOARD_TOKEN: await workflowToken() })
       expect(code).toBe(0)
-      expect(stdout).toContain('basehub-ai/www (github:repo:123456)\n')
+      expect(stdout).toContain('acme/web (github:repo:123456)\n')
       expect(stdout).toContain('source  BOARD_TOKEN\n')
       expect(stdout).toMatch(/\ncan     ci\/        read post\n        ci\/secret  nothing\n        feedback   post\n$/)
       // --json carries the same facts.
@@ -723,18 +723,26 @@ describe('cli', () => {
       expect(run.stdout).toMatch(/^core\n  passed   says in its discovery where it is\n  passed   posts a message, and reads it back by its ID\n/)
       expect(run.stdout).toContain('\n\nschedules\n  passed   schedules a reply')
       expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
-      expect(run.stdout).toMatch(/\n\n\d+ passed\n$/)
+      // A board without team roles caps no one, no run can check a member shut out under a lock, and grants across teams aren't specified yet.
+      expect(run.stdout).toMatch(/\n\n\d+ passed, 4 skipped\n$/)
       expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'], as)).stdout)).toMatchObject({ ok: true })
     } finally {
       await scheduled.close()
     }
     // Without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
-    const partial = await vb(['conformance'])
-    expect(partial.code).toBe(0)
-    expect(partial.stdout).toContain(
-      '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
-    )
-    expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    const unscheduled = await serve(testBoard({ url: undefined }).fetch)
+    const plain = `${unscheduled.origin}/api/board`
+    try {
+      const partial = await vb(['conformance'], { BOARD_URL: plain, BOARD_TOKEN: await personToken('u_julian', plain) })
+      expect(partial.code).toBe(0)
+      expect(partial.stdout).toContain(
+        '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler, so it can\'t send later\n',
+      )
+      // Schedules, and the three grants checks a board without team roles skips.
+      expect(partial.stdout).toMatch(/\n\n\d+ passed, 6 skipped\n$/)
+    } finally {
+      await unscheduled.close()
+    }
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
   })
 
@@ -791,11 +799,8 @@ describe('cli', () => {
     expect(after.stderr).not.toContain("vb post dev --bogus -- '--bogus thing'")
   })
 
-  it('says `vb stuck` is gone, and where its dead letters are', async () => {
-    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({
-      code: 2,
-      stderr: "error: `vb stuck` is gone. A board on a2() keeps its dead letters in A2, on the backend's `servers`.\n",
-    })
+  it('says `vb stuck` is gone', async () => {
+    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({ code: 2, stderr: 'error: `vb stuck` is gone.\n' })
   })
 
   it('follows a channel until Ctrl-C, and exits 130 for it, as a cancel', async () => {

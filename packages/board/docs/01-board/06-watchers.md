@@ -7,38 +7,31 @@ description: A watcher is a `vb tail` the board runs for you, durably, with noth
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }), // retries on a clock: see How it runs
-})
 
 const team = board({
-  backend,
-  // sync as in Sync
   watch: {
     triage: {
-      tail: 'firehose --source slack',
+      tail: 'support',
       run: async ({ event, board }) => {
         if (event.type === 'message.posted' && event.message?.re === null)
-          await board.reply(event.message.id, 'Thanks! Tracking it.') // synced to the Slack thread
+          await board.reply(event.message.id, 'Thanks! Tracking it.')
       },
     },
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 `tail` is what you'd type after `vb tail`. `run` gets each event that tail
 would print, exactly as `vb tail --json` prints it. Try it in a terminal first:
 
 ```bash
-vb tail firehose --source slack --json
+vb tail support --json
 ```
+
+That's your team's board in Vercel's API. Vercel's API matches each event
+against the tails, and wakes this route when one matches, so `run` happens in
+this deployment: see [How it runs](#how-it-runs).
 
 ## The expression
 
@@ -137,10 +130,12 @@ runs.
 ## Writing back
 
 `board` is the board's [handle](./01-mounting.md#the-handle), acting as the
-watcher, with no HTTP and no token.
+watcher.
 
-- **It writes as the watcher,** `board:watch:<id>`, with the id as its handle.
-  Its writes sync like anyone's.
+- **It writes as the watcher.** On Vercel's board, that's this deployment
+  with the watcher's ID as its profile:
+  `vercel:project:prj_v0:production+triage`. On `local()`, it's
+  `board:watch:<id>`, with the ID as its handle. Its writes sync like anyone's.
 - **Its posts and replies get IDs derived from the match,** so a retried `run`
   doesn't post twice, as long as it writes in the same order. Writes made in
   parallel (with `Promise.all`) need an explicit `id`, which is the watcher's
@@ -154,107 +149,65 @@ watcher, with no HTTP and no token.
 
 ## How it runs
 
-Each board event is matched against every watcher by one A2 consumer,
-`board-watchers`, on the thread's lane. A match is appended to the watcher's
-own session (`watch:<id>`, outside the board log), and `run` happens there, on
-the thread's lane.
+Where the match happens depends on the board:
 
-- **A watcher sees a thread's events in order,** and threads run in parallel.
+- **On Vercel's board,** Vercel's API keeps the log and matches the tails,
+  and wakes this deployment when one matches. It pulls what matched with its
+  own credentials and runs it here: see [Woken by the board](#woken-by-the-board).
+  With `BOARD_URL` set, the board at that URL does the same.
+- **On [`local()`](./10-local.md),** everything happens in this process. Each
+  event is matched against every watcher on its thread's lane, and `run`
+  happens on that lane too.
+
+Either way:
+
 - **Each watcher fails on its own.** A `run` that throws is tried again after
-  a wait (1 second, doubling to 30). After 5 tries it's logged and recorded as
-  `watch.failed`, and the thread goes on. Runs cut short (a timeout, out of
-  memory) count too, and ones that keep getting cut short are given up on at
-  the 10th try. Writes, other threads, and other watchers keep flowing.
-- **Retries need the scheduler,** as sync's do. Without one, a match still
-  runs in the request that wrote, but a retry waits for the watcher's next
-  match, and reads never wake it. That suits a tool, not a production board:
-  see [Without a scheduler](./01-mounting.md#without-a-scheduler) and
-  [the scheduler route](./01-mounting.md#the-scheduler-route).
+  a wait. Writes, other threads, and other watchers keep flowing.
 - **A watcher removed from config** skips the matches it left behind.
+
+On `local()`, a watcher sees a thread's events in order, and threads run in
+parallel. A `run` that throws waits 1 second, doubling to 30, and after 5
+tries it's logged and recorded as `watch.failed`, and the thread goes on. Runs
+cut short (a timeout, out of memory) count as tries too, and ones that keep
+getting cut short are given up on at the 10th. Its retries wait on timers in
+the process, so a restart drops the ones pending.
 
 The [triage guide](../03-guides/04-triage.md) builds a full triage agent, first
 as a `tail` loop and then as a watcher.
 
-## On a board on `http()`
+## Woken by the board
 
-A board on [`http()`](./01-mounting.md#backends) runs its watchers too. The
-board it uses keeps the log and matches the tails, and this one runs `run`:
+On Vercel's board, Vercel's API matches the tails, and the route at the top of
+this page runs `run`:
 
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-
-const team = board({
-  backend: http('https://board.example.com/api/board'),
-  watch: {
-    fix: {
-      tail: 'feedback --label kind=bug',
-      run: async ({ event, board }) => {
-        if (event.type !== 'message.posted' || event.message?.re !== null) return
-        await board.reply(event.message.id, 'on it')
-        // await startAgent(event.message)   // your code, in this project
-      },
-    },
-  },
-})
-export const GET = team.fetch, POST = team.fetch
-```
-
-- **It registers its watchers' tails there,** as itself: on its first use if
-  it knows its URL (a call from its handle, or a request), when anyone sends
-  `POST /watchers` to it, and when a wake-up shows the other board holds an
-  older set. Nothing happens before that: creating the board does no I/O. On Vercel, its URL is its
-  production domain, or a preview's own; a request's `Host` never counts. A
-  registration holds at most 32 watchers, and needs `read` somewhere. A
-  token narrowed with `x-board-scope` can't register, pull, or ack (403): the
-  registration is its project's, which a narrowed pull would take matches
-  from.
-- **A match wakes it with nothing in the wake-up:** a `POST <url>/wake` with
-  no event. It then pulls what matched with its own credentials, runs it, and
+- **It registers its watchers' tails with Vercel's API,** as this deployment:
+  on its first use if it knows its URL (a call from its handle, or a
+  request), when anyone sends `POST /watchers` to it, and when a wake-up shows
+  the API holds an older set. Nothing happens before that: creating the board
+  does no I/O. On Vercel, its URL is its production domain, or a preview's
+  own; a request's `Host` never counts. A registration holds at most 32
+  watchers.
+- **From production, or a preview of a branch, it registers its mount path**
+  on its own project, which it names with that branch, and Vercel's API wakes
+  it through Deployment Protection with nothing to set up. Anywhere else
+  (development, a custom environment, a preview made with `vercel deploy`),
+  it registers its URL.
+- **A match wakes it with nothing in the wake-up:** a `POST /wake` with no
+  event. It then pulls what matched with its own credentials, runs it, and
   acks it, until nothing's left, so a burst of matches wakes it once. It
   answers when that's done, or after 2 seconds while it keeps going, so
   whoever woke it never waits on slow watchers. A forged wake-up costs it one
   pull that finds nothing.
-- **A wake-up that doesn't get there is tried again** a minute or so on. While
-  they keep failing, the wait doubles, up to an hour, and the other board logs
-  the first failure and the start of the back-off. It starts over when this
-  board answers one, pulls, or registers. Its matches wait either way.
-- **It sees what its deployment may read** on the other board, as that
-  board's `access` says at each event it matches and again when it's pulled.
+- **A wake-up at a URL carries no credential,** so behind Deployment
+  Protection the project lets `POST /wake` through itself: a production domain
+  left public (Standard Protection), or a Deployment Protection Exception for
+  the domain it registers. A wake-up reveals nothing and is trusted for
+  nothing: it only makes this board pull with its own credentials.
+- **A board without an `https` URL pulls on its own** from its first use,
+  each pull held open until something matches: a dev server, say.
+- **It sees what its deployment may read** on the team's board.
 - **Its writes are by the deployment, with the watcher's ID as its profile:**
   `vercel:project:prj_v0:production+fix`, which never wakes that watcher. IDs
   are profile names, so they start with a letter and use up to 32 letters,
   numbers, and hyphens. Its posts get IDs derived from the match, so a
   retried `run` doesn't post twice.
-- **A thread's matches come one at a time, in order,** and threads run in
-  parallel. A pulled match is leased for 5 minutes. A `run` that throws is
-  tried again after a wait (1 second, doubling to 30), and a lease that runs
-  out counts as a try, noticed within a minute. After 5 tries it's recorded as
-  `watch.failed`, and the thread goes on.
-- **A board without an `https` URL pulls on its own** from its first use,
-  each pull held open until something matches: a dev server, say.
-- **A wake-up carries no credential,** so behind Deployment Protection this
-  project lets `POST /wake` through itself: a production domain left public
-  (Standard Protection), or a Deployment Protection Exception for the domain
-  it registers. A wake-up reveals nothing and is trusted for nothing: it only
-  makes this board pull with its own credentials. One that Deployment
-  Protection stops answers 401, and the other board tries less often until
-  this board pulls or registers.
-- **On a board whose discovery says `wake_by_path`,** this board registers
-  its mount path on its own project instead of its URL, and its wake-ups get
-  through Deployment Protection with nothing to set up. Only on Vercel, from
-  production or a preview of a branch, which it names: the other board finds
-  the deployment from this project's token and that branch. Anywhere else
-  (development, a custom environment, a preview made with `vercel deploy`), it
-  registers its URL.
-- **Retries need the other board's scheduler,** as its own watchers do.
-  Without one there, nothing waits on a clock: a retry, a lease that ran out,
-  and a wake-up that didn't get there (once its back-off is over) each wait
-  for the next match to wake this board. A board that pulls on its own
-  doesn't wait.
-- **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
-  same way,** with its entries in its registration (`sync: [{ key, platform }]`):
-  it gets every post, change, and thread sync in the channels its deployment
-  may `sync`, as matches of watcher `@sync`, and runs them here. The other
-  board lists those entries in its discovery, and refuses a key its own sync
-  has (409 `sync_key_taken`).

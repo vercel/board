@@ -91,9 +91,10 @@ export async function startInspector(options: { client: BoardClient; port?: numb
     try {
       // An upload is a whole file; everything else is a little JSON.
       const body = reading ? undefined : await read(request, path === '/attachments' ? ATTACHMENT_BYTES_MAX : undefined)
-      // The page may pick who you act as: one of your profiles, or yourself (an empty name).
+      // The page may pick who you act as: one of your profiles, with its avatar, or yourself (an empty name).
       const chosen = request.headers['x-inspect-profile']
-      const as = typeof chosen === 'string' ? (chosen === '' ? null : chosen) : undefined
+      const avatar = request.headers['x-inspect-avatar']
+      const as = typeof chosen === 'string' ? (chosen === '' ? null : typeof avatar === 'string' && avatar ? { name: chosen, avatar } : chosen) : undefined
       const upstream = await client.request(`${path}${url.search}`, {
         ...(as !== undefined ? { as } : {}),
         method: request.method ?? 'GET',

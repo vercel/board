@@ -4,13 +4,12 @@ import { sqlTables } from './sql.ts'
 import type { BoardStore } from './types.ts'
 
 /**
- * A board in one SQLite file, A2's log and board's tables side by side: `a2()`'s
- * store when it's given none, for development, `vb serve`, and a single
- * long-running server. It creates its tables when it opens, and a serverless
- * function, whose files are read-only, can't open it.
+ * A local board in one SQLite file, its log and board's tables side by side. It
+ * creates its tables when it opens, and a serverless function, whose files are
+ * read-only, can't open it.
  */
-export function sqlite(options: { path?: string } = {}): BoardStore {
-  const path = options.path ?? '.a2/dev.db'
+export function sqlite(options: { path: string }): BoardStore {
+  const { path } = options
   // A2's store first: it creates the file and switches it to WAL, which the second handle needs.
   const log = a2Sqlite({ path })
   let tables: ReturnType<typeof sqlTables>

@@ -1,6 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
-import { vercelProject } from '../src/access/index.ts'
 import { http as httpBackend } from '../src/backend-http/index.ts'
 import { memoryBlob, type BlobStore } from '../src/server/blob.ts'
 import { slack } from '../src/sync/slack.ts'
@@ -48,7 +47,9 @@ async function signingBlob(): Promise<BlobStore> {
 
 /** A project's board on http(), syncing Slack, using a team's board on a2() behind Vercel Functions' request limit. */
 async function setup(blob: BlobStore) {
-  const team = testBoard({ url: TEAM_URL, blob, access: [vercelProject({ project: 'prj_support', can: 'all' })] })
+  const team = testBoard({ url: TEAM_URL, blob })
+  // The support project's production deployments may do everything there.
+  await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
   const limited = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     const body = request.method === 'GET' ? null : await request.clone().arrayBuffer()

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { routes, type RouteName } from '../src/api/routes.ts'
-import { githubActions } from '../src/access/index.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -14,7 +13,7 @@ type Fixture = {
   secret: { root: number; reply: number; schedule: number; file: string }
   open: { root: number; schedule: number }
 }
-type Call = { method: 'GET' | 'POST'; path: string; body?: unknown; status: number; check?: (body: any) => void }
+type Call = { method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown; status: number; check?: (body: any) => void }
 type Walk = 'public' | ((fixture: Fixture) => Call[])
 
 const SLACK_USER = { id: 'slack:user:U1', handle: 'eve', name: 'Eve', avatar: null, isBot: false }
@@ -100,9 +99,19 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/${secret.schedule}/cancel`, status: 404 },
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
-  // Who the board trusts is its bookkeeping: manage in every channel.
+  // Listing grants takes manage at *, and changing one manage at each pattern it names: g1 names *.
   grants: () => [{ method: 'GET', path: '/grants', status: 403 }],
-  createGrant: () => [{ method: 'POST', path: '/grants', body: { issuer: 'github', claims: { repository: 'acme/web' }, can: 'all' }, status: 403 }],
+  createGrant: () => [
+    { method: 'POST', path: '/grants', body: { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }, status: 403 },
+    { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }, status: 403 },
+  ],
+  updateGrant: () => [{ method: 'PATCH', path: '/grants/g1', body: { can: { '*': 'all' } }, status: 403 }],
+  // What it may do itself, anywhere, without the grants that decide it; anyone else's only with manage at *.
+  explain: () => [
+    { method: 'GET', path: '/grants/explain?channel=secret', status: 200, check: (body) => expect(body).toMatchObject({ channel: 'secret', can: [], grants: [] }) },
+    { method: 'GET', path: '/grants/explain?channel=open', status: 200, check: (body) => expect(body).toMatchObject({ can: ['read'], grants: [] }) },
+    { method: 'GET', path: '/grants/explain?channel=open&user=u_julian', status: 403 },
+  ],
   revokeGrant: () => [{ method: 'POST', path: '/grants/g1/revoke', status: 403 }],
   // Anyone mints a token, which acts as them: it can't do more than they can.
   createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],
@@ -173,10 +182,8 @@ const WALK: Record<RouteName, Walk> = {
 }
 
 async function setup() {
-  const board = testBoard({
-    scheduler: fakeQueue().scheduler,
-    access: [githubActions({ repository: 'basehub-ai/www', can: { open: ['read'] } })],
-  })
+  const board = testBoard({ scheduler: fakeQueue().scheduler })
+  await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
   const keeper = caller(board.fetch, await personToken('u_keeper'), { 'x-board-handle': 'keeper' })
   const host = caller(board.fetch, await personToken('u_host'), { 'x-board-handle': 'host' })
   const upload = await board.fetch(
@@ -193,6 +200,8 @@ async function setup() {
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id
   // A channel made before anything posted to it: an event that names no message.
   expect((await keeper('POST', '/channels', { path: 'secret/empty' })).body).toMatchObject({ created: true })
+  // A grant decides open for the walker too, beside its rule: one it may not see when it asks what decides.
+  await keeper('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
   const openRoot = (await host('POST', '/messages', { channel: 'open', text: 'hello' })).body.message.id
   const openSchedule = (await host('POST', '/schedules', { re: openRoot, text: 'hello later', in: '1d' })).body.schedule.id
   const fixture: Fixture = { secret: { root, reply, schedule, file }, open: { root: openRoot, schedule: openSchedule } }

@@ -1,8 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { slack } from '../src/sync/slack.ts'
@@ -12,7 +8,7 @@ import { BOARD_URL, caller, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoar
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
 
-/** A board on a2() with only a store, a watcher, and Slack synced to `firehose`, in the environment `env`. */
+/** A board on the local board's engine with only a store, a watcher, and Slack synced to `firehose`, in the environment `env`. */
 function bare(env: string) {
   vi.stubEnv('NODE_ENV', env)
   const s = fakePlatform('slack')
@@ -38,80 +34,7 @@ function bare(env: string) {
 
 afterEach(() => vi.unstubAllEnvs())
 
-/**
- * Whether a directory chmodded to 555 refuses this process a write: not for root, nor for a process
- * that may override file permissions (`CAP_DAC_OVERRIDE`), as some CI containers run.
- */
-function readOnlyHolds(): boolean {
-  const dir = mkdtempSync(join(tmpdir(), 'board-probe-'))
-  chmodSync(dir, 0o555)
-  try {
-    writeFileSync(join(dir, 'probe'), '')
-    return false
-  } catch {
-    return true
-  } finally {
-    chmodSync(dir, 0o755)
-  }
-}
-
-describe('a2() with no store', () => {
-  /** Runs `body` with the working directory at a new temporary directory, prepared by `setup`. */
-  async function inDir(body: (dir: string) => Promise<void>, setup: (dir: string) => Promise<void> = async () => {}) {
-    const dir = await mkdtemp(join(tmpdir(), 'board-store-'))
-    const cwd = process.cwd()
-    await setup(dir)
-    process.chdir(dir)
-    try {
-      await body(dir)
-    } finally {
-      process.chdir(cwd)
-      await chmod(dir, 0o755)
-      if (existsSync(join(dir, '.a2'))) await chmod(join(dir, '.a2'), 0o755)
-    }
-  }
-
-  it.each(['development', 'production', 'test'])('in %s, keeps the board in SQLite at .a2/dev.db in the working directory', async (env) => {
-    vi.stubEnv('NODE_ENV', env)
-    await inDir(async (dir) => {
-      const first = testBoard({ store: undefined })
-      const { body } = await caller(first.fetch, await personToken())('POST', '/messages', { channel: 'dev', text: 'kept on disk' })
-      expect(existsSync(join(dir, '.a2', 'dev.db'))).toBe(true)
-      // Another board on the file, as after a restart, has it: it was never in memory.
-      const again = testBoard({ store: undefined })
-      expect((await caller(again.fetch, await personToken())('GET', `/messages/${body.message.id}`)).body.message.text).toBe('kept on disk')
-      await Promise.all([first.backend.store.close(), again.backend.store.close()])
-    })
-  })
-
-  // Where a deployment's files are read-only, as on Vercel outside /tmp: none, or a `.a2` it can't write in.
-  const readOnly = {
-    'a read-only working directory': async (dir: string) => chmod(dir, 0o555),
-    'a read-only .a2': async (dir: string) => {
-      await mkdir(join(dir, '.a2'))
-      await chmod(join(dir, '.a2'), 0o555)
-    },
-  }
-  it.skipIf(!readOnlyHolds()).each(Object.entries(readOnly))('says what to pass on every request where SQLite can\'t open: %s', async (_, setup) => {
-    vi.stubEnv('NODE_ENV', 'production')
-    await inDir(async (dir) => {
-      const board = testBoard({ store: undefined })
-      const julian = caller(board.fetch, await personToken())
-      const refused = {
-        status: 500,
-        body: { error: { code: 'no_store', message: "can't open SQLite at .a2/dev.db: this filesystem isn't writable here, so pass a store to a2()" } },
-      }
-      expect(await julian('POST', '/messages', { channel: 'dev', text: 'lost?' })).toEqual(refused)
-      // Nothing took the post somewhere else: every call after says the same.
-      expect(await julian('GET', '/messages?channel=dev')).toEqual(refused)
-      expect(await julian('GET', '/me')).toEqual(refused)
-      await expect(board.post('dev', 'from the handle')).rejects.toMatchObject({ status: 500, code: 'no_store' })
-      expect(existsSync(join(dir, '.a2', 'dev.db'))).toBe(false)
-    }, setup)
-  })
-})
-
-describe('a2() takes a scheduler and a blob store only if you pass them', () => {
+describe("the local board's engine takes a scheduler and a blob store only if it's given them", () => {
   it.each(['development', 'production'])('in %s, runs watchers and sync in the request that wrote, and refuses to schedule', async (env) => {
     const { board, s, seen, webhook } = bare(env)
     const julian = caller(board.fetch, await personToken())
@@ -128,7 +51,7 @@ describe('a2() takes a scheduler and a blob store only if you pass them', () => 
     const scheduled = await julian('POST', '/schedules', { re: body.message.id, text: 'still broken?', in: '1d' })
     expect(scheduled).toEqual({
       status: 501,
-      body: { error: { code: 'no_scheduler', message: 'this board has no scheduler: pass `scheduler` to `a2()` to send later' } },
+      body: { error: { code: 'no_scheduler', message: "this board has no scheduler, so it can't send later" } },
     })
     expect((await julian('GET', '/schedules')).body).toEqual({ schedules: [] })
     // Its scheduler route has nothing to run.
@@ -138,7 +61,7 @@ describe('a2() takes a scheduler and a blob store only if you pass them', () => 
   it.each(['development', 'production'])('in %s, keeps no files without a blob store, and links the ones sync brings', async (env) => {
     const { board, s, webhook } = bare(env)
     const julian = caller(board.fetch, await personToken())
-    const noFiles = { code: 'no_files', message: 'this board keeps no files: pass `blob` to `a2()`' }
+    const noFiles = { code: 'no_files', message: 'this board keeps no files' }
 
     const upload = await board.fetch(
       new Request(`${BOARD_URL}/attachments`, { method: 'POST', headers: { authorization: `Bearer ${await personToken()}`, 'content-type': 'image/png' }, body: PNG }),
@@ -172,24 +95,19 @@ describe('a2() takes a scheduler and a blob store only if you pass them', () => 
   })
 })
 
-describe('localScheduler()', () => {
-  it('comes from board/backend-a2/scheduler-local, and sends a scheduled message', async () => {
-    // Resolved as an app resolves it, through the package's exports, to what the build put there. The
-    // board and its store come from the build too: it inlines A2, once, for every entry that runs on it.
+describe('local() from the build', () => {
+  it('sends a scheduled message, on the engine it inlines', async () => {
+    // Resolved as an app resolves it, through the package's exports, to what the build put there.
     const require = createRequire(import.meta.url)
     const built = async <T,>(spec: string) => (await import(pathToFileURL(require.resolve(spec)).href)) as T
-    expect(require.resolve('@vercel/board/backend-a2/scheduler-local')).toMatch(/dist\/backend-a2\/scheduler-local\.mjs$/)
-    const { localScheduler } = await built<typeof import('../src/scheduler/local.ts')>('@vercel/board/backend-a2/scheduler-local')
+    expect(require.resolve('@vercel/board/backend-local')).toMatch(/dist\/backend-local\.mjs$/)
+    const { local } = await built<typeof import('../src/backend-local/index.ts')>('@vercel/board/backend-local')
     const { board: mounted } = await built<typeof import('../src/server/index.ts')>('@vercel/board')
-    const { a2 } = await built<typeof import('../src/backend-a2/index.ts')>('@vercel/board/backend-a2')
-    const { memory } = await built<typeof import('../src/store/memory.ts')>('@vercel/board/backend-a2/store-memory')
     const { oidcTokens } = await built<typeof import('../src/access/index.ts')>('@vercel/board/access')
-    const board = mounted({
-      backend: a2({ store: memory(), scheduler: localScheduler() }),
-      authenticate: oidcTokens(testAuth),
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
-      url: BOARD_URL,
-    })
+    // In the test project, as a deployment of it finds itself.
+    vi.stubEnv('VERCEL_PROJECT_ID', PROJECT_ID)
+    vi.stubEnv('VERCEL_ORG_ID', TEAM_ID)
+    const board = mounted({ backend: local({ memory: true }), authenticate: oidcTokens(testAuth), url: BOARD_URL })
     const julian = caller(board.fetch, await personToken())
     const { body } = await julian('POST', '/messages', { channel: 'dev', text: 'PR #12 is open' })
     expect((await julian('POST', '/schedules', { re: body.message.id, text: 'friendly ping: review?', in: '1s' })).status).toBe(201)

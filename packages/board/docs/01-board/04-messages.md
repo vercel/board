@@ -35,7 +35,8 @@ echo "a longer note" | vb reply "$id" -              # - reads the text from std
 - **A message's ID is a string,** shown as `#812`. It's unique within the
   board; pass it back as you got it, and don't count with it or order by it.
   An ID doubles as a cursor, so a script can chain it: `vb wait --after "$id"`.
-  On `a2()` it's a [log index](../04-reference/04-log.md#one-log).
+  Vercel's board hands out `msg_…` IDs, and a [local board](./10-local.md)
+  numbers (`812`).
 - **Threads are one level deep.** Reply to any message in a thread and the
   board stores the root as `re`, plus the exact message you replied to as
   `replyTo` when that isn't the root. Platforms with sub-threads use `replyTo`
@@ -181,9 +182,9 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or
 ```
 
 - **At most 4 MB per file and 10 per message.** An upload is one request,
-  under Vercel Functions' request limit. Where the board's blob store can sign
-  upload URLs (`vercelBlob()` can), a file up to 100 MB goes straight to the
-  store instead, by itself. The CLI checks every file before uploading any. Files sync brings over from a platform can be up to 25 MB,
+  under Vercel Functions' request limit. Where the board can sign upload URLs
+  (Vercel's board can), a file up to 100 MB goes straight to its storage
+  instead, by itself. The CLI checks every file before uploading any. Files sync brings over from a platform can be up to 25 MB,
   since sync fetches them on the server.
 - **The board records each file's name, type, and size from what it stored,**
   never from the request, and refuses an attachment ID it never stored. An ID
@@ -194,16 +195,16 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or
   origin. PNG, JPEG, GIF, WebP, and AVIF images, MP4 and WebM video, and plain
   text display inline; everything else downloads.
 - **Deleting a message hides its files,** and only their uploader and callers
-  that read every channel can still fetch them. The bytes stay in the blob
-  store: a file that must not be read again needs deleting from there.
+  that read every channel can still fetch them. The bytes stay where the board
+  keeps them: a file that must not be read again needs deleting from there.
 - **Files posted on a synced platform come in too,** as attachments on the
   board's copy. See [Sync](../02-sync/01-overview.md).
-- **They need a blob store.** A board on `a2()` without one keeps no files:
-  an upload, a post or schedule that carries files, and a download answer 501
-  `no_files`, and `vb` says it can't, with the board's words under it:
-  ``this board keeps no files: pass `blob` to `a2()` ``. Sync brings a
-  platform's files over as links to where they live instead. See
-  [Mounting](./01-mounting.md#without-a-blob-store).
+- **A board that keeps no files says so.** Vercel's board and `local()` keep
+  them. On a [backend of your own](./01-mounting.md#a-backend-of-your-own)
+  that doesn't, an upload, a post or schedule that carries files, and a
+  download answer 501 `no_files`, and `vb` says it can't, with the board's
+  words under it. Sync brings a platform's files over as links to where they
+  live instead.
 
 In code, `upload` first, then post with what it returns:
 
@@ -228,8 +229,8 @@ vb post deploys "a1b2c3 is live" --idempotency-key deploy-a1b2c3
 The same ID with the same write returns the message it already posted. The same
 ID with a different write fails with `duplicate_id`. The CLI and a
 [handle](./01-mounting.md#the-handle) make the ID their own, so no one can post
-with it first: over HTTP it goes as `key:<principal>:…`, which the board takes
-only from that principal. Through the HTTP API yourself, IDs are up to 200
+with it first: to a board at a URL it goes as `key:<principal>:…`, which the
+board takes only from that principal. Through the HTTP API yourself, IDs are up to 200
 characters, and someone else's post with your ID fails with `duplicate_id`.
 UUIDv8s are the board's own, for the writes it makes itself, so the API refuses
 them, and `key:` IDs under another principal, and `sync:` IDs, which are

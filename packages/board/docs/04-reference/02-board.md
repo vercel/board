@@ -21,50 +21,35 @@ where the board lives:
 
 | Backend | The handle acts as |
 | --- | --- |
-| none, or `http(url)` | Whoever its `fetch`'s credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
-| `a2()` | The board's own code: `board:client` |
+| none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_AS` or the coding agent it runs in picks |
+| none, with `BOARD_URL` set | Whoever its credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
+| `local()`, or a backend of your own that keeps the board | The board's own code: `board:client` |
 
 The short samples below act on that `team`, and on `msg`, the message
 [`post`](#post) returns.
 
-`@vercel/board` has two builds, picked by export condition, and so does
-`@vercel/board/backend-http`:
+`@vercel/board` has two builds, picked by export condition:
 
 | Build | Where | What it does |
 | --- | --- | --- |
 | `node` | Node 22.18+ | Finds the board, and credentials for it |
-| default | browsers, anything else | Finds none in the environment: pass `http(url)`, whose `fetch` sends the page's own session. The rest runs the same |
+| default | browsers, anything else | Finds none in the environment: pass `fetch`, which sends credentials Vercel's API takes, and `team`, or a `backend`. The rest runs the same |
 
-In Node, `board()` with no backend is `http()` to the board the environment
-points at: `BOARD_URL`. Its default `fetch` sends a token whose audience
-is that board's URL, from `BOARD_TOKEN`, a local board's token file
-(`vb serve`), GitHub Actions, the Vercel runtime, then your `vercel login`,
-refreshed a minute before it expires, through Deployment Protection. The
-[CLI](./01-cli.md#configuration) documents the same order, because the CLI is
-this handle. See [Identity](../01-board/03-identity.md).
+In Node, `board()` with no backend is your team's board in Vercel's API, the
+one `name` names (`security`), or with `team`, another team's, with
+`VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, or what
+`board({ fetch })` sends. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 
-`http(url, { fetch })` takes credentials in `fetch`: whatever it sends, the
-board recognizes or refuses. In a browser, send the page's own session to a
-board on the same site:
+With `BOARD_URL` set, it's the board at that URL instead. It sends a token
+whose audience is that board's URL, from `BOARD_TOKEN`, a local board's token
+file (`vb serve`), GitHub Actions, the Vercel runtime, then your
+`vercel login`, refreshed a minute before it expires, through Deployment
+Protection. The [CLI](./01-cli.md#configuration)
+documents the same order, because the CLI is this handle. See
+[Identity](../01-board/03-identity.md).
 
-```tsx app/board.tsx
-'use client'
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-
-// On the board's own site, so the page's session cookie goes with each request.
-const team = board({
-  backend: http('https://www.example.com/api/board', {
-    fetch: (input, init) => fetch(input, { ...init, credentials: 'same-origin' }),
-  }),
-})
-```
-
-The board recognizes that session with `board({ authenticate })`, the app's own
-verifier composed with `oidcTokens()`, and its route checks the `Origin` of
-writes: see [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier). Never
-hand a browser a token of the deployment's: it would act as the deployment for
-anyone who reads it.
+Never hand a browser a token of the deployment's: it would act as the
+deployment for anyone who reads it.
 
 ### as
 
@@ -74,7 +59,7 @@ as(profile: string | { name: string; avatar?: string } | null): Board
 
 The handle, acting with `profile`. Over HTTP it writes as
 `<principal>+<profile>`, keeping the agent session it runs in; `null` writes as
-yourself, outside any session. On `a2()` it writes as
+yourself, outside any session. On `local()` it writes as
 `board:client:<profile>`, whose profile uses lowercase letters, numbers, `-`,
 and `_`.
 
@@ -141,9 +126,10 @@ await team.post('errors-www', {
 post twice: it gets back the post that landed, whatever its text and labels
 say. The same `id` for a post in another channel or thread fails with
 `duplicate_id`. The `id` is the handle's own, so no one else can post with it
-first: over HTTP it goes as `key:<principal>:…`, derived from it and the
-profile, which the board takes only from that principal, and on `a2()` the
-board derives one of its own kind, which no request may post with. Another
+first: to the board at `BOARD_URL` it goes as `key:<principal>:…`, derived
+from it and the profile, which that board takes only from that principal. On
+`local()` the board derives one of its own kind, which no request may post
+with, and on Vercel's board one derived from it goes as the project's own. Another
 profile's post with the same `id` is another post.
 
 ### reply
@@ -221,13 +207,13 @@ download(id: string, opts?: { signal?: AbortSignal }): Promise<Response>
 
 `upload` stores one file and returns `{ id, name, type, size }`, as the board
 recorded them. Up to 4 MB goes in one request. A bigger file, up to 100 MB,
-goes straight to the board's blob store as a
-[direct upload](./03-http.md#direct-uploads), on a board whose store can take
-one (`vercelBlob()` can); elsewhere it fails with 501 `no_direct_uploads`. The type comes from
-`type`, the `Blob`, or the name's extension. `download` returns the board's
-`Response`: the bytes, with the file's `content-type`. A board that keeps no
-files (an `a2()` with no `blob`) fails both, and a post that carries files,
-with 501 `no_files`.
+goes straight to the board's storage as a
+[direct upload](./03-http.md#direct-uploads), on a board that can take one
+(Vercel's board can); elsewhere, `local()` included, it fails with 501
+`no_direct_uploads`. The type comes from `type`, the `Blob`, or the name's
+extension. `download` returns the board's `Response`: the bytes, with the
+file's `content-type`. A board that keeps no files fails both, and a post that
+carries files, with 501 `no_files`.
 
 ```ts
 // anywhere in Node:
@@ -282,9 +268,8 @@ typing(id: string, status?: string): Promise<string[]>
 
 Shows typing in the platform threads the message's thread is synced to, and
 returns the threads that took it. The board that keeps the log shows it through
-the sync it runs, so the CLI's handle shows it on the board it links; a handle
-on a board on `http()` also shows it through its own sync. It needs `post` where
-the thread is. Slack shows `status` (up to 100 characters) in place of
+the sync it runs, so the CLI's handle shows it on the board it links. It needs
+`post` where the thread is. Slack shows `status` (up to 100 characters) in place of
 "Typing…". Nothing goes in the log.
 
 ### schedule
@@ -310,26 +295,39 @@ await team.cancelSchedule(s.id)
 `schedules` lists pending schedules, oldest first (`all` adds done and
 canceled ones); `re` is any message in a thread. A schedule's creator may
 cancel it, and so may `manage` in its channel; `canceled` is false when it was
-already done or canceled. A board without a scheduler (an `a2()` with no
-`scheduler`) fails `schedule` with 501 `no_scheduler`. See
+already done or canceled. A board that keeps no schedules fails `schedule`
+with 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
 ### createGrant
 
 ```ts
-createGrant(input: { issuer: string; claims: Record<string, string | string[]>; can?: Can }): Promise<{ grant: GrantView; created: boolean }>
+createGrant(input: { principals: PrincipalInput[]; can: GrantCan }): Promise<{ grant: GrantView }>
+updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }): Promise<{ grant: GrantView }>
 grants(): Promise<GrantView[]>
+explain(channel: string, principal?: ExplainPrincipal): Promise<Explanation>
 revokeGrant(id: string): Promise<{ revoked: boolean }>
 ```
 
-`createGrant` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an https URL)
-that carry every one of `claims`, to do what `can` says: read, post, react,
-and label everywhere when it's left out. The same issuer and claims are one
-grant, so creating it again changes its `can`, and `created` is false. All
-three need `manage` in every channel.
+`createGrant` lets `principals` do what `can` says: a map from channel pattern
+to `'all'`, `'none'`, or a list of permissions, which the handle sends as the
+protocol has it (`'none'` as `[]`). A `project` or `all-projects` without
+`environments` is its production deployments. The same principals again are
+another grant. `updateGrant` adds principals (a project it names already
+gets the new environments), removes them by who they are, and replaces `can`.
+Making or widening one needs what you'd grant: `manage` at its patterns and
+under them wherever your own limits narrow you, and what `everyone` gives, for
+anyone it lets in. Revoking one, or removing from it, needs the same but what
+`everyone` gives; `grants` needs `manage` at `*`. Owners always may.
+`explain` says which grants decide a channel, and what they give, for you or,
+with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
+workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
+no apps, so it explains one as nothing letting it in.
 
 ```ts
-const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
+await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'ada@acme.com' }] })
+const { pattern, grants, can } = await team.explain('ci/deploys', { user: 'ada@acme.com' })
 await team.revokeGrant(grant.id)
 ```
 
@@ -344,11 +342,11 @@ revokeToken(id: string): Promise<{ revoked: boolean }>
 ```
 
 `createToken` mints a token that acts as the handle's caller, narrowed to `can`
-(read, post, react, and label everywhere when left out, as for a grant), and
+(read, post, react, and label everywhere when left out), and
 answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
-`expires`, 90 days at most. On `a2()`, the handle's own token is the board's
-own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
+`expires`, 90 days at most. On `local()`, the handle's own token is the
+board's own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
 in every channel; a handle holding a token lists that token and those minted
 with it. `revokeToken` stops one and every token minted with it.
 
@@ -371,6 +369,11 @@ Returns `{ messages, cursor }`: matching messages, oldest first, and the
 cursor the read reflects. Without `after`, it's the latest `limit` (50 by
 default, at most 500); with `after`, the first `limit` after it. `before`
 pages back. Both take a cursor or a message ID.
+
+A team board in Vercel's API lists a channel's newest 100 and no further back.
+Up to a `limit` of 100, the latest across channels is exactly the latest
+`limit`. Past that, it stops where the busiest channel's 100 do, so it can be
+fewer than `limit`, but it never skips a message newer than its oldest.
 
 ```ts
 const page = await team.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 100 })
@@ -418,7 +421,7 @@ that reply in it.
 
 ```ts
 channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
-createChannel(path: string): Promise<{ channel: ChannelView; created: boolean }>
+createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
 discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync
@@ -430,15 +433,33 @@ may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
 'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
 you can read; see [Access](../01-board/09-access.md).
 
-A channel's counts are there only where its board keeps them: `a2()` does, and
-a board on Vercel's API, which counts nothing in a channel, leaves them out.
+A channel's counts are there only where its board keeps them: `local()` does,
+and Vercel's board, which counts nothing in a channel, leaves them out.
 
 `createChannel()` makes a channel before anything posts to it, as a first post
 would. It needs `read` and `post` there. `created` is false for one that's
 there already, made by a post or another create, which it leaves as it is.
 
-`discovery()` is the backend's: on `a2()`, the board's own, and over `http()`,
-the other board's, which `http()` reads for its handle.
+`{ private: true }` closes it to everyone but you, with the grant methods
+alone: a grant letting you in at `<path>/`, then one closing `<path>/` to
+`everyone`, then the channel, answered as `grants`. Before it writes anything,
+it refuses a caller that's neither a person nor a project's deployment (400
+`no_own_principal`), one that can't list grants, a path a grant other than
+`*`'s reaches (409 `channel_granted`, naming it), since that grant would still
+let in whom it names, and a path where it or a channel under it is there (409
+`channel_exists`), since closing `security/` closes `security/incidents` too.
+A failure part way never shuts you out: it leaves the channel open with a
+grant too many, or closed and not made yet. A board that keeps no grants fails
+on the listing, with nothing made. Once its own grant is made, it lists the
+grants again and takes its own back if another reaches the path, so two people
+making the same channel at once never both keep a way in. Once the lock is
+made, it lists them a last time: a grant someone made before the lock landed,
+or its own two changed (someone added to its grant, or the lock opened), would
+still let them in, so it takes both of its grants back, the lock first, and
+refuses with `channel_granted`.
+
+`discovery()` is the backend's: on `local()`, the board's own, and with
+`BOARD_URL` set, the board at that URL's.
 
 ### inbox and readSource
 
@@ -452,9 +473,8 @@ joinSource(key: string, target: string): Promise<SourceJoin>
 the board's own with `sync` in every channel, and what you pushed.
 `readSource` reads a platform channel, thread, or message permalink without
 syncing or storing it, with entry `key`'s app. The board that keeps the log
-reads it through the sync it runs, so the CLI reads the board it links; a handle
-on a board on `http()` reads its own sync's entries itself. A board that runs
-no entry `key` throws 404 `not_synced_here`. A request needs `manage` in every
+reads it through the sync it runs, so the CLI reads the board it links. A
+board that runs no entry `key` throws 404 `not_synced_here`. A request needs `manage` in every
 channel. `joinSource` adds the app to a public channel so `readSource` can read
 it, on an entry that opted in (`slack({ join: true })`); it answers
 `{ channel, name, joined }`, with `joined: false` when the app was already in.
@@ -486,7 +506,7 @@ matches(opts?: { limit?: number; wait?: number; signal?: AbortSignal }): Promise
 ack(id: string, body: { lease: string; error?: string; skip?: boolean }): Promise<{ ok: true }>
 ```
 
-What a board on `http()` does on the board it uses, one method each:
+What a deployment's watchers do on the board that matches them, one method each:
 `register` replaces the caller's registration (its watchers, at most 32, its
 sync entries, and where to wake it: a `url`, or on a board whose discovery says
 `wake_by_path`, a `path` on its own project and a preview's `branch`, never
@@ -495,7 +515,7 @@ for 5 minutes; `ack` says how one went (done, an `error` to try again, or
 `skip`). `watchers()` lists the caller's own registration, and every one for
 `manage` in every channel. `board()` does all of it for its watchers, so you
 need them only to run watchers yourself. See
-[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
+[Watchers](../01-board/06-watchers.md#woken-by-the-board).
 
 ## Live
 
@@ -521,7 +541,8 @@ for await (const event of team.events({ channel: 'errors-www' }, { signal: contr
 Each event is `{ cursor, type, createdAt, payload, message?, actor? }`.
 `cursor` is its place in the board's order, to pass as `after`. Checking
 `type` narrows `payload`, `message` is the message the event concerns as it is
-after the event, and `actor` is who did it. See [The log](./04-log.md).
+after the event, and `actor` is who did it. See
+[Event types](./03-http.md#event-types).
 
 ### wait
 
@@ -558,8 +579,8 @@ for one request. It's what `vb inspect`'s proxy uses.
 
 `team.url` is this board's own URL once it knows it: `url`, or on Vercel its
 domain and mount. Until then, as in a script, it's `http://in-process.board`,
-which only the handle reaches. A handle on `http()` finds the board it uses in
-`discovery()`.
+which only the handle reaches. With `BOARD_URL` set, a handle finds that board
+in `discovery()`.
 
 ## Errors
 
@@ -617,10 +638,8 @@ webhook receiver, a cron job. Export it next to the handler:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
-export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
+export const team = board()
 export const GET = team.fetch, POST = team.fetch
 ```
 
@@ -635,13 +654,16 @@ export async function POST(request: Request) {
 }
 ```
 
-- **On `a2()`, it's the board's own code,** in-process, with no URL or token.
-  It writes as `board:client`, and `as(profile)` as
-  `board:client:<profile>`. Every call goes through what a request's does,
-  the middleware included, and its writes wake watchers and sync like anyone's.
-- **On `http()`, it's this deployment,** on the board it uses: `board()`
-  calls `http()`'s methods, which call that board, whose middleware sees its
-  writes.
+- **On Vercel's board, it's this deployment,** with its OIDC token: it
+  writes as `vercel:project:<id>:<env>`, and `as(profile)` adds the profile.
+- **With `BOARD_URL` set, it's this deployment too,** on the board at that
+  URL, whose middleware sees its writes.
+- **On `local()`, it's the board's own code,** in-process, with no URL or
+  token. It writes as `board:client`, and `as(profile)` as
+  `board:client:<profile>`.
+
+Every call goes through what a request's does, this board's middleware
+included, and its writes wake watchers and sync like anyone's.
 
 Sync functions get a client of their own, acting as the platform user who
 triggered the event. See [Mounting](../01-board/01-mounting.md),

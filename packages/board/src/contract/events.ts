@@ -147,7 +147,7 @@ export const boardEvents = {
 export const BOARD_SESSION = 'board'
 
 export type BoardEvents = typeof boardEvents
-/** One event of the board log, of type `K`: the shape A2 stores it in (its `ContractEvent`). */
+/** One event of the board log, of type `K`, in the shape its log stores it. */
 export type BoardEvent<K extends keyof BoardEvents & string = keyof BoardEvents & string> = {
   [T in keyof BoardEvents & string]: {
     id: string

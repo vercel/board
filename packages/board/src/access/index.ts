@@ -1,12 +1,6 @@
 // `@vercel/board/access`: who may use a board, and what each may do in which channels. Backend-agnostic:
-// the rules board() takes, `oidcTokens()` (its verifier by default), and the pieces it decides with.
+// `oidcTokens()` (board()'s verifier by default), and the pieces it decides with.
 export {
-  vercelProject,
-  githubActions,
-  oidc,
-  type AccessRule,
-  type AccessFunction,
-  type RuleFunction,
   type Authenticate,
   type AuthenticateContext,
   type HostPrincipal,
@@ -20,5 +14,21 @@ export {
 } from '../server/auth.ts'
 export { oidcTokens } from '../server/tokens.ts'
 export { resolveActor } from '../server/actors.ts'
-export { compileRules, DEFAULT_CAN } from '../server/auth.ts'
-export { compileAccess, union, FULL_ACCESS, type Access, type Permission, type ChannelPattern, type Grant, type Can, type AccessSummary } from '../server/access.ts'
+export { DEFAULT_CAN } from '../server/auth.ts'
+export {
+  compileAccess,
+  union,
+  checkGrantChange,
+  InvalidCan,
+  FULL_ACCESS,
+  type Access,
+  type Permission,
+  type ChannelPattern,
+  type Grant,
+  type Can,
+  type AccessSummary,
+  type GrantChange,
+  type GrantChangeRefusal,
+  type GrantShape,
+} from '../server/access.ts'
+export { explainGrants, grantAccess, type Caller, type DecidingGrant, type GrantExplanation, type GrantFacts, type GrantSource } from '../server/grants.ts'

@@ -42,5 +42,5 @@ vb reply 999999 "no such thread" >/dev/null 2>&1 && fail "reply to a missing thr
 vb post >/dev/null 2>&1
 [[ $? -eq 2 ]] || fail "post with no channel should exit 2 (misuse)"
 
-sh "ls -l .board .board/attachments" >/dev/null
+sh "ls -lR .board" >/dev/null
 echo "posting and threads: ok (thread #$root)"
