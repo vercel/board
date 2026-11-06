@@ -270,9 +270,15 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const { event, raw, dedupe } = ReceivedEvent.parse(storableJson({ ...received, raw: jsonSafe(received.raw) }))
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
-    // Only the channels a helper routes, and threads the board syncs, are kept.
+    // Only the channels a helper routes, and threads the board syncs, are kept. A helper that
+    // can't tell yet throws: unless the board syncs the thread, the webhook fails, so the platform
+    // sends it again.
     const routes = routesFor(platformOf(key))
-    if (routes && !(await routes(native(event.channel), (name) => resolve(key, name))) && !(await syncsThread(event.thread))) return
+    const kept = routes && (await routes(native(event.channel), (name) => resolve(key, name)).catch(async (error: unknown) => {
+      if (await syncsThread(event.thread)) return true
+      throw error
+    }))
+    if (routes && !kept && !(await syncsThread(event.thread))) return
     await call('inboxPush', { key, events: [{ id: dedupe, event, raw }] })
   }
 

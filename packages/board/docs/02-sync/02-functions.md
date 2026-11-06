@@ -176,7 +176,9 @@ wait: a key like `'C0123ABC'` asks Slack nothing.
 The webhook stores each event it keeps in the [inbox](./01-overview.md#debug-it),
 then the function runs on it. It keeps an event when the board syncs its thread,
 or when its channel is one that `channels`, `repos`, or `numbers` routes;
-`render` keeps theirs. A function of your own at the top keeps every event the
+`render` keeps theirs. While a `#name` key can't be checked, an event it might
+route is refused instead (unless its thread is synced), so Slack sends it again
+and nothing from other channels is stored meanwhile. A function of your own at the top keeps every event the
 platform sends the app, in every channel it's in, and each one is stored, even
 if it only calls a helper inside:
 
