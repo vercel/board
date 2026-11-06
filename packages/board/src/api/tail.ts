@@ -5,8 +5,11 @@ import { Filters } from './routes.ts'
 /** The filter flags `read`, `tail`, and `wait` share, and that a watcher's `tail` accepts. */
 export const FILTER_FLAGS = { re: options.re, by: options.by, mentions: options.mentions, label: options.label, source: options.source, text: options.text }
 
-/** What `--mentions` takes as its value when it's the next word: `@ada`, `ada@vercel.com`, or `me`. A channel never has an `@`. */
-const mentionValue = (word: string | undefined) => word !== undefined && (word === 'me' || word.includes('@'))
+/**
+ * What `--mentions` takes as its value when it's the next word: `@ada`, `ada@vercel.com`, or `me`.
+ * A channel never has an `@`, and a flag (`--text=a@b`) is never the value.
+ */
+const mentionValue = (word: string | undefined) => word !== undefined && !word.startsWith('-') && (word === 'me' || word.includes('@'))
 
 /**
  * `--mentions` alone means mentions of me; `--mentions @ada`, mentions of ada; `--mentions

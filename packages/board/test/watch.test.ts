@@ -58,6 +58,7 @@ describe('tail expressions', () => {
     // A channel after a bare --mentions is still the channel.
     expect(parseTail('--mentions dev')).toEqual({ channel: 'dev', mentions: 'me' })
     expect(parseTail('-- --mentions')).toEqual({ channel: '--mentions' })
+    expect(parseTail('--mentions --text=ada@vercel.com')).toEqual({ mentions: 'me', text: 'ada@vercel.com' })
   })
 })
 

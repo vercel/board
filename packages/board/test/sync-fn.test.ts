@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { slack, type SlackEvent } from '../src/sync/slack.ts'
 import { github, repos } from '../src/sync/github.ts'
-import { channels, into, mirror, render, type Sync, type SyncFn } from '../src/sync/fn.ts'
+import { channels, into, mirror, render, routesOf, type Sync, type SyncFn } from '../src/sync/fn.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 type Read = { id: number; text: string; re: number | null }
@@ -191,6 +191,27 @@ describe('sync functions', () => {
       expect((await read(julian, 'support')).map((m) => m.text)).toEqual(['my refund?'])
     })
     warn.mockRestore()
+  })
+
+  it("keeps and retries only what a key it couldn't check may route: any channel for a name, its own for an ID", async () => {
+    const down = new Error('rate limited')
+    const failing = (key: string) => async (name: string) => {
+      if (name === key) throw down
+      return name
+    }
+    const byId = channels({ C1: 'one', C2: 'two' })
+    const keeps = (fn: SyncFn, channel: string, resolve: (name: string) => Promise<string>) => routesOf(fn)!(channel, resolve)
+    expect(await keeps(byId, 'C1', failing('C2'))).toBe(true)
+    expect(await keeps(byId, 'C2', failing('C2'))).toBe(true)
+    expect(await keeps(byId, 'C9', failing('C2'))).toBe(false)
+    expect(await keeps(channels({ C1: 'one', '#two': 'two' }), 'C9', failing('#two'))).toBe(true)
+
+    // A thread synced by hand in another channel goes on; one in the failed key's channel waits.
+    const imported: (string | undefined)[] = []
+    const inbound = (channel: string) => ({ direction: 'in', channel, resolve: failing('C2'), import: async (to?: string) => void imported.push(to) }) as never
+    await expect(byId(inbound('C2'))).rejects.toBe(down)
+    await byId(inbound('C9'))
+    expect(imported).toEqual([undefined])
   })
 
   const missingScope = Object.assign(new Error('An API error occurred: missing_scope'), { data: { error: 'missing_scope' } })

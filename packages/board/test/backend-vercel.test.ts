@@ -204,6 +204,24 @@ describe('vercel()', () => {
     expect((await ada.schedules({ by: 'julian/claude' })).map((s) => s.id)).toEqual([scheduled.id])
   })
 
+  it("reads the names again at most once for a `--by` value nobody goes by, until they're read anyway", async () => {
+    const api = fakeMessageboard()
+    const reads: string[] = []
+    const fetch = as(api, 'user:u_jb')
+    const counted = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (request.method === 'GET' && new URL(request.url).pathname.endsWith('/actors')) reads.push(request.url)
+      return fetch(input, init)
+    }) as typeof globalThis.fetch
+    const julian = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
+    const root = await julian.as('claude').post('dev', { text: 'from claude' })
+    expect((await julian.messages({ channel: 'dev', by: 'julian/claude' })).messages.map((m) => m.id)).toEqual([root.id])
+    const before = reads.length
+    // A profile name isn't a handle: it matches without the names, read again once.
+    for (let i = 0; i < 3; i++) expect((await julian.messages({ channel: 'dev', by: 'claude' })).messages.map((m) => m.id)).toEqual([root.id])
+    expect(reads.length - before).toBe(1)
+  })
+
   it('reads a channel and the channels under it, and finds threads by a label', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)

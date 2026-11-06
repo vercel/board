@@ -119,7 +119,8 @@ const follow = async (sync: Sync) => {
  * to every channel's function, with `channel` set to that one. A thread the board syncs outside
  * these channels (someone ran `vb sync` on it) stays synced both ways. A key the platform says
  * doesn't exist is skipped. While one can't be checked, an event outside the resolved channels
- * throws, so it's retried, rather than going past that key's function to the default. A new root
+ * that it may be (any, for a name; its own, for an ID) is kept and throws, so it's retried,
+ * rather than going past that key's function to the default. A new root
  * starts only in the channels that resolved.
  */
 export function channels<E extends ProviderEvent = ProviderEvent>(map: Record<string, SyncUnit<E>>): SyncFn<E> {
@@ -127,28 +128,31 @@ export function channels<E extends ProviderEvent = ProviderEvent>(map: Record<st
   const resolved = async (resolve: (name: string) => Promise<string>) => {
     const ids = await Promise.allSettled(units.map(([name]) => resolve(name)))
     const found = new Map<string, SyncFn<E>>()
-    let unchecked: { reason: unknown } | undefined
+    const unchecked: { key: string; reason: unknown }[] = []
     ids.forEach((id, i) => {
       if (id.status === 'fulfilled') found.set(id.value, units[i]![1])
-      else if (!channelMissing(id.reason)) unchecked ??= { reason: id.reason }
+      else if (!channelMissing(id.reason)) unchecked.push({ key: units[i]![0], reason: id.reason })
     })
-    return { found, unchecked }
+    // A name (`#support`) that couldn't be checked may be any channel; an ID only itself.
+    const pending = (channel: string) => unchecked.find(({ key }) => key.startsWith('#') || key.toLowerCase() === channel.toLowerCase())
+    return { found, pending }
   }
   const fn: SyncFn<E> = async (sync) => {
-    const { found, unchecked } = await resolved(sync.resolve)
+    const { found, pending } = await resolved(sync.resolve)
     if (sync.direction === 'out' && sync.target === null) {
       for (const [channel, unit] of found) await unit({ ...sync, channel })
       return
     }
     const unit = found.get(sync.channel!)
     if (unit) return void (await unit(sync))
-    // The channel that couldn't be checked may be this one: its function decides once it resolves.
+    // A key that couldn't be checked may be this channel: its function decides once it resolves.
+    const unchecked = pending(sync.channel!)
     if (unchecked) throw unchecked.reason
     await follow(sync)
   }
-  // An event a channel that couldn't be checked may route is kept: the function decides once it resolves.
+  // An event a key that couldn't be checked may route is kept: the function decides once it resolves.
   return withRoutes(fn, async (channel, resolve) => {
-    const { found, unchecked } = await resolved(resolve)
-    return found.has(channel) || unchecked !== undefined
+    const { found, pending } = await resolved(resolve)
+    return found.has(channel) || pending(channel) !== undefined
   })
 }

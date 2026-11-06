@@ -543,6 +543,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return Object.fromEntries(listed.map((channel, i) => [channel.id, { at: found[i]!.cursor, skip: 0 }]))
   }
 
+  /** Handles a fresh read of the names didn't have, by when: `--by` doesn't read again for them for a while. */
+  const unhandled = new Map<string, number>()
   /** Who a `--by` value covers, as the API's authors. */
   type By = (actor: ApiActor) => boolean
 
@@ -563,8 +565,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         [...(await read.views)].filter(([, view]) => view.handle.toLowerCase() === handle).map(([id]) => id)
       const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
       let ids = await find(kept ?? readNames(who))
-      // Someone new since the list was read: one read again finds them.
-      if (ids.length === 0 && kept) ids = await find(readNames(who))
+      // Someone new since the list was read: one read again finds them. A value no fresh read had
+      // (a profile name, an ID, a typo) isn't read again for it until names are read anyway.
+      const missed = unhandled.get(handle)
+      if (ids.length === 0 && kept && !(missed !== undefined && Date.now() - missed <= NAMES_FRESH_MS)) ids = await find(readNames(who))
+      if (ids.length === 0) {
+        if (unhandled.size >= 1000) unhandled.clear()
+        if (!kept || missed === undefined || Date.now() - missed > NAMES_FRESH_MS) unhandled.set(handle, Date.now())
+      }
       for (const id of ids) named.add(id)
     }
     return (actor) => named.has(actor.id) || named.has(principalId(actor.principal)) || (actor.profile !== undefined && named.has(actor.profile.name))
