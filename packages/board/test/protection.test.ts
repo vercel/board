@@ -413,6 +413,16 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     })
   })
 
+  it('asks Vercel for the bypass again after a lookup failed', async () => {
+    login.token = 'someone-else'
+    vi.stubEnv('PATH', '')
+    const { fetch } = protectedBoard({ bypass: { [SECRET]: { scope: 'automation-bypass' } } })
+    const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
+    await expect(client.discovery()).rejects.toMatchObject({ code: 'protected' })
+    login.token = 'vercel-cli-token'
+    expect((await client.discovery()).url).toBe(BOARD_URL)
+  })
+
   it("says so when your Vercel login can't create the bypass", async () => {
     const { fetch } = protectedBoard({ canCreate: false })
     const client = handle({ url: BOARD_URL, token: await personToken(), fetch })

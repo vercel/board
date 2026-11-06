@@ -50,6 +50,15 @@ describe('tail expressions', () => {
     expect(parseTail('--text - dev')).toEqual({ channel: 'dev', text: '-' })
     expect(parseTail('-- --label')).toEqual({ channel: '--label' })
   })
+
+  it('take an email or me after --mentions as its value, as the docs write it, and nothing past --', () => {
+    expect(parseTail('dev --mentions ada@vercel.com')).toEqual({ channel: 'dev', mentions: 'ada@vercel.com' })
+    expect(parseTail('--mentions ada@vercel.com dev')).toEqual({ channel: 'dev', mentions: 'ada@vercel.com' })
+    expect(parseTail('--mentions me dev')).toEqual({ channel: 'dev', mentions: 'me' })
+    // A channel after a bare --mentions is still the channel.
+    expect(parseTail('--mentions dev')).toEqual({ channel: 'dev', mentions: 'me' })
+    expect(parseTail('-- --mentions')).toEqual({ channel: '--mentions' })
+  })
 })
 
 describe('watchers', () => {

@@ -386,6 +386,10 @@ export function connect(
           hint: shown(found.audience, URL_SHAPE) ? `Use ${found.audience}.` : 'Use the URL its discovery names.',
         })
       return found
+    }).catch((error: unknown) => {
+      // A failed discovery isn't kept: the next token asks again.
+      discovery = undefined
+      throw error
     }))
 
   let cached: Cached | null = null
@@ -577,10 +581,17 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
       if (!(error instanceof Wall)) throw error
     }
     // The cached secret (or none) didn't get through: ask Vercel, once per client.
-    looked ??= projectBypass(url, host, doFetch).then(async (found) => {
-      await writeBypass(host, found.secret).catch(() => {})
-      return found
-    })
+    looked ??= projectBypass(url, host, doFetch).then(
+      async (found) => {
+        await writeBypass(host, found.secret).catch(() => {})
+        return found
+      },
+      (error: unknown) => {
+        // A failed lookup isn't kept: the next request asks Vercel again.
+        looked = undefined
+        throw error
+      },
+    )
     const { secret: found, created } = await looked
     secret = Promise.resolve(found)
     try {

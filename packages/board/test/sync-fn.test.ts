@@ -164,6 +164,35 @@ describe('sync functions', () => {
     warn.mockRestore()
   })
 
+  it("keeps what comes in from a channel it couldn't check, and imports it once the channel resolves", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let listing = false
+    const conversations = {
+      list: vi.fn(async () => {
+        if (!listing) throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } })
+        return { channels: [{ id: 'C9', name: 'support', is_member: true }] }
+      }),
+      info: vi.fn(async () => ({ channel: { id: 'C9', is_member: true } })),
+      join: vi.fn(async () => ({ ok: true })),
+    }
+    const s = fakePlatform('slack', withSlackClient({ conversations }, false))
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => ({ conversations }) as never }, channels({ '#support': into('support') })) } })
+    const julian = caller(board.fetch, await personToken())
+    const event = { type: 'message', threadId: 'slack:C9:900', id: '900', text: 'my refund?', user: 'U_ADA' }
+    expect((await webhookOf(board)('slack', event)).ok).toBe(true)
+    expect((await julian('GET', '/inbox/slack?channel=C9')).body.events).toHaveLength(1)
+    expect(await read(julian, 'support')).toEqual([])
+
+    listing = true
+    const inbox = board.servers.find((server) => server.contract.name === 'board-inbox')!
+    await vi.waitFor(async () => {
+      await board.skipHold(inbox, 'inbox:slack:C9')
+      await inbox.drain('inbox:slack:C9')
+      expect((await read(julian, 'support')).map((m) => m.text)).toEqual(['my refund?'])
+    })
+    warn.mockRestore()
+  })
+
   const missingScope = Object.assign(new Error('An API error occurred: missing_scope'), { data: { error: 'missing_scope' } })
   it.each([
     { why: "doesn't exist", list: async () => ({ channels: [] }) },

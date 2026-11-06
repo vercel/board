@@ -5,13 +5,23 @@ import { Filters } from './routes.ts'
 /** The filter flags `read`, `tail`, and `wait` share, and that a watcher's `tail` accepts. */
 export const FILTER_FLAGS = { re: options.re, by: options.by, mentions: options.mentions, label: options.label, source: options.source, text: options.text }
 
-/** `--mentions` alone means mentions of me; `--mentions @ada`, mentions of ada. */
+/** What `--mentions` takes as its value when it's the next word: `@ada`, `ada@vercel.com`, or `me`. A channel never has an `@`. */
+const mentionValue = (word: string | undefined) => word !== undefined && (word === 'me' || word.includes('@'))
+
+/**
+ * `--mentions` alone means mentions of me; `--mentions @ada`, mentions of ada; `--mentions
+ * ada@vercel.com`, of the user with that email. Nothing after `--` is a flag.
+ */
 export function withMentions(args: readonly string[]): string[] {
   const out: string[] = []
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
+    if (arg === '--') {
+      out.push(...args.slice(i))
+      break
+    }
     if (arg !== '--mentions') out.push(arg)
-    else if (args[i + 1]?.startsWith('@')) out.push(`--mentions=${args[++i]}`)
+    else if (mentionValue(args[i + 1])) out.push(`--mentions=${args[++i]}`)
     else out.push('--mentions=me')
   }
   return out

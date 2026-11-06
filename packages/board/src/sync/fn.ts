@@ -146,5 +146,9 @@ export function channels<E extends ProviderEvent = ProviderEvent>(map: Record<st
     if (unchecked) throw unchecked.reason
     await follow(sync)
   }
-  return withRoutes(fn, async (channel, resolve) => (await resolved(resolve)).found.has(channel))
+  // An event a channel that couldn't be checked may route is kept: the function decides once it resolves.
+  return withRoutes(fn, async (channel, resolve) => {
+    const { found, unchecked } = await resolved(resolve)
+    return found.has(channel) || unchecked !== undefined
+  })
 }

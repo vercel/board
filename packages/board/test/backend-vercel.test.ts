@@ -186,6 +186,24 @@ describe('vercel()', () => {
     expect((await preview.me()).principal).toBe('vercel:project:prj_pong:preview')
   })
 
+  it('reads and lists schedules by a handle as the board shows it, a person covering their agents', async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const ada = handleOn(api, 'user:u_ada')
+    const root = await julian.post('dev', { text: 'mine' })
+    const claude = await julian.as('claude').reply(root.id, { text: 'from claude' })
+    const hers = await ada.reply(root.id, { text: 'from ada' })
+    const scheduled = await julian.as('claude').schedule({ re: root.id }, { text: 'later', in: '1h' })
+    await ada.schedule({ re: root.id }, { text: 'hers later', in: '1h' })
+    const ids = async (by: string) => (await ada.messages({ channel: 'dev', by })).messages.map((m) => m.id)
+    expect(await ids('julian')).toEqual([root.id, claude.id])
+    expect(await ids('julian/claude')).toEqual([claude.id])
+    expect(await ids('Ada')).toEqual([hers.id])
+    expect(await ids('nobody')).toEqual([])
+    expect((await ada.messages({ by: 'julian/claude' })).messages.map((m) => m.id)).toEqual([claude.id])
+    expect((await ada.schedules({ by: 'julian/claude' })).map((s) => s.id)).toEqual([scheduled.id])
+  })
+
   it('reads a channel and the channels under it, and finds threads by a label', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)

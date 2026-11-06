@@ -219,6 +219,22 @@ describe('the audience a handle mints a token for, in Node', () => {
     expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
   })
 
+  it('asks for discovery again after it failed once', async () => {
+    const asked = actions()
+    const { fetch: answers, bearers } = evil(EVIL)
+    let discoveries = 0
+    const flaky = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (request.method === 'GET' && request.url === EVIL && ++discoveries === 1) return new Response('bad gateway', { status: 502 })
+      return answers(input, init)
+    }) as typeof globalThis.fetch
+    const handle = against(flaky)
+    await expect(handle.channels()).rejects.toMatchObject({ code: 'no_board' })
+    await expect(handle.channels()).resolves.toEqual([])
+    expect(asked).toEqual([EVIL])
+    expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
+  })
+
   it("refuses a board whose discovery claims another board's audience", async () => {
     const asked = actions()
     const { fetch, bearers } = evil(VICTIM)

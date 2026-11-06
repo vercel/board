@@ -543,17 +543,40 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return Object.fromEntries(listed.map((channel, i) => [channel.id, { at: found[i]!.cursor, skip: 0 }]))
   }
 
+  /** Who a `--by` value covers, as the API's authors. */
+  type By = (actor: ApiActor) => boolean
+
+  /**
+   * Who `--by` names: `me`, the actor itself; or an actor, a principal and its agents, a profile, or
+   * a handle as the board shows it (`julian`, `julian/claude`), a person's covering their agents.
+   */
+  async function byOf(who: Who, by: string | undefined): Promise<By | undefined> {
+    if (by === undefined) return undefined
+    if (by === 'me') {
+      const me = await actorOf(who)
+      return (actor) => actor.id === me
+    }
+    const named = new Set([by])
+    if (!by.startsWith('vercel:')) {
+      const handle = by.toLowerCase()
+      const find = async (read: { views: Promise<Map<string, ApiActorView>> }) =>
+        [...(await read.views)].filter(([, view]) => view.handle.toLowerCase() === handle).map(([id]) => id)
+      const kept = actorNames && Date.now() - actorNames.at <= NAMES_FRESH_MS ? actorNames : null
+      let ids = await find(kept ?? readNames(who))
+      // Someone new since the list was read: one read again finds them.
+      if (ids.length === 0 && kept) ids = await find(readNames(who))
+      for (const id of ids) named.add(id)
+    }
+    return (actor) => named.has(actor.id) || named.has(principalId(actor.principal)) || (actor.profile !== undefined && named.has(actor.profile.name))
+  }
+
   /**
    * Whether a message matches a read's filters. A label matches on the message or its thread's root:
    * `thread`'s labels, as `labeledBy` gives them when the read filters on labels.
    */
-  function matches(filters: Omit<Filters, 'channel'>, message: ApiMessage, thread: ApiThread, me: string | null): boolean {
+  function matches(filters: Omit<Filters, 'channel'>, message: ApiMessage, thread: ApiThread, by: By | undefined): boolean {
     if (filters.re !== undefined && filters.re !== message.id && filters.re !== idAt(thread.id, 1)) return false
-    if (filters.by !== undefined) {
-      const { createdBy } = message
-      const names = [createdBy.id, principalId(createdBy.principal), createdBy.profile?.name]
-      if (!(filters.by === 'me' ? createdBy.id === me : names.includes(filters.by))) return false
-    }
+    if (by && !by(message.createdBy)) return false
     // Nothing here resolves mentions yet, so a mention filter matches nothing.
     if (filters.mentions !== undefined) return false
     // Nothing syncs here: every message was written on the board.
@@ -666,7 +689,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
     }
     const feeds = await heads(who, listed)
-    const mine = await actorOf(who)
+    const by = await byOf(who, filters.by)
     let newest = 0
     const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
     for (const { thread, channel } of threads) {
@@ -674,7 +697,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
       for (const message of all) {
         newest = Math.max(newest, message.createdAt)
-        if (matches(filters, message, labeled, mine)) messages.push({ message, thread, channel })
+        if (matches(filters, message, labeled, by)) messages.push({ message, thread, channel })
       }
     }
     // A thread's messages are in order; across threads, by time, as a person reads a channel.
@@ -689,7 +712,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     channel: string,
     cursor: string,
     filters: Filters,
-    me: string,
+    authors: By | undefined,
     given?: { thread: ApiThread; message: ApiMessage },
     threads: (id: string) => Promise<ApiThread> = threadReader(who),
   ): Promise<BoardEventView | null> {
@@ -703,7 +726,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // A reply's read names its thread, not whether its root is deleted: a label filter reads the root.
     if (found && !given && filters.label?.length)
       found = { ...found, thread: found.message.sequence === 1 ? labeledBy(found.thread, found.message) : await threads(found.thread.id) }
-    if (!found || !matches(filters, found.message, found.thread, me)) return null
+    if (!found || !matches(filters, found.message, found.thread, authors)) return null
     const message = await view(who, found.message, channel)
     const by = authorOf(change.actor)
     const base = { id: message.id, thread: message.thread }
@@ -760,14 +783,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         return { channel, at: from?.at ?? null, next: page.cursor, events }
       }),
     )
-    const mine = await actorOf(who)
+    const by = await byOf(who, filters.by)
     const threads = threadReader(who, signal)
     const running: Record<string, Feed> = { ...position.feeds }
     const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
     const events: BoardEventView[] = []
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
-      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, mine, undefined, threads)
+      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, by, undefined, threads)
       if (event) events.push(event)
     }
     const after: Record<string, Feed> = { ...position.feeds }
@@ -834,9 +857,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const limit = query.limit ?? 50
     const thread = threadReader(who, signal)
     const narrowed = filtered(query)
-    const me = narrowed ? await actorOf(who) : null
+    const by = narrowed ? await byOf(who, query.by) : undefined
     const keep = async (message: ApiMessage) =>
-      !narrowed || matches(query, message, query.label?.length ? await thread(message.threadId) : ({ id: message.threadId } as ApiThread), me)
+      !narrowed || matches(query, message, query.label?.length ? await thread(message.threadId) : ({ id: message.threadId } as ApiThread), by)
     const kept: ApiMessage[] = []
     if (query.after === undefined) {
       // Without a cursor, the newest: a filtered read looks among the channel's latest page.
@@ -858,7 +881,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   async function channelEvents(who: Who, channel: ApiChannel, query: Protocol['events']['input'], signal: AbortSignal) {
     const path = await onBoard(who, '/changes')
     const thread = threadReader(who, signal)
-    const me = await actorOf(who)
+    const by = await byOf(who, query.by)
     const until = Date.now() + (query.wait ?? 0) * 1000
     let cursor = query.after
     for (;;) {
@@ -873,7 +896,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         const message = change.currentMessage
         const found = message && change.threadId ? { message, thread: query.label?.length ? await thread(change.threadId) : ({ id: change.threadId } as ApiThread) } : null
         if (!found) continue
-        const event = await eventOf(who, change, channel.name, change.cursor ?? page.cursor, query, me, found)
+        const event = await eventOf(who, change, channel.name, change.cursor ?? page.cursor, query, by, found)
         if (event) events.push(event)
       }
       if (events.length > 0 || Date.now() >= until || signal.aborted) return { events, cursor }
@@ -1016,13 +1039,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** A match as vboard hands it out: its event as `vb tail --json` prints it, with its message as it is now. */
-  async function matchOf(who: Who, match: ApiMatch, me: string) {
+  async function matchOf(who: Who, match: ApiMatch) {
     const found = await messageById(who, match.event.messageId).catch((error: unknown) => {
       if (error instanceof HttpError && error.status === 404) return null
       throw error
     })
     const channel = found && (await channelById(who, found.thread.channelId))
-    const event = found && channel && (await eventOf(who, match.event, channel.name, match.id, {}, me, found))
+    const event = found && channel && (await eventOf(who, match.event, channel.name, match.id, {}, undefined, found))
     if (!event?.message) return null
     return { id: match.id, watcher: match.watcher, thread: event.message.thread, lease: match.lease, attempt: match.attempt, event }
   }
@@ -1033,8 +1056,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       query: { limit: query.limit?.toString(), wait: query.wait?.toString() },
       ...(signal ? { signal } : {}),
     })
-    const me = await actorOf(who)
-    const shown = await Promise.all(matches.map((match) => matchOf(who, match, me)))
+    const shown = await Promise.all(matches.map((match) => matchOf(who, match)))
     // A match whose message is gone, or that's about no message, has nothing to run: it's dropped.
     await Promise.all(matches.map((match, i) => (shown[i] ? null : ackAs(who, match.id, { lease: match.lease, skip: true }).catch(() => {}))))
     return shown.filter((match) => match !== null)
@@ -1494,10 +1516,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         filter.channelId = channel.id
       }
       // `by` names an actor, a principal and its agents, or a profile, as a read's does; `me` is the actor itself.
-      const me = query.by === 'me' ? await actorOf(who) : undefined
-      const by = me ?? query.by
-      if (by?.startsWith('vercel:')) filter.createdBy = by
-      const created = (actor: ApiActor) => by === undefined || (me ? actor.id === me : [actor.id, principalId(actor.principal), actor.profile?.name].includes(by))
+      if (query.by?.startsWith('vercel:')) filter.createdBy = query.by
+      const by = await byOf(who, query.by)
+      const created = (actor: ApiActor) => by === undefined || by(actor)
       const listed = await all<ApiSchedule>(who, await onBoard(who, '/schedules'), 'schedules', filter, signal)
       const views = await Promise.all(listed.filter((schedule) => created(schedule.createdBy)).map((schedule) => scheduleView(who, schedule)))
       return { schedules: views.filter((schedule) => access === null || access.readable(schedule.channel)) }
