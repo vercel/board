@@ -269,16 +269,19 @@ checked with `@vercel/board/conformance`.
   own credentials register watchers there: its OIDC token, never a board token,
   whoever made it. Its watchers run as
   `http()`'s do (below): it registers their tails with the API, which wakes
-  this deployment by its path on its project (from production, or a branch's
-  preview, through Deployment Protection), and anywhere else it registers no
-  URL and pulls on its own: it never sends the API a `url`. With anyone else's
+  this deployment by its path on its project, through Deployment Protection,
+  from every deployment on Vercel (production, a branch's preview, which names
+  its branch, a `vercel deploy` preview, a custom environment), which never
+  pulls on its own. Only off Vercel does it register no URL and pull on its
+  own: it never sends the API a `url`. With anyone else's
   credentials (a person's, an app's, any board token), the API answers 403
   `watchers_need_project`, so nothing registers: a `/me` principal that isn't
   a project, `BOARD_TOKEN` in Node, or that refusal to its first registration
   tells it so, and from then on each config
   watcher runs in this process as a tail, following `events` from the head as
   `vb tail` does, with local()'s retries, and skipping its own writes. Sync
-  doesn't run for them. Its routes are `POST /wake` and `POST /watchers`,
+  doesn't run for them, and on Vercel neither do the tails: a deployment's
+  watchers need its own OIDC token. Its routes are `POST /wake` and `POST /watchers`,
   which registers now; on a board run with anyone else's credentials, a
   wake-up runs nothing and a registration answers 403 `watchers_need_project`. It doesn't keep the board, so a board
   on it serves no requests but wake-ups and webhooks: any other answers 404
@@ -416,7 +419,7 @@ answers the same routes its own way:
 
 | Route, on the board with the log | What |
 | --- | --- |
-| `POST /watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers and sync entries, replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries; at most 32 watchers; `url` must be `https`, and without one (or a `path`) the caller pulls on its own. `path`, on a board whose discovery says `wake_by_path`, wakes the caller's own Vercel project there instead, through its Deployment Protection: the board takes the project and environment from the caller's token and finds the deployment, so a project can only register itself, and a caller that isn't a Vercel project (a person, say) gets 403 `not_a_project`. Production wakes its best production domain; a preview names its `branch`, and wakes that branch's latest ready preview, since a token doesn't say which deployment called. The board finds the deployment again for each wake-up. A board that can't find a project's deployments answers 501 `no_wake_by_path`. A registration answers the same way: `{ url }`, or `{ url: null, path, branch? }` |
+| `POST /watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers and sync entries, replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries; at most 32 watchers; `url` must be `https`, and without one (or a `path`) the caller pulls on its own. `path`, on a board whose discovery says `wake_by_path`, wakes the caller's own Vercel project there instead, through its Deployment Protection: the board takes the project and environment from the caller's token and finds the deployment, so a project can only register itself, and a caller that isn't a Vercel project (a person, say) gets 403 `not_a_project`. Production wakes its best production domain; a preview of a branch names its `branch`, and wakes that branch's latest ready preview; a preview with no branch (`vercel deploy`) wakes that deployment, and a custom environment its latest ready deployment, as the caller's token says. The board finds the deployment again for each wake-up. A board that can't find a project's deployments answers 501 `no_wake_by_path`. A registration answers the same way: `{ url }`, or `{ url: null, path, branch? }` |
 | `GET /watchers` | Every registration to `manage` in every channel, the caller's own to anyone else |
 | `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
 | `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |

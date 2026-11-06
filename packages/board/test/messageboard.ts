@@ -555,8 +555,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const principal = actor.principal
       if (body.path !== undefined) {
         if (principal.type !== 'project') throw new Refused(403, 'not_a_project')
-        if (principal.environment !== 'production' && principal.environment !== 'preview') throw new Refused(400, 'invalid_environment')
-        if ((principal.environment === 'preview') !== (body.branch !== undefined)) throw new Refused(400, 'invalid_branch')
+        // Any environment's: the API finds what to wake from the caller's token, and a preview's by its branch when it names one.
+        if (body.branch !== undefined && principal.environment !== 'preview') throw new Refused(400, 'invalid_branch')
         if (typeof body.path !== 'string' || !body.path.startsWith('/') || body.path.startsWith('//')) throw new Refused(400, 'invalid_path')
       }
       const where = body.path !== undefined ? { url: null, path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }

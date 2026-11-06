@@ -161,8 +161,10 @@ Where the match happens depends on the board:
   can be woken. Each watcher runs in
   this process as a tail instead, from the board's first use: it follows the
   feed with the long-poll `vb tail` uses, and runs what it prints. It sees what
-  its credentials may read. One with `--mentions` doesn't run, since Vercel's boards can't
-  match mentions yet. Sync doesn't run.
+  its credentials may read. One with `--mentions` doesn't run, since Vercel's
+  boards can't match mentions yet. Sync doesn't run. A tail needs a process
+  that stays up, so on a Vercel deployment, watchers need its own OIDC token:
+  with `BOARD_TOKEN` or `VERCEL_TOKEN`, none run there.
 - **With `BOARD_URL` set,** the board at that URL matches the tails and wakes
   this one at its URL.
 - **On [`local()`](./10-local.md),** everything happens in this process. Each
@@ -203,13 +205,18 @@ matches the tails, and the route at the top of this page runs `run`:
   counts. A registration holds at most 32 watchers. Anyone else's credentials
   get 403 `watchers_need_project`, a board token's included, even one its
   project made: in `BOARD_TOKEN` it doesn't try, and with a token in a `fetch`
-  it tries once, then runs its watchers here as tails.
-- **From production, or a preview of a branch, it registers its mount path**
-  on its own project, which it names with that branch, and Vercel's API wakes
-  it through Deployment Protection with nothing to set up. Anywhere else
-  (development, a custom environment, a preview made with `vercel deploy`),
-  it registers no URL and pulls on its own from its first use, each pull held
-  open until something matches. Vercel's API never wakes a URL.
+  it tries once, then runs its watchers as tails (off Vercel: see
+  [How it runs](#how-it-runs)).
+- **Every deployment on Vercel registers its mount path** on its own project,
+  and Vercel's API wakes it through Deployment Protection with nothing to set
+  up, finding the deployment from its OIDC token: production's best domain, a
+  branch's latest ready preview (a preview of a branch names it), a custom
+  environment's latest ready deployment, or the very deployment a
+  `vercel deploy` preview is. It never pulls on its own, since a function
+  doesn't outlive its request, and Vercel's API never wakes a URL.
+- **Off Vercel, it registers no URL and pulls on its own** from its first
+  use, each pull held open until something matches: `next dev` with your
+  project's OIDC token pulled, say.
 - **A match wakes it with nothing in the wake-up:** a `POST /wake` with no
   event. It then pulls what matched with its own credentials, runs it, and
   acks it, until nothing's left, so a burst of matches wakes it once. It

@@ -1364,8 +1364,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       matches: ({ signal, ...query }) => pullAs(deployment, query, signal, tails),
       ack: (id, body) => ackAs(deployment, id, body),
     },
-    // The API wakes a path on this project, through its Deployment Protection, wherever this board
-    // has one, and nothing at a URL: anywhere else, it pulls.
+    // The API wakes a path on this project, through its Deployment Protection, from every deployment
+    // on Vercel, and nothing at a URL: off Vercel, it pulls.
     wakeAt: async (here) => wakePath(here) ?? { url: null },
     binding: bound,
     hash: () => tagOf(tails, bound().sync),
@@ -1392,9 +1392,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   let here: ReturnType<typeof tailWatchers> | null = null
+  let deployedElse = false
   /** Anyone else's watchers run in this process, as tails: nothing wakes a person. */
   function runHere() {
-    if (here) return
+    if (here || deployedElse) return
+    // A deployment's function doesn't outlive its request, so a tail there would stop with it.
+    if (typeof process !== 'undefined' && process.env.VERCEL === '1') {
+      deployedElse = true
+      console.error("[board] watchers on a deployment need its own OIDC token: with a board token or another Vercel token, none run here")
+      return
+    }
     const { sync, run } = bound()
     if (sync.length > 0) console.error("[board] sync doesn't run on Vercel's board as anyone but a deployment: run it from the project's deployment")
     const watchers: Parameters<typeof tailWatchers>[0]['watchers'] = {}

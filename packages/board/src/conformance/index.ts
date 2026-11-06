@@ -939,10 +939,8 @@ const CHECKS: Check[] = [
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, and checking would replace them'
       const byPath = (await ctx.board.discovery()).wake_by_path
-      // A path wakes a project's production, or a preview's branch, which it names.
+      // A path wakes a project's deployment in any environment, a preview's by its branch when it names one.
       const environment = /^vercel:project:[^:]+:(.+)$/.exec(ctx.me.principal)?.[1] ?? null
-      if (byPath && environment !== null && environment !== 'production' && environment !== 'preview')
-        return `a path wakes production or a preview, and this token is ${environment}'s`
       const where = wokenAt(registered)
       const branch = environment === 'preview' ? { branch: 'conformance' } : {}
       const attempt = () => ctx.board.register({ path: '/conformance', ...branch, watch: {} })

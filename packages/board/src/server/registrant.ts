@@ -17,23 +17,26 @@ const describe = (error: unknown) => ((error instanceof Error ? error.message : 
 /** Only an https URL can be woken; anything else pulls on its own. */
 export const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
 
-/** Whether a registration is woken at all: one with neither a URL nor a path pulls on its own. */
+/** Whether a registration is woken at all: one with neither a URL nor a path pulls on its own, off Vercel. */
 const pulls = (registration: RegistrationView) => registration.url === null && registration.path === undefined
+
+/** On Vercel, a function doesn't outlive its request: a board there never pulls on its own. */
+const onVercel = () => typeof process !== 'undefined' && process.env.VERCEL === '1'
 
 /** Where the other board wakes this one: a URL (null to pull on its own), or a path on this Vercel project. */
 export type WakeAt = { url: string | null } | { path: string; branch?: string }
 
 /**
- * A path on this Vercel project for a board that wakes by path, from `here`, this board's URL:
- * from production, or from a preview of a branch, which it names. Null anywhere else (off Vercel,
- * development, a custom environment), where only a URL wakes it.
+ * A path on this Vercel project for a board that wakes by path, from `here`, this board's URL: on
+ * Vercel, in every environment, the board that wakes it finds the deployment from its token. A
+ * preview of a branch names it. Null off Vercel, where only a URL wakes it.
  */
 export function wakePath(here: string | null): { path: string; branch?: string } | null {
   const env = typeof process !== 'undefined' && process.env.VERCEL === '1' ? process.env : null
+  if (!here || !env) return null
   // A custom environment says `preview` in VERCEL_ENV and its own name in VERCEL_TARGET_ENV.
-  const environment = env?.VERCEL_TARGET_ENV || env?.VERCEL_ENV
-  const branch = environment === 'preview' ? env?.VERCEL_GIT_COMMIT_REF || null : null
-  if (!here || (environment !== 'production' && !branch)) return null
+  const environment = env.VERCEL_TARGET_ENV || env.VERCEL_ENV
+  const branch = environment === 'preview' ? env.VERCEL_GIT_COMMIT_REF || null : null
   return { path: new URL(here).pathname, ...(branch ? { branch } : {}) }
 }
 
@@ -128,7 +131,7 @@ export function registrant(options: RegistrantOptions) {
   let polling: AbortController | null = null
   /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
   function poll() {
-    if (polling) return
+    if (polling || onVercel()) return
     const controller = (polling = new AbortController())
     void (async () => {
       for (let pause = 1000; !controller.signal.aborted; ) {

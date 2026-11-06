@@ -722,6 +722,46 @@ describe('vercel()', () => {
     await vi.waitFor(async () => expect((await pong.thread(ping.id)).replies.map((reply) => [reply.text, reply.by.actor])).toEqual([['pong', 'vercel:project:prj_pong:development+pings']]))
   })
 
+  it('registers its path from a custom environment and a preview with no branch, and never pulls on its own there', async () => {
+    onTestFinished(() => void vi.unstubAllEnvs())
+    for (const [environment, env] of [
+      ['staging', { VERCEL_ENV: 'preview', VERCEL_TARGET_ENV: 'staging', VERCEL_GIT_COMMIT_REF: '' }],
+      // A `vercel deploy` preview: it names no branch, and the API wakes that deployment itself.
+      ['preview', { VERCEL_ENV: 'preview', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' }],
+    ] as const) {
+      for (const [name, value] of Object.entries({ VERCEL: '1', ...env })) vi.stubEnv(name, value)
+      const api = fakeMessageboard()
+      const ran: string[] = []
+      const backend = vercel({ team: 'team_test', api: API, fetch: as(api, `project:prj_pong:${environment}`) })
+      onTestFinished(() => backend.close())
+      const pong = board({ backend, url: 'https://pong-abc123.vercel.app/api/board', watch: { pings: { tail: 'pings', run: async ({ event }) => void ran.push(event.message!.text) } } })
+      await pong.me()
+      await vi.waitFor(() => expect(api.registrations.has(`vercel:project:prj_pong:${environment}`)).toBe(true))
+      expect(api.registrations.get(`vercel:project:prj_pong:${environment}`)).toMatchObject({ url: null, path: '/api/board' })
+      expect(api.registrations.get(`vercel:project:prj_pong:${environment}`)!.branch).toBeUndefined()
+      await handleOn(api, 'user:u_ada').post('pings', 'ping')
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect([environment, ran, api.requests.filter((request) => request.includes('/watchers/matches'))]).toEqual([environment, [], []])
+    }
+  })
+
+  it('never pulls on its own on Vercel, even with a registration nothing wakes', async () => {
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+    onTestFinished(() => backend.close())
+    // A URL that isn't https, so no path comes of it: the registration it asks for would pull, off Vercel.
+    const pong = board({ backend, url: 'http://pong.internal/api/board', watch: { pings: { tail: 'pings', run: async ({ event }) => void ran.push(event.message!.text) } } })
+    const registered = await pong.fetch(new Request('http://pong.internal/api/board/watchers', { method: 'POST' }))
+    expect(await registered.json()).toMatchObject({ url: null })
+    await handleOn(api, 'user:u_ada').post('pings', 'ping')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(ran).toEqual([])
+    expect(api.requests.filter((request) => request.includes('/watchers/matches'))).toEqual([])
+  })
+
   it('never sends Vercel\'s API a url to wake, and the API takes none', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
@@ -873,6 +913,37 @@ describe('vercel()', () => {
       // A board that pulls on its own stops trying too: its next try would have come after a second.
       await new Promise((resolve) => setTimeout(resolve, 1500))
       expect(registrations(api)).toBe(1)
+    })
+
+    it("start no tails on a deployment whose credentials aren't its own, a board token's or VERCEL_TOKEN's", async () => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      onTestFinished(() => {
+        errors.mockRestore()
+        vi.unstubAllEnvs()
+        vi.unstubAllGlobals()
+      })
+      const api = fakeMessageboard()
+      const ada = handleOn(api, 'user:u_ada')
+      await ada.post('pings', 'before it started')
+      const { secret } = await handleOn(api).createToken({ name: 'ci' })
+      vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
+      for (const [name, value, options] of [
+        ['BOARD_TOKEN', secret, { board: 'brd_test' }],
+        ['VERCEL_TOKEN', 'user:u_jb', {}],
+      ] as const) {
+        for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+        for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_ORG_ID: 'team_test', [name]: value })) vi.stubEnv(key, set)
+        const { ran, watch } = pinger()
+        const backend = nodeVercel(options)
+        onTestFinished(() => backend.close())
+        const team = board({ backend, url: 'https://pong.vercel.app/api/board', watch })
+        await team.me()
+        await ada.post('pings', `ping with ${name}`)
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        expect([name, ran]).toEqual([name, []])
+      }
+      // Neither read the feed or asked to register.
+      expect(api.requests.filter((request) => request.endsWith('/changes') || request.includes('/watchers'))).toEqual([])
     })
 
     it("answer a wake-up with nothing run and a registration with watchers_need_project, asking the API nothing", async () => {
