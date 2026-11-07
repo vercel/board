@@ -1,6 +1,6 @@
 ---
 name: verify-board
-description: Run board itself (the CLI and a board) from this checkout, any git ref, or npm, on a local board sealed off from the factory's, and drive it with vb. Use to reproduce a board bug on main before fixing it, to show a fix or feature working, and to check a PR's head while reviewing it.
+description: Run board itself (the CLI and a board) from this checkout, any git ref, or npm, on a local board sealed off from the factory's, and drive it with vb. Use to reproduce a board bug on main before fixing it, to show a fix or feature working. Not for reviewing someone else's PR: it builds and runs that code in your sandbox, with your credentials.
 ---
 
 # Verify board by running it
@@ -24,11 +24,12 @@ ui-video skill says how).
 V=~/.agents/skills/verify-board/scripts/verify-board
 $V up                                       # this checkout, as it is now
 $V up --name before --ref origin/main       # main, in a worktree of its own
-$V up --name pr --ref pr-123                # a PR's head (git fetch origin pull/123/head:pr-123 first)
+$V up --name mine --ref my-branch            # another of your own branches
 $V up --name npm --published 0.9.0          # what people get from npm
 ```
 
 It prints the board's URL, the vb version it built, and the run's transcript.
+Use `--ref` only for code you wrote or that's on main, never a PR someone else opened.
 Each `--name` is its own run with its own board and port, so `before` and
 `after` can be up side by side. Building takes a few seconds; a `--ref` run
 installs its own dependencies first. Iterating on this checkout, build it
