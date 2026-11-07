@@ -22,6 +22,6 @@ A test can pin an invariant instead of a call, such as a key that must exist in 
 
 ## In board
 
-- Don't make the first edit in your head when you can make it for real: break the line the test is about, run the test, and see it fail. A test you never saw fail is a guess.
+- Don't make the first edit in your head when you can make it for real: break the line the test is about, run the test, and see it fail. A test you never saw fail is a guess. That's for your own code: in someone else's PR, don't run its tests (they'd run with your credentials); make the edit in your head and point at the line it would break.
 - Asserting that a prompt or instructions string contains a phrase (`assert.match(INSTRUCTIONS.review, /…/)`) restates the string: it breaks on a reword and catches no behavior. Test what reads the string, or don't test it.
 - A watcher's behavior is what it writes to the board and what reaches Slack or GitHub. Assert those (the reply's text, the label set, the post Slack gets), not the order of the calls that made them.
