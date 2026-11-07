@@ -694,6 +694,27 @@ describe('vercel()', () => {
     expect(registered()).toBe(before)
   })
 
+  it("keeps the registration a call starts running after the response, through Vercel's waitUntil", async () => {
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const kept: Promise<unknown>[] = []
+    const context = Symbol.for('@vercel/request-context')
+    Reflect.set(globalThis, context, { get: () => ({ waitUntil: (task: Promise<unknown>) => void kept.push(task) }) })
+    onTestFinished(() => void Reflect.deleteProperty(globalThis, context))
+    const api = fakeMessageboard()
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+      url: 'https://pong.example/api/board',
+      basePath: '/api/board',
+      watch: { pings: { tail: 'pings', run: async () => {} } },
+    })
+    await pong.me()
+    // A function can freeze once it answers, so what the call started is handed to the platform to finish.
+    expect(kept.length).toBeGreaterThan(0)
+    await Promise.all(kept)
+    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: null, path: '/api/board' })
+  })
+
   it('registers a deployment off Vercel with no url, and pulls what its watchers match, with its env pulled too', async () => {
     // What `vercel env pull` writes to .env.local, and `vercel dev` sets: a dev server, which stays up.
     for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'development', VERCEL_TARGET_ENV: 'development', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)

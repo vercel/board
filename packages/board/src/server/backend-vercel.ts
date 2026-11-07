@@ -14,6 +14,7 @@ import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
+import { waitUntil } from './wait-until.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
 // private to Vercel's monorepo, so these are written out: conformance catches drift.
@@ -1442,7 +1443,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     ...route,
     async handle(request, context) {
       if (context.caller || (await isDeployment().catch(() => true))) return route.handle(request, context)
-      void start()
+      waitUntil(start())
       if (route.path === '/wake') return json({ ran: 0 })
       throw notADeployment()
     },
@@ -2028,7 +2029,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       name,
       (caller: Caller, ...args: unknown[]) => {
         if ('identity' in caller) throw servesNone()
-        if (binding) void start()
+        if (binding) waitUntil(start())
         return (method as (...input: unknown[]) => unknown)(caller, ...args)
       },
     ]),
@@ -2056,7 +2057,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     /** Registers this board's watchers with Vercel's API now, as `POST /watchers` does: only a deployment's. */
     async registerWatchers() {
       if (await isDeployment()) return runner.registerNow()
-      void start()
+      waitUntil(start())
       throw notADeployment()
     },
     /** Stops pulling, for a board that pulls on its own, and the tails of one that runs them here. */
