@@ -475,14 +475,15 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (!(grant === 'all' || grant.includes(permission))) throw new Refused(403, 'forbidden', `This token may not ${permission} in ${name}.`)
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }) {
+  /** `uploader` is who must have uploaded its files: the caller, which for an import is the sync's project, not the platform user it posts as. */
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }, uploader: Actor = actor) {
     tokenMay(actor, 'post', thread.channelId)
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
     const files = (body.attachments ?? []).map((id) => {
       const attachment = attachments.get(id)
-      if (!attachment || !samePrincipal(attachment.createdBy.principal, actor.principal)) throw new Refused(404, 'attachment_not_found')
+      if (!attachment || !samePrincipal(attachment.createdBy.principal, uploader.principal)) throw new Refused(404, 'attachment_not_found')
       if (attachment.state !== 'ready') throw new Refused(409, 'attachment_not_ready')
       if (attachment.messageId) throw new Refused(409, 'attachment_already_posted')
       return attachment
@@ -749,7 +750,7 @@ function fakeBoard(shared: Shared, boardId: string) {
           if (origin && bound !== undefined && bound !== thread.id) throw new Refused(409, 'already_synced')
           if (origin && bound === undefined) throw new Refused(409, 'not_synced')
         } else throw new Refused(400, 'invalid_import')
-        const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.after !== undefined ? { after: body.after } : {}) })
+        const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.attachments?.length ? { attachments: body.attachments } : {}), ...(body.after !== undefined ? { after: body.after } : {}) }, actor)
         if (body.from !== undefined && body.from !== null) message.from = body.from
         if (origin) message.origin = origin
         if (body.noSync) message.noSync = true

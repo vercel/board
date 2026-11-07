@@ -1319,7 +1319,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (body.op === 'seen') return { op: 'seen', operationId: operationId(), author: platformUser(body.author) }
     const base = { op: body.op, operationId: operationId(), author: platformUser(body.author), ...(body.from !== undefined ? { from: body.from } : {}) }
     if (body.op === 'post') {
-      if (body.attachments?.length) throw notSupported('files on imports')
       let after: number | undefined
       if (body.after !== undefined) {
         const at = locate(body.after)
@@ -1336,6 +1335,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         text: body.text,
         ...(body.labels && Object.keys(body.labels).length ? { labels: body.labels } : {}),
         ...(body.noSync ? { noSync: true } : {}),
+        ...(body.attachments?.length ? { attachments: body.attachments } : {}),
         ...(body.links?.length ? { links: body.links } : {}),
         ...(body.id !== undefined ? { id: body.id } : {}),
         ...(after !== undefined ? { after } : {}),
@@ -1511,8 +1511,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async upload(caller, { data, name, type }) {
       const who = whoOf(caller)
-      // What sync uploads is for its imports, which Vercel's API takes no files on: it links each where it lives.
-      if ('self' in caller && caller.self === 'sync') throw new HttpError(501, 'no_files', "Vercel's board takes no files from sync yet")
       if (data.byteLength === 0) throw new HttpError(400, 'bad_request', 'the file is empty')
       // This deployment's own code (sync's imports among it) holds the bytes already, with no request to fit under.
       if (data.byteLength > IMPORT_BYTES_MAX) throw new HttpError(413, 'too_large', `attachments are at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB`)

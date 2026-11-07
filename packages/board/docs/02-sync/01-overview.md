@@ -61,8 +61,8 @@ export const GET = team.fetch, POST = team.fetch
 
 > [!NOTE]
 > On Vercel's board, sync runs as this deployment's project, and Vercel's API
-> keeps its records and wakes this route to retry what failed. It takes no files
-> on imports yet: a file posted on a platform comes over as a link to it there.
+> keeps its records and wakes this route to retry what failed. A file posted on a
+> platform comes over as an attachment on the board, uploaded as this project.
 
 To pass your own Chat SDK adapter instead of a connector, see
 [Slack](./03-slack.md#your-own-adapter) and [GitHub](./04-github.md#setup). Any

@@ -72,8 +72,7 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   `a board token can't register watchers yet.`
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message, labels on a scheduled reply, and a post's `sync`
-  targets. A platform message's files come over as links to them there. A
-  channel's message and thread counts are left out.
+  targets. A channel's message and thread counts are left out.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out

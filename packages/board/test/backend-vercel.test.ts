@@ -919,7 +919,7 @@ describe('vercel()', () => {
     ])
   })
 
-  it("syncs Slack through the engine from its first webhook, a file as a link to it on Slack, and a board reply back to Slack", async () => {
+  it("syncs Slack through the engine from its first webhook, a file as an attachment on the board, and a board reply back to Slack", async () => {
     const api = fakeMessageboard()
     const s = fakePlatform('slack')
     const pong = board({
@@ -946,12 +946,12 @@ describe('vercel()', () => {
     await vi.waitFor(async () => {
       const { messages } = await julian.messages({ channel: 'general' })
       expect(messages.map((message) => [message.from, message.text, message.attachments])).toEqual([
-        ['slack', "the export page\n\n📎 [shot.png](https://files.slack.test/shot.png) (7 B) didn't come over: Vercel's board takes no files from sync yet", []],
+        ['slack', 'the export page', [{ id: expect.any(String), name: 'shot.png', type: 'image/png', size: png.byteLength }]],
       ])
     })
-    // Vercel's API keeps no file for it.
-    expect(api.requests.filter((request) => request.includes('/attachments'))).toEqual([])
     const [root] = (await julian.messages({ channel: 'general' })).messages
+    // Anyone who reads the board reads the file, not only the project that uploaded it.
+    expect(new Uint8Array(await (await julian.download(root!.attachments![0]!.id)).arrayBuffer())).toEqual(png)
     await julian.reply(root!.id, { text: 'looking' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await vi.waitFor(() => expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([['slack:C1:300', expect.stringContaining('looking')]]))
