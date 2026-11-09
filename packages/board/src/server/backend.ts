@@ -182,7 +182,7 @@ export interface Backend extends ProtocolMethods {
   /**
    * Whether the board lives here. One that keeps it (`local()`) serves requests: its people, the
    * board's own deployments, and whoever its grants and tokens let in. One that uses another board
-   * (Vercel's, or one at `BOARD_URL`) answers only wake-ups and webhooks.
+   * answers no requests: on Vercel's, only wake-ups and webhooks, and at `BOARD_URL`, nothing.
    */
   readonly keeps: boolean
   /**

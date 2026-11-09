@@ -54,8 +54,8 @@ export type MountOptions = Partial<A2Options> & Omit<BoardOptions, 'backend' | '
 
 /** A board on the local board's engine: each option to the one that takes it. It has the engine's extras, for tests to look inside. */
 export function mount(options: MountOptions) {
-  const { store, scheduler, blob, transport, auth, ...rest } = options
-  const backend = a2({ store: store ?? memory(), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
+  const { store, scheduler, blob, auth, ...rest } = options
+  const backend = a2({ store: store ?? memory(), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}) })
   const { url, ...given } = rest
   const created = board({
     ...given,

@@ -29,11 +29,8 @@ it works the same on Vercel's board, on `local()`, and on a
 
 ### With `BOARD_URL` set
 
-`board()` with `BOARD_URL` set syncs here, and keeps what it syncs on the
-board at that URL: webhooks land on this route, and what it imports, it writes
-there as this deployment. That board must let this deployment `sync` in those
-channels, and each sync entry's key must be one its own sync doesn't have:
-registering a key it has answers 409 `sync_key_taken`.
+Sync runs where the board's log is. `board()` with `BOARD_URL` set and `sync`
+throws: configure sync on the board at that URL, or on Vercel's board.
 
 ## Configure it
 

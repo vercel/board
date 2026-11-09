@@ -1,12 +1,9 @@
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http as httpBackend } from '../src/backend-http/index.ts'
 import { memoryBlob, type BlobStore } from '../src/server/blob.ts'
-import { slack } from '../src/sync/slack.ts'
-import { channels } from '../src/sync/fn.ts'
-import { bearer, caller, deploymentToken, personToken, testBoard } from './harness.ts'
+import { bearer, deploymentToken, testBoard } from './harness.ts'
 import { serve } from './http.ts'
-import { fakePlatform } from './sync-fixtures.ts'
 
 const TEAM_URL = 'http://team.test/api/board'
 const PROJECT_URL = 'http://project.test/api/board'
@@ -45,7 +42,7 @@ async function signingBlob(): Promise<BlobStore> {
   }
 }
 
-/** A project's board on http(), syncing Slack, using a team's board on a2() behind Vercel Functions' request limit. */
+/** A project's board on http(), using a team's board on a2() behind Vercel Functions' request limit. */
 async function setup(blob: BlobStore) {
   const team = testBoard({ url: TEAM_URL, blob })
   // The support project's production deployments may do everything there.
@@ -58,39 +55,21 @@ async function setup(blob: BlobStore) {
   }) as typeof globalThis.fetch
   const backend = httpBackend(TEAM_URL, { fetch: bearer(limited, () => deploymentToken('support', 'prj_support', 'production', { audience: TEAM_URL })) })
   closers.push(async () => backend.close())
-  const s = fakePlatform('slack')
-  const project = board({ backend, url: PROJECT_URL, sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
-  await backend.registerWatchers()
-  const julian = caller(team.fetch, await personToken('u_julian', TEAM_URL))
+  const project = board({ backend, url: PROJECT_URL })
   const video = new Uint8Array(Math.round(10.9 * 1024 * 1024)).fill(7)
-  s.served.set('https://files.slack.test/demo.mp4', video)
-  await project.fetch(
-    new Request(`${PROJECT_URL}/webhooks/slack`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'message', threadId: 'slack:C1:700.1', id: '700.1', text: 'the demo', user: 'U1',
-        files: [{ name: 'demo.mp4', mimeType: 'video/mp4', url: 'https://files.slack.test/demo.mp4', size: video.byteLength }],
-      }),
-    }),
-  )
-  const root = async () => {
-    const { body } = await julian('GET', '/messages?channel=firehose')
-    return body.messages[0] as { text: string; attachments: { id: string; size: number }[] } | undefined
-  }
-  return { video, root }
+  const upload = () => project.upload({ data: video, name: 'demo.mp4', type: 'video/mp4' })
+  return { video, upload }
 }
 
-describe('sync on http() brings a Slack file over 4.5 MB', () => {
-  it('as a note, where the board it uses takes nothing bigger than a request', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { root } = await setup(memoryBlob())
-    await vi.waitFor(async () => expect(await root()).toMatchObject({ text: "the demo\n\n📎 demo.mp4 (10.9 MB) didn't come over: over 4 MB", attachments: [] }))
-    warn.mockRestore()
+describe('a board on http() uploads a file over 4.5 MB', () => {
+  it("straight to the store, where the board it uses' store signs uploads", async () => {
+    const { video, upload } = await setup(await signingBlob())
+    // The board it uses records it only once its store has exactly these bytes.
+    expect(await upload()).toMatchObject({ name: 'demo.mp4', type: 'video/mp4', size: video.byteLength })
   })
 
-  it("as a file, straight to the store, where the board it uses' store signs uploads", async () => {
-    const { video, root } = await setup(await signingBlob())
-    await vi.waitFor(async () => expect(await root()).toMatchObject({ text: 'the demo', attachments: [{ name: 'demo.mp4', type: 'video/mp4', size: video.byteLength }] }))
+  it("never as one request, which the board it uses can't take, where its store signs nothing", async () => {
+    const { upload } = await setup(memoryBlob())
+    await expect(upload()).rejects.toMatchObject({ code: 'no_direct_uploads' })
   })
 })

@@ -11,7 +11,6 @@ import { FULL_ACCESS, type Access } from './access.ts'
 import { compileFilter, eventView, foldEvent, loadBefore, OWN_CODE, view as messageView } from './feed.ts'
 import { compileWatcher, type Compiled } from './watch-spec.ts'
 import type { BoardReads } from './reads.ts'
-import { arm, due, hasWork, queueReducer, wakeBackoff, type QueueSession } from './registered.ts'
 import type { Registration, RegistryState, StoredPrincipal } from './registry.ts'
 import { runMatch } from './watch-run.ts'
 
@@ -41,22 +40,12 @@ const RECEIPTS = new Set(['message.synced', 'message.files_synced'])
  */
 const SYNCED = new Set(['message.posted', 'message.edited', 'message.deleted', 'reaction.added', 'reaction.removed', 'labels.changed', 'thread.synced'])
 
-/** Whether a match waits in a registrant's queue for it to pull, as opposed to a config watcher's, which runs here. */
-const queued = (payload: { watcher?: string | undefined; sync?: true | undefined; inbox?: string | undefined }) =>
-  payload.watcher !== undefined || payload.sync === true || payload.inbox !== undefined
-
-/** Tries at a wake-up before it's left to the next match or sweep, well short of A2's dead letter. */
-const WAKE_TRIES = 3
-
-/** Whether a wake-up got there: an answer, or still running when the wait ran out. If not, why: its status, or the error. */
-export type Woken = { reached: true } | { reached: false; why: string }
-
 /** A watcher writes as `board:watch:<id>`, and its own writes never wake it. */
 const actorOf = (id: string) => `board:watch:${id}`
 
 export { compileWatcher }
 
-/** A watcher to match an event against: one in config, or one a board on `http()` registered. */
+/** A watcher to match an event against: one in config, or one registered here. */
 type Candidate = Compiled & {
   id: string
   /** Who its writes are by: an event by it never wakes it. */
@@ -80,13 +69,11 @@ export function createWatchers(options: {
   run: (id: string, event: BoardEventView, trigger: string, attempt: number) => Promise<void>
   store?: A2Store | undefined
   scheduler?: A2Scheduler | undefined
-  /** Watchers that boards on `http()` registered here, and how to tell one it has matches. */
+  /** Watchers registered here, whose matches queue for their registrant to pull. */
   registered?: {
     state: () => Promise<RegistryState>
     /** What a registrant may do now, under the rules as they are: null once it may do nothing. */
     accessNow: (principal: StoredPrincipal) => Promise<Access | null>
-    /** Tells a registrant's board it has something to pull, and says whether that got there. Never throws. */
-    wake: (registration: Registration & { url: string }) => Promise<Woken>
   }
 }) {
   const watchers = Object.entries(options.watch).map(([id, watcher]) => {
@@ -116,64 +103,11 @@ export function createWatchers(options: {
     })
   })
 
-  /**
-   * Wakes a registrant's board when it has something to pull: a new match, a wait after an error
-   * that's over, or a sweep that finds a lease ran out. A registrant's wake-ups go one at a time,
-   * and only when there's something to pull: its board pulls until nothing's left, so a burst of
-   * matches wakes it once. One that doesn't get there waits a minute for the next, doubling to an
-   * hour while they keep failing, until its board answers one, pulls, or registers.
-   */
-  const waker = consumer({
-    contract: watchContract,
-    name: 'board-wake',
-    types: ['watch.matched', 'watch.due'],
-    // A config watcher's match runs here, in its own session: nothing to wake. Neither does a push
-    // to an inbox, whose registrant pulls it right after: only its retries and sweeps wake it.
-    lane: ({ event }) => ('thread' in event.payload && (!queued(event.payload) || event.payload.inbox !== undefined) ? null : 'wake'),
-  }).run(async (ctx) => {
-    const key = ctx.session.id.slice('watch:'.length)
-    const registered = options.registered
-    if (!key.startsWith('@') || !registered) return
-    if (ctx.event.type === 'watch.matched' && (!queued(ctx.event.payload) || ctx.event.payload.inbox !== undefined)) return
-    // Its queue's own appends and timers: a consumer's session names each one, which these don't need.
-    const queue = server.session(ctx.session.id) as unknown as QueueSession
-    try {
-      const state = ctx.event.type === 'watch.due' ? await due(queue, ctx.event.payload) : (await queue.state(queueReducer)).state
-      if (!hasWork(state, Date.now())) return
-      const registration = (await registered.state()).byOwner[key.slice(1)]
-      // One without a URL pulls on its own.
-      if (!registration || registration.url === null) return
-      const { url } = registration
-      // Its last wake-up didn't get there: the sweep set then wakes it, and until then a match only queues.
-      const now = Date.now()
-      if (state.unreachable && state.unreachable.until > now) return
-      const woken = await registered.wake({ ...registration, url })
-      if (woken.reached) {
-        if (state.unreachable) await queue.append({ type: 'watch.reachable', payload: { by: 'wake' } })
-        return
-      }
-      const failures = (state.unreachable?.failures ?? 0) + 1
-      const until = now + wakeBackoff(failures)
-      // The first failure, and the one that starts the back-off: not every try.
-      if (failures === 1) console.error(`[board] couldn't wake ${url}: ${woken.why}`)
-      if (failures === 2)
-        console.error(`[board] couldn't wake ${url} again (${woken.why}): trying less often, up to once an hour, until it answers, pulls, or registers`)
-      // It hears again from a sweep then. The timer goes first: a wait recorded without one would last until the next match.
-      if (options.scheduler) await arm(queue, state, until)
-      await queue.append({ type: 'watch.unreachable', payload: { failures, until, why: woken.why.slice(0, 200) || 'unknown error' } })
-    } catch (error) {
-      // Ten failures would dead-letter this lane, and the registrant would never be woken again.
-      // The queue keeps every match, so the next match or sweep wakes it for this one too.
-      if (ctx.attempt < WAKE_TRIES) throw error
-      console.error(`[board] couldn't wake the board of ${key.slice(1)}:`, (error as Error).message)
-    }
-  })
-
   const server = createServer({
     contract: watchContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    consumers: [runner, waker],
+    consumers: [runner],
   })
 
   const configured: Candidate[] = watchers.map((watcher) => ({ ...watcher, actor: actorOf(watcher.id) }))

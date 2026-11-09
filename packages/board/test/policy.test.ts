@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { board, type Middleware, type MiddlewareContext, type Watcher, type WatcherContext } from '../src/server/index.ts'
+import { board, type Middleware, type MiddlewareContext } from '../src/server/index.ts'
 import { oidcTokens, type Can, type HostPrincipal } from '../src/access/index.ts'
 import { a2 } from '../src/server/a2.ts'
 import { http } from '../src/backend-http/index.ts'
@@ -45,7 +45,7 @@ const julianOn = async (fetch: (request: Request) => Promise<Response>) => calle
 afterEach(() => vi.useRealTimers())
 
 describe('a board on http()', () => {
-  it('serves no request but wake-ups and webhooks: it verifies none, and nothing reaches the board it uses', async () => {
+  it('serves no request: it verifies none, and nothing reaches the board it uses', async () => {
     const remote = testBoard()
     await remote.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
     let project: ReturnType<typeof board>
@@ -54,7 +54,7 @@ describe('a board on http()', () => {
     // An `authenticate` opens nothing: the board it uses keeps the say.
     project = board({ backend: http(BOARD_URL, { fetch }), url: SUPPORT_URL, authenticate })
     const ada = withCookie(project.fetch, 'session=ada')
-    const nothing = { error: { code: 'not_found', message: `${SUPPORT_URL} answers only wake-ups and webhooks` } }
+    const nothing = { error: { code: 'not_found', message: `${SUPPORT_URL} answers nothing itself` } }
     for (const [method, path, body] of [
       ['GET', '/', undefined],
       ['GET', '/me', undefined],
@@ -115,38 +115,32 @@ describe("a local board's own writes, through board()", () => {
   })
 
   it("matches a registered watcher by what the board's grants let its registrant read, at each event", async () => {
-    const queue = fakeQueue()
-    // While it's held, a wake-up gets there and the project doesn't pull: only what matched is queued.
-    const wakes = { held: false }
-    let project: ReturnType<typeof board>
-    const remote = testBoard({
-      scheduler: queue.scheduler,
-      transport: {
-        post: (url, init) => (wakes.held ? Promise.resolve(Response.json({ ran: 0 })) : project.fetch(new Request(url, { method: 'POST', headers: init.headers, body: init.body }))),
-      },
-    })
+    const remote = testBoard()
     // One grant for the project, changed by its ID to change what it gives; g2 would let it in too.
     await remote.revokeGrant('g2')
     const { grant: made } = await remote.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
     const grant = (can: Can) => remote.updateGrant(made.id, { can: (typeof can === 'object' && !Array.isArray(can) ? can : { '*': can }) as never })
-    const { fetch } = team(remote, () => project)
-    const ran: WatcherContext['event'][] = []
-    const watch: Record<string, Watcher> = { triage: { tail: 'feedback', run: ({ event }) => void ran.push(event) } }
-    const backend = http(BOARD_URL, { fetch })
-    project = board({ backend, url: SUPPORT_URL, watch })
-    await backend.registerWatchers()
+    const support = caller(remote.fetch, await supportToken())
+    expect((await support('POST', '/watchers', { watch: { triage: { tail: 'feedback' } } })).status).toBe(200)
+    const pulled: string[] = []
+    /** Pulls and acks what's matched for the project, as a board pulling on its own would. */
+    const pull = async () => {
+      for (const match of (await support('GET', '/watchers/matches')).body.matches as { id: string; lease: string; event: { message: { text: string } } }[]) {
+        pulled.push(match.event.message.text)
+        await support('POST', `/watchers/matches/${match.id}/ack`, { lease: match.lease })
+      }
+      return pulled
+    }
     const julian = await julianOn(remote.fetch)
     await julian('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
-    await vi.waitFor(() => expect(ran.map((event) => event.message?.text)).toEqual(['export is broken']))
+    await vi.waitFor(async () => expect(await pull()).toEqual(['export is broken']))
     // The board's grants no longer let the project read feedback: what's posted there now isn't its
     // match, even once it may read it again by the time it pulls.
     await grant({ support: ['read'] })
-    wakes.held = true
     await julian('POST', '/messages', { channel: 'feedback', text: 'import too' })
     await new Promise((resolve) => setTimeout(resolve, 200))
     await grant('all')
-    wakes.held = false
     await julian('POST', '/messages', { channel: 'feedback', text: 'and search' })
-    await vi.waitFor(() => expect(ran.map((event) => event.message?.text)).toEqual(['export is broken', 'and search']))
+    await vi.waitFor(async () => expect(await pull()).toEqual(['export is broken', 'and search']))
   })
 })

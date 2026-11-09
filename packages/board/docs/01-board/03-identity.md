@@ -14,7 +14,7 @@ a host can recognize its own credentials too: see
 
 Only a few routes take no token: discovery, the built-in avatars, the OpenAPI
 document, and `/webhooks/:key`, which the platform's adapter authenticates instead. A
-route whose watchers another board runs (Vercel's board, say) also answers
+route whose watchers Vercel's board runs also answers
 `POST /wake` without one: a wake-up only says to pull.
 
 ## Where tokens come from

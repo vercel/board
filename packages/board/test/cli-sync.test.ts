@@ -1,44 +1,23 @@
 import { spawn } from 'node:child_process'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { board } from '../src/server/index.ts'
-import { http as httpBackend } from '../src/backend-http/index.ts'
 import { slack, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { CLI, tmp } from './cli-harness.ts'
-import { bearer, caller, deploymentToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { caller, personToken, signedInHome, testBoard } from './harness.ts'
 import { serve } from './http.ts'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 
-/**
- * The CLI on a project whose board is on http() and syncs Slack, over real HTTP: the team's board on
- * a2() keeps the log, the project's runs the sync, and the repo links the team's board.
- */
+/** The CLI over real HTTP, on a team's board on a2() that runs no sync, which the repo links. */
 let team: ReturnType<typeof testBoard>
-let project: ReturnType<typeof board>
-let backend: ReturnType<typeof httpBackend>
 let servers: Awaited<ReturnType<typeof serve>>[] = []
 let teamUrl: string
-let projectUrl: string
 let env: NodeJS.ProcessEnv
-const s = fakePlatform('slack')
 
 beforeAll(async () => {
   const teamServer = await serve((request) => team.fetch(request))
-  const projectServer = await serve((request) => project.fetch(request))
-  servers = [teamServer, projectServer]
+  servers = [teamServer]
   teamUrl = `${teamServer.origin}/api/board`
-  projectUrl = `${projectServer.origin}/api/board`
   team = testBoard({ url: teamUrl })
-  // The support project's production deployments may do everything there.
-  await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
-  backend = httpBackend(teamUrl, { fetch: bearer(globalThis.fetch, () => deploymentToken('support', 'prj_support', 'production', { audience: teamUrl })) })
-  project = board({
-    backend,
-    url: projectUrl,
-    sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) },
-  })
-  // Its registration tells the team's board it syncs Slack, as its first request would.
-  await backend.registerWatchers()
   const clean = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^(CLAUDE|CODEX|GROK|PI_|AI_AGENT|BOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key)),
   )
@@ -47,7 +26,6 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  backend.close()
   await Promise.all(servers.map((server) => server.close()))
 })
 
@@ -114,7 +92,7 @@ describe('the CLI on a board that runs a sync', () => {
     expect(await on(['typing', root.id, 'running', 'tests…', '--json'])).toMatchObject({ code: 0, stdout: `${JSON.stringify({ targets: ['slack:C1:200'] })}\n`, stderr: '' })
     expect([p.typing, p.statuses]).toEqual([['slack:C1:200'], ['running tests…']])
 
-    // The team's board doesn't run the project's Slack: only the board that does reads it.
+    // A board that runs no Slack sync doesn't read Slack: only the board that does.
     expect(await on(['sources', 'slack', 'read', '#project-vercel-kit'], teamUrl)).toMatchObject({
       code: 1,
       stderr: "error: Can't read #project-vercel-kit on slack.\n  this board doesn't run sync entry slack: read it where its sync runs\n",

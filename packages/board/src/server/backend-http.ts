@@ -1,14 +1,14 @@
-import { RegisterBody, routes, type Discovery } from '../api/routes.ts'
+import { routes, type Discovery, type EventsPage } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { BoardError, createBoardClient, type BoardClient, type ProfileOption } from '../client/client.ts'
-import { DERIVED_ID, keyId, sha256 } from '../client/ids.ts'
+import { DERIVED_ID, keyId } from '../client/ids.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
-import { SYNC, type Backend, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller } from './backend.ts'
-import { HttpError, json } from './errors.ts'
+import { type Backend, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller } from './backend.ts'
+import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
-import { registrant, wakePath, type WakeAt } from './registrant.ts'
-import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
+import { deployedOnVercel } from './registrant.ts'
+import { tailWatchers } from './tails.ts'
 
 export type HttpOptions = {
   /**
@@ -93,12 +93,8 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   const remote = (url ?? environment!.url()).replace(/\/+$/, '')
   const doFetch: typeof fetch = options.fetch ?? environment?.fetch(remote) ?? ((input, init) => globalThis.fetch(input, init))
   let binding: BoardBinding | null = null
-  const specs: Record<string, WatcherSpec> = {}
-  /** This board's sync entries, registered there when it syncs. */
-  let sync: SyncEntrySpec[] = []
-  let hash: Promise<string> | null = null
-  /** What every wake-up carries, so the board it uses can tell it's stale. */
-  const watchersHash = () => (hash ??= sha256(canonicalWatchers(specs, sync)).then((hex) => hex.slice(0, 32)))
+  /** This board's watchers, compiled: they run here, as tails of the board it uses. */
+  const tails: Parameters<typeof tailWatchers>[0]['watchers'] = {}
   const bound = () => {
     if (!binding) throw new Error("http: this backend isn't serving a board yet: pass it to board({ backend })")
     return binding
@@ -224,12 +220,10 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
 
   /** A protocol method, called on the board it uses, as `caller`. */
   async function remoteCall(method: Method, caller: Caller, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
-    const registering = start()
+    start()
     // board() serves no requests for a board that uses another's: only its own code calls here.
-    if ('identity' in caller) throw new HttpError(404, 'not_found', `this board uses ${remote}, and answers only wake-ups and webhooks`)
+    if ('identity' in caller) throw new HttpError(404, 'not_found', `this board uses ${remote}, and answers nothing itself`)
     const client = clientOf(caller)
-    // Sync's records name its entries, which the board it uses knows from its registration.
-    if ('self' in caller && caller.origin.via?.kind === 'engine') await registering
     // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
     // and a retry's lookup asks for the same.
     if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
@@ -244,114 +238,55 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     async discovery() {
       return discovery()
     },
-    // A source this board's own sync reads is read here; any other is the board it uses' to read.
-    async readSource(caller, input, signal) {
-      if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().readSource(input.key, input.target, input.limit ?? 50, input.after ?? null)
-      return remoteCall('readSource', caller, input, signal) as Promise<Protocol['readSource']['output']>
-    },
-    async joinSource(caller, input, signal) {
-      if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().joinSource(input.key, input.target)
-      return remoteCall('joinSource', caller, input, signal) as Promise<Protocol['joinSource']['output']>
-    },
-    // The board it uses has the records; this board's own sync links what it synced there.
-    async synced(caller, input, signal) {
-      const { targets } = (await remoteCall('synced', caller, input, signal)) as Protocol['synced']['output']
-      return {
-        targets: await Promise.all(
-          targets.map(async (row) => ({
-            ...row,
-            url: row.url ?? (row.thread !== null && row.message !== null ? await bound().linkOf(row.key, row.thread, row.message) : null),
-          })),
-        ),
-      }
-    },
-    // A link to what this board's own sync synced is found in its records there, as this deployment;
-    // any other is the board it uses' to find. Either way the caller reads it as itself.
-    async linked(caller, input, signal) {
-      const missing = () => new HttpError(404, 'message_not_found', 'no message on this board for that link')
-      // Each of this board's own entries of the link's platform, under its own key there; then the
-      // board it uses, whose own sync may have synced it.
-      const first = async (): Promise<string | null> => {
-        for (const { platform, thread, message } of bound().locate(input.url))
-          for (const entry of bound().sync.filter((candidate) => candidate.platform === platform)) {
-            const at = await own.syncFind({ thread: `${entry.key}:${thread}`, ...(message !== null ? { message } : {}) }, { signal }).catch(rethrow)
-            const found = message !== null ? at.message : at.thread === null ? null : (await own.syncThread(at.thread).catch(rethrow)).root
-            if (found !== null) return found
-          }
-        return null
-      }
-      const id = await first()
-      if (id === null) return remoteCall('linked', caller, input, signal) as Promise<Protocol['linked']['output']>
-      try {
-        return (await methods.message(caller, { id }, signal)) as Protocol['linked']['output']
-      } catch (error) {
-        if (error instanceof HttpError && error.status === 404) throw missing()
-        throw error
-      }
-    },
-    // Typing shows where the board it uses syncs the thread, and where this board's own sync does.
-    async typing(caller, input, signal) {
-      const { targets } = (await remoteCall('typing', caller, input, signal)) as Protocol['typing']['output']
-      if (!('self' in caller) || bound().sync.length === 0) return { targets }
-      const { message, replies } = await methods.message(caller, { id: input.id }, signal)
-      const here = await bound().typing([message, ...replies], input.status).catch((error: unknown) => {
-        console.warn('[board] skipped typing where this board syncs:', describe(error))
-        return [] as string[]
-      })
-      return { targets: [...targets, ...here] }
-    },
   }
 
+  let running: ReturnType<typeof tailWatchers> | null = null
+  /** Whether they won't run, or won't again: on Vercel, or once closed. */
+  let stopped = false
   /**
-   * Where the remote wakes this board: on a board that wakes by path, the path on this project,
-   * which gets through its Deployment Protection (`wakePath`); anywhere else, its URL.
+   * On first use, this board's watchers start following the board it uses, in this process, as
+   * `vb tail` does. Nothing wakes a board on http(). A deployment's function doesn't outlive its
+   * request, so on Vercel none run.
    */
-  async function wakeAt(here: string | null): Promise<WakeAt> {
-    const path = wakePath(here)
-    return path && (await discovery()).wake_by_path ? path : { url: here }
+  function start() {
+    if (running || stopped || Object.keys(tails).length === 0) return
+    if (deployedOnVercel()) {
+      stopped = true
+      console.error(`[board] watchers on a board that uses ${remote} run only in a process that stays up: on Vercel, none run`)
+      return
+    }
+    running = tailWatchers({
+      watchers: tails,
+      events: async (query, signal) => (await call(own, 'events', query, signal)).json() as Promise<EventsPage>,
+      actorOf: async (id) => (await asProfile(id).me().catch(rethrow)).actor,
+      run: (id, event, meta) => bound().run(id, event, meta),
+    })
+    running.start()
   }
-
-  const runner = registrant({
-    remote,
-    registry: {
-      register: (where) => own.register({ ...where, watch: specs, ...(sync.length > 0 ? { sync } : {}) }),
-      matches: (query) => own.matches(query),
-      ack: (id, body) => own.ack(id, body),
-    },
-    wakeAt,
-    binding: bound,
-    hash: watchersHash,
-    hasWork: () => Object.keys(specs).length > 0 || sync.length > 0,
-    rethrow,
-    registerFor: async (caller, request) => json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal)),
-  })
-  const start = runner.start
 
   const backend = {
     ...methods,
-    // Its own routes are wake-ups: who may do what on the board it uses is that board's to say.
-    routes: runner.routes,
-    // The log is the board it uses': a board here answers only wake-ups and webhooks.
+    // Who may do what on the board it uses is that board's to say: a board here answers nothing itself.
+    routes: [],
+    // The log is the board it uses'.
     keeps: false,
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')
       for (const [id, spec] of Object.entries(next.subscriptions)) {
-        // Sync subscribes as itself, beside the watchers: the remote sends it what it may sync.
-        if (spec.kind === 'sync') {
-          if (id === SYNC) sync = next.sync.map((entry) => ({ ...entry }))
-          continue
-        }
+        // Sync runs where the board keeps its log: the board it uses' own config, or Vercel's board.
+        if (spec.kind === 'sync') throw new Error(`http: sync doesn't run on a board that uses ${remote}: sync from that board's own config`)
         if (!PROFILE.test(id)) throw new Error(`watch ${id}: ${PROFILE_RULE}`)
-        compileWatcher(id, spec)
-        specs[id] = { tail: spec.tail }
+        const { filters, all } = compileWatcher(id, spec)
+        tails[id] = { filters, all }
       }
-      hash = null
       binding = next
     },
-    /** Registers this board's watchers with the board it uses now, as `POST /watchers` does. */
-    registerWatchers: runner.registerNow,
-    /** Stops pulling, for a board that pulls on its own. */
-    close: runner.close,
+    /** Stops its watchers' tails. */
+    close: () => {
+      stopped = true
+      running?.close()
+      running = null
+    },
   }
   return backend satisfies Backend
 }

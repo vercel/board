@@ -107,9 +107,9 @@ async function narrowedOut(attempt: Promise<unknown>, what: string) {
   throw new Mismatch(`${what}, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded`)
 }
 
-/** Where a registration is woken, to put back after a check replaces it: its path (and branch) on a board that wakes by path, or its url. */
-function wokenAt(registered: RegistrationView | undefined): { url: string | null } | { path: string; branch?: string } {
-  if (!registered?.path) return { url: registered?.url ?? null }
+/** Where a registration is woken, to put back after a check replaces it: its path (and branch) on a board that wakes by path, or nowhere. */
+function wokenAt(registered: RegistrationView | undefined): { path?: undefined } | { path: string; branch?: string } {
+  if (!registered?.path) return {}
   return { path: registered.path, ...(registered.branch ? { branch: registered.branch } : {}) }
 }
 
@@ -313,7 +313,7 @@ async function registerSync(ctx: Context): Promise<{ where: ReturnType<typeof wo
     return { skip: 'this token has watchers or a sync registered here, which registering would replace' }
   const where = wokenAt(registered)
   try {
-    await ctx.board.register({ url: null, watch: {}, sync: [{ key: SYNC_KEY, platform: SYNC_KEY }] })
+    await ctx.board.register({ watch: {}, sync: [{ key: SYNC_KEY, platform: SYNC_KEY }] })
   } catch (error) {
     if (error instanceof BoardError && error.status === 403) return { skip: "this token can't register a sync here" }
     throw error
@@ -968,7 +968,7 @@ const CHECKS: Check[] = [
         return 'this token has watchers or a sync registered here, and checking would replace them'
       // Nothing's woken while it checks, and an empty one gets back where it's woken after.
       const where = wokenAt(registered)
-      await ctx.board.register({ url: null, watch: { conformance: { tail: `${ctx.channel} --label conformance=${ctx.labels.conformance}` } } })
+      await ctx.board.register({ watch: { conformance: { tail: `${ctx.channel} --label conformance=${ctx.labels.conformance}` } } })
       try {
         const message = await post(ctx, 'conformance: for a watcher')
         const deadline = Date.now() + 10_000
@@ -998,7 +998,7 @@ const CHECKS: Check[] = [
       const branch = environment === 'preview' ? { branch: 'conformance' } : {}
       const attempt = () => ctx.board.register({ path: '/conformance', ...branch, watch: {} })
       try {
-        if (!byPath) await rejects(attempt(), 501, 'no_wake_by_path', 'a path, on a board that wakes only urls')
+        if (!byPath) await rejects(attempt(), 501, 'no_wake_by_path', 'a path, on a board that wakes nothing')
         else if (environment === null) await rejects(attempt(), 403, 'not_a_project', "a path, from a token that isn't a Vercel project's")
         else {
           const view = await attempt()

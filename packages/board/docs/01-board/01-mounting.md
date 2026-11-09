@@ -315,7 +315,7 @@ What a backend has:
 | --- | --- |
 | `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
-| `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants and board tokens let in. `false`, as on Vercel's board and the board at `BOARD_URL`, serves no requests but wake-ups and webhooks |
+| `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants and board tokens let in. `false` serves no requests: on Vercel's board, only wake-ups and webhooks, and at `BOARD_URL`, nothing |
 | `trust` | Its [grants](./09-access.md#grants) and [board tokens](./09-access.md#tokens), for a backend that keeps them: `grants()`, `token(hash)`, and `live(id)`. `board()` checks each request against them as they are then. Without it, they let no one in |
 | `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O. `binding.name` and `binding.team` are `board({ name, team })`'s, or null |
 
@@ -462,7 +462,7 @@ curl https://www.example.com/api/board
 `board()` knows its project from `VERCEL_PROJECT_ID` on Vercel, or
 `.vercel/project.json` locally. Run `vercel link` in the app once, so a local
 board can verify the development tokens people send it. A route with no
-backend answers no discovery: it serves only wake-ups and webhooks.
+backend answers no discovery: it serves only wake-ups and webhooks, and with `BOARD_URL` set, nothing.
 
 The CLI doesn't take discovery's word for it. It mints a person's token only
 for the project Vercel says the board's host is a deployment of, so a board

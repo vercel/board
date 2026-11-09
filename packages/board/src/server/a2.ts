@@ -23,11 +23,10 @@ import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readable
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
-import { compileWatcher, createWatchers, ID, registrantSession, type Woken } from './watch.ts'
-import { ack, pull, pullInbox, queueReducer, type QueueSession } from './registered.ts'
-import { createRegistry, storedPrincipal, type Registration, type SyncEntrySpec } from './registry.ts'
+import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
+import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
+import { createRegistry, storedPrincipal, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
-import { publicPost, type Post } from './transport.ts'
 import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import type { WriteOrigin } from './origin.ts'
 import { isKeyIdOf } from '../client/ids.ts'
@@ -53,8 +52,6 @@ export type A2Options = {
    * platform's files where they are. `local()` always passes one.
    */
   blob?: BlobStore
-  /** For tests: how the board POSTs wake-ups to boards on `http()`. Defaults to https to public addresses only. */
-  transport?: { post?: Post }
 }
 
 const boardServer = (options: A2Options) =>
@@ -104,9 +101,6 @@ function scheduleAt(value: string): number {
 
 /** A signal that never aborts, for what the board does by itself. */
 const NEVER = new AbortController().signal
-
-/** A wake-up only has to arrive: the board it wakes answers once what it pulls has run, or after 2 seconds while it keeps going. */
-const WAKE_TIMEOUT_MS = 5000
 
 /**
  * `idempotentId`'s shape, a UUIDv8: the IDs the board derives for its own writes (schedule
@@ -201,17 +195,16 @@ function build(options: A2Options, binding: BoardBinding) {
   const identityOf = async (caller: Caller): Promise<Identity> => ('identity' in caller ? caller.identity : selfIdentity(caller))
   /** Its own code's handle, which reaches it in process. */
   let ownHandle: ReturnType<BoardBinding['handle']> | null = null
-  const post = options.transport?.post ?? publicPost
   const tails = Object.fromEntries(
     Object.entries(binding.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail }]] : [])),
   )
-  // Always, since boards on http() may register watchers here at any time.
+  // Always, since anyone may register watchers here, to pull, at any time.
   const watchers = createWatchers({
     watch: tails,
     run: (id, event, trigger, attempt) => binding.run(id, event, { trigger, attempt }),
     store: log,
     scheduler: options.scheduler,
-    registered: { state: registry.state, accessNow: (principal) => binding.accessNow(principal), wake },
+    registered: { state: registry.state, accessNow: (principal) => binding.accessNow(principal) },
   })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
@@ -336,25 +329,6 @@ function build(options: A2Options, binding: BoardBinding) {
       }),
     )
 
-  /**
-   * Tells a registrant's board it has matches to pull, with no event and no credential in it: its
-   * board pulls them with its own credentials, and lets this POST through its own protection. The hash says whether its registration is stale. Says whether the
-   * wake-up got there: an answer, or still pulling when the wait ran out.
-   */
-  async function wake(registration: Registration & { url: string }): Promise<Woken> {
-    try {
-      const response = await post(`${registration.url}/wake`, {
-        headers: { 'content-type': 'application/json', 'x-board-watchers': registration.hash },
-        body: '{}',
-        // Its board answers once what it pulls has run, or a little before this runs out: the wake-up only has to arrive.
-        signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
-      })
-      return response.ok ? { reached: true } : { reached: false, why: String(response.status) }
-    } catch (error) {
-      if ((error as Error).name === 'TimeoutError') return { reached: true }
-      return { reached: false, why: (error as Error).message }
-    }
-  }
   /** A registrant's queue, in the watch contract: its watchers' and sync's matches, and its inbox. */
   const queueOf = (owner: string) => watchers.server.session(registrantSession(owner))
 
@@ -613,8 +587,9 @@ function build(options: A2Options, binding: BoardBinding) {
       return { watchers: principal.access.everywhere('manage') ? all : all.filter((found) => found.owner === principal.id) }
     },
     async register(caller, body) {
-      // A path wakes the caller's own Vercel project, which only a board that finds its deployments can.
-      if (body.path) throw new HttpError(501, 'no_wake_by_path', 'this board wakes a url, not a path: register `url` instead')
+      // This board wakes nothing: a registrant pulls its matches. A path wakes the caller's own Vercel project, which only Vercel's board can.
+      if (body.path) throw new HttpError(501, 'no_wake_by_path', "this board wakes nothing: register no path, and pull your matches")
+      if (body.url) throw new HttpError(501, 'no_wake_by_url', "this board wakes nothing: register no url, and pull your matches")
       const { principal } = (await identityOf(caller))
       ownWatchers(principal)
       // A registered watcher sees only what its registrant may read.
@@ -634,18 +609,14 @@ function build(options: A2Options, binding: BoardBinding) {
           throw badRequest((error as Error).message, 'bad_watcher')
         }
       }
-      const registered = await registry.register(storedPrincipal(principal), { url: body.url ?? null, watch: body.watch, sync: body.sync ?? [] })
-      // A board that registers is up, or deployed again: its next match wakes it, whatever wake-ups said before.
-      const queue = queueOf(principal.id) as unknown as QueueSession
-      if ((await queue.state(queueReducer)).state.unreachable) await queue.append({ type: 'watch.reachable', payload: { by: 'registration' } })
-      return registered
+      return registry.register(storedPrincipal(principal), { url: null, watch: body.watch, sync: body.sync ?? [] })
     },
     async matches(caller, query, signal) {
       const { principal } = (await identityOf(caller))
       ownWatchers(principal)
       if (!(await registry.state()).byOwner[principal.id]) throw notFound('this token has no watchers registered here', 'no_registration')
       const queue = queueOf(principal.id) as unknown as QueueSession
-      const pulling = { access: principal.access, limit: query.limit ?? 10, timers: options.scheduler !== undefined }
+      const pulling = { access: principal.access, limit: query.limit ?? 10 }
       const deadline = Date.now() + (query.wait ?? 0) * 1000
       for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
         const matches = await pull(queue, { ...pulling, now: Date.now() })
@@ -661,7 +632,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async ack(caller, { id, ...body }) {
       const { principal } = (await identityOf(caller))
       ownWatchers(principal)
-      const result = await ack(queueOf(principal.id) as unknown as QueueSession, id, body, { now: Date.now(), timers: options.scheduler !== undefined })
+      const result = await ack(queueOf(principal.id) as unknown as QueueSession, id, body, { now: Date.now() })
       if (result === 'gone') throw notFound(`no match ${id} is waiting for this token`, 'no_match')
       if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the match was pulled again')
       return { ok: true }
@@ -960,7 +931,7 @@ function build(options: A2Options, binding: BoardBinding) {
       // This board's own sync gets its inbox delivered here.
       if (ownSync(caller)) return { items: [] }
       const { principal } = (await needSync(caller, 'pull from an inbox', true))
-      const leased = await pullInbox(queueOf(principal.id) as unknown as QueueSession, key, { access: principal.access, limit: limit ?? 10, now: Date.now(), timers: options.scheduler !== undefined })
+      const leased = await pullInbox(queueOf(principal.id) as unknown as QueueSession, key, { access: principal.access, limit: limit ?? 10, now: Date.now() })
       return {
         items: leased.map(({ id, thread, lease, attempt, event }) => {
           const item = event as { event: PlatformEvent; raw: unknown }
@@ -971,7 +942,7 @@ function build(options: A2Options, binding: BoardBinding) {
 
     async inboxAck(caller, { id, lease, error }) {
       const { principal } = (await needSync(caller, 'ack an inbox event', true))
-      const result = await ack(queueOf(principal.id) as unknown as QueueSession, id, { lease, error }, { now: Date.now(), timers: options.scheduler !== undefined })
+      const result = await ack(queueOf(principal.id) as unknown as QueueSession, id, { lease, error }, { now: Date.now() })
       if (result === 'gone') throw notFound(`no inbox event ${id} is waiting for this token`, 'no_item')
       if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the event was pulled again')
       return { ok: true }

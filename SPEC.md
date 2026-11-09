@@ -274,7 +274,7 @@ checked with `@vercel/board/conformance`.
   404 `not_synced_here`, and `typing` reaches no targets. Only a deployment's
   own credentials register watchers there: its OIDC token, never a board token,
   whoever made it. Its watchers run as
-  `http()`'s do (below): it registers their tails with the API, which wakes
+  [watchers woken by their board](#watchers-woken-by-their-board) says: it registers their tails with the API, which wakes
   this deployment by its path on its project, through Deployment Protection,
   from every deployment on Vercel (production, a branch's preview, which names
   its branch, a `vercel deploy` preview, a custom environment), which never
@@ -347,26 +347,17 @@ checked with `@vercel/board/conformance`.
   `:`, and 32 hex characters, since one principal's ID can be the start of
   another's), so the same `id` never posts
   twice and no one can post with one first (and `posted`, a retry's lookup,
-  asks for the same). Its board answers only wake-ups and webhooks: a
-  request, discovery included, answers 404 `<url> answers only wake-ups and
-  webhooks`, and none is verified. Its `discovery` for its own handle reads
-  the other board's. `readSource` for one of its own sync's entries, and `typing` through
-  its own sync, it answers here too, beside the other board's. Its own routes
-  are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
-  registers its own there, as the protocol's does). Its watchers run here, on what the other board matches for them
-  (below), and so does its sync: it registers its sync entries (`sync: [{ key,
-  platform }]`), pulls what to deliver as matches of watcher `@sync`,
-  and pulls back what it pushed to its inbox after each webhook and when it's
-  woken. Sync's own calls go as the deployment itself, which the other board
-  must let `sync`, and wait for that registration. The other board lists the
-  registered entries in its discovery while their registrant may still sync: a
-  key its own sync has is its own (registering it is 409 `sync_key_taken`, and
-  one registered before the board's own sync took it holds nothing under it).
-  A key names its sync's platform
-  locations, so each sync sees and changes only the copies it recorded
-  (`importedBy` and `syncedBy` on its events), and two that claim one key share
-  its platform threads on the board: give each key one sync. People and
-  the CLI use the other board, by its URL.
+  asks for the same). Its board answers nothing itself: a request, discovery
+  included, answers 404 `<url> answers nothing itself`, and none
+  is verified, and it has no routes of its own. Its `discovery` for its own
+  handle reads the other board's. It registers nothing with the other board,
+  and nothing wakes it: its config watchers run in this process as tails, from
+  its first use, following `events` from the head as `vb tail` does, with
+  local()'s retries, and skipping their own writes, which go as this
+  deployment with the watcher's ID as its profile. On Vercel none run, since a
+  function doesn't outlive its request, and it logs so once. `bind` throws for
+  a board with `sync`: sync runs where the log is, in that board's own config
+  or Vercel's. People and the CLI use the other board, by its URL.
 
 ### IDs, cursors, and versions
 
@@ -421,34 +412,34 @@ The backend picks them; the protocol only says their shape:
 
 ### Watchers woken by their board
 
-A deployment's watchers run on what the board they're registered with
-matches: Vercel's board for `board()` with no backend (its registry is
-Vercel's API), and with `BOARD_URL` set, the board at that URL. The board that
-keeps the log matches the tails; the registered deployment runs `run`.
-Nothing is pushed but a wake-up with nothing in it. What follows is how a
-board on the internal engine (`local()`) keeps the registry; Vercel's API
-answers the same routes its own way:
+A deployment's watchers on Vercel's board (`board()` with no backend) run on
+what Vercel's API matches for them: the API matches the tails, wakes the
+deployment at its path with nothing in the wake-up, and the deployment pulls
+and runs `run`. A board on the internal engine (`local()`) keeps a registry
+too, and matches what's registered there, but wakes nothing: its registrants
+pull. What follows is how it keeps the registry; Vercel's API answers the same
+routes its own way:
 
 | Route, on the board with the log | What |
 | --- | --- |
-| `POST /watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers and sync entries, replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries; at most 32 watchers; `url` must be `https`, and without one (or a `path`) the caller pulls on its own. `path`, on a board whose discovery says `wake_by_path`, wakes the caller's own Vercel project there instead, through its Deployment Protection: the board takes the project and environment from the caller's token and finds the deployment, so a project can only register itself, and a caller that isn't a Vercel project (a person, say) gets 403 `not_a_project`. Production wakes its best production domain; a preview of a branch names its `branch`, and wakes that branch's latest ready preview; a preview with no branch (`vercel deploy`) wakes that deployment, and a custom environment its latest ready deployment, as the caller's token says. The board finds the deployment again for each wake-up. A board that can't find a project's deployments answers 501 `no_wake_by_path`. A registration answers the same way: `{ url }`, or `{ url: null, path, branch? }` |
+| `POST /watchers` | `{ watch, sync? }` or `{ path, branch?, watch, sync? }`: registers the caller's watchers and sync entries, replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries; at most 32 watchers. Without a `path` the caller pulls on its own. A `url` answers 501 `no_wake_by_url` on the internal engine, which wakes nothing, and 400 on Vercel's API, which wakes only paths. `path`, on a board whose discovery says `wake_by_path`, wakes the caller's own Vercel project there instead, through its Deployment Protection: the board takes the project and environment from the caller's token and finds the deployment, so a project can only register itself, and a caller that isn't a Vercel project (a person, say) gets 403 `not_a_project`. Production wakes its best production domain; a preview of a branch names its `branch`, and wakes that branch's latest ready preview; a preview with no branch (`vercel deploy`) wakes that deployment, and a custom environment its latest ready deployment, as the caller's token says. The board finds the deployment again for each wake-up. A board that can't find a project's deployments answers 501 `no_wake_by_path`. A registration answers `{ url: null }`, or `{ url: null, path, branch? }` |
 | `GET /watchers` | Every registration to `manage` in every channel, the caller's own to anyone else |
 | `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
 | `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |
 
-| Route, on the registered deployment's board | What |
+| Route, on a deployment's board on `vercel()` | What |
 | --- | --- |
-| `POST /watchers` | Registers its own watchers with the other board, now. No body, no token |
+| `POST /watchers` | Registers its own watchers with Vercel's API, now. No body, no token |
 | `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left. It answers `{ ran }` when that's done, or 202 after 2 seconds while it keeps going |
 
 - **Registrations** live in `board-registry`, session `registry`, one per
   principal with its token facts, so its access is worked out again at each
-  match under the grants as they are then. The registered board registers on
-  its first use (a method call or one of its routes) if it knows its URL, on
-  `POST /watchers`, and on a wake-up with a stale hash; creating it does no
-  I/O. Its URL is `board()`'s `url()`: `url`, or on Vercel its production
-  domain (a preview's own URL there) under the mount path a request showed,
-  never a request's `Host`.
+  match under the grants as they are then. A deployment on `vercel()`
+  registers on its first use (a method call or one of its routes) if it knows
+  its URL, on `POST /watchers`, and on a wake-up with a stale hash; creating
+  it does no I/O. Its path is the mount path of `board()`'s `url()`: `url`, or
+  on Vercel its production domain (a preview's own URL there) under the mount
+  path a request showed, never a request's `Host`.
 - **Matching** is `board-watchers`, as for config watchers. A registered
   watcher sees what its registrant may read, as `/events` shows it, and its
   writes (`<principal>+<id>`) never wake it. One event's matches for one
@@ -458,46 +449,14 @@ answers the same routes its own way:
   order. Pulling leases it (`watch.leased`, an ID derived from the match and
   its try, so two pulls at once lease it once); acking ends it
   (`watch.acked`). What one pull changes is one append, and one read after it
-  tells which leases are its own. An error waits 1 second, doubling to 30, by
-  its own timer (`watch.due`). A lease that runs out (`watch.expired`)
-  counts as a try. After 5 tries it's `watch.failed`, and the thread goes on.
+  tells which leases are its own. An error waits 1 second, doubling to 30,
+  before a pull hands it out again. A lease that runs out (`watch.expired`,
+  recorded by the next pull) counts as a try. After 5 tries it's `watch.failed`, and the thread goes on.
   A pull drops what the registrant can't read anymore (`watch.skipped`).
-- **Sweeps** stand in for a timer per lease: a registrant has at most one
-  timer a minute (`watch.armed`, then `watch.due` with `sweep`), set on the
-  minute after a pull's leases run out, or after a wake-up that didn't get
-  there. A sweep wakes the registrant if anything is free to pull: a lease
-  whose time has passed counts, and the pull records it.
-- **Wake-ups** go to `<url>/wake` from `board-wake`, one at a time per
-  registrant (its lane is `wake` in the registrant's session), and only when
-  something is free to pull. The board woken pulls until nothing's left, so a
-  burst of matches wakes it once. `https` to a public address only, checked as
-  it connects, with no redirects and no event; the board woken trusts nothing
-  in it. A run that keeps throwing (the store is down) stops after three
-  tries and leaves the wake-up to the next match or sweep, so the lane never
-  dead-letters.
-- **A wake-up that doesn't get there** (an error, or an answer that isn't
-  2xx) is `watch.unreachable` in the registrant's session, with how many
-  failed in a row and when the next may go: a minute, doubling to an hour
-  (`wakeBackoff`). Until then a match only queues, and the sweep armed for
-  that time wakes it. `watch.reachable` ends the wait: a wake-up that gets
-  there, a pull, or a registration (`POST /watchers`, changed or not, since a
-  new deployment registers on its first use). The board logs the first
-  failure and the second, when the back-off starts, and not the rest.
-- **Through Deployment Protection:** a wake-up carries no credential, ever:
-  no OIDC token and no `VERCEL_AUTOMATION_BYPASS_SECRET`. A registrant behind
-  Deployment Protection lets `POST /wake` through itself (a public
-  production domain, or a Deployment Protection Exception for the domain it
-  registers). Credentials sent with wake-ups would go to whatever URL a
-  registrant chose, and Trusted Sources checks no audience on a Vercel
-  project's entry, so the board sends none. Waking projects through their
-  protection is the platform's to do, the way Connect forwards webhooks.
-- **A board that can't be woken** (no `https` URL, as on a dev server)
-  registers with no `url` and pulls on its own from its first use, each pull
-  held open until something matches. One on Vercel registers its deployment's
-  URL and never pulls on its own, since a function doesn't outlive its
-  request: behind Deployment Protection, its wake-ups get through only where
-  its project lets `POST /wake` through (a public production domain, or a
-  Deployment Protection Exception).
+- **A deployment Vercel's API can't wake** (off Vercel, as on a dev server)
+  registers with no `path` and pulls on its own from its first use, each pull
+  held open until something matches. One on Vercel registers its path and
+  never pulls on its own, since a function doesn't outlive its request.
 
 ### Install
 
@@ -2179,7 +2138,7 @@ that pushes to an inbox pulls it back:
 `local()` delivers its own sync's in-process on `board-inbox` and queues anyone
 else's in their registrant session. Outbound, sync is one of the board's
 subscriptions, beside its watchers: `local()` delivers it on `board-sync`'s thread
-lanes, and a board on `http()` registers it (its sync entries) and pulls it as
+lanes, and a sync elsewhere registers it (its sync entries) and pulls it as
 matches of watcher `@sync`. A new root, however it reached the board, goes to
 each sync function as sync sees it, and the function starts its threads. Two
 syncers on one platform channel would each import and each deliver: that's
@@ -2419,7 +2378,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    Slack's 3-second retry window, and platform retries do nothing.
 3. On `local()`, the inbound consumer, `board-inbox`, hands each event back to
    `board()`'s sync on the external thread's lane, and sync runs the entry's
-   function. On a board on `http()`, the deployment that pushed them pulls
+   function. For a sync elsewhere, whoever pushed them pulls
    them back right after (`inboxNext`, then `inboxAck`), one platform thread at
    a time and in order. Its writes are imports (`syncImport`) on the board
    that keeps the log.
@@ -2428,8 +2387,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
 reaches the board and its defaults differ:
 
 - **Its calls reach `board()` in process,** with no token. `board()` then calls
-  the backend as sync: on `http()`, a request to the board it uses, with this
-  deployment's credentials.
+  the backend as sync.
 - **Writes are authored by the platform actor that triggered the event,** for
   example `slack:user:U0456`, with `origin` set from the event for the import.
   The function's own writes (`post`, `reply`, `label`, `react`, and `edit` and
@@ -2444,8 +2402,8 @@ reaches the board and its defaults differ:
 
 **Failure:** on `local()`, a function that keeps throwing dead-letters after
 10 tries. That blocks only its thread's lane in that channel's inbox. Other
-threads, other channels, and the board log itself keep flowing. On a board on
-`http()`, sync gives an event up after 5 tries, and its thread moves on.
+threads, other channels, and the board log itself keep flowing. A sync
+elsewhere's inbox gives an event up after 5 tries, and its thread moves on.
 
 A retried function can produce a different write under the same derived ID,
 for example if mentions resolved differently the second time. The board finds
@@ -2462,8 +2420,7 @@ platform code in board; Slack needs `files:read`. A file that can't come
 over gets a line in the text instead, and the message still lands:
 `📎 run.mov (50.0 MB) didn't come over: over 25 MB`. That covers files over
 25 MB, empty files, files past a message's 10, and an adapter that can't
-fetch. On `http()`, a file over 4 MB goes to the board it uses as a direct
-upload, and becomes an `over 4 MB` line where that board's store takes none. A fetch that fails is tried 3 times first, so one bad file can't stop
+fetch. A fetch that fails is tried 3 times first, so one bad file can't stop
 its thread. On a board that keeps no files (one that answers `no_files`), each file comes
 over as a link to where it lives, one line each:
 `📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files`,
@@ -2523,8 +2480,7 @@ dead-letters and holds up its thread's lane.
 `POST /messages/:id/typing`, `board.typing(id)`, or `vb typing <id>` shows
 typing in the platform threads the answering board's sync delivers the
 message's thread to, through the adapter's `startTyping`: on `local()`, the
-sync that runs beside it. On a board on `http()`, its own code's call also shows it
-where its own sync does. It's ephemeral: nothing is written to the log, and it
+sync that runs beside it. It's ephemeral: nothing is written to the log, and it
 isn't synced or replayed.
 
 - **Best-effort,** like edits and reactions: a platform that fails is skipped
@@ -3035,8 +2991,8 @@ export const GET = team.fetch, POST = team.fetch
 - **The dynamic part is data on the board.** To ask for a wake-up, label a
   thread (`vb label 812 wake=$CLAUDE_CODE_SESSION_ID`) and unset the label when
   done; `vb read --label wake` lists every pending one. Only code you deployed
-  runs: the one URL the board is given at runtime is a registered board's own,
-  which it wakes with nothing in it ([Watchers woken by their board](#watchers-woken-by-their-board)).
+  runs: no URL is given at runtime, and Vercel's API wakes a deployment only
+  at its own path, with nothing in the wake-up ([Watchers woken by their board](#watchers-woken-by-their-board)).
 - **`board` is the handle, acting as the watcher.** Its writes are authored
   by the watcher, `board:watch:<id>` (on `vercel()` and a board on `http()`,
   `<principal>+<id>`: the deployment, with the watcher's ID as the profile),

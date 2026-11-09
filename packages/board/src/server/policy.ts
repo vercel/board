@@ -59,7 +59,7 @@ export type Policy = ReturnType<typeof createPolicy>
 /**
  * The policy a board's options say: verifying requests, and what they and the principals its
  * backend stores may do. `keeps`: the backend keeps the board, so it serves requests; one that
- * uses another board's (Vercel's, or one at `BOARD_URL`) answers only wake-ups and webhooks.
+ * uses another board's answers only wake-ups and webhooks on Vercel's, and nothing at `BOARD_URL`.
  */
 export function createPolicy(options: PolicyOptions, keeps: boolean, serving: (() => Promise<Serving>) | null, trust: Trust | null = null) {
   const grants = trust ? () => trust.grants() : null

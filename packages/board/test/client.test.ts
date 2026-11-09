@@ -226,12 +226,13 @@ describe('board() with no backend', () => {
     const page = defaultBoard({ backend: defaultHttp(BOARD_URL, { fetch }) })
     expect((await page.as('page').post('dev', 'from a browser')).by.actor).toBe('vercel:user:u_julian+page')
     expect((await page.discovery()).url).toBe(BOARD_URL)
-    // It serves what its backend answers a request: http() answers only wake-ups and webhooks.
+    // It serves what its backend answers a request: http() answers nothing itself.
     const served = await page.fetch(new Request(`${BOARD_URL}/me`, { headers: { authorization: `Bearer ${await personToken()}` } }))
     expect([served.status, (await served.json()).error.code]).toEqual([404, 'not_found'])
-    // Watchers and sync run here as they do in Node: a tail is checked the same way.
+    // Watchers run here as they do in Node: a tail is checked the same way, and sync is refused the same way.
     expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev --after 3', run: () => {} } } })).toThrow("watch fix: --after isn't a filter")
-    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev', run: () => {} } }, sync: { slack: {} as never } })).not.toThrow()
+    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev', run: () => {} } } })).not.toThrow()
+    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), sync: { slack: {} as never } })).toThrow("http: sync doesn't run on a board that uses")
   })
 })
 

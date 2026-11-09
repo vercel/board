@@ -147,9 +147,9 @@ describe('board() and its backend', () => {
 })
 
 describe('a board on http()', () => {
-  it('answers only wake-ups and webhooks, and its handle reads the board it uses', async () => {
+  it('answers nothing itself, and its handle reads the board it uses', async () => {
     const { project } = await team()
-    const nothing = { error: { code: 'not_found', message: `${V0_URL} answers only wake-ups and webhooks` } }
+    const nothing = { error: { code: 'not_found', message: `${V0_URL} answers nothing itself` } }
     // No discovery to send anyone elsewhere: a repo links the team's board itself.
     const discovery = await project.fetch(new Request(V0_URL))
     expect([discovery.status, await discovery.json()]).toEqual([404, nothing])

@@ -11,7 +11,7 @@ Vercel's board says who may use it in Vercel's API: the team's people, and the
 projects it grants the board to (see
 [A board by its name](./01-mounting.md#a-board-by-its-name)). A route on
 Vercel's board, or on the board at `BOARD_URL`, serves no callers of its own:
-it answers only wake-ups and webhooks.
+on Vercel's it answers only wake-ups and webhooks, and at `BOARD_URL` nothing.
 
 Every caller is an OIDC principal. `board()` verifies it with its
 `authenticate` (see [Identity](./03-identity.md)), works out what it may do,

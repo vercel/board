@@ -260,8 +260,12 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     return { identity: await policy.identify(request), origin: { via: { kind: 'api' } } }
   }
 
-  /** What a board that serves no requests answers them: one that uses another board's. */
-  const servesOnly = () => new HttpError(404, 'not_found', `${ownUrl() ?? 'this board'} answers only wake-ups and webhooks`)
+  /**
+   * What a board that serves no requests answers them: one that uses another board's. One on
+   * Vercel's still takes wake-ups and webhooks; one at `BOARD_URL` has neither.
+   */
+  const servesOnly = () =>
+    new HttpError(404, 'not_found', `${ownUrl() ?? 'this board'} answers ${backend.routes.length > 0 || engine ? 'only wake-ups and webhooks' : 'nothing itself'}`)
 
   /**
    * `@[ada@vercel.com]`: an email a synced platform knows becomes that user's mention, and the

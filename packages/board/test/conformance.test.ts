@@ -90,29 +90,34 @@ function withoutPath(fetch: Fetch): Fetch {
 
 /**
  * A board in front of `fetch` that wakes by path, as the team board does: it refuses a path from a
- * person, and keeps one (and a preview's branch) as a URL on a host that never resolves, which it
- * shows as the path.
+ * person, and keeps each owner's path (and a preview's branch) itself, beside the registration the
+ * board under it holds, which wakes nothing.
  */
 function wakingByPath(fetch: Fetch): Fetch {
-  const host = 'https://path.invalid'
+  const paths = new Map<string, { path: string; branch?: string }>()
+  const shown = (found: { owner: string }) => ({ ...found, ...paths.get(found.owner) })
   return async (request) => {
     const url = new URL(request.url)
-    let forwarded = request
     if (request.method === 'POST' && url.pathname.endsWith('/watchers')) {
       const { path, branch, ...body } = await request.json()
       const claims = JSON.parse(Buffer.from(request.headers.get('authorization')!.split('.')[1]!, 'base64url').toString())
       if (path && claims.user_id) return Response.json({ error: { code: 'not_a_project', message: "a path is on the caller's own project" } }, { status: 403 })
-      const at = `${host}${path}${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`
-      forwarded = new Request(request, { body: JSON.stringify(path ? { ...body, url: at } : body) })
+      const response = await fetch(new Request(request, { body: JSON.stringify(body) }))
+      if (!response.ok) return response
+      const made = await response.json()
+      if (path) paths.set(made.owner, { path, ...(branch ? { branch } : {}) })
+      else paths.delete(made.owner)
+      return Response.json(shown(made))
     }
-    const response = await fetch(forwarded)
+    const response = await fetch(request)
     if (!response.headers.get('content-type')?.includes('application/json')) return response
-    let text = (await response.text()).replace(
-      /"url":"https:\/\/path\.invalid([^"?]*)(?:\?branch=([^"]*))?"/g,
-      (_, path: string, branch?: string) => `"url":null,"path":${JSON.stringify(path)}${branch ? `,"branch":${JSON.stringify(decodeURIComponent(branch))}` : ''}`,
-    )
-    if (request.method === 'GET' && url.pathname.replace(/\/$/, '') === new URL(BOARD_URL).pathname) text = text.replace(/^\{/, '{"wake_by_path":true,')
-    return new Response(text, { status: response.status, headers: response.headers })
+    if (request.method === 'GET' && url.pathname.endsWith('/watchers')) {
+      const { watchers } = await response.json()
+      return Response.json({ watchers: watchers.map(shown) }, { status: response.status })
+    }
+    if (request.method === 'GET' && url.pathname.replace(/\/$/, '') === new URL(BOARD_URL).pathname)
+      return Response.json({ wake_by_path: true, ...(await response.json()) }, { status: response.status })
+    return response
   }
 }
 
@@ -181,16 +186,16 @@ describe('the conformance kit', () => {
     expect(without.checks.filter((check) => NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual(NARROWED.map(() => ['skipped', NO_CAN]))
   })
 
-  it("leaves a token's registration as it was: one with watchers or a sync is skipped, and an empty one keeps its URL", async () => {
+  it("leaves a token's registration as it was: one with watchers or a sync is skipped, and an empty one is checked", async () => {
     const board = await grantingV0()
     const v0 = caller(board.fetch, await deploymentToken('v0', 'prj_v0', 'production'))
     const asV0 = await clientAs(board.fetch, () => deploymentToken('v0', 'prj_v0', 'production'))
     const narrowedV0 = { withCan: withCan(board.fetch, () => deploymentToken('v0', 'prj_v0', 'production')) }
     const registered = async () => (await v0('GET', '/watchers')).body.watchers.map(({ hash: _hash, ...rest }: { hash: string }) => rest)
     for (const registration of [
-      // A project's board on http() that syncs Slack and has no watchers of its own.
-      { url: 'https://v0.test/api/board', watch: {}, sync: [{ key: 'slack', platform: 'slack' }] },
-      { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback' } }, sync: [] },
+      // A sync elsewhere with no watchers of its own, and watchers with no sync.
+      { watch: {}, sync: [{ key: 'slack', platform: 'slack' }] },
+      { watch: { fix: { tail: 'feedback' } }, sync: [] },
     ]) {
       expect((await v0('POST', '/watchers', registration)).status).toBe(200)
       const before = await registered()
@@ -199,9 +204,9 @@ describe('the conformance kit', () => {
       expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
       expect(await registered()).toEqual(before)
     }
-    // One with nothing in it is checked, and keeps where it's woken.
-    const empty = { owner: 'vercel:project:prj_v0:production', url: 'https://v0.test/api/board', watch: {}, sync: [] }
-    expect((await v0('POST', '/watchers', { url: empty.url, watch: {} })).status).toBe(200)
+    // One with nothing in it is checked, and is left as it was.
+    const empty = { owner: 'vercel:project:prj_v0:production', url: null, watch: {}, sync: [] }
+    expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(200)
     const report = await conformance(asV0, narrowedV0)
     expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect(await registered()).toEqual([empty])
@@ -212,17 +217,17 @@ describe('the conformance kit', () => {
     const v0 = caller(older, await deploymentToken('v0', 'prj_v0', 'production'))
     const asV0 = await clientAs(older, () => deploymentToken('v0', 'prj_v0', 'production'))
     const narrowedV0 = { withCan: withCan(older, () => deploymentToken('v0', 'prj_v0', 'production')) }
-    const watching = { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback' } }, sync: [] }
+    const watching = { url: null, watch: { fix: { tail: 'feedback' } }, sync: [] }
     expect((await v0('POST', '/watchers', watching)).status).toBe(200)
     expect(watcherStatuses(await conformance(asV0, narrowedV0))).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([watching])
-    // An empty one fails the check, since the board took the path, and keeps where it's woken.
-    expect((await v0('POST', '/watchers', { url: watching.url, watch: {} })).status).toBe(200)
+    // An empty one fails the check, since the board took the path, and is left as it was.
+    expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(200)
     const report = await conformance(asV0, narrowedV0)
     expect(report.checks.filter((check) => check.status === 'failed')).toMatchObject([
-      { name: 'wakes by path only where its discovery says so, and only a Vercel project', detail: 'a path, on a board that wakes only urls: expected 501 no_wake_by_path, and it succeeded' },
+      { name: 'wakes by path only where its discovery says so, and only a Vercel project', detail: 'a path, on a board that wakes nothing: expected 501 no_wake_by_path, and it succeeded' },
     ])
-    expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([{ url: watching.url, watch: {} }])
+    expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, watch: {} }])
   })
 
   it("passes a board that wakes by path, which a project registers on and gets back, and refuses anyone else's", async () => {

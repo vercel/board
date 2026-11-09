@@ -5,7 +5,6 @@ import { idempotentId } from 'experimental-a2'
 import { build } from 'tsdown'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import type { MessageView } from '../src/api/routes.ts'
 import { http } from '../src/backend-http/index.default.ts'
 import { derivedId } from '../src/client/ids.ts'
 import { board } from '../src/server/index.default.ts'
@@ -150,7 +149,6 @@ describe('board() in a browser', () => {
   })
 })
 
-const PAGE = 'vercel:project:prj_page:production'
 const pageToken = () => deploymentToken('page', 'prj_page', 'production')
 const Schema = eventSchema('push', 'message')
 
@@ -181,32 +179,34 @@ class Push extends SyncProvider<z.infer<typeof Schema>> {
   }
 }
 
-describe('a board on another one with no URL of its own, on the internal http() of the default build', () => {
-  it('syncs and watches, pulling what it can’t be woken for', async () => {
+describe('a board on another one, on the internal http() of the default build', () => {
+  it('runs its watchers here, following the board it uses', async () => {
     const team = testBoard()
     await team.createGrant({ principals: [{ kind: 'project', project: 'prj_page', environments: ['production'] }], can: { '*': 'all' } })
-    const backend = http(BOARD_URL, { fetch: bearer((input, init) => team.fetch(new Request(input, init)), pageToken) })
-    const push = new Push()
+    const reads: string[] = []
+    const backend = http(BOARD_URL, {
+      fetch: bearer((input, init) => {
+        const request = new Request(input, init)
+        if (new URL(request.url).pathname.endsWith('/events')) reads.push(request.url)
+        return team.fetch(request)
+      }, pageToken),
+    })
     const seen: string[] = []
-    // The default build: no URL, so nothing can wake it.
-    const page = board({ backend, sync: { push }, watch: { seen: { tail: 'support', run: ({ event }) => void (event.message && seen.push(event.message.text)) } } })
+    const page = board({ backend, watch: { seen: { tail: 'support', run: ({ event }) => void (event.message && seen.push(event.message.text)) } } })
     const julian = caller(team.fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
-    const support = async () => (await julian('GET', '/messages?channel=support')).body.messages as MessageView[]
     try {
-      // A webhook, through the page's own handler, lands on the team's board as the platform's author.
-      const hook = await page.fetch(new Request('http://page.test/board/webhooks/push', { method: 'POST', body: JSON.stringify({ id: 'p1', text: 'export is broken' }) }))
-      expect(hook.status).toBe(200)
-      await vi.waitFor(async () => expect((await support()).map((message) => [message.text, message.by.actor])).toEqual([['export is broken', 'push:user:ada']]))
-      // It registered without a URL, so it pulls.
-      const { body } = await caller(team.fetch, await pageToken())('GET', '/watchers')
-      expect(body.watchers).toEqual([expect.objectContaining({ owner: PAGE, url: null })])
-
-      // A post on the team's board reaches the platform, and the watcher.
+      await page.as('deploys').me()
+      await vi.waitFor(() => expect(reads.length).toBeGreaterThan(0))
       await julian('POST', '/messages', { channel: 'support', text: 'looking into it' })
-      await vi.waitFor(() => expect(push.posts.map((post) => [post.target, post.kind, post.body.markdown])).toEqual([['room', 'channel', '**julian**: looking into it']]), { timeout: 5_000 })
-      await vi.waitFor(() => expect(seen).toEqual(['export is broken', 'looking into it']), { timeout: 5_000 })
+      await vi.waitFor(() => expect(seen).toEqual(['looking into it']), { timeout: 5_000 })
+      // It registered nothing on the team's board.
+      expect((await caller(team.fetch, await pageToken())('GET', '/watchers')).body.watchers).toEqual([])
     } finally {
       backend.close()
     }
+  })
+
+  it("won't take a sync, which runs where the board's log is", () => {
+    expect(() => board({ backend: http(BOARD_URL), sync: { push: new Push() } })).toThrow("http: sync doesn't run on a board that uses")
   })
 })
