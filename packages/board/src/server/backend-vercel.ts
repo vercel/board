@@ -130,7 +130,7 @@ type ApiWatcherFilter = {
   labels?: { key: string; values?: string[] }[]
 }
 type ApiWatcherSpec = { filter: ApiWatcherFilter }
-type ApiRegistration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, ApiWatcherSpec>; sync?: SyncEntrySpec[]; hash: string }
+type ApiRegistration = { owner: string; path?: string; branch?: string; watch: Record<string, ApiWatcherSpec>; sync?: SyncEntrySpec[]; hash: string }
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
 export type VercelOptions = {
@@ -1279,10 +1279,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return parts.join(' ')
   }
 
-  /** Where a registration is woken, as board shows it: its URL, or a path on its project (and a preview's branch). */
   const syncOf = (found: ApiRegistration) => (found.sync ?? []).map(({ key, platform }) => ({ key, platform }))
-  const whereOf = (found: ApiRegistration) =>
-    found.path ? { url: null, path: found.path, ...(found.branch ? { branch: found.branch } : {}) } : { url: found.url }
+  /**
+   * Where a registration is woken, as board shows it: a path on its project (and a preview's branch),
+   * or, with none, nowhere: it pulls. The API never wakes a URL, and its replies carry none.
+   */
+  const whereOf = (found: ApiRegistration) => (found.path ? { url: null, path: found.path, ...(found.branch ? { branch: found.branch } : {}) } : { url: null })
 
   /**
    * Vercel's API takes watchers only from a deployment's own credentials: never a person's, an app's,
@@ -1406,8 +1408,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       ack: (id, body) => ackAs(deployment, id, body),
     },
     // The API wakes a path on this project, through its Deployment Protection, from every deployment
-    // on Vercel, and nothing at a URL: off Vercel, it pulls.
-    wakeAt: async (here) => wakePath(here) ?? { url: null },
+    // on Vercel, and nothing at a URL: off Vercel, it registers no path, and pulls. The API refuses any `url`, even null.
+    wakeAt: async (here) => wakePath(here) ?? {},
     binding: bound,
     hash: () => tagOf(tails, bound().sync),
     hasWork: () => Object.keys(tails).length > 0 || bound().sync.length > 0,
@@ -2094,7 +2096,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async register(caller, body) {
       if (typeof body.url === 'string')
         throw new HttpError(400, 'invalid_request', "Vercel's API wakes a deployment only by its path.", { hint: 'Register a path, or no url to pull its matches.', origin: 'handle' })
-      return registerAs(whoOf(caller), typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }, body.watch, body.sync ?? [], false)
+      return registerAs(whoOf(caller), typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : {}, body.watch, body.sync ?? [], false)
     },
     async matches(caller, query, signal) {
       return { matches: await pullAs(whoOf(caller), query, signal) }

@@ -313,7 +313,7 @@ function fakeBoard(shared: Shared, boardId: string) {
   const actors = new Map<string, ActorView>()
   const attachments = new Map<string, Attachment>()
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
-  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter }>; sync: { key: string; platform: string }[]; hash: string }
+  type Registration = { owner: string; path?: string; branch?: string; watch: Record<string, { filter: Filter }>; sync: { key: string; platform: string }[]; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
@@ -551,18 +551,17 @@ function fakeBoard(shared: Shared, boardId: string) {
 
   async function watchers(method: string, rest: string, actor: Actor, parsed: Record<string, any>, url: URL): Promise<unknown> {
     const owner = principalId(actor.principal)
-    const view = (r: Registration) => ({ owner: r.owner, url: r.url, ...(r.path ? { path: r.path, ...(r.branch ? { branch: r.branch } : {}) } : {}), watch: r.watch, ...(r.sync.length ? { sync: r.sync } : {}), hash: r.hash })
+    const view = (r: Registration) => ({ owner: r.owner, ...(r.path ? { path: r.path, ...(r.branch ? { branch: r.branch } : {}) } : {}), watch: r.watch, ...(r.sync.length ? { sync: r.sync } : {}), hash: r.hash })
     if (method === 'GET' && rest === '/watchers') {
       const found = registrations.get(owner)
       return { watchers: found ? [view(found)] : [] }
     }
     if (method === 'PUT' && rest === '/watchers') {
-      const body = parsed as { url?: string | null; path?: string; branch?: string; watch: Registration['watch']; tag?: string; sync?: Registration['sync'] }
-      // A URL, or a path on the caller's own project (a preview's with its branch), as api-messageboard checks one.
-      if (body.url !== undefined && body.path !== undefined) throw new Refused(400, 'bad_request', 'A url or a path, not both.')
+      const body = parsed as { path?: string; branch?: string; watch: Registration['watch']; tag?: string; sync?: Registration['sync'] }
+      // A path on the caller's own project (a preview's with its branch), or none to pull, as api-messageboard checks one.
+      // A deployment is woken by its path on its project, or pulls: never at a URL, and the API refuses any `url`, even null.
+      if ('url' in parsed) throw new Refused(400, 'bad_request', 'Watchers are woken by a path, not a url.')
       if (body.branch !== undefined && body.path === undefined) throw new Refused(400, 'bad_request', 'A branch goes with a path.')
-      // A deployment is woken by its path on its project, or pulls: never at a URL.
-      if (typeof body.url === 'string') throw new Refused(400, 'bad_request', 'Watchers are woken by a path, not a url.')
       const principal = actor.principal
       if (body.path !== undefined) {
         if (principal.type !== 'project') throw new Refused(403, 'not_a_project')
@@ -570,7 +569,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         if (body.branch !== undefined && principal.environment !== 'preview') throw new Refused(400, 'invalid_branch')
         if (typeof body.path !== 'string' || !body.path.startsWith('/') || body.path.startsWith('//')) throw new Refused(400, 'invalid_path')
       }
-      const where = body.path !== undefined ? { url: null, path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }
+      const where = body.path !== undefined ? { path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : {}
       const sync = body.sync ?? []
       // Only a project's own token syncs, and a key is one registrant's on the board.
       if (sync.length > 0 && principal.type !== 'project') throw new Refused(403, 'sync_needs_project')

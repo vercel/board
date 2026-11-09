@@ -26,8 +26,8 @@ const pulls = (registration: RegistrationView) => registration.url === null && r
  */
 export const deployedOnVercel = () => typeof process !== 'undefined' && process.env.VERCEL === '1' && process.env.VERCEL_ENV !== 'development'
 
-/** Where the other board wakes this one: a URL (null to pull on its own), or a path on this Vercel project. */
-export type WakeAt = { url: string | null } | { path: string; branch?: string }
+/** Where the other board wakes this one: a URL (null or none to pull on its own), or a path on this Vercel project. */
+export type WakeAt = { url?: string | null } | { path: string; branch?: string }
 
 /**
  * A path on this Vercel project for a board that wakes by path, from `here`, this board's URL: from

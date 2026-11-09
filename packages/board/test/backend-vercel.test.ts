@@ -701,7 +701,7 @@ describe('vercel()', () => {
     })
     await pong.me()
     while (!api.registrations.has('vercel:project:prj_pong:production')) await new Promise((resolve) => setTimeout(resolve, 5))
-    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: null, path: '/api/board' })
+    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ path: '/api/board' })
     await handleOn(api).post('pings', { text: 'ping' })
     const wake = () => pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST' })).then((response) => response.json())
     await expect(wake()).resolves.toEqual({ ran: 1 })
@@ -734,7 +734,7 @@ describe('vercel()', () => {
     // A function can freeze once it answers, so what the call started is handed to the platform to finish.
     expect(kept.length).toBeGreaterThan(0)
     await Promise.all(kept)
-    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: null, path: '/api/board' })
+    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ path: '/api/board' })
   })
 
   it('registers a deployment off Vercel with no url, and pulls what its watchers match, with its env pulled too', async () => {
@@ -760,7 +760,8 @@ describe('vercel()', () => {
       },
     })
     await pong.me()
-    await vi.waitFor(() => expect(api.registrations.get('vercel:project:prj_pong:development')).toMatchObject({ url: null }))
+    // With no path, and no url, which the API refuses: it pulls.
+    await vi.waitFor(() => expect(api.registrations.has('vercel:project:prj_pong:development')).toBe(true))
     expect(api.registrations.get('vercel:project:prj_pong:development')!.path).toBeUndefined()
     // Nothing wakes it: it pulls the match itself.
     const ping = await handleOn(api, 'user:u_ada').post('pings', 'ping')
@@ -783,7 +784,7 @@ describe('vercel()', () => {
       const pong = board({ backend, url: 'https://pong-abc123.vercel.app/api/board', watch: { pings: { tail: 'pings', run: async ({ event }) => void ran.push(event.message!.text) } } })
       await pong.me()
       await vi.waitFor(() => expect(api.registrations.has(`vercel:project:prj_pong:${environment}`)).toBe(true))
-      expect(api.registrations.get(`vercel:project:prj_pong:${environment}`)).toMatchObject({ url: null, path: '/api/board' })
+      expect(api.registrations.get(`vercel:project:prj_pong:${environment}`)).toMatchObject({ path: '/api/board' })
       expect(api.registrations.get(`vercel:project:prj_pong:${environment}`)!.branch).toBeUndefined()
       await handleOn(api, 'user:u_ada').post('pings', 'ping')
       await new Promise((resolve) => setTimeout(resolve, 300))
@@ -1046,8 +1047,8 @@ describe('vercel()', () => {
       const api = fakeMessageboard()
       const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
       board({ backend, url: 'https://pong.vercel.app/api/board', watch: { ping: { tail: 'pings', run: async () => {} } } })
-      expect(await backend.registerWatchers()).toMatchObject({ url: null, path: '/api/board' })
-      expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: null, path: '/api/board' })
+      expect(await backend.registerWatchers()).toMatchObject({ path: '/api/board' })
+      expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ path: '/api/board' })
     } finally {
       vi.unstubAllEnvs()
     }
@@ -1079,7 +1080,7 @@ describe('vercel()', () => {
       const at = Date.now()
       clock.mockReturnValue(at + 11_000)
       await pong.me()
-      await vi.waitFor(() => expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: null }))
+      await vi.waitFor(() => expect(api.registrations.has('vercel:project:prj_pong:production')).toBe(true))
     } finally {
       clock.mockRestore()
       errors.mockRestore()
