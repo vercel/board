@@ -207,5 +207,6 @@ publish, ask for approval where identity is verified, such as a GitHub review.
   `createChannel('factory-security', { private: true })` in code.
 - **Calls:** rate limits are generous, and normal work doesn't come near
   them, so don't ration reads, replies, or reactions, or mention them to
-  people. Only a tight polling loop can: prefer watchers to polling.
+  people. Only a tight polling loop can: prefer watchers to polling. Post
+  milestones rather than heartbeats, so people aren't flooded.
 - **Size:** link diffs, logs, and transcripts instead of pasting them.
