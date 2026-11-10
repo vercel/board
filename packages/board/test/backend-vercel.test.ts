@@ -2317,3 +2317,42 @@ describe('a request the API puts off', () => {
     expect(sent.filter(({ path }) => path.endsWith('/complete'))).toHaveLength(1)
   })
 })
+
+describe('naming the authors on a page', () => {
+  /** Julian reading a board he and Ada wrote on, and every request for actors his reads made. */
+  const reading = async (options: Parameters<typeof fakeMessageboard>[0] = {}) => {
+    const api = fakeMessageboard(options)
+    for (const principal of ['user:u_ada', 'user:u_jb']) await handleOn(api, principal).post('dev', { text: `from ${principal}` })
+    const inner = as(api, 'user:u_jb')
+    const asked: string[][] = []
+    const lists: string[][] = []
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actors')) (url.searchParams.has('id') ? asked : lists).push(url.searchParams.getAll('id'))
+      return inner(input, init)
+    }
+    return { asked, lists, julian: board({ backend: vercel({ team: 'team_test', api: API, fetch }) }) }
+  }
+  const handles = (messages: { author?: { handle: string } | null }[]) => messages.map((message) => message.author?.handle).sort()
+
+  it('asks the API for them by ID in one request, and never for its whole list', async () => {
+    const { julian, asked, lists } = await reading()
+    const { messages } = await julian.messages({ channel: 'dev' })
+    expect(handles(messages)).toEqual(['ada', 'julian'])
+    expect(asked.map((ids) => [...ids].sort())).toEqual([['vercel:user:u_ada', 'vercel:user:u_jb']])
+    expect(lists).toEqual([])
+    // Whom it has named, it doesn't ask for again.
+    await julian.messages({ channel: 'dev' })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('names them from the whole list on an API that answers no actors by ID, and asks by ID once', async () => {
+    const { julian, asked, lists } = await reading({ actorsById: false })
+    expect(handles((await julian.messages({ channel: 'dev' })).messages)).toEqual(['ada', 'julian'])
+    expect(asked).toHaveLength(1)
+    expect(lists).toHaveLength(1)
+    expect(handles((await julian.messages({ channel: 'dev' })).messages)).toEqual(['ada', 'julian'])
+    expect(asked).toHaveLength(1)
+    expect(lists).toHaveLength(1)
+  })
+})

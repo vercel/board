@@ -859,25 +859,86 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The actor in a read of the list, or undefined when it doesn't have them or failed. */
   const inList = (read: { views: Promise<Map<string, ApiActorView>> }, id: string) => read.views.then((views) => views.get(id), () => undefined)
 
+  /** Whether the API answers actors by their IDs. An older one answers 400 for `id`, and names come from the whole list. */
+  let namesById = true
+  /** Actor IDs one request names, as many as the API takes. */
+  const NAMED_AT_ONCE = 100
+  /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
+  const asked = new Map<string, { at: number; view: Promise<ApiActorView | undefined | null> }>()
+  /** The request for actors by ID that hasn't gone out yet: everyone named in the same turn shares it. */
+  let asking: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } | null = null
+  /** The actors `ids` name, in one request, or null from an API that doesn't answer them by ID. */
+  const readNamed = async (who: Who, ids: string[]): Promise<Map<string, ApiActorView> | null> => {
+    try {
+      const { actors } = await api<{ actors: ApiActorView[] }>(who, 'GET', await onBoard(who, '/actors'), { query: { id: ids } })
+      return new Map(actors.map((view) => [view.id, view] as const))
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 400)) throw error
+      namesById = false
+      return null
+    }
+  }
+  /**
+   * An actor as the API names them, asked for by ID with everyone else named in the same turn: the
+   * authors on a page cost one request however many actors the board has. Undefined for one the API
+   * doesn't have or a read that failed, which isn't kept; null when the API doesn't answer by ID.
+   */
+  function byId(who: Who, id: string): Promise<ApiActorView | undefined | null> {
+    const kept = asked.get(id)
+    if (kept && Date.now() - kept.at <= NAMES_FRESH_MS) return kept.view
+    let batch = asking
+    if (!batch || batch.ids.length >= NAMED_AT_ONCE) {
+      const ids: string[] = []
+      const next: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } = {
+        ids,
+        views: new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() => {
+          if (asking === next) asking = null
+          return readNamed(who, ids)
+        }),
+      }
+      batch = asking = next
+    }
+    batch.ids.push(id)
+    const view: Promise<ApiActorView | undefined | null> = batch.views.then(
+      (views) => (views === null ? null : views.get(id)),
+      () => {
+        if (asked.get(id)?.view === view) asked.delete(id)
+        return undefined
+      },
+    )
+    if (asked.size >= 10_000) asked.clear()
+    asked.set(id, { at: Date.now(), view })
+    return view
+  }
+  /** An actor as the actors list names them: read again every few minutes, and at once for someone who wrote since it was. */
+  async function listed(who: Who, id: string): Promise<ApiActorView | undefined> {
+    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
+    let found = await inList(current, id)
+    if (!found && !unlisted.has(id)) {
+      // Someone new since this list: one read again covers everyone it's missing, even several at once.
+      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
+      found = await inList(again, id)
+      // Only a read that worked and still doesn't have them settles it.
+      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(id)
+    }
+    return found
+  }
+
   /**
    * An actor as board shows them: a person by their Vercel username and name, and an agent acting
    * for a person by its profile under them, as the API names them; anyone else (a project, an app,
-   * an agent of one), or someone the API doesn't list, by their principal. The list is read again
-   * every few minutes, and at once for someone who wrote since it was.
+   * an agent of one), or someone the API doesn't have, by their principal. The API is asked for
+   * them by ID, or on an older API for its whole list.
    */
   async function nameOf(who: Who, actor: ApiActor): Promise<ActorView & { id: string }> {
-    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
-    let found = await inList(current, actor.id)
-    if (!found && !unlisted.has(actor.id)) {
-      // Someone new since this list: one read again covers everyone it's missing, even several at once.
-      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
-      found = await inList(again, actor.id)
-      // Only a read that worked and still doesn't have them settles it.
-      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(actor.id)
-    }
+    const own = namesById ? await byId(who, actor.id) : null
+    const found = own === null ? await listed(who, actor.id) : own
     const kind = found && apiKind(found.kind)
-    // A project, its deployments and their agents alike, by its name as the actors list names it.
-    const project = actor.principal.type === 'project' ? await namedProject(who, actor.principal.projectId) : undefined
+    // A project, its deployments and their agents alike, by its name: as its own actor names it, or else as the actors list does.
+    const project =
+      actor.principal.type === 'project'
+        ? ((own ? projectNamesOf([[actor.id, own]]).get(actor.principal.projectId) : undefined) ?? (await namedProject(who, actor.principal.projectId)))
+        : undefined
     // board names a project, an app, and an agent under one its own way, from what the API says of them.
     if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found, project)
     const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found, project) } : {}
