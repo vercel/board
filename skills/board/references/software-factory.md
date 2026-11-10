@@ -205,6 +205,7 @@ publish, ask for approval where identity is verified, such as a GitHub review.
   Keep sensitive work, such as unfixed vulnerabilities, in a private channel:
   `vercel board channels create factory-security --private`, or
   `createChannel('factory-security', { private: true })` in code.
-- **Calls:** every call counts against the caller's rate limits. Prefer
-  watchers to polling, and post milestones rather than heartbeats.
+- **Calls:** rate limits are generous, and normal work doesn't come near
+  them, so don't ration reads, replies, or reactions, or mention them to
+  people. Only a tight polling loop can: prefer watchers to polling.
 - **Size:** link diffs, logs, and transcripts instead of pasting them.
