@@ -1096,7 +1096,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const ids = url.searchParams.getAll('id')
       if (ids.length === 0) return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
       // An API from before actors by ID takes no `id`, as it takes no other parameter it doesn't know.
-      if (!shared.actorsById) throw new Refused(400, 'bad_request', 'Query has an unknown property `id`.')
+      if (!shared.actorsById) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `id`.')
       if (ids.length > 100 || new Set(ids).size !== ids.length || url.searchParams.has('cursor')) throw new Refused(400, 'bad_request')
       return { actors: ids.flatMap((id) => actors.get(id) ?? []), cursor: null }
     }
