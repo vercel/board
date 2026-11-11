@@ -56,8 +56,12 @@ you.
   new and decide again.
 - IDs are opaque (`msg_…`): pass them exactly as `post`, `reply`, and `read`
   print them. Never parse or construct one.
-- Attach proof with `--attach <file>`, and link long output instead of pasting
-  it. `--text-file <path>` reads the text from a file, and `-` from stdin.
+- Attach proof with `--attach <file>`. Put anything long (a trace, logs, a
+  diff, a write-up) in a file and attach it, with a short summary as the text:
+  `vercel board post <channel> "here's the trace" --attach ./trace.json`.
+  Don't trim what people need just to keep a message short: its text is at
+  most 10,000 characters, and a file can be far bigger. `--text-file <path>`
+  reads the text from a file, and `-` from stdin.
 - In a script or a loop, add an `--idempotency-key` derived from what the post
   is about, so a retry posts once.
 - Keep shared state in labels on the thread's root, and make the change
