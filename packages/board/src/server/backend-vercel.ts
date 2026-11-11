@@ -865,8 +865,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const NAMED_AT_ONCE = 100
   /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
   const asked = new Map<string, { at: number; view: Promise<ApiActorView | undefined | null> }>()
-  /** The request for actors by ID that hasn't gone out yet: everyone named in the same turn shares it. */
+  /** The request for actors by ID that hasn't gone out yet: everyone named before this turn's promises settle shares it. */
   let asking: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } | null = null
+  /**
+   * Once everything already running in this turn has had its say, and before any timer or request answers: the
+   * views of a page each name their author as they start, a few promise steps apart, and what waits on them
+   * (a watcher's run, a wake-up's answer) is no later than it was.
+   */
+  const settled = async () => {
+    for (let step = 0; step < 16; step++) await null
+  }
   /** The actors `ids` name, in one request, or null from an API that doesn't answer them by ID. */
   const readNamed = async (who: Who, ids: string[]): Promise<Map<string, ApiActorView> | null> => {
     try {
@@ -896,7 +904,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const ids: string[] = []
       const next: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } = {
         ids,
-        views: new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() => {
+        views: settled().then(() => {
           if (asking === next) asking = null
           return readNamed(who, ids)
         }),
@@ -1246,17 +1254,28 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** A thread at a glance: its root, its reply count, and its latest reply, read by reference. */
-  async function summary(who: Who, thread: ApiThread, channel: ApiChannel, signal: AbortSignal): Promise<ThreadSummaryView> {
-    const [root, last] = await Promise.all([
-      messageById(who, idAt(thread.id, 1), signal),
-      thread.lastMessage && thread.lastMessage.sequence > 1 ? messageById(who, thread.lastMessage.id, signal) : null,
-    ])
-    return {
-      message: await view(who, root.message, channel.name),
-      // The API counts deleted messages too.
-      replies: thread.messageCount - 1,
-      last: last && (await view(who, last.message, channel.name)),
-    }
+  /**
+   * A page of threads as their summaries: each thread's first and newest messages are read, then every author
+   * on the page is asked for together, before any is named.
+   */
+  async function summaries(who: Who, page: { thread: ApiThread; channel: ApiChannel }[], signal: AbortSignal): Promise<ThreadSummaryView[]> {
+    const read = await Promise.all(
+      page.map(({ thread }) =>
+        Promise.all([
+          messageById(who, idAt(thread.id, 1), signal),
+          thread.lastMessage && thread.lastMessage.sequence > 1 ? messageById(who, thread.lastMessage.id, signal) : null,
+        ]),
+      ),
+    )
+    naming(who, read.flatMap(([root, last]) => [root.message.createdBy, ...(last ? [last.message.createdBy] : [])]))
+    return Promise.all(
+      page.map(async ({ thread, channel }, i) => {
+        const [root, last] = read[i]!
+        const [message, newest] = await Promise.all([view(who, root.message, channel.name), last && view(who, last.message, channel.name)])
+        // The API counts deleted messages too.
+        return { message, replies: thread.messageCount - 1, last: newest }
+      }),
+    )
   }
 
   let me: Promise<ApiMe> | null = null
@@ -2136,7 +2155,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         // Each thread with a matching message, by its latest.
         const latest = new Map<string, { thread: ApiThread; channel: ApiChannel; at: number }>()
         for (const { message, thread, channel } of messages) latest.set(thread.id, { thread, channel, at: Math.max(latest.get(thread.id)?.at ?? 0, message.createdAt) })
-        const threads = await Promise.all(pick([...latest.values()]).map(({ thread, channel }) => summary(who, thread, channel, signal)))
+        const threads = await summaries(who, pick([...latest.values()]), signal)
         return { threads, cursor: cursorOf({ t: newest, feeds }) }
       }
       // Otherwise the threads say enough: a label is matched on the root, whose labels the API
@@ -2150,7 +2169,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const rooted = found.filter(({ thread }) => (query.label ?? []).every(([key, values]) => thread.labels !== undefined && Object.hasOwn(thread.labels, key) && (values === null || values.includes(thread.labels[key]!))))
       const newest = found.reduce((max, { at }) => Math.max(max, at), 0)
       if (!query.label?.length) {
-        const threads = await Promise.all(pick(rooted).map(({ thread, channel }) => summary(who, thread, channel, signal)))
+        const threads = await summaries(who, pick(rooted), signal)
         return { threads, cursor: cursorOf({ t: newest, feeds }) }
       }
       // The API still lists a deleted root by its labels, and only its summary, which reads the
@@ -2161,7 +2180,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       for (let next = 0; next < candidates.length && threads.length < limit; ) {
         const page = candidates.slice(next, next + limit - threads.length)
         next += page.length
-        for (const shown of await Promise.all(page.map(({ thread, channel }) => summary(who, thread, channel, signal)))) if (!shown.message.deleted) threads.push(shown)
+        for (const shown of await summaries(who, page, signal)) if (!shown.message.deleted) threads.push(shown)
       }
       if (after === undefined) threads.reverse()
       return { threads, cursor: cursorOf({ t: newest, feeds }) }
