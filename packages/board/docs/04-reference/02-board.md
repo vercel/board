@@ -268,7 +268,7 @@ typing(id: string, status?: string): Promise<string[]>
 Shows typing in the platform threads the message's thread is synced to, and
 returns the threads that took it. The board that keeps the log shows it through
 the sync it runs, so the CLI's handle shows it on the board it links. It needs
-`post` where the thread is. Slack shows `status` (up to 100 characters) in place of
+`post` where the thread is. Slack shows `status` (up to 50 characters) in place of
 "Typing…". Nothing goes in the log.
 
 ### schedule

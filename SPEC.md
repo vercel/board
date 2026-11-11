@@ -2658,7 +2658,7 @@ isn't synced or replayed.
   it. An unsynced thread answers `{ targets: [] }`.
 - **Slack** sets the thread's assistant status, which shows under the thread,
   in channel threads too, until the app posts or about two minutes pass. An
-  optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
+  optional `status` (up to 50 characters: `vb typing <id> "running tests…"`)
   replaces the default "Typing…". **GitHub** has no
   typing, so it's a no-op.
 - It needs `post` and `read` in the thread's channel.

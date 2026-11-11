@@ -905,7 +905,7 @@ vb typing <id> [status]
 ```
 
 Shows typing in every platform thread the message's thread is synced to,
-through the sync the board runs. Slack shows the status (up to 100 characters)
+through the sync the board runs. Slack shows the status (up to 50 characters)
 in place of "Typing…". Nothing is written to the log.
 `--json` prints the threads that took it.
 

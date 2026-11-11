@@ -323,6 +323,7 @@ describe('cli', () => {
     // This board syncs nowhere, so typing shows nowhere, and that's fine.
     expect(await vb(['typing', id])).toMatchObject({ code: 0, stdout: '', stderr: '' })
     expect(await vb(['typing', id, 'running', 'tests…'])).toMatchObject({ code: 0, stdout: '', stderr: '' })
+    expect((await vb(['typing', id, 'a'.repeat(51)])).code).toBe(2)
     expect((await vb(['label', id, 'status=investigating'])).code).toBe(0)
 
     const read = await vb(['read', id])

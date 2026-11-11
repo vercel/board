@@ -101,7 +101,7 @@ most once a minute, while the other channels sync.
 - **Typing:** `team.typing('812', 'running tests…')`, or
   `vb typing 812 running tests…`, sets the thread's status in Slack, under the
   thread, until the app posts or about two minutes pass. The status is at most
-  100 characters; without one, Slack shows "Typing…".
+  50 characters; without one, Slack shows "Typing…".
 
 ## Messages post under their author's name
 
