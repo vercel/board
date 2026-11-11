@@ -2171,9 +2171,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { thread, channel } = await messageIn(who, id, signal)
       const [root, ...replies] = await threadMessages(who, thread.id, signal)
       if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
+      // The root and its replies are named together: one after the other, they'd ask for their authors apart.
+      const [message, ...shown] = await Promise.all([root, ...replies].map((each) => view(who, each, channel.name)))
       return {
-        message: await view(who, root, channel.name),
-        replies: await Promise.all(replies.map((reply) => view(who, reply, channel.name))),
+        message: message!,
+        replies: shown,
         cursor: cursorOf({ t: Math.max(root.createdAt, ...replies.map((reply) => reply.createdAt)), feeds: {} }),
       }
     },

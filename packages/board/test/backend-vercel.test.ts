@@ -2347,18 +2347,18 @@ describe('naming the authors on a page', () => {
     expect(asked).toHaveLength(1)
   })
 
-  it('asks once for a page of threads and once for a thread with its replies, on an API that takes its time', async () => {
+  it('asks once for a page of threads, and once for a thread nobody here has read with its replies, on an API that takes its time', async () => {
     const { api, julian, asked, lists } = await reading({}, 5)
     const { threads } = await julian.threads({ channel: 'dev' })
     expect(handles(threads.map((thread) => thread.message))).toEqual(['ada', 'julian'])
     expect(asked).toHaveLength(1)
-    // A thread whose replies are by people the page didn't name.
-    const root = threads[0]!.message.id
-    for (const principal of ['user:u_val', 'user:u_tom']) await handleOn(api, principal).reply(root, { text: 'me too' })
+    // A thread whose root and replies are all by people nothing here has named yet.
+    const { id: root } = await handleOn(api, 'user:u_val').post('dev', { text: 'new here' })
+    for (const principal of ['user:u_tom', 'user:u_kim']) await handleOn(api, principal).reply(root, { text: 'me too' })
     const { replies } = await julian.thread(root)
     expect(replies).toHaveLength(2)
     expect(asked).toHaveLength(2)
-    expect(asked[1]!.sort()).toEqual(['vercel:user:u_tom', 'vercel:user:u_val'])
+    expect(asked[1]!.sort()).toEqual(['vercel:user:u_kim', 'vercel:user:u_tom', 'vercel:user:u_val'])
     expect(lists).toEqual([])
   })
 
