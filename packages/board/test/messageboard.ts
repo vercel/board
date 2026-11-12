@@ -1379,6 +1379,11 @@ export function fakeMessageboard(
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
     unscopedSync?: boolean
+    /**
+     * A production or preview deployment may make the team's board with `POST /boards/default`, as Vercel's API
+     * will once it lets one: without it, as the API has it today, only a person may.
+     */
+    deploymentsMakeBoard?: boolean
   } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
@@ -1462,8 +1467,9 @@ export function fakeMessageboard(
     // The team's boards are its principal's to change, not a caller narrowed to some channels.
     if (actor.narrowed && method === 'POST' && (path === '/boards/default' || path === '/boards/ensure')) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's boards: that's its principal's job.")
     if (method === 'POST' && path === '/boards/default') {
-      // Board creates record a person's event, so project tokens can't.
-      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
+      // Board creates record a person's event, so project tokens can't, unless the API lets a deployment.
+      const project = actor.principal.type === 'project' ? actor.principal : null
+      if (project && !(options.deploymentsMakeBoard && (project.environment === 'production' || project.environment === 'preview'))) throw new Refused(403, 'forbidden')
       if (!made && named(general.name)) throw new Refused(409, 'board_name_taken')
       made = true
       return { board: show(general) }

@@ -715,8 +715,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   let board: Promise<string> | null = null
   /**
    * The board's ID: the one given, the one `board({ name })` names, or the team's, which the API
-   * names only to those it lets in. A team with none gets one the first time a person uses it, as
-   * the API asks of its clients; a project can't make it, and is told so. Each is asked for once.
+   * names only to those it lets in. A team with none gets one the first time someone uses it, as
+   * the API asks of its clients: a person, or a deployment where the API lets one. A project it
+   * refuses is told how a person makes it. Each is asked for once.
    */
   const boardId = (who: Who) =>
     (board ??= options.board
@@ -725,10 +726,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ? boardNamed(who, boardName()!)
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
-            const { principal } = (await self(who)).actor
-            if (principal.type === 'project') throw notLetIn(null, principal)
-            const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
-            return made.id
+            try {
+              const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
+              return made.id
+            } catch (error) {
+              // A project the API doesn't let make it (as it lets none yet) is told what a person can do.
+              const { principal } = (await self(who)).actor
+              if (principal.type === 'project' && error instanceof HttpError && error.status === 403) throw notLetIn(null, principal)
+              throw error
+            }
           })).catch((error: unknown) => {
       board = null
       throw error

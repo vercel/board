@@ -513,6 +513,24 @@ describe('vercel()', () => {
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
+  it("has a deployment make the team's board where the API lets it, and tells one it refuses how a person does", async () => {
+    // Where the API lets a production or preview deployment make the team's board, its first deployment needs nobody to open it first.
+    for (const environment of ['production', 'preview']) {
+      const api = fakeMessageboard({ boardId: null, deploymentsMakeBoard: true })
+      await handleOn(api, `project:prj_pong:${environment}`).post('dev', { text: 'hello' })
+      expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
+    }
+    // One it refuses, as it refuses every project today, gets the message that says how a person makes it.
+    const api = fakeMessageboard({ boardId: null, deploymentsMakeBoard: true })
+    await expect(handleOn(api, 'project:prj_pong:development').post('dev', { text: 'hello' })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_not_granted',
+      message: "this project can't use the team's board (prj_pong, development): nobody on the team has opened it yet, or its grants keep this project out.",
+    })
+    expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
+  })
+
   it('says what the API says its credentials may do, and until when, and what any it lets in may when it says neither', async () => {
     const said = async (handle: ReturnType<typeof handleOn>) => {
       const { can, expiresAt } = await handle.me()
