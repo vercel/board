@@ -106,6 +106,16 @@ describe('cli', () => {
     // So was a second text, a title's body say, and what a filter flag was given.
     expect((await vb(['post', 'notes', 'title', 'the body'])).stderr).toMatch(/^error: post takes one text, and the body is one too many\./)
     expect((await vb(['post', 'notes', 'title', '--text', 'the body'])).stderr).toMatch(/^error: --text is a filter for read, tail, and wait\. post takes its text as an argument, in quotes\.\n/)
+    // An option only another command takes is unknown here too, not dropped: an edit can't attach or label.
+    const attach = join(await tmp('board-attach-'), 'trace.json')
+    await writeFile(attach, '{}')
+    const edit = await vb(['edit', id, 'edited', '--attach', attach])
+    expect(edit).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: edit can't attach files: reply with the file instead\.\n\n {2}Reply with it:\n {4}vb reply <ID> <TEXT> --attach <FILE>\n/) })
+    expect(failure(await vb(['edit', id, 'edited', '--label', 'a=b', '--json']))).toMatchObject({ reason: 'unknown_option', message: 'Unknown option --label for vb edit.' })
+    expect((await vb(['read', id, '--attach', attach])).stderr).toMatch(/^error: Unknown option --attach for vb read\./)
+    // Where it means something else, it says so: --text filters reads, and a schedule doesn't sync.
+    expect((await vb(['schedule', 'notes', 'hi', '--sync', 'slack:#x'])).stderr).toMatch(/^error: Can't use --sync with schedule\. A schedule posts where you point it\.\n/)
+    expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message).toMatchObject({ text: 'root', labels: {} })
     // Stdin is the text's, never an attachment's.
     expect((await vb(['reply', id, 'see attached', '--attach', '-'])).stderr).toMatch(/^error: Can't attach -: stdin is for the message's text\./)
     expect(await replies()).toBe(0)

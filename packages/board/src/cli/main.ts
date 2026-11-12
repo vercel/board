@@ -247,6 +247,18 @@ function parse(argv: string[]) {
   } catch (error) {
     throw parseFailure(error as Error & { code?: string }, argv, word)
   }
+  // An option only another command takes would be dropped without a word (`edit --attach`): it's unknown here too.
+  const known = specOf(word) && new Set(optionsOf(word))
+  const foreign = known && ordered.find((option) => !known.has(option.name))
+  if (foreign) throw foreignOption(foreign.name, word!)
+}
+
+/** An option `word` doesn't take: what to do instead, where there's something better to say than that. */
+function foreignOption(name: string, word: string): Failed {
+  if (name === 'text' && TEXT.has(word)) return usage(`--text is a filter for read, tail, and wait. ${word} takes its text as an argument, in quotes.`)
+  if (name === 'sync' && word === 'schedule') return usage("Can't use --sync with schedule. A schedule posts where you point it.")
+  if (name === 'attach' && word === 'edit') return usage("edit can't attach files: reply with the file instead.", { reason: 'unknown_option', next: [{ instruction: 'Reply with it', argv: [...cli(), 'reply', '<ID>', '<TEXT>', '--attach', '<FILE>'] }] })
+  return usage(`Unknown option --${name} for ${named()} ${word}.`, { reason: 'unknown_option', next: [{ instruction: 'See all options', argv: [...cli(), word, '--help'] }] })
 }
 
 /** What the parser rejected, as misuse: an unknown option (with the likeliest one meant), or an option without its value. */
@@ -279,8 +291,12 @@ function parseFailure(error: Error & { code?: string }, argv: string[], word: st
 }
 
 /** The options `word`'s command takes, its subcommands' and the filters included, and the ones every command takes. */
+/** The command `word` names, board's or the app's, as help shows it. */
+const specOf = (word: string | undefined): CliCommand | undefined =>
+  word === undefined ? undefined : [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+
 function optionsOf(word: string | undefined): string[] {
-  const command = [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+  const command = specOf(word)
   const own = command ? [command, ...(command.subcommands ?? [])].flatMap((c) => [...c.options, ...(c.filters ? filterOptions : [])]) : []
   return [...own, ...globalOptions].map((option) => option.name)
 }
@@ -385,8 +401,6 @@ function labelPairs(
  * and would be dropped without a word: say so, and how each is written.
  */
 function oneText(command: string, target: string, extra: string[]) {
-  if (flags.text !== undefined)
-    throw usage(`--text is a filter for read, tail, and wait. ${command} takes its text as an argument, in quotes.`)
   const [first] = extra
   if (first === undefined) return
   if (/^[\w.-]+=/.test(first))
@@ -1191,7 +1205,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const [target, body] = args
       if (!target) throw usage('Missing the channel or message to schedule a message in.', { reason: 'missing_arguments' })
       if (!flags.in && !flags.at && !flags.every) throw usage("Can't schedule a message without a time: pass --in 1d, --at <time>, or --every 30m.", { reason: 'missing_arguments' })
-      if (flags.sync?.length) throw usage("Can't use --sync with schedule. A schedule posts where you point it.")
       const times = flags.times === undefined ? undefined : Number(flags.times)
       if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw usage(`--times takes a count, and ${flags.times} isn't one.`)
       const board = client()
