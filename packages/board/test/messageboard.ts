@@ -231,6 +231,7 @@ const whoOf = (actor: Actor): Who => {
  */
 type Shared = {
   teamId: string
+  inlineThreadMessages: boolean
   accounts: Accounts
   directory: Directory
   now: () => number
@@ -1029,7 +1030,19 @@ function fakeBoard(shared: Shared, boardId: string) {
         listed.sort((a, b) => a.createdAt - b.createdAt)
       } else listed.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
       const { items, cursor } = page(listed, url.searchParams.get('cursor'), 25)
-      return { threads: items.map(showThread), cursor }
+      const include = url.searchParams.get('include')
+      // An API from before `include=messages` takes no `include`, as it takes no other parameter it doesn't know.
+      if (include !== null && !shared.inlineThreadMessages) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
+      if (include !== null && include !== 'messages') throw new Refused(400, 'bad_request')
+      return {
+        threads: items.map((t) => {
+          if (include === null) return showThread(t)
+          // Each thread's first message, and its newest when it has replies.
+          const latest = t.lastMessage && t.lastMessage.sequence > 1 ? t.messages.find((m) => m.sequence === t.lastMessage!.sequence) : undefined
+          return { ...showThread(t), ...(t.messages[0] ? { rootMessage: show(t.messages[0]) } : {}), ...(latest ? { latestMessage: show(latest) } : {}) }
+        }),
+        cursor,
+      }
     }
     if (method === 'POST' && rest === '/threads') {
       const again = repeat(actor, body.clientId)
@@ -1359,6 +1372,8 @@ export function fakeMessageboard(
     repositories?: Record<string, string>
     me?: Record<string, MeSays> | false
     notDefault?: boolean
+    /** True for an API that lists threads with their first and newest messages (`include=messages`). Vercel's doesn't yet: `include` is 400 there. */
+    inlineThreadMessages?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
     tokens?: Record<string, string>
     /** An import's author is the platform user alone (`principal: { type: 'external' }`), as Vercel's API named them before platform profiles. */
@@ -1402,6 +1417,7 @@ export function fakeMessageboard(
     directory,
     now,
     stored,
+    inlineThreadMessages: options.inlineThreadMessages ?? false,
     externalImports: options.externalImports ?? false,
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,

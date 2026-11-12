@@ -396,12 +396,43 @@ describe('vercel()', () => {
     expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'general', 'ops'])
   })
 
+  it("shows a channel's threads from the thread list alone where the API lists them with their messages, and reads each by ID where it doesn't, asking it once", async () => {
+    const shown = async (inlineThreadMessages: boolean) => {
+      const api = fakeMessageboard({ inlineThreadMessages })
+      const team = handleOn(api)
+      const roots = []
+      for (let i = 0; i < 20; i++) roots.push(await team.post('busy', { text: `thread ${i}` }))
+      for (const root of roots.slice(0, 10)) await team.reply(root.id, { text: `reply to ${root.text}` })
+      const count = async () => {
+        api.requests.length = 0
+        const { threads } = await team.threads({ channel: 'busy' })
+        return { threads, listed: api.requests.filter((r) => /\/threads$/.test(r)).length, byId: api.requests.filter((r) => /\/messages\/msg_/.test(r)).length }
+      }
+      return { first: await count(), again: await count() }
+    }
+    const inline = await shown(true)
+    const today = await shown(false)
+    // The same summaries either way: a root for each, and a latest reply for the ten with one.
+    const summaries = (threads: { message: { text: string }; last: { text: string } | null }[]) => threads.map((t) => [t.message.text, t.last?.text ?? null])
+    expect(summaries(inline.first.threads)).toEqual(summaries(today.first.threads))
+    expect(inline.first.threads.filter((t) => t.last)).toHaveLength(10)
+    // With them, the list is the only request. An edit or a delete since shows too: they come as they are now.
+    expect(inline.first).toMatchObject({ listed: 1, byId: 0 })
+    expect(inline.again).toMatchObject({ listed: 1, byId: 0 })
+    // Vercel's API today refuses the parameter: the list is read again without it, each message by ID as before,
+    expect(today.first).toMatchObject({ listed: 2, byId: 30 })
+    // and it isn't asked again.
+    expect(today.again).toMatchObject({ listed: 1, byId: 30 })
+  })
+
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
     const roots = []
     for (let i = 0; i < 60; i++) roots.push(await team.post('busy', { text: `thread ${i}` }))
     await team.reply(roots[59]!.id, { text: 'latest' })
+    // A first listing finds this API lists threads without their messages (below), and no later one asks.
+    await team.threads({ channel: 'busy', limit: 1 })
     api.requests.length = 0
     const { threads, cursor } = await team.threads({ channel: 'busy', limit: 5 })
     expect(threads.map((t) => t.message.text)).toEqual(['thread 55', 'thread 56', 'thread 57', 'thread 58', 'thread 59'])
