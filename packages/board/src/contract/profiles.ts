@@ -69,5 +69,16 @@ export type Via = { name: string; environment: string | null }
 export const viaText = (via: Via): string =>
   `via ${via.name}${via.environment !== null && via.environment !== 'production' ? ` (${via.environment})` : ''}`
 
-/** An actor as people see it: `claude via julian`, `Malte via www (preview)`, or just a name for an actor with no profile. */
-export const shownName = (actor: { name: string; via?: Via | undefined }): string => (actor.via ? `${actor.name} ${viaText(actor.via)}` : actor.name)
+/**
+ * What follows an actor's name to say whose word it is: ` via julian`, ` via www (preview)`, nothing for
+ * an actor with no profile. A profile named like its principal (`factory` of the project `factory`)
+ * reads as the principal does, its environment and all: ` (preview)`, or nothing in production.
+ */
+export const viaSuffix = (actor: { name: string; via?: Via | undefined }): string => {
+  if (!actor.via) return ''
+  if (actor.name.toLowerCase() !== actor.via.name.toLowerCase()) return ` ${viaText(actor.via)}`
+  return actor.via.environment !== null && actor.via.environment !== 'production' ? ` (${actor.via.environment})` : ''
+}
+
+/** An actor as people see it: `claude via julian`, `Malte via www (preview)`, `factory` for the project factory's own profile, or just a name for an actor with no profile. */
+export const shownName = (actor: { name: string; via?: Via | undefined }): string => `${actor.name}${viaSuffix(actor)}`

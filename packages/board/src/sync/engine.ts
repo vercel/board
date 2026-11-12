@@ -22,7 +22,7 @@ import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableErr
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
-import { actorParts, platformProfile, shownName, viaText } from '../contract/profiles.ts'
+import { actorParts, platformProfile, shownName, viaSuffix } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
 export type SyncEvent = BoardEventView & { before?: MessageView }
@@ -833,7 +833,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     // names its environment in its own name, which is whose word it is too: `www (preview)`, as
     // project names have no spaces or parentheses (`www@preview` on what a local board stored before).
     const own = actor?.name ?? message.by.actor
-    const after = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
+    const after = `${actor ? viaSuffix(actor) : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
     const environment = actor?.kind === 'deployment' && !actor.via ? (/(?:@[^@/]+| \([^()]+\))$/.exec(own)?.[0] ?? '') : ''
     const name = `${own}${after}`
     const attribution = `${environment}${after}`

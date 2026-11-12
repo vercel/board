@@ -251,6 +251,21 @@ describe('what board copies to Slack', () => {
     expect(s.channelPosts).toEqual([])
   })
 
+  it("go out under a profile's name alone, with its picture, when it's named like the project it writes for", async () => {
+    const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'], false)
+    await team.createGrant({ principals: [{ kind: 'project', project: 'prj_factory', environments: ['production', 'preview'] }], can: { '*': ['read', 'post'] } })
+    for (const environment of ['production', 'preview']) {
+      const factory = caller(team.fetch, await deploymentToken('factory', 'prj_factory', environment), { 'x-board-profile': 'factory;avatar="https://example.com/factory.png"' })
+      expect((await factory('POST', '/messages', { channel: 'firehose', text: environment })).status).toBe(201)
+    }
+    await vi.waitFor(() => expect(posted).toHaveLength(2))
+    expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([
+      ['factory', 'https://example.com/factory.png', 'production'],
+      ['factory (preview)', 'https://example.com/factory.png', 'preview'],
+    ])
+    expect(s.channelPosts).toEqual([])
+  })
+
   it('go out as the app, each labeled with its author, when the app lacks chat:write.customize', async () => {
     const board = mirrored(['chat:write'])
     const { s, posted } = board

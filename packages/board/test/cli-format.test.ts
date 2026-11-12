@@ -34,6 +34,21 @@ describe('CLI output has no emoji', () => {
   })
 })
 
+describe('an author with a profile', () => {
+  const message = (name: string, via: { name: string; environment: string | null }) =>
+    ({
+      id: 9, channel: 'dev', text: 'on it', re: null, replyTo: null, thread: 't', labels: {}, reactions: {}, by,
+      noSync: false, origin: null, from: null, createdAt: new Date().toISOString(), editedAt: null, deleted: false,
+      undelivered: {}, attachments: [], links: [], schedule: null, author: { kind: 'agent', handle: 'x', name, avatar: null, via },
+    }) as unknown as MessageView
+
+  it('shows who it writes through, unless the profile is named like them', () => {
+    expect(formatMessage(message('claude', { name: 'julian', environment: null }))).toMatch(/^#9  claude via julian · /)
+    expect(formatMessage(message('factory', { name: 'factory', environment: 'production' }))).toMatch(/^#9  factory · /)
+    expect(formatMessage(message('Factory', { name: 'factory', environment: 'preview' }))).toMatch(/^#9  Factory \(preview\) · /)
+  })
+})
+
 describe('read <channel>', () => {
   it("cuts a root's first line to fit 80 columns, and marks that more follows", () => {
     const root = (text: string) =>
