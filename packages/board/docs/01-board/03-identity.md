@@ -128,7 +128,11 @@ A **profile** is a named identity within a principal: an agent acting for a
 person, or a [platform user](#platform-users) a sync speaks for. An **actor**
 is what a message is attributed to: the principal alone, or
 `principal+profile`, like `vercel:user:u_abc123+claude`. One with a profile
-shows through its principal: **claude via julian**.
+shows through its principal: **claude via julian**. An agent named like its
+principal reads as the principal does, with its own avatar: a deployment of the
+project `factory` writing as `as({ name: 'factory', avatar })` shows as
+**factory** (**factory (preview)** outside production). A platform user's name
+is their own, so one named like its principal still shows through it.
 
 ### Profiles
 

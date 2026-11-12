@@ -35,17 +35,19 @@ describe('CLI output has no emoji', () => {
 })
 
 describe('an author with a profile', () => {
-  const message = (name: string, via: { name: string; environment: string | null }) =>
+  const message = (name: string, via: { name: string; environment: string | null }, kind = 'agent') =>
     ({
       id: 9, channel: 'dev', text: 'on it', re: null, replyTo: null, thread: 't', labels: {}, reactions: {}, by,
       noSync: false, origin: null, from: null, createdAt: new Date().toISOString(), editedAt: null, deleted: false,
-      undelivered: {}, attachments: [], links: [], schedule: null, author: { kind: 'agent', handle: 'x', name, avatar: null, via },
+      undelivered: {}, attachments: [], links: [], schedule: null, author: { kind, handle: 'x', name, avatar: null, via },
     }) as unknown as MessageView
 
-  it('shows who it writes through, unless the profile is named like them', () => {
+  it('shows who it writes through, unless it is an agent named like them', () => {
     expect(formatMessage(message('claude', { name: 'julian', environment: null }))).toMatch(/^#9  claude via julian · /)
     expect(formatMessage(message('factory', { name: 'factory', environment: 'production' }))).toMatch(/^#9  factory · /)
     expect(formatMessage(message('Factory', { name: 'factory', environment: 'preview' }))).toMatch(/^#9  Factory \(preview\) · /)
+    // A platform user's name is their own: one named like the project that imported them still shows through it.
+    expect(formatMessage(message('factory', { name: 'factory', environment: 'production' }, 'external'))).toMatch(/^#9  factory via factory · /)
   })
 })
 

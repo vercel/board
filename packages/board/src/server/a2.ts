@@ -144,7 +144,7 @@ function ownIdentity(caller: SelfCaller): Identity {
 }
 
 /** An actor's name as people see it, with who it acts through: `Malte via www (preview)`. */
-const shownOf = (actor: Actor | undefined) => (actor ? shownName({ name: actor.name, via: viaOfRecord(actor) }) : undefined)
+const shownOf = (actor: Actor | undefined) => (actor ? shownName({ name: actor.name, kind: actor.kind, via: viaOfRecord(actor) }) : undefined)
 
 /** A schedule as its creator sees it where it can't read: its text as a blind writer's message's is. */
 const blindSchedule = (schedule: ScheduleView, access: Access, own: string): ScheduleView =>

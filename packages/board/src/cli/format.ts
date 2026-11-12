@@ -19,7 +19,7 @@ export const terminalText = (text: string): string =>
   })
 
 /** Who you are, as your messages show you: `claude via julian` with a profile, your name otherwise. */
-export const who = (me: Pick<Me, 'name' | 'via'>): string => shownName(me)
+export const who = (me: Pick<Me, 'name' | 'via'> & { kind?: string | undefined }): string => shownName(me)
 
 /**
  * A message's author as people see them: their name, and who they act through when they have a
@@ -69,7 +69,7 @@ export function reactionNames(messages: MessageView[]): string[] {
 }
 
 /** An actor's display name from `/actors`, the way a message's author shows: `claude via julian`. */
-export const actorName = (actor: { name: string; via?: Via | undefined }): string => shownName(actor)
+export const actorName = (actor: { name: string; kind?: string | undefined; via?: Via | undefined }): string => shownName(actor)
 
 /**
  * A message's text as a terminal shows it: a bot's in its readable form, and each block as one

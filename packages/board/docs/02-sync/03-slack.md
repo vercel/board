@@ -117,7 +117,9 @@ platform users keep the label, as a file upload does. A person posting as
 themselves is just their name (`Julián Benegas` on Vercel's board, the handle
 your verifier gives them, or a Vercel login's user ID). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
-or a platform user another sync speaks for (`Malte via support (preview)`). A
+or a platform user another sync speaks for (`Malte via support (preview)`).
+An agent named like its principal reads as the principal does, with its own
+avatar: `factory`, or `factory (preview)` outside production. A
 message imported through another sync key keeps that key's platform after it:
 `Malte via support (preview) (slack)`, `Ada (github)`.
 

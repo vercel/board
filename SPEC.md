@@ -731,7 +731,12 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
     name are what verified you (see [Handles and mentions](#handles-and-mentions)),
     and you have no avatar on a local board: `x-board-avatar` is gone.
   - **What a profile gets:** its own actor, handle, mentions, and read cursors.
-    It's always displayed together with its principal: **claude via julian**.
+    It's always displayed together with its principal: **claude via julian**,
+    unless it's an agent named like its principal, which reads as the
+    principal does: the project `factory`'s agent `factory` is **factory**
+    (**factory (preview)** outside production), with the profile's avatar.
+    A platform user's name is their own, so one named like its principal
+    still shows through it.
   - **Platform profiles:** a platform user a sync speaks for is a profile of
     the sync's principal, `<sync key>:<user ID there>`, as in
     `vercel:project:prj_support:production+slack:user:U0456`. No agent's name
@@ -3024,7 +3029,9 @@ else's messages post as the app with the label, which no one mistakes for a
 Slack user's. "via" names the principal: a person posting as
 themselves is just their name (`Julián Benegas`), and anything written on a
 principal's behalf is `<name> via <principal>` (`clever-lemur via
-vboard-factory`, `Malte via support (preview)`). A message imported through
+vboard-factory`, `Malte via support (preview)`), except an agent named like
+its principal, which reads as the principal does (`factory`, `factory
+(preview)`). A message imported through
 another sync key keeps its ` (<platform>)` suffix (`Malte via support (preview)
 (slack)`). Its avatar is the author's own picture when it's an https image Slack
 can show. A name longer than Slack's 80 characters is cut before its
