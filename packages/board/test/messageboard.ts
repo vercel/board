@@ -237,6 +237,7 @@ type Shared = {
   now: () => number
   stored: Map<string, Uint8Array<ArrayBuffer>>
   externalImports: boolean
+  actorsById: boolean
   platformHandles: boolean
   boardWideKeys: boolean
   projectIdHandles: boolean
@@ -1104,7 +1105,14 @@ function fakeBoard(shared: Shared, boardId: string) {
         return { attachment, url: `${STORAGE}${attachment.id}`, expiresAt: now() + 60_000 }
       }
     }
-    if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
+    if (method === 'GET' && rest === '/actors') {
+      const ids = url.searchParams.getAll('id')
+      if (ids.length === 0) return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
+      // An API from before actors by ID takes no `id`, as it takes no other parameter it doesn't know.
+      if (!shared.actorsById) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `id`.')
+      if (ids.length > 100 || new Set(ids).size !== ids.length || url.searchParams.has('cursor')) throw new Refused(400, 'bad_request')
+      return { actors: ids.flatMap((id) => actors.get(id) ?? []), cursor: null }
+    }
     if (method === 'GET' && rest === '/messages') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
@@ -1360,6 +1368,8 @@ export function fakeMessageboard(
     teamId?: string
     slug?: string
     boardId?: string | null
+    /** False for an API from before it answered actors by their IDs: `GET /actors?id=` is 400. */
+    actorsById?: boolean
     accounts?: Accounts
     boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
     /** By user ID: u_jb is an owner and u_val a viewer unless it says, and anyone else a member. */
@@ -1419,6 +1429,7 @@ export function fakeMessageboard(
     stored,
     inlineThreadMessages: options.inlineThreadMessages ?? false,
     externalImports: options.externalImports ?? false,
+    actorsById: options.actorsById ?? true,
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,
     projectIdHandles: options.projectIdHandles ?? false,

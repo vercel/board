@@ -863,25 +863,106 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The actor in a read of the list, or undefined when it doesn't have them or failed. */
   const inList = (read: { views: Promise<Map<string, ApiActorView>> }, id: string) => read.views.then((views) => views.get(id), () => undefined)
 
+  /** Whether the API answers actors by their IDs. An older one answers 400 for a query it doesn't know, `id`, and names come from the whole list. */
+  let namesById = true
+  /** Actor IDs one request names, as many as the API takes. */
+  const NAMED_AT_ONCE = 100
+  /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
+  const asked = new Map<string, { at: number; view: Promise<ApiActorView | undefined | null> }>()
+  /** The request for actors by ID that hasn't gone out yet: everyone named before this turn's promises settle shares it. */
+  let asking: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } | null = null
+  /**
+   * Once everything already running in this turn has had its say, and before any timer or request answers: the
+   * views of a page each name their author as they start, a few promise steps apart, and what waits on them
+   * (a watcher's run, a wake-up's answer) is no later than it was.
+   */
+  const settled = async () => {
+    for (let step = 0; step < 16; step++) await null
+  }
+  /** The actors `ids` name, in one request, or null from an API that doesn't answer them by ID. */
+  const readNamed = async (who: Who, ids: string[]): Promise<Map<string, ApiActorView> | null> => {
+    try {
+      const { actors } = await api<{ actors: ApiActorView[] }>(who, 'GET', await onBoard(who, '/actors'), { query: { id: ids } })
+      return new Map(actors.map((view) => [view.id, view] as const))
+    } catch (error) {
+      // What the API refuses for these IDs is named from the list this once. Only an API that takes no `id` at all never is again.
+      if (!(error instanceof HttpError && error.status >= 400 && error.status < 500 && error.status !== 429)) throw error
+      if (error.status === 400 && /additional property/i.test(error.message)) namesById = false
+      return null
+    }
+  }
+  /** Asks for `actors` by ID together, before each is named: a page's authors, or a page of changes', in one request. */
+  const naming = (who: Who, actors: Iterable<ApiActor>) => {
+    if (namesById) for (const actor of actors) void byId(who, actor.id)
+  }
+  /**
+   * An actor as the API names them, asked for by ID with everyone else named in the same turn: the
+   * authors on a page cost one request however many actors the board has. Undefined for one the API
+   * doesn't have or a read that failed, which isn't kept; null when the API doesn't answer by ID.
+   */
+  function byId(who: Who, id: string): Promise<ApiActorView | undefined | null> {
+    const kept = asked.get(id)
+    if (kept && Date.now() - kept.at <= NAMES_FRESH_MS) return kept.view
+    let batch = asking
+    if (!batch || batch.ids.length >= NAMED_AT_ONCE) {
+      const ids: string[] = []
+      const next: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } = {
+        ids,
+        views: settled().then(() => {
+          if (asking === next) asking = null
+          return readNamed(who, ids)
+        }),
+      }
+      batch = asking = next
+    }
+    batch.ids.push(id)
+    const view: Promise<ApiActorView | undefined | null> = batch.views.then(
+      (views) => (views === null ? null : views.get(id)),
+      () => {
+        if (asked.get(id)?.view === view) asked.delete(id)
+        return undefined
+      },
+    )
+    if (asked.size >= 10_000) asked.clear()
+    asked.set(id, { at: Date.now(), view })
+    return view
+  }
+  /**
+   * The name of the project `actor` is of, one of its deployments or their agents: as its own actor names it,
+   * asked for by ID, or else as the actors list does. Undefined for an actor of no project, or one nothing names.
+   */
+  async function projectOf(who: Who, actor: ApiActor, own?: ApiActorView | null): Promise<string | undefined> {
+    if (actor.principal.type !== 'project') return undefined
+    const { projectId } = actor.principal
+    const view = own === undefined ? (namesById ? await byId(who, actor.id) : null) : own
+    return (view ? projectNamesOf([[actor.id, view]]).get(projectId) : undefined) ?? (await namedProject(who, projectId))
+  }
+
+  /** An actor as the actors list names them: read again every few minutes, and at once for someone who wrote since it was. */
+  async function listed(who: Who, id: string): Promise<ApiActorView | undefined> {
+    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
+    let found = await inList(current, id)
+    if (!found && !unlisted.has(id)) {
+      // Someone new since this list: one read again covers everyone it's missing, even several at once.
+      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
+      found = await inList(again, id)
+      // Only a read that worked and still doesn't have them settles it.
+      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(id)
+    }
+    return found
+  }
+
   /**
    * An actor as board shows them: a person by their Vercel username and name, and an agent acting
    * for a person by its profile under them, as the API names them; anyone else (a project, an app,
-   * an agent of one), or someone the API doesn't list, by their principal. The list is read again
-   * every few minutes, and at once for someone who wrote since it was.
+   * an agent of one), or someone the API doesn't have, by their principal. The API is asked for
+   * them by ID, or on an older API for its whole list.
    */
   async function nameOf(who: Who, actor: ApiActor): Promise<ActorView & { id: string }> {
-    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
-    let found = await inList(current, actor.id)
-    if (!found && !unlisted.has(actor.id)) {
-      // Someone new since this list: one read again covers everyone it's missing, even several at once.
-      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
-      found = await inList(again, actor.id)
-      // Only a read that worked and still doesn't have them settles it.
-      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(actor.id)
-    }
+    const own = namesById ? await byId(who, actor.id) : null
+    const found = own === null ? await listed(who, actor.id) : own
     const kind = found && apiKind(found.kind)
-    // A project, its deployments and their agents alike, by its name as the actors list names it.
-    const project = actor.principal.type === 'project' ? await namedProject(who, actor.principal.projectId) : undefined
+    const project = await projectOf(who, actor, own)
     // board names a project, an app, and an agent under one its own way, from what the API says of them.
     if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor, found, project)
     const via = actor.profile && actor.principal.type !== 'external' ? { via: viaFor(actor.principal, found, project) } : {}
@@ -936,11 +1017,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (from === undefined) return null
     const project = importerOf(by)
     if (project === null || project === (await ownProject(who))) return from
-    return `${await projectName(who, project)}/${from}`
+    return `${(await projectOf(who, by)) ?? project}/${from}`
   }
 
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
     const root = message.sequence === 1
+    // Asked for before anything here waits, so every message of a page asks in the same turn, and so in one request.
+    const author = nameOf(who, message.createdBy)
+    author.catch(() => {})
     return {
       id: message.id,
       channel,
@@ -962,7 +1046,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       links: (message.links ?? []).map((link) => ({ url: link.url, message: link.message ?? null, snapshot: link.snapshot ?? null, unavailable: link.unavailable ?? null })),
       version: message.version,
       revision: message.revision,
-      author: await nameOf(who, message.createdBy),
+      author: await author,
       ...(message.schedule ? { schedule: { id: message.schedule.id, n: message.schedule.n } } : {}),
       // The API keeps text alone: its blocks are read out of it here, for what was written on the board.
       blocks: (message.from ?? null) === null && message.deletedAt === undefined ? blocksIn(message.text) : [],
@@ -1193,21 +1277,29 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /**
-   * A thread at a glance: its root, its reply count, and its latest reply, as its thread list
-   * brought them, or read by reference from an API that lists threads without them.
+   * A page of threads as their summaries: each thread's first and newest messages as its thread list brought them,
+   * or read by reference from an API that lists threads without them, then every author on the page is asked for
+   * together, before any is named.
    */
-  async function summary(who: Who, thread: ApiThread, channel: ApiChannel, signal: AbortSignal): Promise<ThreadSummaryView> {
-    const replied = thread.lastMessage !== undefined && thread.lastMessage.sequence > 1
-    const [root, last] = await Promise.all([
-      thread.rootMessage ?? messageById(who, idAt(thread.id, 1), signal).then((found) => found.message),
-      !replied ? null : (thread.latestMessage ?? messageById(who, thread.lastMessage!.id, signal).then((found) => found.message)),
-    ])
-    return {
-      message: await view(who, root, channel.name),
-      // The API counts deleted messages too.
-      replies: thread.messageCount - 1,
-      last: last && (await view(who, last, channel.name)),
-    }
+  async function summaries(who: Who, page: { thread: ApiThread; channel: ApiChannel }[], signal: AbortSignal): Promise<ThreadSummaryView[]> {
+    const read = await Promise.all(
+      page.map(({ thread }) => {
+        const replied = thread.lastMessage !== undefined && thread.lastMessage.sequence > 1
+        return Promise.all([
+          thread.rootMessage ?? messageById(who, idAt(thread.id, 1), signal).then((found) => found.message),
+          !replied ? null : (thread.latestMessage ?? messageById(who, thread.lastMessage!.id, signal).then((found) => found.message)),
+        ])
+      }),
+    )
+    naming(who, read.flatMap(([root, last]) => [root.createdBy, ...(last ? [last.createdBy] : [])]))
+    return Promise.all(
+      page.map(async ({ thread, channel }, i) => {
+        const [root, last] = read[i]!
+        const [message, newest] = await Promise.all([view(who, root, channel.name), last && view(who, last, channel.name)])
+        // The API counts deleted messages too.
+        return { message, replies: thread.messageCount - 1, last: newest }
+      }),
+    )
   }
 
   let me: Promise<ApiMe> | null = null
@@ -1402,6 +1494,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const running: Record<string, Feed> = { ...position.feeds }
     const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
     const events: BoardEventView[] = []
+    naming(who, merged.flatMap(({ change }) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
       const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, narrow, undefined, threads)
@@ -1497,6 +1590,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       cursor = page.cursor
       const events: BoardEventView[] = []
+      naming(who, page.events.flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
       for (const change of page.events) {
         const message = change.currentMessage
         const found = message && change.threadId ? { message, thread: query.label?.length ? await thread(change.threadId) : ({ id: change.threadId } as ApiThread) } : null
@@ -2085,7 +2179,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         // Each thread with a matching message, by its latest.
         const latest = new Map<string, { thread: ApiThread; channel: ApiChannel; at: number }>()
         for (const { message, thread, channel } of messages) latest.set(thread.id, { thread, channel, at: Math.max(latest.get(thread.id)?.at ?? 0, message.createdAt) })
-        const threads = await Promise.all(pick([...latest.values()]).map(({ thread, channel }) => summary(who, thread, channel, signal)))
+        const threads = await summaries(who, pick([...latest.values()]), signal)
         return { threads, cursor: cursorOf({ t: newest, feeds }) }
       }
       // Otherwise the threads say enough: a label is matched on the root, whose labels the API
@@ -2099,7 +2193,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const rooted = found.filter(({ thread }) => (query.label ?? []).every(([key, values]) => thread.labels !== undefined && Object.hasOwn(thread.labels, key) && (values === null || values.includes(thread.labels[key]!))))
       const newest = found.reduce((max, { at }) => Math.max(max, at), 0)
       if (!query.label?.length) {
-        const threads = await Promise.all(pick(rooted).map(({ thread, channel }) => summary(who, thread, channel, signal)))
+        const threads = await summaries(who, pick(rooted), signal)
         return { threads, cursor: cursorOf({ t: newest, feeds }) }
       }
       // The API still lists a deleted root by its labels, and only its summary, which reads the
@@ -2110,7 +2204,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       for (let next = 0; next < candidates.length && threads.length < limit; ) {
         const page = candidates.slice(next, next + limit - threads.length)
         next += page.length
-        for (const shown of await Promise.all(page.map(({ thread, channel }) => summary(who, thread, channel, signal)))) if (!shown.message.deleted) threads.push(shown)
+        for (const shown of await summaries(who, page, signal)) if (!shown.message.deleted) threads.push(shown)
       }
       if (after === undefined) threads.reverse()
       return { threads, cursor: cursorOf({ t: newest, feeds }) }
@@ -2120,9 +2214,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { thread, channel } = await messageIn(who, id, signal)
       const [root, ...replies] = await threadMessages(who, thread.id, signal)
       if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
+      // The root and its replies are named together: one after the other, they'd ask for their authors apart.
+      const [message, ...shown] = await Promise.all([root, ...replies].map((each) => view(who, each, channel.name)))
       return {
-        message: await view(who, root, channel.name),
-        replies: await Promise.all(replies.map((reply) => view(who, reply, channel.name))),
+        message: message!,
+        replies: shown,
         cursor: cursorOf({ t: Math.max(root.createdAt, ...replies.map((reply) => reply.createdAt)), feeds: {} }),
       }
     },

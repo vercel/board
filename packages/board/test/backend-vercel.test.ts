@@ -2353,3 +2353,96 @@ describe('a request the API puts off', () => {
     expect(sent.filter(({ path }) => path.endsWith('/complete'))).toHaveLength(1)
   })
 })
+
+describe('naming the authors on a page', () => {
+  /** Julian reading a board he and Ada wrote on, and every request for actors his reads made, each answered after `latency` ms. */
+  const reading = async (options: Parameters<typeof fakeMessageboard>[0] = {}, latency = 0) => {
+    const api = fakeMessageboard(options)
+    for (const principal of ['user:u_ada', 'user:u_jb']) await handleOn(api, principal).post('dev', { text: `from ${principal}` })
+    const inner = as(api, 'user:u_jb')
+    const asked: string[][] = []
+    const lists: string[][] = []
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actors')) (url.searchParams.has('id') ? asked : lists).push(url.searchParams.getAll('id'))
+      if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency))
+      return inner(input, init)
+    }
+    return { api, asked, lists, julian: board({ backend: vercel({ team: 'team_test', api: API, fetch }) }) }
+  }
+  const handles = (messages: { author?: { handle: string } | null }[]) => messages.map((message) => message.author?.handle).sort()
+
+  it('asks the API for them by ID in one request, and never for its whole list', async () => {
+    const { julian, asked, lists } = await reading()
+    const { messages } = await julian.messages({ channel: 'dev' })
+    expect(handles(messages)).toEqual(['ada', 'julian'])
+    expect(asked.map((ids) => [...ids].sort())).toEqual([['vercel:user:u_ada', 'vercel:user:u_jb']])
+    expect(lists).toEqual([])
+    // Whom it has named, it doesn't ask for again.
+    await julian.messages({ channel: 'dev' })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('asks once for a page of threads, and once for a thread nobody here has read with its replies, on an API that takes its time', async () => {
+    const { api, julian, asked, lists } = await reading({}, 5)
+    const { threads } = await julian.threads({ channel: 'dev' })
+    expect(handles(threads.map((thread) => thread.message))).toEqual(['ada', 'julian'])
+    expect(asked).toHaveLength(1)
+    // A thread whose root and replies are all by people nothing here has named yet.
+    const { id: root } = await handleOn(api, 'user:u_val').post('dev', { text: 'new here' })
+    for (const principal of ['user:u_tom', 'user:u_kim']) await handleOn(api, principal).reply(root, { text: 'me too' })
+    const { replies } = await julian.thread(root)
+    expect(replies).toHaveLength(2)
+    expect(asked).toHaveLength(2)
+    expect(asked[1]!.sort()).toEqual(['vercel:user:u_kim', 'vercel:user:u_tom', 'vercel:user:u_val'])
+    expect(lists).toEqual([])
+  })
+
+  it("names the project a synced message came through from its importer's own actor, without the whole list, in the page's one request", async () => {
+    // An API that takes its time: naming where a message came from waits on it before its author is named.
+    const { api, julian, asked, lists } = await reading({}, 5)
+    const pong = pongBoard(api)
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
+    await pong.syncImport({ op: 'post', author, from: 'slack', channel: 'dev', text: 'from slack', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    const { messages } = await julian.messages({ channel: 'dev' })
+    expect(messages.map((message) => message.from).filter(Boolean)).toEqual(['pong/slack'])
+    expect(asked).toHaveLength(1)
+    expect(lists).toEqual([])
+  })
+
+  it('names them from the whole list on an API that answers no actors by ID, and never asks it by ID again', async () => {
+    const { api, julian, asked, lists } = await reading({ actorsById: false })
+    expect(handles((await julian.messages({ channel: 'dev' })).messages)).toEqual(['ada', 'julian'])
+    expect(asked).toHaveLength(1)
+    expect(lists).toHaveLength(1)
+    // Someone new, whom nothing here has named or asked for yet: found, they go by what the API calls them, not by their principal.
+    await handleOn(api, 'user:u_val').post('dev', { text: 'late' })
+    expect(handles((await julian.messages({ channel: 'dev' })).messages)).toContain('u_val')
+    expect(asked).toHaveLength(1)
+  })
+
+  it('names them from the list this once when the API refuses these IDs, and asks by ID again for the next', async () => {
+    const { api, asked, lists } = await reading()
+    const inner = as(api, 'user:u_jb')
+    let refusing = true
+    const refused = board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        fetch: async (input, init) => {
+          const url = new URL(String(input))
+          if (url.pathname.endsWith('/actors')) (url.searchParams.has('id') ? asked : lists).push(url.searchParams.getAll('id'))
+          if (refusing && url.searchParams.has('id')) return Response.json({ error: { code: 'bad_request', message: 'Invalid request: `id` should NOT be longer than 300 characters.' } }, { status: 400 })
+          return inner(input, init)
+        },
+      }),
+    })
+    expect(handles((await refused.messages({ channel: 'dev' })).messages)).toEqual(['ada', 'julian'])
+    expect(lists).toHaveLength(1)
+    refusing = false
+    await handleOn(api, 'user:u_val').post('dev', { text: 'late' })
+    expect(handles((await refused.messages({ channel: 'dev' })).messages)).toContain('u_val')
+    expect(asked.at(-1)).toEqual(['vercel:user:u_val'])
+  })
+})
