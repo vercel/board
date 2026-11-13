@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll } from 'vitest'
+import { afterAll, beforeAll, vi } from 'vitest'
 import { serve } from './http.ts'
 import { localBoard, personToken } from './harness.ts'
 
@@ -21,8 +21,12 @@ export let server: Awaited<ReturnType<typeof serve>>
 export let url: string
 export let env: NodeJS.ProcessEnv
 
-/** Serves the calling file's board before its tests, and stops it after. */
+/** A test's default time limit in the files that use the board: each runs the CLI as subprocesses, about half a second apiece, so vitest's 5s fails them whenever the runner is busy. */
+export const CLI_TIMEOUT = 20_000
+
+/** Serves the calling file's board before its tests, and stops it after, with the CLI's time limit for every test. */
 export function useBoard() {
+  vi.setConfig({ testTimeout: CLI_TIMEOUT })
   beforeAll(async () => {
     // No fixed URL: the board infers its own from requests, as when mounted.
     server = await serve(localBoard({ url: undefined }).fetch)

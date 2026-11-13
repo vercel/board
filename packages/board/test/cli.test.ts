@@ -94,7 +94,7 @@ describe('cli', () => {
     // At the limit, it posts.
     expect(await vb(['reply', id, '-'], {}, 'x'.repeat(10_000))).toMatchObject({ code: 0 })
     expect((await read()).replies).toHaveLength(2)
-  }, 20_000)
+  })
 
   it('refuses what a post, a reply, or a label would drop, and says how each is written', async () => {
     const id = (await vb(['post', 'notes', 'root'])).stdout.trim()
@@ -127,7 +127,7 @@ describe('cli', () => {
     expect((await vb(['post', 'notes', 'hi', '--label', 'owner='])).stderr).toBe('error: owner= has no value: a label needs one.\n\n  See how to use it:\n    vb post --help\n')
     // --if still takes one: it matches a label an older client left with no value.
     expect((await vb(['label', id, 'owner=bo', '--if', 'owner='])).stderr).toMatch(/^error: Can't label #\d+\.\n {2}owner isn't /)
-  }, 20_000)
+  })
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
@@ -227,7 +227,7 @@ describe('cli', () => {
     } finally {
       await Promise.all([apex.close(), wall.close()])
     }
-  }, 20_000)
+  })
 
   it("doesn't wait on a signed-out `vercel` CLI's login flow", async () => {
     const wall = await serve(async () => new Response(null, { status: 302, headers: { location: 'https://vercel.com/sso-api?url=x' } }))
@@ -282,7 +282,7 @@ describe('cli', () => {
     } finally {
       await Promise.all([moved.close(), target.close()])
     }
-  }, 20_000)
+  })
 
   it("never reaches a board a checkout's .board/config.json names, with the environment's token or bypass", async () => {
     const seen: string[] = []
@@ -303,7 +303,7 @@ describe('cli', () => {
     } finally {
       await elsewhere.close()
     }
-  }, 20_000)
+  })
   it("replies --after a message only while it's the thread's newest, and says how to read what came after", async () => {
     const root = (await vb(['post', 'deploys', 'deploy a1b2c3 is rolling out'])).stdout.trim()
     const first = await vb(['reply', root, 'on it', '--after', root])
@@ -353,7 +353,7 @@ describe('cli', () => {
     expect(await vb(['delete', id, '--if-revision', second])).toMatchObject({ code: 0, stderr: '' })
     expect((await read()).deleted).toBe(true)
     expect(await vb(['edit', id, 'x', '--if-revision', 'latest'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --if-revision takes the message's revision, a number, and latest isn't one\./) })
-  }, 20_000)
+  })
 
   it('posts, replies, reacts, labels, and reads a thread', async () => {
     const posted = await vb(['post', 'errors-www', 'deploy failed on a1b2c3', '--label', 'status=open'])
@@ -455,7 +455,7 @@ describe('cli', () => {
     // The board refuses a path that isn't one, and makes nothing.
     expect(await vb(['channels', 'create', 'Made Early'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Can't create Made Early\.\n/) })
     expect((await vb(['channels'])).stdout).not.toContain('Made Early')
-  }, 20_000) // a dozen CLI runs, which a loaded CI runner can take past the default 5s
+  })
 
   it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
@@ -504,7 +504,7 @@ describe('cli', () => {
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel open-wrok\. Did you mean open-work\?\n/) })
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n\nnew since then: vb read open-work --text 'nothing like this' --after \d+\n$/) })
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
-  }, 20_000)
+  })
 
   it("posts once for an idempotency key, and reads by a message's source", async () => {
     const once = await vb(['post', 'retries', 'deploy failed', '--idempotency-key', 'deploy-a1b2c3'])
@@ -629,7 +629,7 @@ describe('cli', () => {
     expect(none).toMatchObject({ code: 1, stderr: expect.stringMatching(new RegExp(`^error: Nothing matched within 300ms\\.\n {2}Nothing came after ${reply}\\.\n`)) })
     // A channel whose name only looks like an ID is still a channel, as read takes it.
     expect((await vb(['wait', 'msg_updates', '--timeout', '300ms'])).stderr).toMatch(/^error: Nothing matched within 300ms\.\n {2}wait sees only what arrives after it starts\./)
-  }, 20_000)
+  })
 
   it('attaches files, shows them, and downloads them', async () => {
     const dir = await tmp('board-files-')
@@ -654,7 +654,7 @@ describe('cli', () => {
     const many = await vb(['reply', id, 'all of them', ...eleven])
     expect(many.code).toBe(2)
     expect(many.stderr).toMatch(/^error: Can't attach 11 files\. A message carries at most 10\./)
-  }, 20_000) // six CLI runs: a cold start right after install can pass the default 5s
+  })
 
   it('downloads an attachment whose id starts with "-", which reads like a flag', async () => {
     // Boards minted one in 64 of these before they stopped: they're still out there.
@@ -680,7 +680,7 @@ describe('cli', () => {
     } finally {
       await files.close()
     }
-  }, 20_000)
+  })
 
 
   it('delivers all of a long read to a reader that falls behind', async () => {
@@ -853,7 +853,7 @@ describe('cli', () => {
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)
     expect((await vb(['inspect', '--port', 'nope'])).code).toBe(2)
-  }, 20_000)
+  })
 
   it('says a removed command is gone whatever flags it carries, and names an unknown option', async () => {
     // board 0.8's turn-end hook told agents to run `vb update --skip` or `vb update "<summary>"`.
@@ -912,7 +912,7 @@ describe('cli', () => {
     expect(id).toMatch(/^\d+$/)
     child.kill('SIGINT')
     expect(await exited).toBe(130)
-  }, 20_000)
+  })
 
   it('serves the inspector until Ctrl-C', async () => {
     const child = spawn(process.execPath, [CLI, 'inspect', '--port', '0', '--no-open'], { env })
