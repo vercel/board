@@ -21,12 +21,12 @@ export let server: Awaited<ReturnType<typeof serve>>
 export let url: string
 export let env: NodeJS.ProcessEnv
 
-/** A test's default time limit in the files that use the board: each runs the CLI as subprocesses, about half a second apiece, so vitest's 5s fails them whenever the runner is busy. */
+/** A test's default time limit in every file that imports this one: they run the CLI as subprocesses, about half a second apiece, so vitest's 5s fails them whenever the runner is busy. */
 export const CLI_TIMEOUT = 20_000
+vi.setConfig({ testTimeout: CLI_TIMEOUT })
 
-/** Serves the calling file's board before its tests, and stops it after, with the CLI's time limit for every test. */
+/** Serves the calling file's board before its tests, and stops it after. */
 export function useBoard() {
-  vi.setConfig({ testTimeout: CLI_TIMEOUT })
   beforeAll(async () => {
     // No fixed URL: the board infers its own from requests, as when mounted.
     server = await serve(localBoard({ url: undefined }).fetch)

@@ -97,7 +97,7 @@ describe('the CLI on a board that runs a sync', () => {
       code: 1,
       stderr: "error: Can't read #project-vercel-kit on slack.\n  this board doesn't run sync entry slack: read it where its sync runs\n",
     })
-  }, 20_000)
+  })
 
   it("reads the thread a Slack link names, and says where a thread is synced, with each copy's link", async () => {
     await synced.fetch(
@@ -123,5 +123,5 @@ describe('the CLI on a board that runs a sync', () => {
       stderr: '',
     })
     expect(await on(['read', 'https://acme.slack.com/archives/C1/p1727000009000000'])).toEqual({ code: 1, stdout: '', stderr: "error: Couldn't find that link's message on this board.\n" })
-  }, 20_000)
+  })
 })
