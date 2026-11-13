@@ -408,7 +408,10 @@ describe('vercel()', () => {
         const { threads } = await team.threads({ channel: 'busy' })
         return { threads, listed: api.requests.filter((r) => /\/threads$/.test(r)).length, byId: api.requests.filter((r) => /\/messages\/msg_/.test(r)).length }
       }
-      return { first: await count(), again: await count() }
+      const first = await count()
+      // An edit since the first listing: the next one shows the root as it is now.
+      await team.edit(roots[0]!.id, 'thread 0, edited')
+      return { first, again: await count() }
     }
     const inline = await shown(true)
     const today = await shown(false)
@@ -416,9 +419,11 @@ describe('vercel()', () => {
     const summaries = (threads: { message: { text: string }; last: { text: string } | null }[]) => threads.map((t) => [t.message.text, t.last?.text ?? null])
     expect(summaries(inline.first.threads)).toEqual(summaries(today.first.threads))
     expect(inline.first.threads.filter((t) => t.last)).toHaveLength(10)
-    // With them, the list is the only request. An edit or a delete since shows too: they come as they are now.
+    // With them, the list is the only request, and an edit since shows: they come as they are now.
     expect(inline.first).toMatchObject({ listed: 1, byId: 0 })
     expect(inline.again).toMatchObject({ listed: 1, byId: 0 })
+    expect(summaries(inline.again.threads)).toContainEqual(['thread 0, edited', 'reply to thread 0'])
+    expect(summaries(inline.again.threads)).toEqual(summaries(today.again.threads))
     // Vercel's API today refuses the parameter: the list is read again without it, each message by ID as before,
     expect(today.first).toMatchObject({ listed: 2, byId: 30 })
     // and it isn't asked again.
