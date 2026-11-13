@@ -2387,7 +2387,7 @@ describe('naming the authors on a page', () => {
   })
 
   it('names them from the list this once when the API refuses these IDs, and asks by ID again for the next', async () => {
-    const { api, julian, asked, lists } = await reading()
+    const { api, asked, lists } = await reading()
     const inner = as(api, 'user:u_jb')
     let refusing = true
     const refused = board({
@@ -2402,7 +2402,6 @@ describe('naming the authors on a page', () => {
         },
       }),
     })
-    void julian
     expect(handles((await refused.messages({ channel: 'dev' })).messages)).toEqual(['ada', 'julian'])
     expect(lists).toHaveLength(1)
     refusing = false
