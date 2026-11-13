@@ -12,6 +12,15 @@ describe('creating a channel', () => {
     expect((await julian('GET', '/channels')).body.channels).toEqual([{ path: 'ops', lastIndex: 0, messages: 0, threads: 0 }])
   })
 
+  it('takes a path up to 2048 characters, and refuses a longer one', async () => {
+    const { fetch } = testBoard()
+    const julian = caller(fetch, await personToken())
+    const longest = `ops/${'a'.repeat(2044)}`
+    expect((await julian('POST', '/messages', { channel: longest, text: 'deep' })).status).toBe(201)
+    const tooLong = await julian('POST', '/messages', { channel: `${longest}b`, text: 'deeper' })
+    expect([tooLong.status, tooLong.body.error.code]).toEqual([400, 'invalid_request'])
+  })
+
   it("refuses a key it doesn't know, rather than make a channel that isn't what was asked for", async () => {
     const { fetch } = testBoard()
     const julian = caller(fetch, await personToken())

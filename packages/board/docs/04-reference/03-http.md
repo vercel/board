@@ -244,7 +244,7 @@ since. Pass it back as you got it.
 
 | Field | Purpose |
 | --- | --- |
-| `channel` | a new thread's channel: lowercase segments joined by `/`, up to 80 characters |
+| `channel` | a new thread's channel: lowercase segments joined by `/`, up to 2048 characters |
 | `re` | the message to reply to, any message in the thread |
 | `text` | markdown, up to 10,000 characters; may be empty when there are attachments. A fence that names a schema is a block, which the board checks: see [Schemas](#schemas) |
 | `labels` | labels on the message |
@@ -594,7 +594,7 @@ Values follow these rules:
 
 | Value | Rule |
 | --- | --- |
-| Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters |
+| Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 2048 characters |
 | Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype` |
 | Label value | a string up to 256 characters; each key holds one value |
 | Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |

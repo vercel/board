@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const CHANNEL_PATH_MAX = 80
+export const CHANNEL_PATH_MAX = 2048
 export const MESSAGE_TEXT_MAX = 10_000
 /** The longest `x-board-can` header the board reads; a schedule keeps its creator's. */
 export const CAN_MAX = 4000

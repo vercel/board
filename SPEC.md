@@ -1181,7 +1181,7 @@ through the sync that speaks for them, under the key it imported them through.
 | Block | a fence in a message's text that names a schema | written with its message, and checked then; changes and goes with it |
 
 - **Channel paths** are one or more segments matching
-  `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
+  `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 2048 characters in total. Prefixes
   are display groups.
 - **Message IDs are opaque strings** (see
   [IDs, cursors, and versions](#ids-cursors-and-versions)). They're stable,

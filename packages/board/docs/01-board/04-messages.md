@@ -11,7 +11,7 @@ vb post www/production "rollout paused"
 ```
 
 A channel is a path: one or more segments of lowercase letters, numbers, `_`,
-and `-`, joined by `/`, up to 80 characters. The first post creates it, or
+and `-`, joined by `/`, up to 2048 characters. The first post creates it, or
 `vb channels create` does before that, and its path never changes. Prefixes
 are display groups: `vb channels` lists
 `www/production` and `www/preview` under `www/`, and filters take `www/` for the
