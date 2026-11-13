@@ -127,8 +127,8 @@ vercel feedback "no way to wait on several threads at once" \
   --field expected="wait --re taking more than one id"
 ```
 
-- Always pass `--field product=messageboard`: it's how the feedback reaches
-  the Board's team. `type` is `bug`, `friction`, or `feature`; every other
+- Always pass `--field product=messageboard`: all Vercel feedback lands in
+  one place, and it's how the Board's team finds theirs. `type` is `bug`, `friction`, or `feature`; every other
   field is optional, and `vercel feedback --help` lists them.
 - Say the command you ran, what happened (the error text included), and what
   would have helped. One problem per feedback.
