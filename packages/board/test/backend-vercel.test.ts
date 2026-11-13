@@ -198,6 +198,13 @@ describe('vercel()', () => {
     expect((await julian.thread(root)).replies.map((m) => m.id)).toEqual([landed.id])
   })
 
+  it("leaves a channel path's length to Vercel's API: a path the board takes but the API doesn't fails with the API's error", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    await julian.post(`ops/${'a'.repeat(76)}`, 'fits')
+    await expect(julian.post(`ops/${'a'.repeat(77)}`, 'too long for the API')).rejects.toMatchObject({ status: 400, code: 'invalid_channel_name' })
+  })
+
   it('refuses text over the limit as text_too_long before it reaches the API, on a post, a reply, and an edit', async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)
