@@ -828,6 +828,33 @@ describe('vercel()', () => {
     expect(changes - before).toBeLessThanOrEqual(channels * (1 + 6 + 1))
   }, 15_000)
 
+  it("waits in a thread on its channel's feed alone, and reads no message a feed brought", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    for (const channel of ['dev', 'ops', 'web', 'docs']) await team.post(channel, { text: `hi ${channel}` })
+    const root = await team.post('questions', { text: 'anyone?' })
+    const count = () => ({
+      feeds: api.requests.filter((r) => /\/changes$/.test(r)).length,
+      byId: api.requests.filter((r) => /\/messages\/msg_/.test(r)).length,
+    })
+    // A wait in the thread: only `questions` has its messages, whatever else the board holds.
+    api.requests.length = 0
+    const waiting = team.poll({ re: root.id, wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await team.reply(root.id, { text: 'me!' })
+    expect((await waiting).events.map((event) => event.message?.text)).toEqual(['me!'])
+    // Its channel's feed alone: where it is now, a read, the wait, and the read once it wakes. With the
+    // other four channels' feeds it is five times that.
+    expect(count().feeds).toBeLessThanOrEqual(5)
+    // Across the board, each change comes with its message: 20 posts cost no read by ID to show.
+    const { cursor } = await team.poll({})
+    for (let i = 0; i < 20; i++) await team.post(['dev', 'ops', 'web', 'docs'][i % 4]!, { text: `post ${i}` })
+    api.requests.length = 0
+    const everything = await team.poll({ after: cursor })
+    expect(everything.events.map((event) => event.message?.text)).toEqual(Array.from({ length: 20 }, (_, i) => `post ${i}`))
+    expect(count().byId).toBe(0)
+  }, 15_000)
+
   it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)

@@ -1483,7 +1483,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       listed.map(async (channel) => {
         const from = position.feeds[channel.id]
         // A channel the position doesn't know reads from its oldest change kept, after the position's time.
-        const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, ...(from?.at ? { cursor: from.at } : {}) }, signal })
+        // Each change comes with its message as it is now, so showing one costs no read of its own.
+        const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
         const skip = from?.skip ?? 0
         const events = page.events.map((change, i) => ({ change, i })).slice(skip).filter(({ change }) => from || change.createdAt > position.t)
         return { channel, at: from?.at ?? null, next: page.cursor, events }
@@ -1497,7 +1498,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     naming(who, merged.flatMap(({ change }) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
-      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, narrow, undefined, threads)
+      const message = change.currentMessage
+      // A label matches on the root's, which only a read of the thread has: nothing else needs one.
+      const given = message && change.threadId ? { message, thread: filters.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
+      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, narrow, given, threads)
       if (event) events.push(event)
     }
     const after: Record<string, Feed> = { ...position.feeds }
@@ -1607,7 +1611,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const channel = await oneChannel(who, query)
     if (channel) return channelEvents(who, channel, query, signal)
     if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
-    const listed = await channelsFor(who, query.channel)
+    const listed = query.re === undefined ? await channelsFor(who, query.channel) : await channelOfThread(who, query.re, query.channel, signal)
     // With no cursor, it starts now, as on any board.
     let position: Position =
       query.after === undefined
@@ -1628,6 +1632,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (!busy) busy = (await changed(who, listed, position, until, signal)) && Date.now() - started < 1000
       await pause(Math.min(started + 1000, until) - Date.now(), signal)
     }
+  }
+
+  /**
+   * The channel a thread is in, which is the only one whose feed has its messages: a read or a wait
+   * in one thread (`--re`) costs that channel's feed, not every channel's on the board. None when
+   * there's no such message, or it isn't in the channels the read names.
+   */
+  async function channelOfThread(who: Who, re: string, within: string | undefined, signal: AbortSignal): Promise<ApiChannel[]> {
+    const found = await messageIn(who, re, signal).catch((error: unknown) => {
+      if (error instanceof HttpError && error.status === 404) return null
+      throw error
+    })
+    if (!found) return []
+    if (within !== undefined && !(await channelsFor(who, within)).some((channel) => channel.id === found.channel.id)) return []
+    return [found.channel]
   }
 
   /** The one channel a read names, when the API can read it directly: not a subtree, and from one of its cursors or now. */
