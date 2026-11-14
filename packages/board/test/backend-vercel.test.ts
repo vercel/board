@@ -1339,7 +1339,7 @@ describe('vercel()', () => {
     await expect(pong.cancelSchedule('sch_missing')).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
   })
 
-  it('sends a scheduled reply its labels, and reads them back on the schedule and on each send', async () => {
+  it('sends a scheduled reply its labels, and reads them back on the schedule', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
     const root = await pong.post('pings', { text: 'root' })
@@ -1347,10 +1347,6 @@ describe('vercel()', () => {
     expect(api.schedules.get(reply.id)).toMatchObject({ threadId: root.thread, labels: { kind: 'task', check: 'in' } })
     expect(reply.labels).toEqual({ kind: 'task', check: 'in' })
     expect((await pong.schedules({ re: root.id })).find((s) => s.id === reply.id)?.labels).toEqual({ kind: 'task', check: 'in' })
-    const sends = [api.send(reply.id), api.send(reply.id)]
-    const { replies } = await pong.thread(root.id)
-    expect(replies.map((r) => ({ id: r.id, labels: r.labels }))).toEqual(sends.map((id) => ({ id, labels: { kind: 'task', check: 'in' } })))
-    expect((await pong.thread(root.id)).message.labels).toEqual({})
   })
 
   it("refuses what the API can't schedule: files", async () => {

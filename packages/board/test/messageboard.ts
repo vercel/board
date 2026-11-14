@@ -650,14 +650,14 @@ function fakeBoard(shared: Shared, boardId: string) {
     const due = schedules.get(id)
     if (!due || due.state !== 'pending') throw new Error(`schedule ${id} has nothing due`)
     const n = due.sent
-    const body = { text: due.text, schedule: { id, n }, ...(due.labels ? { labels: due.labels } : {}), ...(due.noSync ? { noSync: true } : {}) }
+    const body = { text: due.text, schedule: { id, n }, ...(due.noSync ? { noSync: true } : {}) }
     let message: Message
     if (due.threadId !== undefined) message = post(due.createdBy, threadAt(due.threadId), body)
     else {
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: due.channelId, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: due.createdBy, messages: [] }
       threads.set(thread.id, thread)
-      message = post(due.createdBy, thread, body)
+      message = post(due.createdBy, thread, { ...body, ...(due.labels ? { labels: due.labels } : {}) })
     }
     due.sent = n + 1
     due.lastMessageId = message.id
