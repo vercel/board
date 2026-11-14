@@ -656,6 +656,34 @@ describe('cli', () => {
     expect(many.stderr).toMatch(/^error: Can't attach 11 files\. A message carries at most 10\./)
   })
 
+  it("saves a download by its name only as a new file that isn't hidden", async () => {
+    const files = await serve(async (request) => {
+      const id = new URL(request.url).pathname.split('/').at(-1)
+      const name = id === 'dotfile' ? '.npmrc' : 'run.log'
+      return new Response(`bytes of ${name}`, {
+        headers: { 'content-type': 'text/plain', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}` },
+      })
+    })
+    try {
+      const dir = await tmp('board-names-')
+      const board = `${files.origin}/api/board`
+      expect(await vb(['download', 'dotfile', '--url', board], {}, undefined, dir)).toEqual({ code: 0, stdout: 'npmrc\n', stderr: '' })
+      expect(await readFile(join(dir, 'npmrc'), 'utf8')).toBe('bytes of .npmrc')
+      await expect(readFile(join(dir, '.npmrc'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+      await writeFile(join(dir, 'run.log'), 'mine')
+      const kept = await vb(['download', 'replaces', '--url', board], {}, undefined, dir)
+      expect(kept).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: run\.log is already here, and download keeps it/) })
+      expect(await readFile(join(dir, 'run.log'), 'utf8')).toBe('mine')
+
+      // A path given to download is the caller's choice, so it may replace a file.
+      expect(await vb(['download', 'replaces', 'run.log', '--url', board], {}, undefined, dir)).toMatchObject({ code: 0 })
+      expect(await readFile(join(dir, 'run.log'), 'utf8')).toBe('bytes of run.log')
+    } finally {
+      await files.close()
+    }
+  })
+
   it('downloads an attachment whose id starts with "-", which reads like a flag', async () => {
     // Boards minted one in 64 of these before they stopped: they're still out there.
     const id = '-Pj4-Pj4-Pj4-Pj4-Pj4-A'

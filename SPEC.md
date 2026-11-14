@@ -2121,7 +2121,7 @@ board inbox <key> [channel] [--limit N]        raw platform events, for debuggin
 board sources                                 the board's sources (sync entries) and their platforms
 board sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 board sources <key> join <channel|link>       add the app to a public channel so `sources <key> read` can read it, where the board opted in
-board download <attachment-id> [path]          save an attachment: its own name here by default, `-` for stdout
+board download <attachment-id> [path]          save an attachment: its own name here by default (never over a file, no leading dot), `-` for stdout
 board conformance [--channel <c>]              check the board speaks the protocol (posts to conformance, deletes what it posted)
 
 board tail [channel] [filters] [--all]         live, until Ctrl-C

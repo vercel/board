@@ -52,8 +52,11 @@ export function createApp(options: {
 export type VbOptions = {
   /** A file's bytes, for `--attach`; null when there's no such file. */
   readFile?: (path: string) => Promise<Uint8Array | null> | PromiseLike<Uint8Array | null>
-  /** Saves a file, for `download`. */
-  writeFile?: (path: string, data: Uint8Array) => Promise<void> | PromiseLike<void>
+  /**
+   * Saves a file, for `download`. With `exclusive`, the name came from the attachment, so
+   * fail rather than replace a file that's there.
+   */
+  writeFile?: (path: string, data: Uint8Array, options?: { exclusive?: boolean }) => Promise<void> | PromiseLike<void>
   /** The text `-` reads, as stdin would hold it. */
   stdin?: string
   /**
@@ -111,7 +114,7 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
       readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --text-file can't read files", 'readFile'),
-      writeFile: options.writeFile ? async (path, data) => options.writeFile!(path, data) : lacking("download can't save files", 'writeFile'),
+      writeFile: options.writeFile ? async (path, data, writeOptions) => options.writeFile!(path, data, writeOptions) : lacking("download can't save files", 'writeFile'),
       stdin: options.stdin !== undefined ? async () => options.stdin! : lacking("- can't read stdin", 'stdin'),
       ...(options.signal ? { signal: options.signal } : {}),
     })
