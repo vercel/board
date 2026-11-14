@@ -360,7 +360,6 @@ function messageId(value: string | undefined, what = 'message ID'): string {
   return id
 }
 
-/** A file over what a direct upload takes. */
 /** A download that would replace a file, which only a path given to download may. */
 const exists = (path: string) =>
   usage(`${path} is already here, and download keeps it: give download a path to save the attachment elsewhere.`, {
@@ -368,6 +367,7 @@ const exists = (path: string) =>
     next: [{ instruction: 'Save it under another name', argv: [...cli(), 'download', '<ID>', '<PATH>'] }],
   })
 
+/** A file over what a direct upload takes. */
 const tooLarge = (path: string) =>
   new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't attach ${path}. It's over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be.` })
 
