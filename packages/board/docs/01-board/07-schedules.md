@@ -111,8 +111,8 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
   already posted. Downtime doesn't replay: the next send is the next slot after
   now, so a board that was down sends once rather than catching up on every
   missed slot.
-- **Vercel's board takes no files on a scheduled message yet,** and no labels
-  on a scheduled reply: those answer 501 `not_supported`.
+- **Vercel's board takes no files on a scheduled message yet:** those answer
+  501 `not_supported`.
 - **A board that keeps no schedules refuses.** `POST /schedules`, `schedule()`,
   and `vb schedule` answer 501 `no_scheduler`, and `vb` says it can't, with the
   board's words under it. A [backend of your own](./01-mounting.md#a-backend-of-your-own)

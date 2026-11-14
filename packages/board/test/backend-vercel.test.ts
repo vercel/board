@@ -1339,11 +1339,22 @@ describe('vercel()', () => {
     await expect(pong.cancelSchedule('sch_missing')).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
   })
 
-  it("refuses what the API can't schedule: files, and labels on a reply", async () => {
+  it('sends a scheduled reply its labels, and reads them back on the schedule and on each send', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
     const root = await pong.post('pings', { text: 'root' })
-    await expect(pong.schedule({ re: root.id }, { text: 'labeled', in: '1h', labels: { kind: 'task' } })).rejects.toMatchObject({ status: 501, code: 'not_supported' })
+    const reply = await pong.schedule({ re: root.id }, { text: 'check in', in: '1h', every: '1h', times: 2, labels: { kind: 'task', check: 'in' } })
+    expect(api.schedules.get(reply.id)).toMatchObject({ threadId: root.thread, labels: { kind: 'task', check: 'in' } })
+    expect(reply.labels).toEqual({ kind: 'task', check: 'in' })
+    expect((await pong.schedules({ re: root.id })).find((s) => s.id === reply.id)?.labels).toEqual({ kind: 'task', check: 'in' })
+    const sends = [api.send(reply.id), api.send(reply.id)]
+    const { replies } = await pong.thread(root.id)
+    expect(replies.map((r) => ({ id: r.id, labels: r.labels }))).toEqual(sends.map((id) => ({ id, labels: { kind: 'task', check: 'in' } })))
+    expect((await pong.thread(root.id)).message.labels).toEqual({})
+  })
+
+  it("refuses what the API can't schedule: files", async () => {
+    const api = fakeMessageboard()
     const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
     const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
     const signal = new AbortController().signal

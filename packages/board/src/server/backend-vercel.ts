@@ -2432,8 +2432,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (input.channel !== undefined) {
         target = { channelId: (await channelToPost(who, input.channel)).id }
       } else {
-        // The API labels a scheduled thread's root, and posts a scheduled reply with no labels.
-        if (labels) throw notSupported('labels on a scheduled reply')
         const { thread } = await messageIn(who, input.re!, signal)
         target = { threadId: thread.id }
       }

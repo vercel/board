@@ -262,8 +262,8 @@ checked with `@vercel/board/conformance`.
   files (direct uploads too, on URLs the API signs for the bytes' SHA-256),
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
-  answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants go to the API, which takes no `github` or `oidc`
+  answers 501 `not_supported`: files on a scheduled message and a post's sync
+  targets. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
   which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It

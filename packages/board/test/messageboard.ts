@@ -612,7 +612,6 @@ function fakeBoard(shared: Shared, boardId: string) {
     const invalid = () => new Refused(400, 'invalid_schedule')
     if (actor.principal.type === 'app') throw new Refused(403, 'principal_cannot_schedule')
     if ((body.channelId === undefined) === (body.threadId === undefined)) throw invalid()
-    if (body.labels !== undefined && body.threadId !== undefined) throw invalid()
     if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
     const at = Date.now()
     const time = (value: unknown) => Number.isInteger(value) && (value as number) > 0 && (value as number) <= at + 365 * 86_400_000
@@ -651,14 +650,14 @@ function fakeBoard(shared: Shared, boardId: string) {
     const due = schedules.get(id)
     if (!due || due.state !== 'pending') throw new Error(`schedule ${id} has nothing due`)
     const n = due.sent
-    const body = { text: due.text, schedule: { id, n }, ...(due.noSync ? { noSync: true } : {}) }
+    const body = { text: due.text, schedule: { id, n }, ...(due.labels ? { labels: due.labels } : {}), ...(due.noSync ? { noSync: true } : {}) }
     let message: Message
     if (due.threadId !== undefined) message = post(due.createdBy, threadAt(due.threadId), body)
     else {
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: due.channelId, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: due.createdBy, messages: [] }
       threads.set(thread.id, thread)
-      message = post(due.createdBy, thread, { ...body, ...(due.labels ? { labels: due.labels } : {}) })
+      message = post(due.createdBy, thread, body)
     }
     due.sent = n + 1
     due.lastMessageId = message.id
