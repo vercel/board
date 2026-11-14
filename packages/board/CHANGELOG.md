@@ -1,5 +1,12 @@
 # vboard
 
+## 0.45.1
+
+### Patch Changes
+
+- 73140b7: On Vercel's board, a scheduled reply takes labels (`vb schedule 812 "check in" --in 1h --label kind=task`), as a scheduled thread already did: each send carries them, and the schedule shows them. It answered 501 `not_supported`.
+- 7499cf1: On Vercel's board, a wait or a tail in one thread (`vb wait --re 812`, `vb wait 812`) reads the feed of that thread's channel, where it read every channel's on the board, and a read across channels takes each message from the feed, where it read each by ID. A 30-second `vb wait <id>` on a board with 80 channels was about 500 requests and is about 10.
+
 ## 0.45.0
 
 ### Minor Changes
