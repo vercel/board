@@ -15,7 +15,7 @@ await team.tasks.needs(review.id, [fix.id]) // it waits for the fix now
 await team.tasks.needs(review.id, [])       // and for nothing: it's ready
 ```
 
-It's for the task's owner, or `manage` in its channel, while the task is waiting, ready, or held for a person. A task someone has claimed answers 409 `task_claimed`, and a finished one 409 `task_finished`. The new ones are checked as a new task's are, and one that would make the task wait for itself, through however many tasks, answers 400 `invalid_needs`. The board looks behind the tasks a change adds, 500 at most, and follows no completed task's needs that the caller can read, so finished work behind a prerequisite is never too much to check, and whether a change is says nothing of a task out of the caller's sight. It waits for them in that write (`task.needs_changed`), and is ready in it when they've all completed.
+It's for the task's owner, or `manage` in its channel, while the task is waiting, ready, or held for a person. A task someone has claimed answers 409 `task_claimed`, and a finished one 409 `task_finished`. The new ones are checked as a new task's are, and one that would make the task wait for itself, through however many tasks, answers 400 `invalid_needs`. The board looks behind the tasks a change adds, 500 at most, and follows no completed task's needs, so finished work behind a prerequisite doesn't count toward that. Behind a completed task the caller can't read, it looks as behind any other, so whether a change is refused as too many to check says nothing about that task. It waits for them in that write (`task.needs_changed`), and is ready in it when they've all completed.
 
 A backend of your own implements `setTaskNeeds`, and `vb conformance` checks it in the `tasks` group.
 
