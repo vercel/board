@@ -2,7 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
-import { vercel as nodeVercel } from '../src/backend-vercel/index.ts'
+import { credentialSource, vercel as nodeVercel } from '../src/backend-vercel/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { boardEvents } from '../src/contract/events.ts'
 import { watchersHash } from '../src/server/registry.ts'
@@ -842,20 +842,32 @@ describe('vercel()', () => {
     await expect(handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production').me()).rejects.toMatchObject({ status: 403, code: 'board_not_granted' })
   })
 
-  it('sends VERCEL_TOKEN in Node, and never BOARD_TOKEN, which is for a board at a URL', async () => {
+  it("never sends VERCEL_TOKEN: a deployment sends its own OIDC token, so its watchers register as its project, and anyone else BOARD_TOKEN or their login", async () => {
     for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
-    const api = fakeMessageboard({ tokens: { k7Qe2mXa9vLp: 'user:u_ada' } })
-    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
-    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
-    const who = async () => (await board({ backend: nodeVercel() }).me()).principal
-    try {
-      vi.stubEnv('BOARD_TOKEN', 'k7Qe2mXa9vLp')
-      vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
-      expect(await who()).toBe('vercel:project:prj_pong:production')
-    } finally {
+    onTestFinished(() => {
       vi.unstubAllEnvs()
       vi.unstubAllGlobals()
-    }
+    })
+    // The deployment's OIDC token, a JWT that names its own team, as Vercel's does.
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_test', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+    const api = fakeMessageboard({ tokens: { [oidc]: 'project:prj_pong:production', k7Qe2mXa9vLp: 'user:u_bo' } })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
+    // Someone set VERCEL_TOKEN so the app could call Vercel's API: a person's. BOARD_TOKEN is for a board at a URL.
+    for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_OIDC_TOKEN: oidc, VERCEL_TOKEN: 'user:u_jb', BOARD_TOKEN: 'k7Qe2mXa9vLp' })) vi.stubEnv(key, set)
+    const backend = nodeVercel()
+    onTestFinished(() => backend.close())
+    const pong = board({ backend, url: 'https://pong.vercel.app/api/board', watch: { pings: { tail: 'pings', run: async () => {} } } })
+    expect((await pong.me()).principal).toBe('vercel:project:prj_pong:production')
+    await vi.waitFor(() => expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ path: '/api/board' }))
+    expect(credentialSource()).toBe('Vercel OIDC')
+    // Off a deployment, in a terminal, CI or a sandbox: BOARD_TOKEN, then the login a CLI hands it, and never VERCEL_TOKEN.
+    for (const [key, set] of Object.entries({ VERCEL: '', VERCEL_OIDC_TOKEN: '', VERCEL_ORG_ID: 'team_test', VERCEL_AUTH_TOKEN: 'user:u_ada' })) vi.stubEnv(key, set)
+    expect((await board({ backend: nodeVercel() }).me()).principal).toBe('vercel:user:u_bo')
+    expect(credentialSource()).toBe('BOARD_TOKEN')
+    vi.stubEnv('BOARD_TOKEN', '')
+    expect((await board({ backend: nodeVercel() }).me()).principal).toBe('vercel:user:u_ada')
+    expect(credentialSource()).toBe('the Vercel CLI')
   })
 
   describe('a board by its name', () => {
@@ -1428,25 +1440,22 @@ describe('vercel()', () => {
       return { ran, watch }
     }
 
-    it("start no tails on a deployment whose credentials aren't its own: VERCEL_TOKEN's", async () => {
+    it("start no tails on a deployment whose credentials aren't its own: a fetch's that sends a person's", async () => {
       const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
       onTestFinished(() => {
         errors.mockRestore()
         vi.unstubAllEnvs()
-        vi.unstubAllGlobals()
       })
       const api = fakeMessageboard()
       const ada = handleOn(api, 'user:u_ada')
       await ada.post('pings', 'before it started')
-      vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
-      for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
-      for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_ORG_ID: 'team_test', VERCEL_TOKEN: 'user:u_jb' })) vi.stubEnv(key, set)
+      for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production' })) vi.stubEnv(key, set)
       const { ran, watch } = pinger()
-      const backend = nodeVercel()
+      const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') })
       onTestFinished(() => backend.close())
       const team = board({ backend, url: 'https://pong.vercel.app/api/board', watch })
       await team.me()
-      await ada.post('pings', 'ping with VERCEL_TOKEN')
+      await ada.post('pings', 'ping as jb')
       await new Promise((resolve) => setTimeout(resolve, 300))
       expect(ran).toEqual([])
       // It neither read the feed nor asked to register.

@@ -529,9 +529,10 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("sends your login to Vercel's API and never BOARD_TOKEN, from vb and from a CLI that runs board's, and says to log in again when it's refused", async () => {
+  it("sends BOARD_TOKEN to Vercel's API ahead of your login, from vb and from a CLI that runs board's, and your login without it, each refusal saying what to renew", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_TOKEN', 'user:u_bo')
     vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
     const api = fakeMessageboard({ tokens: { p9Lr4vTzQ2wc: 'user:u_ada' } })
     const sent: (string | null)[] = []
@@ -539,21 +540,29 @@ describe('the embedded CLI', () => {
       sent.push(new Request(input, init).headers.get('authorization'))
       return api.fetch(input, init)
     })
+    const run = (...args: string[]) => capture(() => main([...args, '--scope', 'test'], { name: 'board', commands: local }))
     const cwd = process.cwd()
     process.chdir(home)
     try {
-      const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      const whoami = await run('whoami')
       expect(whoami.code).toBe(0)
-      expect(whoami.stdout).toMatch(/^.* \(vercel:user:u_jb\)\n/)
-      expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
-      // `vercel board`: the login it hands over.
+      expect(whoami.stdout).toMatch(/^.* \(vercel:user:u_ada\)\n/)
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+      // `vercel board`: BOARD_TOKEN goes ahead of the login it hands over too.
       sent.length = 0
       const app = createApp({ appName: 'vercel board', login: async () => 'user:u_jb', team: async () => 'team_test' })
       expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+      // A BOARD_TOKEN it refuses is yours to replace: logging in changes nothing.
+      vi.stubEnv('BOARD_TOKEN', 'not-a-token')
+      expect((await run('read', 'general')).stderr).toContain('BOARD_TOKEN')
+      // Without it, your login, and never VERCEL_TOKEN.
+      vi.stubEnv('BOARD_TOKEN', '')
+      sent.length = 0
+      expect((await run('whoami')).stdout).toMatch(/^.* \(vercel:user:u_jb\)\n/)
       expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
-      // A login it refuses is yours to renew: BOARD_TOKEN has nothing to do with it.
       vi.stubEnv('VERCEL_AUTH_TOKEN', 'not-a-token')
-      const refused = await capture(() => main(['read', 'general', '--scope', 'test'], { name: 'board', commands: local }))
+      const refused = await run('read', 'general')
       expect(refused).toMatchObject({ code: 1, stderr: expect.stringContaining('vercel login') })
       expect(refused.stderr).not.toContain('BOARD_TOKEN')
     } finally {
@@ -592,7 +601,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("narrows a connection to Vercel's API with x-board-can, on your login and on VERCEL_TOKEN alike", async () => {
+  it("narrows a connection to Vercel's API with x-board-can, on your login", async () => {
     const home = await isolated()
     const api = fakeMessageboard()
     const sent: { can: string | null; type: string | null; authorization: string | null }[] = []
@@ -613,7 +622,7 @@ describe('the embedded CLI', () => {
     const cwd = process.cwd()
     process.chdir(home)
     try {
-      for (const [name, value] of [['VERCEL_AUTH_TOKEN', 'user:u_jb'], ['VERCEL_TOKEN', 'user:u_ada']] as const) {
+      for (const [name, value] of [['VERCEL_AUTH_TOKEN', 'user:u_jb']] as const) {
         vi.stubEnv(name, value)
         sent.length = 0
         expect(await capture(() => main(['probe', '--scope', 'test'], { name: 'board', commands: { probe } }))).toMatchObject({ code: 0, stdout: 'dev\n' })
@@ -883,8 +892,8 @@ describe('the embedded CLI', () => {
 
   it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
     const home = await isolated()
-    // As a deployment, which Vercel's board takes watchers from.
-    vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+    // As a project, which Vercel's board takes watchers from.
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:production')
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
     const api = fakeMessageboard()
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))

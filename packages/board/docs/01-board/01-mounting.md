@@ -62,8 +62,10 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   Vercel's API keeps sync's records: see [Sync](../02-sync/01-overview.md).
 - **It acts as this deployment, or as you.** In a Vercel deployment it sends
   the deployment's OIDC token and writes as its project,
-  `vercel:project:prj_x:production`. Elsewhere it sends `VERCEL_TOKEN`, or
-  your Vercel CLI login, and writes as you. `fetch` sends other credentials.
+  `vercel:project:prj_x:production`. Nothing replaces that token there. Elsewhere it
+  sends `BOARD_TOKEN`, or else your Vercel CLI login (`VERCEL_AUTH_TOKEN`, or
+  `vercel login`'s), and writes as whoever that is. It never sends
+  `VERCEL_TOKEN`, which people set for other reasons. `fetch` sends other credentials.
 - **Only a deployment's own credentials register watchers.** Anyone else's
   (yours, an app's) answer 403 `watchers_need_project`, and
   a board run with them runs its config's watchers in this process: see
@@ -86,7 +88,7 @@ backend:
 | Option | What it does |
 | --- | --- |
 | `backend` | `local()`, or your own. Default: your team's board in Vercel's API, the one `name` names, or in Node with `BOARD_URL` set, the board there, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
-| `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`. A board at `BOARD_URL` never gets it |
+| `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to the deployment's OIDC token, or else `BOARD_TOKEN`, then `VERCEL_AUTH_TOKEN` or your `vercel login`, never `VERCEL_TOKEN`. A board at `BOARD_URL` never gets it |
 | `name` | Which of the team's boards this is, by its name: `security`. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
 | `team` | Whose board this is: another team's, by its ID or slug, with `name` or without it for that team's default board. Default: the team the environment finds |
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [Callers of your own](#callers-of-your-own) |
@@ -242,7 +244,8 @@ await team.post('deploys', 'www@a1b2c3 is live')
 In Node it finds the team and credentials as the Vercel CLI and a deployment
 do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
 `.vercel/project.json`'s, unless `team` says another (`acme`). The
-credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
+credentials are the deployment's OIDC token, or else `BOARD_TOKEN`, then
+`VERCEL_AUTH_TOKEN` or your
 `vercel login`, or what `fetch` sends: a deployment writes as its project, and
 you as yourself. Its profile is the one `BOARD_PROFILE` names, or none;
 `team.as(null)` acts as yourself.

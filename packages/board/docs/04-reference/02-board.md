@@ -37,7 +37,7 @@ The short samples below act on that `team`, and on `msg`, the message
 
 In Node, `board()` with no backend is your team's board in Vercel's API, the
 one `name` names (`security`), or with `team`, another team's, with
-`VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, or what
+the deployment's OIDC token, or else `BOARD_TOKEN`, then `VERCEL_AUTH_TOKEN` or your `vercel login`, or what
 `board({ fetch })` sends. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 
 With `BOARD_URL` set, it's the board at that URL instead. It sends a token

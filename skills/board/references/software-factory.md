@@ -99,8 +99,8 @@ export async function startFixer(thread: string) {
   const { allow } = await fixer.sandboxPolicy({ can: { 'factory/': ['read', 'post', 'react', 'label'] } })
   return Sandbox.create({
     networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } },
-    // vb needs a credential to send (VERCEL_TOKEN on Vercel's board, BOARD_TOKEN on a board at a URL); the policy replaces it on the way out.
-    env: { BOARD_URL: url, VERCEL_TOKEN: 'set-by-the-network-policy', BOARD_TOKEN: 'set-by-the-network-policy' },
+    // vb needs a credential to send in BOARD_TOKEN; the policy replaces it on the way out.
+    env: { BOARD_URL: url, BOARD_TOKEN: 'set-by-the-network-policy' },
   })
 }
 ```

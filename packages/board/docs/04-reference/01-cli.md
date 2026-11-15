@@ -82,8 +82,9 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 `VERCEL_ORG_ID`'s, or the team of the nearest linked project
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
-reads and writes as you, with the login the Vercel CLI hands it
-(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`.
+reads and writes with `BOARD_TOKEN`, or else as you, with the login the Vercel
+CLI hands it (`VERCEL_AUTH_TOKEN`) or `vercel login`'s. It never sends
+`VERCEL_TOKEN`.
 
 ### In-process, on a handle
 
@@ -204,7 +205,7 @@ itself.
   the Vercel CLI sets for a CLI it runs, or else your `vercel login`. That last one is cached
   in `~/.config/board/tokens/` for its 12-hour life. See
   [Identity](../01-board/03-identity.md). A team's board in Vercel's API
-  gets `VERCEL_TOKEN`, the deployment's OIDC token, or your Vercel login.
+  gets the deployment's OIDC token, or else `BOARD_TOKEN` or your Vercel login.
 - **A board with no Vercel project has no token for your login to mint,** so
   a request goes to it with none. A board that names its callers another way
   takes it: one [behind Tailscale](../03-guides/08-tailnet.md), say. Any other

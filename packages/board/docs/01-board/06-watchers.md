@@ -158,8 +158,8 @@ Where the match happens depends on the board:
   matches the tails, and wakes this deployment when one matches. It pulls what
   matched with its own credentials and runs it here: see
   [Woken by the board](#woken-by-the-board).
-- **On Vercel's board, as anyone else** (you in `next dev`, or with
-  `VERCEL_TOKEN`), nothing registers: Vercel's API takes
+- **On Vercel's board, as anyone else** (you in `next dev`, or a
+  `fetch` with other credentials), nothing registers: Vercel's API takes
   watchers only from a deployment's own credentials, since only a deployment
   can be woken. Each watcher runs in
   this process as a tail instead, from the board's first use: it follows the
@@ -167,7 +167,7 @@ Where the match happens depends on the board:
   its credentials may read. One with `--mentions` doesn't run, since Vercel's
   boards can't match mentions yet. Sync doesn't run. A tail needs a process
   that stays up, so on a Vercel deployment, watchers need its own OIDC token:
-  with `VERCEL_TOKEN`, none run there.
+  with a `fetch` that sends anyone else's, none run there.
 - **With `BOARD_URL` set,** each watcher runs in this process as a tail of the
   board at that URL, from the board's first use, and sees what this
   deployment may read there. Nothing wakes it, so on a Vercel deployment none

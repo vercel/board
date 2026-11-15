@@ -231,8 +231,8 @@ export type VercelOptions = {
   /** Vercel's API, `https://api.vercel.com` by default. */
   api?: string
   /**
-   * How requests reach the API, with credentials it takes. In Node it defaults to `VERCEL_TOKEN`,
-   * a deployment's OIDC token, or your `vercel login`. Elsewhere, pass one that sends them.
+   * How requests reach the API, with credentials it takes. In Node it defaults to a
+   * deployment's OIDC token, `BOARD_TOKEN`, or your Vercel login, never `VERCEL_TOKEN`. Elsewhere, pass one that sends them.
    */
   fetch?: typeof fetch
   /** How files reach Vercel's storage, on URLs the API signs: `fetch` by default, never with credentials. */

@@ -173,8 +173,11 @@ describe('board() with no backend', () => {
 
   it("is Vercel's board for the team, the one its name names, with the deployment's credentials or fetch's", async () => {
     clean()
-    const api = fakeMessageboard()
-    vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+    // The deployment's OIDC token, a JWT, as Vercel's is.
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_test', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+    const api = fakeMessageboard({ tokens: { [oidc]: 'project:prj_pong:production' } })
+    vi.stubEnv('VERCEL_OIDC_TOKEN', oidc)
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
     // The project's own code: its first use of the name makes the board.
