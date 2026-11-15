@@ -324,13 +324,16 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
    * `NEEDS_WALK_MAX` tasks: a change it can't check is refused too. One that only drops some walks
    * nothing.
    *
-   * It follows no completed task's needs. A task completes by a claim, which it takes only once
-   * all it needs has completed, and neither it nor they change after: completed is for good, and a
-   * finished task's needs can't be changed. So everything behind a completed task has completed,
-   * and task `id`, which hasn't, isn't there. Finished work behind a prerequisite, however much,
-   * is never too much to check. A canceled task is followed: it may have waited for anything.
+   * It follows no completed task's needs that `access` reads. A task completes by a claim, which
+   * it takes only once all it needs has completed, and neither it nor they change after: completed
+   * is for good, and a finished task's needs can't be changed. So everything behind a completed
+   * task has completed, and task `id`, which hasn't, isn't there. Finished work behind a
+   * prerequisite, however much, is never too much to check. One the caller can't read is followed
+   * all the same, completed or not: the walk reads tasks out of the caller's sight, as it must to
+   * find a cycle, so where it stops, and whether it gets past `NEEDS_WALK_MAX`, must depend on
+   * nothing the caller can't see. A canceled task is followed: it may have waited for anything.
    */
-  async function acyclic(id: number, added: readonly number[], position: number) {
+  async function acyclic(access: Access, id: number, added: readonly number[], position: number) {
     const invalid = (need: number, why: string) => badRequest(`needs: #${need} ${why}`, 'invalid_needs')
     /** Each task the walk reached, by the added prerequisite it reached it from. */
     const from = new Map<number, number>(added.map((need) => [need, need]))
@@ -338,8 +341,9 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       const found = await writes().reads.tables.messagesAt(level, position)
       const next: number[] = []
       for (const at of level) {
-        const task = found.get(at)?.task
-        if (!task || task.state === 'completed') continue
+        const message = found.get(at)
+        const task = message?.task
+        if (!task || (task.state === 'completed' && access.readable(message.channel))) continue
         for (const need of task.needs) {
           if (need === id) throw invalid(from.get(at)!, `waits for #${id} already: they would wait for each other`)
           if (from.has(need)) continue
@@ -727,7 +731,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
         if (task.state === 'claimed' && !over) throw conflict('task_claimed', `#${id} is claimed until ${task.claim!.until}: what it needs changes once no one holds it`)
         const needs = await needsAt(principal.access, refs, position, id)
         if (needs.ids.length === task.needs.length && needs.ids.every((need) => task.needs.includes(need))) return []
-        await acyclic(id, needs.ids.filter((need) => !task.needs.includes(need)), position)
+        await acyclic(principal.access, id, needs.ids.filter((need) => !task.needs.includes(need)), position)
         const about = { id, thread: found.thread }
         return [
           ...(over ? [{ type: 'task.expired' as const, payload: { ...about, epoch: task.epoch } }] : []),

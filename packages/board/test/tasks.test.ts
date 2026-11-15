@@ -757,6 +757,32 @@ describe('what a task needs, changed', () => {
     expect((await read(ada, a.id)).task).toMatchObject({ state: 'ready', needs: [] })
   }, 120_000)
 
+  it("walks behind a completed task the caller can't read as behind one that hasn't completed, so whether a change is too many to check says nothing of it", async () => {
+    const { board, ada } = setup()
+    const narrowed = person(board, 'ada', { 'x-board-can': '*=post;work=read,post,label' })
+    const done = async (id: string) => expect((await ada('POST', `/tasks/${id}/complete`, await claim(ada, id))).status).toBe(200)
+    // A task out of the caller's sight, waiting for five more there.
+    const behind: string[] = []
+    for (let n = 0; n < 5; n++) behind.push((await task(ada, `secret step ${n}`, { channel: 'secret' })).id)
+    const secret = await task(ada, 'rotate the keys', { channel: 'secret', needs: behind })
+    // A line of 494 tasks the caller reads, and one at its end that also waits for the secret one: the walk from it
+    // reaches the line, the secret task, and the five behind it, 501 in all.
+    let last = await task(ada, 'the first')
+    for (let n = 1; n < 494; n++) last = await task(ada, `waits for #${last.id}`, { needs: [last.id] })
+    const added = await task(ada, 'waits for the line and the secret', { needs: [last.id, secret.id] })
+    const root = await task(narrowed, 'ship it')
+    const before = await needs(narrowed, root.id, [added.id])
+    expect(code(before)).toEqual([400, 'invalid_needs'])
+    expect(before.body.error.message).toContain('more than 500 tasks behind it')
+    // Once the secret task completes, the caller gets the same answer: what's behind it is still walked.
+    for (const id of [...behind, secret.id]) await done(id)
+    const after = await needs(narrowed, root.id, [added.id])
+    expect([after.status, after.body.error]).toEqual([before.status, before.body.error])
+    expect((await read(narrowed, root.id)).task).toMatchObject({ state: 'ready', needs: [] })
+    // Someone who reads it isn't walked behind it, as behind any completed task.
+    expect((await needs(ada, root.id, [added.id])).body.task.task).toMatchObject({ state: 'waiting', needs: [added.id] })
+  }, 60_000)
+
   it("is its owner's to change, or manage's, while no one holds the task and it isn't finished", async () => {
     const { ada, bo, board } = setup()
     const fix = await task(ada, 'fix CVE-123')

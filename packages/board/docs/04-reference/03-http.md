@@ -467,7 +467,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   walks up to 500 tasks behind the ones the change adds, and refuses a change
   it would have to walk further for. It follows no completed task's needs,
   which have all completed, so finished work behind a prerequisite doesn't
-  count. One that only drops some walks nothing. A claimed task is 409 `task_claimed`, and a
+  count, unless the caller can't read that task: then it's walked as any, so
+  the answer says nothing of whether it completed. One that only drops some walks nothing. A claimed task is 409 `task_claimed`, and a
   finished one 409 `task_finished`.
 - **`GET /tasks`** lists open tasks unless `state` is `all` or one state. `owner`
   and `for` take a handle or an ID, and `needs` a task's ID. Each task is
