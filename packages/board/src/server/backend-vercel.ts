@@ -2327,11 +2327,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** A match as vboard hands it out: its event as `vb tail --json` prints it, with its message as it is now. */
   async function matchOf(who: Who, match: ApiMatch, filters: Filters) {
-    const found = await messageIn(who, match.event.messageId).catch((error: unknown) => {
-      if (error instanceof HttpError && error.status === 404) return null
-      throw error
-    })
-    if (!found) {
+    // A match comes with its message as it is now, so handing it out costs no read of its own; one without it is read
+    // by ID. The API matches a watcher's labels itself, so a pull passes none, but a label filter would need the
+    // root's labels, which only a read of the thread has, as in read().
+    const current = match.event.currentMessage
+    const found =
+      current && !filters.label?.length
+        ? { message: current, thread: { id: match.threadId, channelId: match.event.channelId } as ApiThread, channel: await channelById(who, match.event.channelId) }
+        : await messageIn(who, match.event.messageId).catch((error: unknown) => {
+            if (error instanceof HttpError && error.status === 404) return null
+            throw error
+          })
+    if (!found?.channel) {
       return null
     }
     const { channel } = found

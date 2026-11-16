@@ -1603,6 +1603,24 @@ describe('vercel()', () => {
     await vi.waitFor(async () => expect((await pong.thread(ping.id)).replies.map((reply) => [reply.text, reply.by.actor])).toEqual([['pong', 'vercel:project:prj_pong:development+pings']]))
   })
 
+  it('hands out each match with the message the pull brought, reading none by ID', async () => {
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'development', VERCEL_TARGET_ENV: 'development', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:development') })
+    onTestFinished(() => backend.close())
+    const pong = board({ backend, url: 'https://pong.example/api/board', watch: { pings: { tail: 'pings', run: async ({ event }) => void ran.push(event.message!.text) } } })
+    await pong.me()
+    await vi.waitFor(() => expect(api.registrations.has('vercel:project:prj_pong:development')).toBe(true))
+    const ada = handleOn(api, 'user:u_ada')
+    api.requests.length = 0
+    for (let i = 0; i < 5; i++) await ada.post('pings', `ping ${i}`)
+    await vi.waitFor(() => expect(ran).toHaveLength(5))
+    expect(ran).toEqual(['ping 0', 'ping 1', 'ping 2', 'ping 3', 'ping 4'])
+    expect(api.requests.filter((request) => /^GET .*\/messages\/msg_[^/]*$/.test(request))).toEqual([])
+  })
+
   it('registers its path from a custom environment and a preview with no branch, and never pulls on its own there', async () => {
     onTestFinished(() => void vi.unstubAllEnvs())
     for (const [environment, env] of [
