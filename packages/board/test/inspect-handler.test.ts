@@ -86,7 +86,7 @@ describe('the inspector in a route handler', () => {
           body: JSON.stringify({ channel: 'ops', text: `as ${profile}` }),
         }),
       )
-    for (const profile of [null, 'factory', 'factory;avatar="https://example.com/a.png"']) {
+    for (const profile of [null, 'factory', 'Factory', 'FACTORY', 'factory;avatar="https://example.com/a.png"']) {
       const refused = await write(profile)
       expect(refused.status).toBe(401)
       expect(await refused.json()).toMatchObject({ error: { code: 'profile_required' } })

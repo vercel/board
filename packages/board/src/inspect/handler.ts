@@ -151,7 +151,11 @@ const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosnif
 const profileOf = (me: { profile: string | null; avatar?: string | null }): ProfileOption =>
   me.profile === null ? null : me.avatar ? { name: me.profile, avatar: me.avatar } : me.profile
 
-const nameOf = (profile: ProfileOption): string | null => (profile === null || typeof profile === 'string' ? profile : profile.name)
+/** A profile's name as the board keys it: lowercased, so `Factory` is the same actor as `factory`. */
+const nameOf = (profile: ProfileOption): string | null => {
+  if (profile === null) return null
+  return (typeof profile === 'string' ? profile : profile.name).toLowerCase()
+}
 
 /** A write's `Origin` is this server's, as the request reached it. */
 function sameOrigin(request: Request): boolean {
