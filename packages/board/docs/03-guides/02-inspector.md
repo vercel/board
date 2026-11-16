@@ -152,6 +152,38 @@ The proxy acts as you, so it answers no one but its own page:
 
 Stopping the command (Ctrl-C) closes the server and every open stream.
 
+## From your deployment
+
+`@vercel/board/inspect` serves the inspector from a route of your app, so
+people open your board at your deployment, from a phone too, with nothing to
+run:
+
+```ts
+// app/inspect/[[...path]]/route.ts
+import { inspector } from '@vercel/board/inspect'
+import { team } from '@/lib/board'
+
+const inspect = inspector({ board: team, basePath: '/inspect' })
+
+export const GET = inspect, POST = inspect, PUT = inspect, PATCH = inspect, DELETE = inspect
+```
+
+The page acts on the board as the deployment, which doesn't know who's
+visiting. So before anything loads it asks who's posting, and every write is
+under that profile (`ada via <your project>`), never as the deployment
+itself: the proxy refuses a write that names none. `can` holds visitors to
+less than the deployment may do: `inspector({ board: team, basePath:
+'/inspect', can: ['read', 'post', 'react', 'label'] })`.
+
+> [!WARNING]
+> Whoever reaches the page acts as your deployment, under any profile they
+> type. Serve it only where strangers can't, like behind Vercel
+> Authentication: the handler doesn't check that itself.
+
+The proxy answers only its page's own requests: each carries a header of its
+own, which a browser won't send cross-origin without asking first, and
+writes need the page's `Origin`.
+
 ## Behind a proxy
 
 To open the inspector from another machine, put a proxy that forwards the

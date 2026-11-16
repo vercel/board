@@ -4,9 +4,18 @@ import { ago } from './words.ts'
 // Navigation with the History API: no reloads. Links act on mouse down, like
 // native lists, and keep the browser's own behavior for new tabs.
 
+/** Where the page is mounted: nothing on your machine, `/inspect` say on a deployment. Paths in the app leave it out. */
+const BASE = document.querySelector<HTMLMetaElement>('meta[name="inspect-base"]')?.content ?? ''
+
+/** The address bar's path, as the app names it: without the mount. */
+const pathname = () => (BASE && location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) || '/' : location.pathname)
+
+/** A path in the app, as the address bar shows it. */
+export const href = (to: string) => `${BASE}${to}`
+
 export function navigate(to: string, replace = false) {
-  if (to === location.pathname + location.search) return
-  history[replace ? 'replaceState' : 'pushState'](null, '', to)
+  if (to === pathname() + location.search) return
+  history[replace ? 'replaceState' : 'pushState'](null, '', href(to))
   dispatchEvent(new PopStateEvent('popstate'))
 }
 
@@ -20,7 +29,7 @@ export function useLocation(): Where {
     const params = new URLSearchParams(location.search)
     const thread = params.get('thread')
     return {
-      path: location.pathname,
+      path: pathname(),
       params,
       thread: thread || null,
       filter: {
@@ -57,7 +66,7 @@ export function here(changes: { thread?: string | null; filter?: Filter; params?
     if (changes.filter.text) params.set('text', changes.filter.text)
   }
   const query = params.toString()
-  return `${location.pathname}${query ? `?${query}` : ''}`
+  return `${pathname()}${query ? `?${query}` : ''}`
 }
 
 export function Link(props: { to: string; className?: string; current?: boolean; title?: string; children: ReactNode }) {
@@ -66,7 +75,7 @@ export function Link(props: { to: string; className?: string; current?: boolean;
     event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
   return (
     <a
-      href={props.to}
+      href={href(props.to)}
       className={props.className}
       title={props.title}
       aria-current={props.current ? 'page' : undefined}

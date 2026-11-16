@@ -18,12 +18,18 @@ import { refusal, said } from './words.ts'
 
 const meta = (name: string) => document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content ?? ''
 
+/**
+ * Served from a deployment (`@vercel/board/inspect`), the page doesn't know who you are, so it
+ * acts only as a profile you name: never as yourself, which there is the deployment.
+ */
+export const named = meta('inspect-named') === '1'
+
 /** A profile you post as: its name, and the avatar you gave it (an https URL), if any. */
 export type Profile = { name: string; avatar?: string }
 
 /** You, as no profile. Its `fetch` sends the page's credential for the proxy: a token only this run's page has. */
 const yourself = board({
-  backend: http(`${location.origin}/board`, {
+  backend: http(`${location.origin}${meta('inspect-base')}/board`, {
     fetch: (input, init) => {
       const headers = new Headers(init?.headers)
       headers.set('x-inspect-token', meta('inspect-token'))
@@ -65,6 +71,9 @@ let profile: Profile | null | undefined = (() => {
 const avatars: Record<string, string> = stored<Record<string, string>>(AVATARS_KEY) ?? {}
 
 export const getProfile = () => profile
+
+/** Whether the page waits for a profile before it reads anything: served from a deployment, with none picked yet. */
+export const needsName = () => named && (profile === undefined ? started : profile) === null
 export const avatarOf = (name: string): string | undefined => avatars[name]
 
 const handleFor = (choice: Profile | null | undefined) => {
@@ -75,8 +84,8 @@ const handleFor = (choice: Profile | null | undefined) => {
 /** The handle every call below goes through: you, or you as the profile you picked. */
 let team = handleFor(profile)
 
-/** Switches who you post as, then learns the identity that is, and remembers it once the board takes it. */
-export async function setProfile(next: Profile | null | undefined) {
+/** Switches who you post as, then learns the identity that is, and remembers it once the board takes it: false when it didn't. */
+export async function setProfile(next: Profile | null | undefined): Promise<boolean> {
   const handle = handleFor(next)
   try {
     const me = await handle.me()
@@ -85,7 +94,7 @@ export async function setProfile(next: Profile | null | undefined) {
     set((s) => ({ ...s, me }))
   } catch (error) {
     toast(`couldn't switch: ${said(error)}`)
-    return
+    return false
   }
   if (next) {
     if (next.avatar) avatars[next.name] = next.avatar
@@ -96,6 +105,7 @@ export async function setProfile(next: Profile | null | undefined) {
     else localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
     localStorage.setItem(AVATARS_KEY, JSON.stringify(avatars))
   } catch {}
+  return true
 }
 
 /** What you may do where: `me.can` is each channel pattern's permissions, and `compileAccess` answers for a channel. */

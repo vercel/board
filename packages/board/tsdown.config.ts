@@ -42,6 +42,8 @@ export default defineConfig([
       'sync-slack': 'src/sync/slack.ts',
       'sync-github': 'src/sync/github.ts',
       'sync-linear': 'src/sync/linear.ts',
+      // `@vercel/board/inspect`: the inspector as a fetch handler, for a route of your app.
+      inspect: 'src/inspect/fetch.ts',
       cli: 'src/cli/bin.ts',
       // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `inspect`
       // or `serve`.

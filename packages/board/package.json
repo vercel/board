@@ -34,6 +34,10 @@
       "types": "./dist/conformance.d.mts",
       "default": "./dist/conformance.mjs"
     },
+    "./inspect": {
+      "types": "./dist/inspect.d.mts",
+      "default": "./dist/inspect.mjs"
+    },
     "./cli": {
       "types": "./dist/cli-embedded.d.mts",
       "default": "./dist/cli-embedded.mjs"

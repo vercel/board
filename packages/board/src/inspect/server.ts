@@ -5,7 +5,7 @@ import type { Me } from '../api/routes.ts'
 import type { BoardClient, ProfileOption } from '../client/client.ts'
 import { InvalidProfileHeader, parseProfileHeader } from '../contract/profile-header.ts'
 import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
-import { CSS } from './style.ts'
+import { CSP, shell } from './shell.ts'
 
 /** A browser UI for one board, on this machine, reading and writing as the client's identity. */
 export type Inspector = {
@@ -33,38 +33,6 @@ const FORWARDED = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwar
 
 /** The prebuilt UI where board is installed, read only when an inspector starts without one. */
 const bundle = async () => (await import('./page.ts')).page()
-
-const attribute = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
-
-/** The page, with what only this run's page is told: its token for the proxy, and the profile inspect started as. */
-const shell = (token: string, profile: ProfileOption) => `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="inspect-token" content="${token}">
-<meta name="inspect-profile" content="${attribute(JSON.stringify(profile))}">
-<title>board</title>
-<style>${CSS}</style>
-</head>
-<body>
-<div id="root"></div>
-<script type="module" src="/app.js"></script>
-</body>
-</html>`
-
-const CSP = [
-  "default-src 'none'",
-  // Attachments arrive as `blob:` URLs: the page fetches them through the proxy, with its token.
-  'img-src https: http://localhost:* http://127.0.0.1:* data: blob:',
-  'media-src blob:',
-  "style-src 'unsafe-inline'",
-  "script-src 'self'",
-  "connect-src 'self'",
-  "form-action 'none'",
-  "base-uri 'none'",
-  "frame-ancestors 'none'",
-].join('; ')
 
 /**
  * The UI, and a proxy for the board's API that adds your credentials, for a server
@@ -186,7 +154,7 @@ export async function createInspector(options: {
         ? send(response, 200, 'text/javascript; charset=utf-8', app)
         : send(response, 503, 'text/plain; charset=utf-8', "the inspector's UI isn't built: run `pnpm --filter @vercel/board build`")
     // Every other path is a route inside the page.
-    send(response, 200, 'text/html; charset=utf-8', shell(token, started), { 'content-security-policy': CSP })
+    send(response, 200, 'text/html; charset=utf-8', shell({ token, profile: started, base: '', named: false }), { 'content-security-policy': CSP })
   }
 
   return {
