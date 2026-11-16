@@ -42,6 +42,10 @@
       "types": "./dist/cli-commands.d.mts",
       "default": "./dist/cli-commands.mjs"
     },
+    "./inspect": {
+      "types": "./dist/inspect.d.mts",
+      "default": "./dist/inspect.mjs"
+    },
     "./backend-local": {
       "types": "./dist/backend-local.d.mts",
       "default": "./dist/backend-local.mjs"

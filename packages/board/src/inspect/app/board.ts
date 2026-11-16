@@ -11,6 +11,7 @@ import { board, BoardError, type Attachment, type EventsState, type ExplainPrinc
 import { http } from '../../backend-http/index.default.ts'
 import { toast } from './chrome.ts'
 import { listing } from './listing.ts'
+import { base } from './nav.tsx'
 import * as store from './store.ts'
 import { refusal, said } from './words.ts'
 
@@ -23,7 +24,7 @@ export type Profile = { name: string; avatar?: string }
 
 /** You, as no profile. Its `fetch` sends the page's credential for the proxy: a token only this run's page has. */
 const yourself = board({
-  backend: http(`${location.origin}/board`, {
+  backend: http(`${location.origin}${base}/board`, {
     fetch: (input, init) => {
       const headers = new Headers(init?.headers)
       headers.set('x-inspect-token', meta('inspect-token'))
