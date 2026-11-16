@@ -68,6 +68,13 @@ describe('the inspector in a route handler', () => {
     await expect(page().thread('9999')).rejects.toMatchObject({ status: 404 })
   })
 
+  it('never writes as its handle itself, which is the app and not whoever is visiting, so the page asks who first', async () => {
+    expect(await (await ask('/board')).text()).toContain('<meta name="inspect-named" content="1">')
+    await expect(page().post('ops', 'as the app')).rejects.toMatchObject({ status: 401, code: 'profile_required' })
+    await expect(page().react('1', 'eyes')).rejects.toMatchObject({ status: 401, code: 'profile_required' })
+    expect((await client.messages({ channel: 'ops' })).messages.map((message) => message.text)).not.toContain('as the app')
+  })
+
   it('streams board events to the page', async () => {
     const controller = new AbortController()
     const events = page().events({ channel: 'live-handler' }, { signal: controller.signal })
@@ -87,7 +94,7 @@ describe('the inspector in a route handler', () => {
     expect((await ask('/board/board/me', { headers: { ...PAGE, 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
     expect((await write({ 'x-inspect-token': 'page' })).status).toBe(403) // no origin
     expect((await write({ ...PAGE, origin: 'https://evil.example' })).status).toBe(403)
-    expect((await write(PAGE)).status).toBe(201)
+    expect((await write({ ...PAGE, 'x-board-profile': 'ada' })).status).toBe(201)
     expect((await ask('/board/board/%2E%2E%2Fsecret', { headers: PAGE })).status).toBe(400)
     const bad = await ask('/board/board/me', { headers: { ...PAGE, 'x-board-profile': '"unclosed' } })
     expect(bad.status).toBe(400)

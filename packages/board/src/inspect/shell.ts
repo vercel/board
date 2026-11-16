@@ -12,7 +12,7 @@ const attribute = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${ch
  * the path it's served under (`''` at a server's root), which its bundle, its proxy, and its links
  * are under too.
  */
-export const shell = ({ token, profile, base }: { token: string; profile: ProfileOption; base: string }) => `<!doctype html>
+export const shell = ({ token, profile, base, named = false }: { token: string; profile: ProfileOption; base: string; named?: boolean }) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -20,7 +20,7 @@ export const shell = ({ token, profile, base }: { token: string; profile: Profil
 <meta name="inspect-token" content="${attribute(token)}">
 <meta name="inspect-profile" content="${attribute(JSON.stringify(profile))}">
 <meta name="inspect-base" content="${attribute(base)}">
-<title>board</title>
+${named ? '<meta name="inspect-named" content="1">\n' : ''}<title>board</title>
 <style>${CSS}</style>
 </head>
 <body>

@@ -19,6 +19,12 @@ import { refusal, said } from './words.ts'
 
 const meta = (name: string) => document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content ?? ''
 
+/**
+ * Served from an app (`@vercel/board/inspect`), the page acts as the app's handle, which isn't
+ * whoever's visiting, so it writes only as a profile you name: never as yourself.
+ */
+export const named = meta('inspect-named') === '1'
+
 /** A profile you post as: its name, and the avatar you gave it (an https URL), if any. */
 export type Profile = { name: string; avatar?: string }
 
@@ -66,6 +72,9 @@ let profile: Profile | null | undefined = (() => {
 const avatars: Record<string, string> = stored<Record<string, string>>(AVATARS_KEY) ?? {}
 
 export const getProfile = () => profile
+
+/** Whether the page waits for a profile before it reads anything: served from an app, with none picked yet. */
+export const needsName = () => named && (profile === undefined ? started : profile) === null
 export const avatarOf = (name: string): string | undefined => avatars[name]
 
 const handleFor = (choice: Profile | null | undefined) => {
@@ -77,7 +86,7 @@ const handleFor = (choice: Profile | null | undefined) => {
 let team = handleFor(profile)
 
 /** Switches who you post as, then learns the identity that is, and remembers it once the board takes it. */
-export async function setProfile(next: Profile | null | undefined) {
+export async function setProfile(next: Profile | null | undefined): Promise<boolean> {
   const handle = handleFor(next)
   try {
     const me = await handle.me()
@@ -86,7 +95,7 @@ export async function setProfile(next: Profile | null | undefined) {
     set((s) => ({ ...s, me }))
   } catch (error) {
     toast(`couldn't switch: ${said(error)}`)
-    return
+    return false
   }
   if (next) {
     if (next.avatar) avatars[next.name] = next.avatar
@@ -97,6 +106,7 @@ export async function setProfile(next: Profile | null | undefined) {
     else localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
     localStorage.setItem(AVATARS_KEY, JSON.stringify(avatars))
   } catch {}
+  return true
 }
 
 /** What you may do where: `me.can` is each channel pattern's permissions, and `compileAccess` answers for a channel. */

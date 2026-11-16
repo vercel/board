@@ -197,7 +197,9 @@ export const GET = inspect, POST = inspect, PATCH = inspect, PUT = inspect, DELE
 The page is at `/board`, its bundle at `/board/app.js`, and its proxy at
 `/board/board/*`. Each request acts as the handle you pass, under the
 profile the page picks, so a person who names themselves `ada` posts as
-`ada via <your app>`. A request that picks none acts as the handle itself.
+`ada via <your app>`. The handle is your app, not whoever's visiting, so the
+page asks who's posting before it loads, and the proxy refuses a write that
+names no profile (401 `profile_required`). Reads need none.
 
 Whoever reaches the route reads and writes as that handle, so put it behind
 something that turns strangers away, like Vercel's Deployment Protection,

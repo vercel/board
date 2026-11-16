@@ -104,6 +104,32 @@ function usePane() {
   }
 }
 
+/** Who you post as, asked before anything loads: the page acts as its app, so you write as a profile of it, `ada via factory`. */
+function NameGate({ done }: { done: () => void }) {
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <div className="boot">
+      <form
+        className="name-gate"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const name = new FormData(event.currentTarget).get('profile')?.toString().trim()
+          if (!name) return
+          void board.setProfile({ name }).then((took) => (took ? done() : setError(`couldn't post as ${name}`)))
+        }}
+      >
+        <label htmlFor="profile">Who's posting?</label>
+        <p>You'll write as a profile of this app, shown as your name via it.</p>
+        <input id="profile" name="profile" autoFocus placeholder="your name, e.g. ada" pattern="[A-Za-z][A-Za-z0-9\-]{0,31}" title="a letter, then up to 31 letters, numbers, and hyphens" required />
+        {error && <p className="error">{error}</p>}
+        <button type="submit" className="send">
+          continue
+        </button>
+      </form>
+    </div>
+  )
+}
+
 // --- the app -----------------------------------------------------------------------
 
 export function App() {
@@ -117,9 +143,11 @@ export function App() {
   const [nav, setNav] = useState(false)
   useEffect(() => setNav(false), [where.path])
 
+  // Served from an app, the page reads nothing until you've named who you post as.
+  const [naming, setNaming] = useState(board.needsName)
   useEffect(() => {
-    board.boot().catch((error: Error) => setFailed(error.message))
-  }, [])
+    if (!naming) board.boot().catch((error: Error) => setFailed(error.message))
+  }, [naming])
 
   // Old links: /t/12 is the thread pane over the activity view, and a sync entry's inbox is in settings.
   useEffect(() => {
@@ -150,6 +178,7 @@ export function App() {
   const known = useMemo(() => knownLabels(state), [state.messages])
   const viewer = useMemo(() => (state.me ? board.viewerOf(state.me) : null), [state.me])
 
+  if (naming) return <NameGate done={() => setNaming(false)} />
   if (failed) return <div className="boot error">error: {failed}</div>
   if (!state.me || !viewer) return <div className="boot">connecting…</div>
 

@@ -26,7 +26,8 @@ const BODY_MAX = 1024 * 1024
  * `/board/app.js`, its proxy at `/board/board/*`). The proxy answers only the page: a request names
  * its token, a browser's says it's from this origin (`Sec-Fetch-Site`), and a write carries this
  * origin. Each request acts as `board`, under the profile the page picks, the way any handle names
- * one (`x-board-profile`); none is the handle as it is.
+ * one (`x-board-profile`). A write that names none is refused: the handle is the deployment, not
+ * whoever's visiting, so the page asks who's posting before it loads.
  */
 export function inspector(options: { board: BoardClient; basePath: string }): InspectorHandler {
   const { board } = options
@@ -52,6 +53,10 @@ export function inspector(options: { board: BoardClient; basePath: string }): In
         return json(400, { error: { code: 'invalid_profile', message: error.message } })
       }
     }
+    // The handle is the deployment, which is no one visiting: a write names whose it is. Reads are the
+    // same whoever asks, and the page's handle reads some (`/`, `/me`) as itself.
+    if (as === null && !reading)
+      return json(401, { error: { code: 'profile_required', message: "name a profile to write as: this page doesn't know who you are, and writes as no one without one" } })
     let body: Uint8Array<ArrayBuffer> | undefined
     if (!reading) {
       const limit = path === '/attachments' ? ATTACHMENT_BYTES_MAX : BODY_MAX
@@ -94,7 +99,7 @@ export function inspector(options: { board: BoardClient; basePath: string }): In
     }
     // A board that won't say who the handle is still gets its page, which says why when it asks.
     const profile = await started().catch(() => null)
-    return new Response(shell({ token: TOKEN, profile, base }), {
+    return new Response(shell({ token: TOKEN, profile, base, named: true }), {
       headers: { ...HEADERS, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP },
     })
   }
