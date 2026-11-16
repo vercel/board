@@ -73,12 +73,15 @@ const avatars: Record<string, string> = stored<Record<string, string>>(AVATARS_K
 
 export const getProfile = () => profile
 
-/** Whether the page waits for a profile before it reads anything: served from an app, with none picked yet. */
-export const needsName = () => named && (profile === undefined ? started : profile) === null
+/**
+ * Whether the page waits for a profile before it reads anything: served from an app, with none picked
+ * yet. The handle's own profile doesn't count there: it's the app's name, not the visitor's.
+ */
+export const needsName = () => named && (profile === undefined || profile === null)
 export const avatarOf = (name: string): string | undefined => avatars[name]
 
 const handleFor = (choice: Profile | null | undefined) => {
-  const as = choice === undefined ? started : choice
+  const as = choice === undefined && !named ? started : (choice ?? null)
   return as === null ? yourself : yourself.as(as)
 }
 

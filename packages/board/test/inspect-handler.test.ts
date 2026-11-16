@@ -75,6 +75,25 @@ describe('the inspector in a route handler', () => {
     expect((await client.messages({ channel: 'ops' })).messages.map((message) => message.text)).not.toContain('as the app')
   })
 
+  it("won't write under its handle's own profile, the app's name, either", async () => {
+    const url = `${server.origin}/api/board`
+    const asFactory = inspector({ board: createBoardClient({ url, token: await personToken('u_julian', url), profile: 'factory' }), basePath: '/board' })
+    const write = (profile: string | null) =>
+      asFactory(
+        new Request(`${ORIGIN}/board/board/messages`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...PAGE, ...(profile ? { 'x-board-profile': profile } : {}) },
+          body: JSON.stringify({ channel: 'ops', text: `as ${profile}` }),
+        }),
+      )
+    for (const profile of [null, 'factory', 'factory;avatar="https://example.com/a.png"']) {
+      const refused = await write(profile)
+      expect(refused.status).toBe(401)
+      expect(await refused.json()).toMatchObject({ error: { code: 'profile_required' } })
+    }
+    expect((await write('ada')).status).toBe(201)
+  })
+
   it('streams board events to the page', async () => {
     const controller = new AbortController()
     const events = page().events({ channel: 'live-handler' }, { signal: controller.signal })

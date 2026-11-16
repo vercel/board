@@ -55,8 +55,8 @@ export function inspector(options: { board: BoardClient; basePath: string }): In
     }
     // The handle is the deployment, which is no one visiting: a write names whose it is. Reads are the
     // same whoever asks, and the page's handle reads some (`/`, `/me`) as itself.
-    if (as === null && !reading)
-      return json(401, { error: { code: 'profile_required', message: "name a profile to write as: this page doesn't know who you are, and writes as no one without one" } })
+    if (!reading && (as === null || nameOf(as) === nameOf(await started().catch(() => null))))
+      return json(401, { error: { code: 'profile_required', message: "name a profile to write as, other than the app's own: this page doesn't know who you are" } })
     let body: Uint8Array<ArrayBuffer> | undefined
     if (!reading) {
       const limit = path === '/attachments' ? ATTACHMENT_BYTES_MAX : BODY_MAX
@@ -150,6 +150,8 @@ const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosnif
 /** The profile a handle acts as, as the page is told it. */
 const profileOf = (me: { profile: string | null; avatar?: string | null }): ProfileOption =>
   me.profile === null ? null : me.avatar ? { name: me.profile, avatar: me.avatar } : me.profile
+
+const nameOf = (profile: ProfileOption): string | null => (profile === null || typeof profile === 'string' ? profile : profile.name)
 
 /** A write's `Origin` is this server's, as the request reached it. */
 function sameOrigin(request: Request): boolean {
