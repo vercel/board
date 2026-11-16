@@ -120,3 +120,29 @@ describe('the inspector in a route handler, on a board that refuses its handle',
     expect(await response.text()).toContain('<meta name="inspect-profile" content="null">')
   })
 })
+
+describe('the inspector in a route handler, given too much', () => {
+  it('refuses a body over its cap, without reading the rest of it', async () => {
+    const handler = inspector({ board: client, basePath: '/board' })
+    const headers = { ...PAGE, 'x-board-profile': 'ada', 'content-type': 'application/json' }
+    // Said up front: refused before a byte is read.
+    const declared = await handler(new Request(`${ORIGIN}/board/board/messages`, { method: 'POST', headers: { ...headers, 'content-length': String(2 * 1024 * 1024) }, body: 'x' }))
+    expect(declared.status).toBe(413)
+    // Streamed with no length: read until it passes the cap, then canceled.
+    let pulled = 0
+    let canceled = false
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++
+        controller.enqueue(new Uint8Array(64 * 1024))
+      },
+      cancel() {
+        canceled = true
+      },
+    })
+    const streamed = await handler(new Request(`${ORIGIN}/board/board/messages`, { method: 'POST', headers, body: endless, duplex: 'half' } as RequestInit))
+    expect(streamed.status).toBe(413)
+    expect(canceled).toBe(true)
+    expect(pulled).toBeLessThan(40)
+  })
+})

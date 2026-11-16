@@ -60,8 +60,9 @@ export function inspector(options: { board: BoardClient; basePath: string }): In
     let body: Uint8Array<ArrayBuffer> | undefined
     if (!reading) {
       const limit = path === '/attachments' ? ATTACHMENT_BYTES_MAX : BODY_MAX
-      body = new Uint8Array(await request.arrayBuffer())
-      if (body.byteLength > limit) return json(413, { error: { code: 'too_large', message: `a request to the inspector is at most ${limit} bytes` } })
+      const read = await readUpTo(request, limit)
+      if (read === null) return json(413, { error: { code: 'too_large', message: `a request to the inspector is at most ${limit} bytes` } })
+      body = read
     }
     const forwarded: Record<string, string> = {}
     for (const header of ['content-type', 'accept', 'x-board-filename']) {
@@ -103,6 +104,35 @@ export function inspector(options: { board: BoardClient; basePath: string }): In
       headers: { ...HEADERS, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP },
     })
   }
+}
+
+/**
+ * A request's body, or null once it's more than `limit` bytes: a `Content-Length` over it is refused
+ * before reading, and a body without one stops being read, and is canceled, as soon as it passes it.
+ */
+async function readUpTo(request: Request, limit: number): Promise<Uint8Array<ArrayBuffer> | null> {
+  if (Number(request.headers.get('content-length') ?? 0) > limit) return null
+  if (request.body === null) return new Uint8Array(0)
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(value)
+  }
+  const body = new Uint8Array(size)
+  let at = 0
+  for (const chunk of chunks) {
+    body.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return body
 }
 
 /** `load`'s answer, asked for once: a failure is asked again next time. */
