@@ -1071,7 +1071,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     // A target its sync doesn't list is another's: another project's, under a key of the same name.
     if (!synced?.targets.includes(target)) return
     const [root, ...replies] = await threadOf(synced.root)
-    if (!root || root.id !== synced.root || root.deleted) return
+    // A thread whose root was written with `noSync` stays on the board, however it came to be synced.
+    if (!root || root.id !== synced.root || root.deleted || root.noSync) return
     const failures: Failure[] = []
     try {
       await offer(keyOf(target), event, root, target, (renderer) => backfill(synced, root, replies, target, failures, renderer))
@@ -1158,7 +1159,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (!synced || synced.targets.length === 0) return
     // As it is now, not as it was posted: a delivery can go out late (a backlog, a retry), and what
     // its author has since edited goes as edited, and what they deleted doesn't go at all.
-    const message = await messageOf(event.message.id)
+    const thread = await threadOf(synced.root)
+    // A reply in a thread whose root stays on the board stays there too.
+    if (thread[0]?.id !== synced.root || thread[0].noSync) return
+    const message = thread.find((found) => found.id === event.message!.id)
     if (!message || message.deleted) return
     const actors = await actorsNow()
     const failures: Failure[] = []

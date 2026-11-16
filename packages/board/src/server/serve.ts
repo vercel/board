@@ -441,8 +441,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   /**
    * Settles the `@handle`s of a caller's texts: a mention is `@[actor-id]`, so a handle that names
    * exactly one of the actors the caller can see is written as that, and one that names none or
-   * several stays as typed, a mention of no one. Of several, it's the one who wrote in `thread`, if
-   * exactly one did. The actors are read once, for the first text that has a handle. A board behind
+   * several stays as typed, a mention of no one. Of several, one on the board wins over platform
+   * users (a synced user's handle is their display name, theirs to set), and else it's the one who
+   * wrote in `thread`, if exactly one did. The actors are read once, for the first text that has a handle. A board behind
    * this one settles them itself, and a schedule's send goes as it was settled when it was made: a
    * handle that mentioned no one then mentions no one later. An ID is longer than a handle, so where
    * settling would take a text past what a message holds, it stays as typed, each handle's actor a
@@ -450,10 +451,16 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    */
   function settler(caller: Caller, signal: AbortSignal) {
     let listed: Promise<MentionedActor[]> | null = null
+    // Platform users, whose handle is whatever their platform calls them: see `prefer` below.
+    const external = new Set<string>()
     // A caller that may not list the board's actors can name no one by handle.
     const actors = () =>
       (listed ??= backend.actors(caller, {}, signal).then(
-        (answer) => answer.actors.map(({ id, handle, name }) => ({ id, handle, name })),
+        (answer) =>
+          answer.actors.map(({ id, handle, name, kind }) => {
+            if (kind === 'external') external.add(id)
+            return { id, handle, name }
+          }),
         (error: unknown) => {
           if (error instanceof HttpError && (error.status === 403 || error.status === 404)) return []
           throw error
@@ -477,7 +484,12 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       }
       return fitting(
         settleMentions(text, await actors(), (candidates) => {
-          const wrote = candidates.filter((actor) => writers.has(actor.id))
+          // A platform user takes the handle their platform shows, which anyone there can set to a
+          // board user's: one who's on the board is who it means, wherever the platform user wrote.
+          const board = candidates.filter((actor) => !external.has(actor.id))
+          const among = board.length > 0 ? board : candidates
+          if (among.length === 1) return among[0]!
+          const wrote = among.filter((actor) => writers.has(actor.id))
           return wrote.length === 1 ? wrote[0]! : null
         }),
       )

@@ -19,6 +19,9 @@ export const terminalText = (text: string): string =>
     return code < 0x20 ? String.fromCharCode(0x2400 + code) : code === 0x7f ? '\u2421' : '\ufffd'
   })
 
+/** As `terminalText`, for what shows within one line: tab and newline show as their pictures too. */
+export const lineText = (text: string): string => terminalText(text).replace(/[\t\n]/g, (char) => String.fromCharCode(0x2400 + char.charCodeAt(0)))
+
 /** Who you are, as your messages show you: `claude via julian` with a profile, your name otherwise. */
 export const who = (me: Pick<Me, 'name' | 'via'>): string => shownName(me)
 
@@ -47,7 +50,8 @@ const indent = (text: string, prefix: string) =>
 
 function labels(message: MessageView): string {
   const entries = Object.entries(message.labels)
-  return entries.length ? `  [${entries.map(([k, v]) => `${k}=${v}`).join(' ')}]` : ''
+  // On the message's own line: a newline in a value (one written before values refused them) shows as its picture too.
+  return entries.length ? `  [${entries.map(([k, v]) => `${k}=${lineText(v)}`).join(' ')}]` : ''
 }
 
 /** How many people a reaction names before it counts the rest: `👀 ada, claude, codex +9`. */
@@ -182,7 +186,7 @@ function taskNote(message: MessageView, task: TaskView, room: number): string {
   if ((task.state === 'failed' || task.state === 'canceled') && task.reason) return noteLine(task.reason, room)
   if (task.state === 'blocked' && task.blocked) return noteLine(task.blocked.reason, room)
   // Its state has a column of its own, so the label that says it again is left out.
-  const own = Object.entries(message.labels).filter(([key]) => !key.startsWith('board.')).map(([key, value]) => `${key}=${value}`).join(' ')
+  const own = Object.entries(message.labels).filter(([key]) => !key.startsWith('board.')).map(([key, value]) => `${key}=${lineText(value)}`).join(' ')
   const needs = task.state === 'waiting' && task.needs.length ? `needs ${task.needs.map((id) => `#${id}`).join(' ')}` : ''
   return [own, needs].filter(Boolean).join('  ')
 }

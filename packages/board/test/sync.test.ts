@@ -2205,3 +2205,51 @@ describe('provider callbacks', () => {
     expect(provider.platform).toBe('opaque')
   })
 })
+
+describe('a thread that stays on the board, and a platform thread one board thread holds', () => {
+  it("never sends a `noSync` thread to a platform it's synced with: not its root, nor what's said in it", async () => {
+    const { board, s } = setup()
+    const julian = caller(board.fetch, await personToken(), {})
+    // Two board-only threads synced by hand: one with a Slack channel, whose sync would backfill it,
+    // and one with a Slack thread, which would get its replies.
+    const { body: a } = await julian('POST', '/messages', { channel: 'firehose', text: 'the key is hunter2', noSync: true })
+    const { body: b } = await julian('POST', '/messages', { channel: 'firehose', text: 'board only', noSync: true })
+    expect((await julian('POST', `/messages/${a.message.id}/sync`, { target: 'slack:C9' })).status).toBe(200)
+    expect((await julian('POST', `/messages/${b.message.id}/sync`, { target: 'slack:C9:900.1' })).status).toBe(200)
+    await julian('POST', '/messages', { re: b.message.id, text: 'hunter2 again' })
+    // A thread that does sync, after them: once it's there, they've had their turn.
+    await julian('POST', '/messages', { channel: 'firehose', text: 'shared' })
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text).join()).toContain('shared'))
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect([...s.channelPosts, ...s.posts].map((post) => post.text).join('\n')).not.toContain('hunter2')
+    expect(s.channelPosts).toHaveLength(1)
+    expect(s.posts).toEqual([])
+  })
+
+  it('lets only one of two threads that ask for a Slack thread at once take it', async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), {})
+    const roots = await Promise.all(['one', 'two'].map(async (text) => (await julian('POST', '/messages', { channel: 'incidents', text })).body.message.id as number))
+    const tries = await Promise.all(roots.map((id) => julian('POST', `/messages/${id}/sync`, { target: 'slack:C9:900.1' })))
+    expect(tries.map((tried) => tried.status).sort()).toEqual([200, 409])
+    const winner = roots[tries.findIndex((tried) => tried.status === 200)]!
+    // What Slack says there lands in the thread that took it, and only there.
+    await webhook('slack', { type: 'message', threadId: 'slack:C9:900.1', id: '900.2', text: 'on it', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await julian('GET', `/messages/${winner}`)).body.replies.map((m: { text: string }) => m.text)).toEqual(['on it']))
+    for (const id of roots) expect((await julian('GET', `/messages/${id}/sync`)).body.targets.length).toBe(id === winner ? 1 : 0)
+  })
+
+  it('keeps a Slack thread with the board thread that took it first, whatever a later claim in the log says', async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), {})
+    const { body: first } = await julian('POST', '/messages', { channel: 'incidents', text: 'first', id: 'first' })
+    const { body: second } = await julian('POST', '/messages', { channel: 'incidents', text: 'second', id: 'second' })
+    expect((await julian('POST', `/messages/${first.message.id}/sync`, { target: 'slack:C9:900.1' })).status).toBe(200)
+    // A second claim the log holds, as one that raced the first before writes refused it would.
+    await board.session.append({ type: 'thread.synced', payload: { thread: 'second', target: 'slack:C9:900.1', kind: 'thread', cause: 'request', by: first.message.by } })
+    await webhook('slack', { type: 'message', threadId: 'slack:C9:900.1', id: '900.2', text: 'on it', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await julian('GET', `/messages/${first.message.id}`)).body.replies.map((m: { text: string }) => m.text)).toEqual(['on it']))
+    expect((await julian('GET', `/messages/${second.message.id}`)).body.replies).toEqual([])
+    expect((await julian('GET', `/messages/${second.message.id}/sync`)).body.targets).toEqual([])
+  })
+})

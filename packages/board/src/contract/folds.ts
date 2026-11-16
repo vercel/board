@@ -428,9 +428,13 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
     case 'thread.synced': {
       const thread = own(state.threads, event.payload.thread)
       if (!thread) return state
+      const claims = (event.payload.kind ?? (isThreadTarget(event.payload.target) ? 'thread' : 'channel')) === 'thread'
+      // A platform thread is one board thread's: a second claim to it, which a write refuses, is ignored.
+      const owner = claims ? own(state.byExternalThread, event.payload.target) : undefined
+      if (owner !== undefined && owner !== event.payload.thread) return state
       addTarget(thread, event.payload.target)
       if (event.payload.kind) setOwn((thread.kinds ??= {}), event.payload.target, event.payload.kind)
-      if ((event.payload.kind ?? (isThreadTarget(event.payload.target) ? 'thread' : 'channel')) === 'thread') {
+      if (claims) {
         setOwn(thread.external, event.payload.target, event.payload.target)
         setOwn(state.byExternalThread, event.payload.target, event.payload.thread)
       }

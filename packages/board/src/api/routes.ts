@@ -10,6 +10,7 @@ import {
   LabelKey,
   Labels,
   LabelValue,
+  NewLabels,
   MESSAGE_TEXT_MAX,
   MessageText,
   SentText,
@@ -112,7 +113,7 @@ export const PostBody = z
     re: Ref.optional(),
     /** May be empty when the message has attachments. */
     text: z.string().default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     /**
      * External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. The
@@ -158,7 +159,7 @@ export const ScheduleBody = z
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     text: z.string().default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).optional(),
     in: Duration.optional(),
@@ -223,7 +224,7 @@ export const CreateTaskBody = z
     re: Ref.optional(),
     /** As long as a post's text may be: the backend says how long that is. */
     text: z.string().optional(),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     /** IDs from `POST /attachments`, as a post takes them. */
     attachments: z.array(AttachmentId).optional(),
@@ -266,7 +267,7 @@ export const CreateTasksBody = z.object({
           key: TaskKey.optional(),
           /** May be empty when the task's root has attachments. As long as a post's text may be: the backend says how long that is. */
           text: z.string(),
-          labels: Labels.optional(),
+          labels: NewLabels.optional(),
           noSync: z.boolean().optional(),
           /** IDs from `POST /attachments`, as a post takes them. */
           attachments: z.array(AttachmentId).optional(),
@@ -604,7 +605,7 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
@@ -621,7 +622,7 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     op: z.literal('labels'),
     ...Imported,
     ...Changed,
-    set: Labels.optional(),
+    set: NewLabels.optional(),
     unset: z.array(LabelKey).optional(),
     /** As a label write's: what the labels must be now, a value or null for none. */
     if: z.record(LabelKey, LabelValue.nullable()).optional(),
@@ -704,7 +705,7 @@ export const LABEL_CONDITIONS_MAX = 16
 
 export const LabelBody = z
   .object({
-    set: Labels.optional(),
+    set: NewLabels.optional(),
     unset: z.array(LabelKey).optional(),
     /**
      * What the message's labels must be now: a key's value, or null for one that mustn't be set.

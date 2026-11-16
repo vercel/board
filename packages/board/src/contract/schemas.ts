@@ -83,6 +83,12 @@ export const LabelValue = z
   .max(LABEL_VALUE_MAX, { error: (issue) => `a label value is at most ${LABEL_VALUE_MAX} characters, and this one has ${String(issue.input).length}` })
   .refine(storable, 'label value has a NUL character or a lone surrogate')
 export const Labels = z.record(LabelKey, LabelValue)
+/**
+ * A label value as a write sets it: no control characters either, so a value can't break the line
+ * a reader shows it on (`vb read` prints labels inline). Labels already in a log keep what they have.
+ */
+export const NewLabelValue = LabelValue.refine((value) => !/\p{Cc}/u.test(value), 'label value has a control character')
+export const NewLabels = z.record(LabelKey, NewLabelValue)
 
 /** Normalized short names, as Chat SDK names them: `eyes`, `check`, `thumbs_up`. */
 export const Emoji = z

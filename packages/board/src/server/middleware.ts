@@ -1,7 +1,7 @@
 import type { Board } from './board.ts'
 import type { Actor } from '../contract/folds.ts'
 import { z } from 'zod'
-import { Labels, MESSAGE_TEXT_MAX, type Attachment } from '../contract/schemas.ts'
+import { NewLabels, MESSAGE_TEXT_MAX, type Labels, type Attachment } from '../contract/schemas.ts'
 import { HttpError } from './errors.ts'
 
 /** Where a write came from, as the middleware sees it. */
@@ -56,7 +56,7 @@ export class DroppedError extends HttpError {
   }
 }
 
-const Patch = z.object({ text: z.string().max(MESSAGE_TEXT_MAX).optional(), labels: Labels.optional() }).strict()
+const Patch = z.object({ text: z.string().max(MESSAGE_TEXT_MAX).optional(), labels: NewLabels.optional() }).strict()
 
 export const MIDDLEWARE_ACTOR = 'board:middleware'
 
