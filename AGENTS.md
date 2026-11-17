@@ -238,7 +238,7 @@ thread rather than starting one.
   `x-board-profile` with the avatar as a parameter, and the factory's route
   reads it into the name and `x-board-avatar` that 0.32.0 reads (`profile.ts`),
   so a newer `vb` with `--avatar` works on it too. The policy's board part
-  (`boardPolicy` in `harness.ts`) has the shape board's `sandboxPolicy()`
+  (`boardPolicy` in `harness.ts`) has the shape of the `allow` board's `sandboxPolicy()`
   returns, merged with the other hosts as a caller merges that; it's replaced
   by `sandboxPolicy()` once the factory runs a release that has it.
   Its `vb` tool (`agent/tools/vb.ts`) runs a vb command straight from the function, in one

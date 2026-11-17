@@ -136,7 +136,7 @@ export function eveHeaders(thread: string, token: string, bypass: string | undef
 
 /**
  * The factory's board, handed to a thread's Eve: the routes vb calls, with the board's token and who Eve is. It's the
- * shape board's `sandboxPolicy()` returns, merged the way a caller merges that, which replaces it once the factory runs
+ * shape of the `allow` board's `sandboxPolicy()` returns, merged the way a caller merges that, which replaces it once the factory runs
  * a release that has it (0.32.0 doesn't).
  */
 export function boardPolicy(thread: string, token: string, bypass: string | undefined): { allow: Record<string, NetworkPolicyRule[]> } {
