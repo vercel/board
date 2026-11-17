@@ -1,5 +1,17 @@
 # vboard
 
+## 0.50.1
+
+### Patch Changes
+
+- 5b09b37: License `@vercel/board` under Apache-2.0, up from MIT, and ship the LICENSE file in the package.
+- 95ce79c: A CLI that runs board's (`createApp`, as `vercel board`) runs every command as the `login` it gives, wherever it runs: a deployment's own OIDC token and `BOARD_TOKEN` no longer go ahead of it, on a team's board in Vercel's API or a board at a URL, so `vercel board` is you, as every `vercel` command is. Before, on a deployment it sent the deployment's token on the team that login resolved, which could be another team or none. An app that gives no `login` still finds its credentials as `vb` does, and `vb` is unchanged: run it to act as a deployment's project, or with `BOARD_TOKEN`. The team a deployment's token names is used only when that token is what goes.
+- 88687b8: Fetch an OIDC issuer's discovery once for tokens that arrive together, give up on one that stalls, and keep at most 100 issuers' keys, so tokens naming made-up issuers can't make a board fetch and remember without bound.
+- b8a5e05: Read a Slack message link only for someone who could open it: nothing is read for a guest or a person from another organization who posted the link, nor from a channel shared with another organization.
+- bd93c80: Keep `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^…>` in a message synced from another platform, a GitHub comment say, from notifying a whole Slack channel or user group. A message written on the board keeps them, so its authors can ping a group.
+- 353cc5b: A board mounted outside Vercel needs `board({ url })` in production: without it, it verifies no tokens and answers 500 `no_board_url`, since a token's audience came from the request's Host, which its sender chooses. In development (`NODE_ENV` isn't `production`) it still takes its URL from requests and warns once to set `url`. On Vercel, which routes a request only for the deployment's own domains, and under `vb serve`, which checks Host itself, nothing changes.
+- 3477262: On Vercel's board, a watcher hands out each match with the message the pull brought (`currentMessage`), where it read each one by ID: a pull of 10 matches is 1 request where it was 11. A match without one, as for a thread moved to a channel the watcher can't read, is read by ID as before.
+
 ## 0.50.0
 
 ### Minor Changes
