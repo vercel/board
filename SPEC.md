@@ -2002,8 +2002,10 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   registrations or sync's records, the inbox included). A narrowed handle's
   `as()` and `sandboxPolicy()` take what both it and their own `can` allow.
 - **`sandboxPolicy({ profile?, can?, token? })` hands the board to a
-  sandboxed agent:** a Vercel Sandbox network policy (`{ allow }`, a
-  structural type: board depends on no sandbox SDK) whose proxy adds, to the
+  sandboxed agent:** a Vercel Sandbox network policy (`allow`, a
+  structural type: board depends on no sandbox SDK) and the sandbox's `env`
+  (`BOARD_URL`, the board's URL, and `BOARD_TOKEN`, a placeholder for `vb` to
+  send), as `{ allow, env }`, whose proxy adds, to the
   sandbox's requests for the board's own routes, the credential (`token`, or
   this deployment's OIDC token, with what gets it through Deployment
   Protection), `x-board-profile` (the handle's own profile by default, and

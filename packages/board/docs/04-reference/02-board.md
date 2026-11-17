@@ -100,8 +100,10 @@ sandboxPolicy(options?: { profile?: { name: string; avatar?: string }; can?: Can
 ```
 
 A Vercel Sandbox network policy that hands this board, and nothing else, to a
-sandboxed agent: `Sandbox.create({ networkPolicy })` takes it, and spreading its
-`allow` beside your own hosts merges them. Its proxy adds the credential
+sandboxed agent, and the environment for it: `{ allow, env }`. Spreading
+`allow` beside your own hosts merges them into `networkPolicy`, and `env` is
+the sandbox's `BOARD_URL` and a placeholder `BOARD_TOKEN`, which the policy
+replaces with the credential on the way out. Its proxy adds the credential
 (`token`, or this deployment's own OIDC token), the profile (`profile`, or this
 handle's from `as()`: one or the other, or it fails with `invalid_profile`), and
 `x-board-can` (`can`, or read, post, react, and label everywhere) to the
@@ -112,8 +114,8 @@ other. See [Hand a board to a sandboxed agent](../03-guides/06-sandboxed-agents.
 import { board } from '@vercel/board'
 
 const team = board()
-const { allow } = await team.as('fixer').sandboxPolicy()
-// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } } })   // yours
+const { allow, env } = await team.as('fixer').sandboxPolicy()
+// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } }, env })   // yours
 ```
 
 ### fetch
