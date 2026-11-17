@@ -58,7 +58,14 @@ export type ProviderSender = { name: string; avatar: string | null; attribution?
  * `deployments` comes with Vercel's deployment comment, whose markdown lists them a line each,
  * for a platform that lays them out itself (Slack's table).
  */
-export type ProviderPost = { markdown: string; files?: ProviderFile[]; as?: ProviderSender; deployments?: VercelDeployment[] }
+export type ProviderPost = {
+  markdown: string
+  files?: ProviderFile[]
+  as?: ProviderSender
+  deployments?: VercelDeployment[]
+  /** Written on another platform, not on the board: markup in it that notifies people here is the platform's to keep inert. */
+  external?: boolean
+}
 export type { VercelDeployment }
 export type ProviderDelivery = { thread: string; message: string; files?: string[] }
 export type ProviderOptions = {

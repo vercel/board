@@ -1005,6 +1005,21 @@ describe('sync', () => {
     expect(posted).not.toContain('| Project |')
   })
 
+  it('keeps a GitHub comment from pinging a Slack channel or group, and lets a board author ping one', async () => {
+    const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const pr = { number: 44, title: 'Page me', html_url: 'https://github.com/vercel/board/pull/44' }
+    await webhook('github', { action: 'opened', repository: { full_name: 'vercel/board' }, sender: { id: 42, login: 'grace' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'ping-opened' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    await webhook('github', { type: 'message', threadId: 'github:vercel/board:44', id: 'c1', text: 'cc <!channel> and <!subteam^S1|oncall>', user: '42', name: 'grace' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(JSON.parse(s.posts[0]!.text).markdown).not.toMatch(/<!(channel|subteam)/)
+    const [root] = await read(julian, 'prs')
+    await julian('POST', '/messages', { re: root!.id, text: 'paging <!subteam^S1|oncall>' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(JSON.parse(s.posts[1]!.text).markdown).toContain('<!subteam^S1|oncall>')
+  })
+
   it("shows Vercel's deployment comment in Slack as Vercel's own table, one message that follows Vercel's edits, where board has a Slack client to lay it out with", async () => {
     const posted: { text: string; blocks: { type: string; text?: string; rows?: unknown[][] }[] }[] = []
     const updated: ({ ts: string } & (typeof posted)[number])[] = []

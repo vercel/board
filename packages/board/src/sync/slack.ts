@@ -225,9 +225,11 @@ const attribute = (attrs: string, name: string) => new RegExp(`\\s${name}\\s*=\\
 /**
  * Slack's `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^…>` notify a whole channel or user
  * group. Text from other platforms (a GitHub comment) isn't allowed to ping them, so a word joiner
- * breaks the markup; the text reads the same. Board's own mentions are `<@U…>`, never `<!…>`.
+ * breaks the markup; the text reads the same. Code keeps its text, as Slack doesn't act on it there.
+ * A message written on the board isn't touched: its author may mean to ping a group.
  */
-export const withoutBroadcasts = (markdown: string): string => markdown.replace(/<!(?=[a-z^])/gi, '<\u2060!')
+export const withoutBroadcasts = (markdown: string): string =>
+  markdown.replace(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|``[^\n]*?``|`[^`\n]+`)|<!(?=[a-z^])/gi, (_match, code: string | undefined) => code ?? '<\u2060!')
 
 /** GitHub's markdown allows inline HTML, which Slack shows as raw tags: as markdown instead, outside code. */
 export function withoutHtml(markdown: string): string {
@@ -908,8 +910,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
    * the app, label and all.
    */
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
-    const { as, deployments, ...given } = body
-    const post = { ...given, markdown: withoutBroadcasts(withoutHtml(given.markdown)) }
+    const { as, deployments, external, ...given } = body
+    const html = withoutHtml(given.markdown)
+    const post = { ...given, markdown: external ? withoutBroadcasts(html) : html }
     if (deployments && !post.files?.length) {
       const laidOut = await this.postDeployments(target, as, post.markdown, deployments)
       if (laidOut) return laidOut
@@ -973,8 +976,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
 
   /** An edit keeps the label out only where the message went out under its author's name. */
   override async edit(thread: string, message: string, body: ProviderPost) {
-    const { as, deployments, ...given } = body
-    const post = { ...given, markdown: withoutBroadcasts(withoutHtml(given.markdown)) }
+    const { as, deployments, external, ...given } = body
+    const html = withoutHtml(given.markdown)
+    const post = { ...given, markdown: external ? withoutBroadcasts(html) : html }
     // Only an app that may name a message's sender ever sent one under a name.
     const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as) : false
     const edited = named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post

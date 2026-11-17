@@ -902,7 +902,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const key = keyOf(target)
     const { markdown, ...rest } = await render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
-    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...rest }
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...rest, external: message.from !== null && message.from !== 'board' }
   }
 
   async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {
