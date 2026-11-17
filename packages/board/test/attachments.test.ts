@@ -41,6 +41,18 @@ describe('attachments', () => {
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(PNG)
   })
 
+  it('stores a name without a leading dot or invisible characters, so it downloads as no dotfile and shows its real extension', async () => {
+    const { client } = await setup()
+    const named = async (name: string) => (await client.upload({ data: PNG, name, type: 'image/png' })).name
+    expect(await named('.npmrc')).toBe('npmrc')
+    expect(await named('.. .envrc')).toBe('envrc')
+    expect(await named('invoice\u202efdp.exe')).toBe('invoicefdp.exe')
+    expect(await named('shot\u200b.png')).toBe('shot.png')
+    expect(await named('two\u2028lines.png')).toBe('twolines.png')
+    expect(await named('\ufeff...')).toBe('file')
+    expect(await named('after fix.png')).toBe('after fix.png')
+  })
+
   it('mints no id that starts with "-", which a command line reads as a flag, and still serves those it did', async () => {
     const blob = memoryBlob()
     const { client } = await setup({ blob })

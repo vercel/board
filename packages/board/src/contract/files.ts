@@ -47,9 +47,9 @@ export function typeOf(name: string): string {
   return (dot > 0 && TYPES[name.slice(dot).toLowerCase()]) || 'application/octet-stream'
 }
 
-/** `shot.png`, as the board stores a name: no paths, no control characters. */
+/** `shot.png`, as the board stores a name: no paths, no control or invisible formatting characters, and no leading dot, so a download can't land as a dotfile or show a disguised extension. */
 export function fileName(name: string | null): string {
-  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '').trim().replace(/^[.\s]+/, '')
   return base.slice(0, 255) || 'file'
 }
 
