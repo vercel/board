@@ -48,7 +48,11 @@ const DISCOVERY_TIMEOUT_MS = 5000
  */
 function keysFor(iss: string): Promise<JWTVerifyGetKey> {
   const cached = remoteKeys.get(iss)
-  if (cached) return Promise.resolve(cached)
+  if (cached) {
+    remoteKeys.delete(iss)
+    remoteKeys.set(iss, cached)
+    return Promise.resolve(cached)
+  }
   let pending = loading.get(iss)
   if (!pending) {
     pending = discover(iss).finally(() => loading.delete(iss))
