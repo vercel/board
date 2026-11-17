@@ -51,7 +51,7 @@ export type SlackClient = {
   }
   /** Says which scopes the app has (`response_metadata.scopes`, from Slack's `x-oauth-scopes`). */
   /** Also whose a token is (`user_id`), for a person's own. */
-  auth?: { test(args?: Record<string, unknown>): Promise<{ user_id?: string; user?: string; response_metadata?: { scopes?: string[] } }> }
+  auth?: { test(args?: Record<string, unknown>): Promise<{ user_id?: string; user?: string; team_id?: string; response_metadata?: { scopes?: string[] } }> }
 }
 
 type SlackPost = {
@@ -279,6 +279,8 @@ type SlackUser = {
   is_ultra_restricted?: boolean
   /** Someone from another organization, in a Slack Connect channel. */
   is_stranger?: boolean
+  /** The workspace they belong to: the app's own for its people, another's for a Slack Connect member. */
+  team_id?: string
   profile?: { display_name?: string; real_name?: string; image_72?: string; image_48?: string }
 }
 
@@ -721,12 +723,17 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const [, at, root] = linker.thread.split(':')
         const linkingMessage = at && root ? one(at, root, linker.message).catch(() => undefined) : Promise.resolve(undefined)
         // Whoever posted the link, as Slack knows them: an app or the board's own message passes, a
-        // person who is a guest or from another organization, or one Slack won't say, doesn't.
+        // person who is a guest or from another workspace, or one Slack won't say, doesn't.
         const posterMayRead = async () => {
           const poster = (await linkingMessage)?.user
           if (!poster) return (await linkingMessage) !== undefined
           const user = (await web.users?.info({ user: poster }).catch(() => undefined))?.user
-          return !!user && (!!user.is_bot || !(user.is_restricted || user.is_ultra_restricted || user.is_stranger))
+          if (!user) return false
+          if (user.is_bot) return true
+          if (user.is_restricted || user.is_ultra_restricted || user.is_stranger) return false
+          // A Slack Connect member of a shared channel belongs to another workspace, whatever else Slack flags.
+          const team = (await web.auth?.test().catch(() => undefined))?.team_id
+          return !!team && user.team_id === team
         }
         let found: SlackMessage | undefined
         let unavailable = 'message_not_found'

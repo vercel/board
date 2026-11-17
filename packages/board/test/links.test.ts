@@ -20,11 +20,13 @@ const withPoster = (replies: NonNullable<SlackClient['conversations']['replies']
     return read?.messages?.some((message) => message.ts === args.oldest) ? read : { messages: [{ ts: args.oldest, user: 'U_JB', text: '' }] }
   }
 /** Who Slack says U_JB is: a full member of the workspace, unless a test says otherwise. */
-const member: NonNullable<SlackClient['users']> = { info: async () => ({ user: { id: 'U_JB' } }) }
+const member: NonNullable<SlackClient['users']> = { info: async () => ({ user: { id: 'U_JB', team_id: 'T1' } }) }
+/** The app's own workspace. */
+const auth = { test: async () => ({ team_id: 'T1' }) }
 
 function setup(client?: Partial<SlackClient['conversations']>, users: SlackClient['users'] = member) {
   const web = client
-    ? { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}), ...client, ...(client.replies ? { replies: withPoster(client.replies) } : {}) }, users }
+    ? { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}), ...client, ...(client.replies ? { replies: withPoster(client.replies) } : {}) }, users, auth }
     : undefined
   const s = fakePlatform('slack', web ? withSlackClient(web, false) : undefined)
   const board = testBoard({
@@ -161,7 +163,7 @@ describe('slack message links', () => {
 
   it('reads an unsynced message from Slack when no unfurl came', async () => {
     const replies = vi.fn(async () => ({ messages: [{ ts: TS, user: 'U_ADA', text: 'the root, in <#C9>' }] }))
-    const users = { info: vi.fn(async () => ({ user: { real_name: 'Ada Lovelace' } })) }
+    const users = { info: vi.fn(async () => ({ user: { real_name: 'Ada Lovelace', team_id: 'T1' } })) }
     const { board, webhook } = setup({ replies, info: joined }, users)
     const julian = caller(board.fetch, await personToken())
     await webhook(linking('1791322999.000003', permalink('C9')))
@@ -207,6 +209,7 @@ describe('slack message links', () => {
     ['a guest', { is_restricted: true }],
     ['a single-channel guest', { is_ultra_restricted: true }],
     ['someone from another organization', { is_stranger: true }],
+    ['a Slack Connect member of another workspace', { team_id: 'T9' }],
     ['someone Slack will not name', null],
   ])('reads nothing from a public channel for %s who posted the link', async (_who, user) => {
     const replies = vi.fn(async () => ({ messages: [{ ts: TS, user: 'U_ADA', text: 'only members were in this channel' }] }))
