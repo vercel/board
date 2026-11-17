@@ -1,30 +1,20 @@
-import { Check, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
+import { ListTodo, PanelLeftOpen, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { ChannelView, InboxEntry, Me, MessageView } from '../../api/routes.ts'
-import { who } from '../../cli/format.ts'
+import type { MessageView, SyncedView } from '../../api/routes.ts'
 import * as board from './board.ts'
+import { setEditing } from './chrome.ts'
 import { Composer } from './composer.tsx'
 import { Feed, Toasts } from './feed.tsx'
-import { Avatar, Messages, Pendings, type RowOptions } from './message.tsx'
-import { Ago, here, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
+import { Messages, Pendings, type RowOptions } from './message.tsx'
+import { here, Link, navigate, route, useLocation, useNow, useTypeToFocus } from './nav.tsx'
+import { Settings } from './settings.tsx'
+import { Sidebar } from './sidebar.tsx'
+import { actorFor, TaskCard, taskIds } from './task.tsx'
+import { Tasks } from './tasks.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
-import { byWritten, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
-import { ContextMenuArea, Menu, MenuItem, MenuSeparator, ResizeHandle, type KnownLabels } from './ui.tsx'
-
-type Route = { view: 'activity' } | { view: 'channel'; channel: string } | { view: 'inbox'; key: string } | { view: 'missing' }
-
-function route(path: string): Route {
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(path)
-  } catch {
-    return { view: 'missing' }
-  }
-  if (decoded === '/') return { view: 'activity' }
-  if (decoded.startsWith('/c/') && decoded.length > 3) return { view: 'channel', channel: decoded.slice(3) }
-  if (decoded.startsWith('/inbox/') && decoded.length > 7) return { view: 'inbox', key: decoded.slice(7) }
-  return { view: 'missing' }
-}
+import { byWritten, channelRows, channelThreads, filtering, isTask, knownLabels, listingOf, matches, profilesOf, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
+import { Ask, Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
+import { boardWords, cadence, firstLine, until } from './words.ts'
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
 
@@ -114,6 +104,32 @@ function usePane() {
   }
 }
 
+/** Who you post as, asked before anything loads: the page acts as its app, so you write as a profile of it, `ada via factory`. */
+function NameGate({ done }: { done: () => void }) {
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <div className="boot">
+      <form
+        className="name-gate"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const name = new FormData(event.currentTarget).get('profile')?.toString().trim()
+          if (!name) return
+          void board.setProfile({ name }).then((took) => (took ? done() : setError(`couldn't post as ${name}`)))
+        }}
+      >
+        <label htmlFor="profile">Who's posting?</label>
+        <p>You'll write as a profile of this app, shown as your name via it.</p>
+        <input id="profile" name="profile" autoFocus placeholder="your name, e.g. ada" pattern="[A-Za-z][A-Za-z0-9\-]{0,31}" title="a letter, then up to 31 letters, numbers, and hyphens" required />
+        {error && <p className="error">{error}</p>}
+        <button type="submit" className="send">
+          continue
+        </button>
+      </form>
+    </div>
+  )
+}
+
 // --- the app -----------------------------------------------------------------------
 
 export function App() {
@@ -123,15 +139,23 @@ export function App() {
   const [failed, setFailed] = useState<string | null>(null)
   const sidebar = useSidebar()
   const pane = usePane()
+  // On a narrow page the sidebar is out of the way until it's asked for, and goes again once you've picked.
+  const [nav, setNav] = useState(false)
+  useEffect(() => setNav(false), [where.path])
 
+  // Served from an app, the page reads nothing until you've named who you post as.
+  const [naming, setNaming] = useState(board.needsName)
   useEffect(() => {
-    board.boot().catch((error: Error) => setFailed(error.message))
-  }, [])
+    if (!naming) board.boot().catch((error: Error) => setFailed(error.message))
+  }, [naming])
 
-  // Old links: /t/12 is the thread pane over the activity view.
+  // Old links: /t/12 is the thread pane over the activity view, and a sync entry's inbox is in settings.
   useEffect(() => {
     const old = /^\/t\/(\d+)$/.exec(where.path)
     if (old) navigate(`/?thread=${old[1]}`, true)
+    const inbox = /^\/inbox\/(.+)$/.exec(where.path)
+    if (inbox) navigate(`/settings/sync/${inbox[1]}`, true)
+    if (where.path === '/settings') navigate('/settings/access', true)
   }, [where.path])
 
   useEffect(() => {
@@ -145,31 +169,51 @@ export function App() {
   }, [where])
 
   const current = route(where.path)
+  // The tab says which board too, so two inspectors side by side tell apart.
+  const named = boardWords(state.discovery).name
   useEffect(() => {
-    document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'inbox' ? `inbox · ${current.key}` : 'activity'} · board`
-  }, [where.path])
+    document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'settings' ? `${current.section} · settings` : current.view === 'missing' ? 'nothing here' : current.view} · ${named}`
+  }, [where.path, named])
 
   const known = useMemo(() => knownLabels(state), [state.messages])
+  const viewer = useMemo(() => (state.me ? board.viewerOf(state.me) : null), [state.me])
 
+  if (naming) return <NameGate done={() => setNaming(false)} />
   if (failed) return <div className="boot error">error: {failed}</div>
-  if (!state.me) return <div className="boot">connecting…</div>
+  if (!state.me || !viewer) return <div className="boot">connecting…</div>
 
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
-  const options: RowOptions = { me: state.me.actor, now, known, platforms, openThread: (id) => navigate(here({ thread: id })) }
+  const names = namesOf(state)
+  const options: RowOptions = { me: state.me.actor, now, known, platforms, board: state, schemas: state.schemas, names, openThread: (id) => navigate(here({ thread: id })) }
   const filter = where.filter
   const setFilter = (next: Filter) => navigate(here({ filter: next }), true)
   const sources = (state.discovery?.sync ?? []).map((entry) => entry.key)
   const filters = { filter, setFilter, sources, known }
-  const expand = sidebar.collapsed ? (
-    <button className="tool" title="show the sidebar" onClick={() => sidebar.collapse(false)}>
+  const expand = (
+    <button
+      className={`tool${sidebar.collapsed ? '' : ' only-narrow'}`}
+      title="show the sidebar"
+      onClick={() => {
+        sidebar.collapse(false)
+        setNav(true)
+      }}
+    >
       <PanelLeftOpen size={15} strokeWidth={1.75} />
     </button>
-  ) : null
+  )
   return (
-    <div className="shell">
+    <div className={`shell${nav ? ' nav' : ''}`}>
+      {nav && <div className="scrim" onClick={() => setNav(false)} />}
       {!sidebar.collapsed && (
         <nav className="sidebar" style={{ width: sidebar.width, opacity: sidebar.fade }}>
-          <Sidebar state={state} current={current} onCollapse={() => sidebar.collapse(true)} />
+          <Sidebar
+            state={state}
+            current={current}
+            onCollapse={() => {
+              if (nav) setNav(false)
+              else sidebar.collapse(true)
+            }}
+          />
           <ResizeHandle side="right" label="resize the sidebar" onDrag={sidebar.drag} onDone={sidebar.done} onStep={sidebar.step} />
         </nav>
       )}
@@ -178,7 +222,8 @@ export function App() {
         {current.view === 'channel' && (
           <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} filters={filters} />
         )}
-        {current.view === 'inbox' && <Inbox key={current.key} entry={current.key} now={now} lead={expand} />}
+        {current.view === 'tasks' && <Tasks state={state} now={now} lead={expand} where={where} known={known} />}
+        {current.view === 'settings' && <Settings state={state} viewer={viewer} now={now} lead={expand} where={where} section={current.section} open={current.open} />}
         {current.view === 'missing' && (
           <>
             <Header title="nothing here" lead={expand} />
@@ -189,219 +234,10 @@ export function App() {
       {where.thread !== null && (
         <aside className="pane" style={{ width: pane.width }}>
           <ResizeHandle side="left" label="resize the thread" onDrag={pane.drag} onDone={pane.done} onStep={pane.step} />
-          <ThreadPane key={where.thread} id={where.thread} state={state} now={now} known={known} />
+          <ThreadPane key={where.thread} id={where.thread} state={state} viewer={viewer} now={now} known={known} />
         </aside>
       )}
       <Toasts />
-    </div>
-  )
-}
-
-function Header(props: { title: string; meta?: string; live?: State['live']; lead?: ReactNode; children?: ReactNode }) {
-  return (
-    <header className="header">
-      {props.lead}
-      <span className="title">{props.title}</span>
-      {props.meta && <span className="meta">{props.meta}</span>}
-      <span className="spacer" />
-      {props.children}
-      {props.live && (
-        <span className={`live ${props.live}`} title={props.live === 'live' ? 'receiving board events' : 'the stream reconnects on its own'}>
-          <i />
-          {props.live === 'live' ? 'live' : props.live}
-        </span>
-      )}
-    </header>
-  )
-}
-
-// --- sidebar -------------------------------------------------------------------------
-
-function useSeen(state: State, current: Route): Record<string, number> {
-  const storage = `board.seen:${state.discovery?.url ?? location.host}`
-  const [seen, setSeen] = useState<Record<string, number>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(storage) ?? 'null') ?? {}
-    } catch {
-      return {}
-    }
-  })
-  const save = (next: Record<string, number>) => {
-    setSeen(next)
-    try {
-      localStorage.setItem(storage, JSON.stringify(next))
-    } catch {}
-  }
-  // The first visit marks everything read; after that, dots mean news.
-  useEffect(() => {
-    const channels = Object.values(state.channels)
-    if (Object.keys(seen).length === 0 && channels.length > 0)
-      save(Object.fromEntries(channels.map((channel) => [channel.path, channel.lastIndex ?? 0])))
-  }, [state.channels])
-  useEffect(() => {
-    if (current.view !== 'channel') return
-    const channel = state.channels[current.channel]
-    if (channel?.lastIndex !== undefined && (seen[channel.path] ?? 0) < channel.lastIndex) save({ ...seen, [channel.path]: channel.lastIndex })
-  }, [current, state.channels])
-  return seen
-}
-
-function Sidebar({ state, current, onCollapse }: { state: State; current: Route; onCollapse: () => void }) {
-  const seen = useSeen(state, current)
-  const groups = useMemo(() => {
-    const out = new Map<string, ChannelView[]>()
-    for (const channel of Object.values(state.channels).sort((a, b) => a.path.localeCompare(b.path))) {
-      const at = channel.path.lastIndexOf('/')
-      const group = at === -1 ? 'channels' : channel.path.slice(0, at)
-      out.set(group, [...(out.get(group) ?? []), channel])
-    }
-    return [...out]
-  }, [state.channels])
-  const sync = state.discovery?.sync ?? []
-  const copy = (text: string) => void navigator.clipboard.writeText(text).then(() => board.toast(`copied ${text}`))
-  return (
-    <div className="sidebar-scroll">
-      <div className="brand">
-        <span>board</span>
-        <button className="tool" title="hide the sidebar" onClick={onCollapse}>
-          <PanelLeftClose size={15} strokeWidth={1.75} />
-        </button>
-      </div>
-      <Link to="/" className="item" current={current.view === 'activity'}>
-        <span>activity</span>
-      </Link>
-      {groups.map(([group, channels]) => (
-        <section key={group}>
-          <h2>{group}</h2>
-          {channels.map((channel) => {
-            const active = current.view === 'channel' && current.channel === channel.path
-            // Only where the board keeps a channel's last position: Vercel's API doesn't.
-            const unread = !active && (channel.lastIndex ?? 0) > (seen[channel.path] ?? Number.POSITIVE_INFINITY)
-            return (
-              <ContextMenuArea
-                key={channel.path}
-                menu={
-                  <>
-                    <MenuItem onClick={() => copy(channel.path)}>copy name</MenuItem>
-                    <MenuItem onClick={() => copy(`vb read ${channel.path}`)}>copy vb read command</MenuItem>
-                  </>
-                }
-              >
-                <Link to={`/c/${channel.path}`} className={`item${unread ? ' unread' : ''}`} current={active} title={channel.path}>
-                  <span className="name">#{channel.path.slice(channel.path.lastIndexOf('/') + 1)}</span>
-                  {unread ? <i className="dot" /> : channel.threads !== undefined ? <span className="count">{channel.threads}</span> : null}
-                </Link>
-              </ContextMenuArea>
-            )
-          })}
-        </section>
-      ))}
-      {sync.length > 0 && (
-        <section>
-          <h2>inbox</h2>
-          {sync.map((entry) => (
-            <Link key={entry.key} to={`/inbox/${entry.key}`} className="item" current={current.view === 'inbox' && current.key === entry.key}>
-              <span className="name">{entry.key}</span>
-              <span className="count">{entry.platform}</span>
-            </Link>
-          ))}
-        </section>
-      )}
-      <ProfileMenu me={state.me!} board={state.discovery?.url ?? ''} />
-    </div>
-  )
-}
-
-const AGENTS = ['claude', 'codex', 'grok']
-
-/** The profile `name`, with the avatar you last gave it. */
-function remembered(name: string): board.Profile {
-  const avatar = board.avatarOf(name)
-  return avatar ? { name, avatar } : { name }
-}
-
-/** Who you post as: yourself, one of your agents' profiles, or any profile you name, with the avatar you give it. */
-function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
-  // The profile you're naming or changing, as it starts out; null while the menu shows.
-  const [editing, setEditing] = useState<board.Profile | null>(null)
-  const person = me.via?.name ?? me.handle
-  const choose = (name: string | null) => void board.setProfile(name === null ? null : remembered(name))
-  if (editing)
-    return (
-      <form
-        className="whoami naming"
-        onSubmit={(event) => {
-          event.preventDefault()
-          const form = new FormData(event.currentTarget)
-          const name = form.get('profile')?.toString().trim()
-          const avatar = form.get('avatar')?.toString().trim()
-          if (name) void board.setProfile({ name, ...(avatar ? { avatar } : {}) })
-          setEditing(null)
-        }}
-        onKeyDown={(event) => event.key === 'Escape' && setEditing(null)}
-        // Leaving the form puts it away; moving between its fields doesn't.
-        onBlur={(event) => !event.currentTarget.contains(event.relatedTarget) && setEditing(null)}
-      >
-        <input
-          name="profile"
-          autoFocus
-          defaultValue={editing.name}
-          placeholder="profile name, e.g. reviewer"
-          pattern="[A-Za-z][A-Za-z0-9\-]{0,31}"
-          title="a letter, then up to 31 letters, numbers, and hyphens"
-          required
-        />
-        <input
-          name="avatar"
-          type="url"
-          defaultValue={editing.avatar ?? ''}
-          placeholder="avatar URL, https://… (optional)"
-          // What the board takes: https, or http on this machine.
-          pattern="https://.+|http://(localhost|127\.0\.0\.1)([:\/].*)?"
-          title="an https URL (http only on localhost)"
-        />
-        {/* Safari and Firefox don't focus a button you click: without this, the field's blur closes the form before the click. */}
-        <button type="submit" className="send small" onMouseDown={(event) => event.preventDefault()}>
-          post as this
-        </button>
-      </form>
-    )
-  const item = (label: string, profile: string | null) => (
-    <MenuItem onClick={() => choose(profile)}>
-      <span className="choice">
-        {label}
-        {me.profile === profile && <Check size={13} />}
-      </span>
-    </MenuItem>
-  )
-  return (
-    <div className="whoami-wrap" title={`${me.actor}\n${url}`}>
-      <Menu
-        className="whoami"
-        title="post as"
-        trigger={
-          <>
-            <Avatar name={who(me)} url={me.avatar} size={24} />
-            <span className="grow">
-              <span className="as">as {who(me)}</span>
-              <span className="faint url">{url.replace(/^https?:\/\//, '')}</span>
-            </span>
-            <ChevronsUpDown size={13} />
-          </>
-        }
-      >
-        {item(`${person} (you)`, null)}
-        {AGENTS.map((agent) => item(agent, agent))}
-        {me.profile !== null && !AGENTS.includes(me.profile) && item(me.profile, me.profile)}
-        <MenuSeparator />
-        {me.profile !== null && (
-          <MenuItem onClick={() => setEditing(remembered(me.profile!))}>
-            {me.profile}'s name and avatar…
-          </MenuItem>
-        )}
-        <MenuItem onClick={() => setEditing({ name: '' })}>another profile…</MenuItem>
-        {board.getProfile() !== undefined && <MenuItem onClick={() => void board.setProfile(undefined)}>as inspect started</MenuItem>}
-      </Menu>
     </div>
   )
 }
@@ -415,6 +251,18 @@ type Filters = { filter: Filter; setFilter: (filter: Filter) => void; sources: s
 
 function FilterControls({ filters }: { filters: Filters }) {
   return <FilterButton filter={filters.filter} onChange={filters.setFilter} sources={filters.sources} known={filters.known} />
+}
+
+const NAMES = new WeakMap<State['actors'], Record<string, string>>()
+/**
+ * Every actor the page knows, by ID, by their own name, which a mention of them reads as: the same
+ * record until one of them changes, so a row's text renders once. Not a hook: it's read after the
+ * views' early returns.
+ */
+function namesOf(state: State): Record<string, string> {
+  let names = NAMES.get(state.actors)
+  if (!names) NAMES.set(state.actors, (names = Object.fromEntries(Object.entries(state.actors).map(([id, actor]) => [id, actor.name]))))
+  return names
 }
 
 function Activity(props: { state: State; options: RowOptions; known: KnownLabels; lead: ReactNode; filters: Filters }) {
@@ -461,10 +309,11 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
         placeholder="start a thread…"
         known={known}
         channels={Object.keys(state.channels).sort()}
-        onSend={({ text, noSync, channel, labels, files }) => void board.send({ channel, re: null, text, noSync, labels, files })}
+        tasks={{ state }}
+        onSend={({ text, noSync, channel, labels, files, task, later }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(task ? { task } : {}), ...(later ? { later } : {}) })}
         onEditLast={() => {
           const mine = lastOwn(messages, state.me!.actor)
-          if (mine) board.setEditing(mine.id)
+          if (mine) setEditing(mine.id)
         }}
       />
     </>
@@ -483,14 +332,22 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   useEffect(() => {
     if (filtering(filter)) void board.loadFiltered(channel, filter)
   }, [channel, key])
-  const { threads: all, pending: posts } = useMemo(() => channelThreads(state, channel), [state.messages, state.ops, state.pending, state.actors, channel])
+  // The board's thread list, by latest activity; a filter, or a board from before `older`, the messages loaded.
+  const listed = !!listingOf(state, channel) && !filtering(filter)
+  const { threads: all, pending: posts } = useMemo(
+    () => (listed ? channelRows(state, channel) : channelThreads(state, channel)),
+    [state.messages, state.ops, state.pending, state.actors, state.listings, listed, channel],
+  )
   // A filtered channel shows the threads where anything matches.
   const threads = filtering(filter) ? all.filter((t) => matches(state, t.root, filter) || t.replies.some((r) => matches(state, r, filter))) : all
   const pending = filtering(filter) ? [] : posts
   const roots = threads.map((t) => t.root)
-  const replies = new Map(threads.map((t) => [t.root.id, t.replies]))
+  const summaries = new Map(threads.map((t) => [t.root.id, t.summary]))
   const info = state.channels[channel]
-  const newest = [...roots, ...threads.flatMap((t) => t.replies)].sort(byWritten).at(-1)?.id ?? ''
+  const newest = listed
+    ? (threads.at(-1)?.summary.last ?? threads.at(-1)?.root)?.id ?? ''
+    : [...roots, ...threads.flatMap((t) => t.replies)].sort(byWritten).at(-1)?.id ?? ''
+  const activeAt = (m: MessageView) => summaries.get(m.id)?.last?.createdAt ?? m.createdAt
   return (
     <>
       <Header
@@ -506,40 +363,99 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
         {roots.length === 0 && pending.length === 0 && (
           <p className="empty">{loading ? 'loading…' : filtering(filter) ? 'nothing matches these filters' : 'no messages yet: say something'}</p>
         )}
-        <Messages messages={roots} now={options.now} options={{ ...options, replies: (m) => replies.get(m.id) ?? [] }} />
-        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(replies.get(roots.at(-1)?.id ?? '')?.length ?? 0) > 0} />
+        <Messages messages={roots} now={options.now} options={{ ...options, summary: (m) => summaries.get(m.id) }} {...(listed ? { at: activeAt } : {})} />
+        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(summaries.get(roots.at(-1)?.id ?? '')?.count ?? 0) > 0} />
       </Feed>
       <Composer
         scope={`channel:${channel}`}
         role="main"
         placeholder={`message #${channel}…`}
         known={props.known}
-        onSend={({ text, noSync, labels, files }) => void board.send({ channel, re: null, text, noSync, labels, files })}
+        tasks={{ state }}
+        onSend={({ text, noSync, labels, files, task, later }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(task ? { task } : {}), ...(later ? { later } : {}) })}
         onEditLast={() => {
           const mine = lastOwn(roots, state.me!.actor)
-          if (mine) board.setEditing(mine.id)
+          if (mine) setEditing(mine.id)
         }}
       />
     </>
   )
 }
 
-function ThreadPane(props: { id: string; state: State; now: number; known: KnownLabels }) {
-  const { id, state } = props
+function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: number; known: KnownLabels }) {
+  const { id, state, viewer } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
     void board.loadThread(id).then(() => setMissing(!board.getState().messages[id]))
   }, [id])
   const t = useMemo(() => threadOf(state, id), [state.messages, state.ops, state.pending, state.actors, id])
+  // Where the thread's copies are, on the platforms it syncs with.
+  const [synced, setSynced] = useState<SyncedView['targets']>([])
+  useEffect(() => {
+    void board.loadSynced(id).then(setSynced)
+  }, [id])
+  const scheduled = threadSchedules(state, id)
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
-  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms }
+  const names = namesOf(state)
+  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names }
   return (
     <>
-      <Header title="thread" meta={t ? `in #${t.root.channel}` : undefined}>
+      <Header title={isTask(t?.root) ? 'task' : 'thread'} meta={t ? `in #${t.root.channel}` : undefined}>
+        {t && !isTask(t.root) && !t.root.deleted && viewer.may('label', t.root.channel) && (
+          <Ask
+            label={<ListTodo size={15} strokeWidth={1.75} />}
+            className="tool"
+            title="make this thread a task"
+            submit="make it a task"
+            note="You own it, and agents claim it."
+            fields={[
+              { name: 'needs', placeholder: 'needs: task IDs it waits for (optional)' },
+              { name: 'for', placeholder: 'for one of your profiles (optional)', items: profilesOf(state, viewer.principal) },
+            ]}
+            onSubmit={(values) => void board.makeTask(id, { needs: taskIds(values.needs ?? ''), for: values.for ? actorFor(viewer.principal, values.for) : null })}
+          />
+        )}
         <button className="tool" title="close (esc)" onClick={() => navigate(here({ thread: null }))}>
           <X size={15} strokeWidth={1.75} />
         </button>
       </Header>
+      {t && isTask(t.root) && <TaskCard root={t.root} state={state} viewer={viewer} />}
+      {(synced.length > 0 || scheduled.length > 0) && (
+        <dl className="facts thread-facts" {...nativeMenu}>
+          {synced.length > 0 && (
+            <>
+              <dt>synced</dt>
+              <dd className="copies">
+                {synced.map((copy) => (
+                  <span key={copy.target}>
+                    {copy.url ? (
+                      <a href={copy.url} target="_blank" rel="noreferrer" className="text-link">
+                        {copy.target}
+                      </a>
+                    ) : (
+                      copy.target
+                    )}
+                    {copy.undelivered && <span className="error-text"> didn't arrive: {copy.undelivered}</span>}
+                  </span>
+                ))}
+              </dd>
+            </>
+          )}
+          {scheduled.map((schedule) => (
+            <div key={schedule.id} className="fact">
+              <dt>later</dt>
+              <dd>
+                {schedule.next ? until(schedule.next, props.now) : ''} · {cadence(schedule)} · {firstLine(schedule.text)}{' '}
+                {(schedule.by.principal === viewer.principal || viewer.may('manage', schedule.channel)) && (
+                  <button className="clear" onClick={() => void board.cancelSchedule(schedule.id)}>
+                    cancel
+                  </button>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <Feed scope={`thread:${id}`} first={id} last={`${t?.replies.at(-1)?.id ?? id}+${t?.pending.length ?? 0}`}>
         {!t ? (
           <p className="empty">{missing ? 'no such thread' : 'loading…'}</p>
@@ -558,61 +474,13 @@ function ThreadPane(props: { id: string; state: State; now: number; known: Known
           role="thread"
           placeholder="reply to thread…"
           known={props.known}
-          onSend={({ text, noSync, labels, files }) => void board.send({ channel: t.root.channel, re: id, text, noSync, labels, files })}
+          onSend={({ text, noSync, labels, files, later }) => void board.send({ channel: t.root.channel, re: id, text, noSync, labels, files, ...(later ? { later } : {}) })}
           onEditLast={() => {
             const mine = lastOwn([t.root, ...t.replies], state.me!.actor)
-            if (mine) board.setEditing(mine.id)
+            if (mine) setEditing(mine.id)
           }}
         />
       )}
-    </>
-  )
-}
-
-/** Raw platform events: "did Slack even send it?" Not on the board's log, so not live. */
-function Inbox({ entry, now, lead }: { entry: string; now: number; lead: ReactNode }) {
-  const [events, setEvents] = useState<InboxEntry[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const load = () => {
-    setError(null)
-    board.loadInbox(entry).then(setEvents, (e: Error) => setError(e.message))
-  }
-  useEffect(load, [entry])
-  return (
-    <>
-      <Header title={`inbox · ${entry}`} meta="raw platform events, newest first" lead={lead}>
-        <button className="tool" title="refresh" onClick={load}>
-          <RefreshCw size={14} strokeWidth={1.75} />
-        </button>
-      </Header>
-      <div className="feed-wrap">
-        <div className="feed">
-          <div>
-            {error && <p className="error">error: {error}</p>}
-            {!error && events === null && <p className="empty">loading…</p>}
-            {events?.length === 0 && <p className="empty">no events yet</p>}
-            {events?.map((row) => {
-              const event = row.event as { kind: string; text?: string; type?: string; emoji?: string; author?: { handle?: string } }
-              return (
-                <div key={row.id} className="inbox-row">
-                  <Ago iso={row.createdAt} />
-                  <span>
-                    <span className="badge">{event.kind}</span>
-                  </span>
-                  <div>
-                    <div>
-                      <span className="author">{event.author?.handle ?? '—'}</span> {event.text ?? event.type ?? event.emoji ?? ''}
-                    </div>
-                    <pre>
-                      {row.channel} · {row.event.thread}
-                    </pre>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
     </>
   )
 }

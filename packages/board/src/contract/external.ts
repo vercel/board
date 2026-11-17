@@ -44,6 +44,8 @@ export const Link = z.object({
 })
 export type Link = z.infer<typeof Link>
 export const LINKS_PER_MESSAGE_MAX = 10
+/** The most platform users one message introduces to the board by mentioning them. */
+export const MENTIONED_PER_MESSAGE_MAX = 50
 
 export type Origin = z.infer<typeof Origin>
 
@@ -99,6 +101,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     files: z.array(ExternalFile).max(20).optional(),
     /** Platform messages it links to. Older events have none. */
     links: z.array(ExternalLink).max(LINKS_PER_MESSAGE_MAX).optional(),
+    /** The platform's users its text mentions, each written there as `@[<their id>]`. Older events have none. */
+    mentioned: z.array(ExternalAuthor).max(MENTIONED_PER_MESSAGE_MAX).optional(),
   }),
   z.object({
     kind: z.literal('edited'),
@@ -109,6 +113,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     links: z.array(ExternalLink).max(LINKS_PER_MESSAGE_MAX).optional(),
     /** Only the links changed (the platform sent what they say), so `text` isn't news. */
     linksOnly: z.boolean().optional(),
+    /** As a message's: who its text now mentions. */
+    mentioned: z.array(ExternalAuthor).max(MENTIONED_PER_MESSAGE_MAX).optional(),
   }),
   z.object({
     kind: z.literal('deleted'),

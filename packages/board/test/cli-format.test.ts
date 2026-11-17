@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatMessage, formatSchedule, formatThreads, formatThreadSummaries, principalFlags } from '../src/cli/format.ts'
-import type { MessageView, ScheduleView } from '../src/api/routes.ts'
+import { claimLine, formatEvent, formatMessage, formatSchedule, formatTasks, formatThreads, formatThreadSummaries, principalFlags } from '../src/cli/format.ts'
+import type { BoardEventView, MessageView, ScheduleView, TaskView } from '../src/api/routes.ts'
 
 const by = { actor: 'vercel:user:j', principal: 'vercel:user:j', profile: null }
 const author = { kind: 'person', handle: 'julian', name: 'Julian', avatar: null } as unknown as MessageView['author']
@@ -77,3 +77,62 @@ describe('grants', () => {
     expect(principalFlags({ kind: 'app', clientId: 'cl_ship', name: null })).toBe('--app cl_ship')
   })
 })
+
+describe('tasks', () => {
+  const now = Date.parse('2026-03-01T12:00:00.000Z')
+  const at = (ms: number) => new Date(now + ms).toISOString()
+  const holder = 'vercel:user:j+claude'
+  const task = (about: Partial<TaskView>): TaskView =>
+    ({ state: 'ready', owner: by.principal, for: null, needs: [], epoch: 1, claim: null, blocked: null, result: null, reason: null, ...about }) as unknown as TaskView
+  const root = (text: string, about: Partial<TaskView>, labels: Record<string, string> = {}) =>
+    ({
+      id: 812, channel: 'work', text, re: null, labels: { ...labels, 'board.task': about.state ?? 'ready' }, reactions: {}, by, from: null,
+      createdAt: at(-60_000), deleted: false, attachments: [], author, task: task(about),
+    }) as unknown as MessageView
+  const names = new Map([[holder, 'claude via julian']])
+  const row = (about: Partial<TaskView>, when = now) => formatMessage(root('fix CVE-123 in acme/web', about), { names, now: when }).split('\n').at(-1)
+
+  it('say how long a claim has left, to the second under a minute, and that a lease ran out once it has', () => {
+    const claimed = (until: string) => ({ state: 'claimed' as const, claim: { actor: holder, until } })
+    expect(row(claimed(at(12 * 60_000 + 20_000)))).toBe('      task  claimed by claude via julian · 12m left')
+    expect(row(claimed(at(44_200)))).toBe('      task  claimed by claude via julian · 45s left')
+    // A claim whose lease has passed is over, though the board hasn't said the task is ready yet.
+    expect(row(claimed(at(-1)))).toBe('      task  claimed by claude via julian · its lease ran out')
+    // Someone the reader has no name for shows by their ID, never as nobody.
+    expect(formatMessage(root('x', claimed(at(60_000))), { now }).split('\n').at(-1)).toBe(`      task  claimed by ${holder} · 1m left`)
+    expect(claimLine(root('fix CVE-123 in acme/web', claimed(at(900_000))), at(900_000), now + 400)).toBe('#812  yours for 15m  fix CVE-123 in acme/web')
+    expect(claimLine(root('fix CVE-123 in acme/web', claimed(at(30_000))), at(30_000), now + 400)).toBe('#812  yours for 30s  fix CVE-123 in acme/web')
+  })
+
+  it('list one a row in 80 columns: a long first line is cut, and how it ended takes the place of its labels', () => {
+    const long = 'fix the export that times out past ten thousand rows in acme/web'
+    const listed = formatTasks([
+      { message: root(long, { state: 'ready' }, { step: 'fix' }), replies: 0, last: null },
+      { message: { ...root('deploy it\nto production', { state: 'failed', reason: 'no credentials\nsee the log' }, { step: 'deploy' }), id: '813' }, replies: 2, last: null },
+    ]).split('\n')
+    expect(listed).toEqual([
+      `#812  ready      ${long.slice(0, 39)}…  step=fix`,
+      // Columns line up from one row to the next, so the second is padded to the first's width.
+      `#813  failed     ${'deploy it …'.padEnd(40)}  no credentials`,
+    ])
+    for (const line of listed) expect(line.length).toBeLessThanOrEqual(80)
+    // A long account of how it ended is cut to what the row has left: the rest is in its thread.
+    const reason = 'no production credentials in this sandbox, and none in the vault either'
+    const [failed] = formatTasks([{ message: root('deploy acme/web to production', { state: 'failed', reason }, { step: 'deploy' }), replies: 0, last: null }]).split('\n')
+    expect(failed).toBe(`#812  failed     deploy acme/web to production   ${reason.slice(0, 30)}…`)
+    expect(failed).toHaveLength(80)
+  })
+
+  it('print what the board did to one on its own, and a renewal for whoever follows receipts', () => {
+    const message = root('fix CVE-123 in acme/web', { state: 'ready' })
+    const actor = { id: holder, kind: 'profile', handle: 'julian/claude', name: 'claude', avatar: null, via: { name: 'julian', environment: null } }
+    const event = (type: string, payload: object, who?: object) => ({ cursor: '900', type, createdAt: at(0), payload, message, ...(who ? { actor: who } : {}) }) as unknown as BoardEventView
+    // No one ends a lease: the board does, when its time is up.
+    expect(formatEvent(event('task.expired', { message: '812', epoch: 1 }))).toBe('#812  work  task lease ran out')
+    expect(formatEvent(event('task.renewed', { message: '812', epoch: 1, until: at(900_000) }, actor))).toBe('#812  work  task renewed by claude via julian')
+    // What a task waits for, changed: the ones it waits for now, or that it waits for nothing.
+    expect(formatEvent(event('task.needs_changed', { id: '812', needs: ['810', '811'] }, actor))).toBe('#812  work  task needs #810 #811 by claude via julian')
+    expect(formatEvent(event('task.needs_changed', { id: '812', needs: [] }, actor))).toBe('#812  work  task needs nothing by claude via julian')
+  })
+})
+

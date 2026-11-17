@@ -3,7 +3,7 @@ import { boardContract } from '../contract/contract.ts'
 import { BOARD_SESSION, type BoardEvent } from '../contract/events.ts'
 import type { Message } from '../contract/folds.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
-import type { MessageFilter, MessageTables, Page } from '../store/types.ts'
+import type { MessageFilter, MessageTables, Page, ThreadsPage } from '../store/types.ts'
 import type { Access } from './access.ts'
 import type { BoardSession } from './a2.ts'
 import { linkedIds, type Reader } from './feed.ts'
@@ -117,10 +117,15 @@ export function createReads(tables: MessageTables, session: BoardSession, projec
       if (filter.channels?.length === 0) return { messages: [], position: await tables.position() }
       return tables.messages(filter, page)
     },
-    async threads(filter: MessageFilter, page: Page) {
+    async threads(filter: MessageFilter, page: ThreadsPage) {
+      catchUp()
+      if (filter.channels?.length === 0) return { threads: [], position: await tables.position(), ...(page.after === undefined ? { older: null } : {}) }
+      return tables.threads(filter, page)
+    },
+    async roots(filter: MessageFilter, page: Page) {
       catchUp()
       if (filter.channels?.length === 0) return { threads: [], position: await tables.position() }
-      return tables.threads(filter, page)
+      return tables.roots(filter, page)
     },
   }
 }

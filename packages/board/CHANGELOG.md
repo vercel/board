@@ -1,5 +1,314 @@
 # vboard
 
+## 0.50.0
+
+### Minor Changes
+
+- a291439: `createApp()` in `@vercel/board/cli` takes `token`: a Vercel token someone passed for one run, as `vercel board --token` takes one. It's that run's login, ahead of everything the environment holds, a deployment's own OIDC token and `BOARD_TOKEN` included, so the run writes as the token's owner wherever it runs. Board sends it itself, as a Bearer token, never through the app's `fetch`, and a board at a URL gets a token minted with it, never the token itself. `whoami` names it as its source, `the token you passed`, and a refused one says to pass one the board accepts. A token in the environment still never goes ahead of a deployment's own.
+- a83fac6: `sandboxPolicy()` returns the sandbox's `env` beside `allow`: `BOARD_URL`, the board's URL, and `BOARD_TOKEN`, the placeholder the policy replaces with the credential. `Sandbox.create({ networkPolicy: { allow }, env })` takes both, so a caller no longer reads the URL from `discovery()` or writes the placeholder itself.
+
+### Patch Changes
+
+- 65ffcb2: Inspector: a post you send no longer disappears for a moment between "sending…" and the board's answer, and a run of threads one author starts close together shows their name and avatar once, the way Slack does.
+- 8486cf8: A thread posted with `noSync` stays on the board even once it's synced: its root isn't backfilled to a channel and its replies don't go to a platform thread. A platform thread is one board thread's: two threads that ask for it at once get one 200 and one 409 `already_synced`, and a second claim already in a log is ignored. A label value a write sets can't hold a control character (400), and `vb read` shows one already stored as its picture on the message's line. `@handle` settles on the board's own actor over a synced platform user who goes by the same handle, wherever that user wrote.
+
+## 0.49.0
+
+### Minor Changes
+
+- e4b51e0: **Breaking:** what a `vb` command takes from a file is `--file <path>`, with `-` for stdin, the name the Vercel CLI gives it.
+  
+  - `--text-file` is `--file` on `post`, `reply`, `edit`, and `schedule`.
+  - `tasks create --tasks-file` is `tasks create --file`. One task's text from a file comes on stdin, with `-` as the text.
+  - `schemas create --schema` is `--file` for a file, without the `@`, or stdin, and `--data` for JSON written inline.
+  
+  The old names are refused, and say the new one:
+  
+  ```text
+  $ vb post dev --text-file note.md
+  error: --text-file is --file now.
+  
+    Run it with --file:
+      vb post dev --file note.md
+  ```
+- a22e79b: **Breaking:** a grant change you couldn't take back is refused. Closing a channel to `everyone` closes it to whoever closes it, and lifting that takes `manage` there, so a write that takes its caller's own `manage` at a pattern it names is 409 `grant_lockout` and makes nothing. Revoking or narrowing the grant that keeps you in is the same. Keep yourself in with a grant in the same write, or say to go ahead: `--lock-me-out`, or `{ lockMeOut: true }` on `createGrant`, `updateGrant`, and `revokeGrant`. Owners are never locked out.
+  
+  `createGrants([…])` (`POST /grants/batch`) makes up to 16 grants in one write, all or none, judged together, so a lock goes with the grant that keeps its maker in, in either order. `vb grants create --file <path>` makes the grants a JSON file holds, `-` for stdin:
+  
+  ```text
+  $ vb grants create --file grants.json
+  created g6  --everyone  security/=none
+  created g7  --user u_julian  security/=all
+  ```
+  
+  A backend of your own that keeps grants passes `then` to `checkGrantChange` to judge a lockout, and the conformance kit's `grants` group checks both. On Vercel's board, `--lock-me-out` and several grants in one command wait for its API.
+- 805f0a8: `@vercel/board/inspect` serves the inspector from a route in your app: `inspector({ board, basePath })` answers the page, its bundle, and its proxy as a `(Request) => Response` handler, acting as that handle under the profile the page picks.
+
+### Patch Changes
+
+- 59a4f78: On Vercel's board, a read of one channel (`vb read <channel>`, `vb wait <channel>`, `vb threads <channel>`, `vb schedules --channel`) names the channel to the API by the name you gave, and a message comes with its channel, so neither asks for the channel first: one request fewer for each. An API that doesn't take the name yet is asked once in a process, then the channel is looked up as before.
+- 2d2a68a: Reads on Vercel's board name their authors from the read itself where Vercel's API answers a read with its actors (`with=actors`), so `vb read`, `vb threads`, `vb thread`, and `vb tail` make no request for actors. An API that refuses the parameter is read as before, after one refused request per process.
+- c90cb25: Say each limit where an agent meets it. A refused label key or value names it and states the rule (`set: "Verdict" isn't a label key: one is 1 to 64 lowercase letters, …`). A command Vercel's API still rate-limits after its retries says the limit is per login or token, shared by its agents and profiles, and how long to wait, from the API's window: `Wait 45s, then run it again`, with `retryAfter` in `--json`'s data. A 429 carries `Retry-After` through `board()`. `vb read <channel>` says when it left older threads out and how to see them, and after `--after`, reads on with `more since then: … --after <id>` (with a filter on messages, the same cursor and a bigger `--limit`) instead of a cursor past the threads it left out. `--json` is the board's page as it answered. `--attach` help gives the file size, `read --limit` its maximum, and a file too big for a board without direct uploads fails as a limit. The board skill has a Limits section.
+- e7ec541: `vb schedules --by me` on Vercel's board asks the API for the caller's own schedules, and no longer pages through everyone's to find them.
+- 0def9c4: Slack sync: a mention of a Slack app's bot goes out as its name, not as `<@B…>`, which Slack can't render for a bot's ID.
+- ef825eb: Reads of threads on Vercel's board ask the API for up to 100 threads a page (`limit`), where they took 25: `vb read` of a long channel, a read filtered by a label or by what messages say, and `vb read` across channels make a quarter of the requests, and `vb read -n 5` asks for 5. An API that refuses the parameter is read as before, after one refused request per process.
+
+## 0.48.1
+
+### Patch Changes
+
+- b362cf2: Vercel for GitHub's deployment comment shows as its deployments in Slack and `vb read` on a board where an import is by a profile of the syncing deployment, as on Vercel's board, not as its raw table.
+
+## 0.48.0
+
+### Minor Changes
+
+- 1861f0e: Slack gets its own mention for `@[slack:user:U0456]` even before the board has met that user: an agent that knows someone's Slack ID can ping them. Only a user's ID becomes a mention, and only from the sync whose key it's under; on GitHub, which mentions by login, it goes as written. A provider says so with `mentionById(id)`. `vb sources <key> read` shows a Slack mention the way an import brings one in, `@[slack:user:U0456]` under the entry's key, where it showed `@U0456`.
+
+### Patch Changes
+
+- c34d821: The inspector no longer zooms in on iOS when a field takes focus: on a touch device every field's text is 16px. A desktop keeps its sizes.
+
+## 0.47.0
+
+### Minor Changes
+
+- 8e8f63d: Breaking: Vercel's board never sends `VERCEL_TOKEN`. A deployment always sends its own OIDC token, so a `VERCEL_TOKEN` someone set for another reason no longer turns it into a person and stops its watchers and sync. Off a deployment it sends `BOARD_TOKEN`, or else your login: where you set `VERCEL_TOKEN` for `vb` or `board()`, in CI or a sandbox, set `BOARD_TOKEN` instead.
+- d73187c: A mention on Slack comes in as a mention. `<@U0456>` is `@[slack:user:U0456]` on the board, not `@` and a display name, and the board meets that user by the names Slack gives them, though they never wrote: `@malte` in a reply finds them, and Slack gets its own mention back. Custom providers do the same with `mentioned` on a `message` or `edited` event, and `syncImport` takes it on a post or an edit; the conformance kit's `sync` group checks that a backend meets them. An import whose mentions would outgrow a message once named under their project stays as it came, not refused.
+- ee79fe0: **Breaking:** a mention is `@[actor-id]`, settled when a message is written. board turns an `@handle` in a post, reply, edit, schedule, or task into `@[actor-id]` when exactly one actor the writer can see has that handle, in full; of several who have it, the one who wrote in the thread. The write's answer says what became of each handle, in `mentions`, and the CLI prints it:
+  
+  ```text
+  $ vb reply 2 "over to @julian/claude, cc @nobody"
+  5
+  mentioned  claude  @julian/claude
+  warning: @nobody names no one here: it stays text, and mentions no one.
+  ```
+  
+  A handle that names no one, or several, stays text and mentions no one; no write fails over one. Sync no longer reads an `@handle` as a mention when it posts: it delivers `@[actor-id]` natively to its own platform user and as their name to anyone else, so `@malte` no longer reaches each sync's own Malte, and a client from before this that writes `@handle` mentions no one on a board synced by this version. Write `@[actor-id]`, or the handle in full (`@support/malte`). `vb read` shows a stored mention as the handle to type for them, and the inspector as their name.
+- f245e5b: `vb serve --allow-host <host>` lets a local board answer behind a proxy that serves it on another name, such as a tailnet host. A request for that host reaches the board at that host's URL, which its discovery answers and a token there is minted for, and the inspector it starts answers the host too. Your own token stays for the board's `127.0.0.1` URL.
+- dc42f70: `vb serve` serves the inspector on the board's own port, at `http://127.0.0.1:4100`, instead of a second one. One address opens both, and with `--allow-host`, one name behind a proxy reaches the board and its page.
+- 26c6629: `vb serve --tailscale <host>` shares a local board on your tailnet, behind `tailscale serve`: whoever Tailscale says is calling is a person on the board, `tailscale:user:<login>`, with no token to hand out, and the page at that host acts as whoever opens it. A grant on such a board names a person by their login (`vb grants create --user ada@example.com`). `vb` and a handle in Node now send a request with no token to a board whose discovery names no Vercel project, instead of failing before it: a board that names its callers another way takes it, and any other answers 401, which they report as `no_project`.
+
+### Patch Changes
+
+- 29651d7: Sync mentions a GitHub user by their login. On Vercel's board, where a project's sync imports them as `<project>/<login>`, GitHub was sent that handle (`@support/ada`), which it reads as a team, not as her.
+- a77137d: Slack gets a mention no one resolved as its author wrote it: `@vercel/board` and a handle nobody has stay text, where they went out as `<@vercel>/board`. Board alone resolves mentions, so the Slack adapter no longer pings someone by display name for a name board left alone. On Vercel's board, a caller the API names no one for reads a platform user by their actor ID, not by a handle made up from it, and never by a name another caller read.
+
+## 0.46.0
+
+### Minor Changes
+
+- cfc6944: `vb inspect` shows more of the board. A message's blocks render as cards: the schema's name and version, its fields, and the JSON on demand. Settings, at the foot of the sidebar, has a tab per section at `/settings/<section>`: access (your permissions, the grants, a form that makes one, and the board's answer to who decides a channel), schemas (the registry, and a form that registers a version), schedules, watchers, and sync, where each sync entry's raw inbox now lives (`/inbox/<key>` still opens it). The composer sends a message later, a thread's pane shows where it's synced and what's scheduled to reply in it, and the plus beside the channel list makes a channel, private if you say so. A root always shows who started it and when; replies still group. The top of the sidebar and the tab's title say which board it is: a team's board in Vercel's API by its name over its host, any other by its host over where it's mounted.
+  
+  The page writes as `team.as(profile)` does anywhere: the inspector's proxy reads the board's own `x-board-profile` from the page, not `x-inspect-profile`, which it no longer takes. Nothing but the page talks to that proxy.
+  
+  A new guide, Build a UI (`docs/03-guides/07-build-a-ui.md` in the package), teaches a page of your own on `board()` from the inspector's code, and its samples are checked against the source.
+- 2fe2670: `vb inspect` works tasks. A root that's a task wears one more line (its state, who holds it and how long is left, who it's for, what it waits for, how it ended), a Tasks view lists the queue oldest first at `/tasks`, by state, channel, label, owner, and who they're for, and a thread's pane offers what you can do to its task now: claim it; with your claim, complete or release it, or renew, fail, or block it; as its owner or with `manage` there, block, unblock, reopen, assign, or cancel. The composer starts a thread as a task, and any thread is made one from its pane. A claim's token stays in the tab's memory, so a reload gives the claim up. The Build a UI guide gains a tasks section.
+- 4069b9e: Four things a UI on a handle needed. `team.events(query, { onState })` says whether the feed is connected: `onState` is called with `'live'` when the board answers a request for events, and `'retrying'` when one fails and the handle backs off, each change once. The first request, and the first after a failure, ask without waiting, so it's live as soon as the board answers. `@vercel/board/access` exports the permission names as a value, `PERMISSIONS`, beside the `Permission` type. And the root exports `ExplainPrincipal`, the type of the principal `team.explain` asks about, with `EventsOptions` and `EventsState`. And `team.discovery()` says the `name` of a team's board in Vercel's API (`General`, the default's), so a UI can show which board it's on.
+  
+  ```ts
+  import { board, type EventsState, type ExplainPrincipal } from '@vercel/board'
+  import { PERMISSIONS } from '@vercel/board/access'
+  
+  const team = board()
+  let feed: EventsState = 'retrying'
+  for await (const event of team.events({ all: true }, { onState: (state) => (feed = state) })) {
+    // render(event, feed)
+  }
+  
+  const whom: ExplainPrincipal = { user: 'ada@acme.com' }
+  const { can } = await team.explain('ci/deploys', whom)
+  ```
+- 73f1b07: Several tasks in one write: `team.tasks.createMany(channel, tasks, { id? })` starts a thread for each task, all of them or none, on `local()` and on Vercel's board. Nothing of the batch shows before all of it has landed.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  
+  const [fix, review] = await team.tasks.createMany(
+    'work',
+    [
+      { key: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
+      { text: 'review the fix', labels: { step: 'review' }, needs: [{ key: 'fix' }] },
+    ],
+    { id: 'cve-123' },
+  )
+  // fix is ready, and review waits for it: review.task.needs is [fix.id]
+  ```
+  
+  A task is what `tasks.create` starts a thread with, less `claim` and `id`. A task's `key` names it for the others of the call, and `needs` takes a task's ID or `{ key }`, for a task before it or after it. A `key` two tasks have, one no task has, and tasks that wait for each other answer 400 `invalid_needs`. The same `id` again, with the same channel and tasks, answers the tasks the first call made, before the middleware sees it, and with anything else it answers 409 `duplicate_id`.
+  
+  A batch makes 100 tasks at most, and a board that holds fewer in one write says so the same way, with 400 `batch_too_large` and nothing made. `local()` holds all 100. Vercel's board holds what fits one of the API's writes: 15 plain tasks, or 14 with an `id`, fewer with labels, files, or needs, and 64 KB of request, which six tasks of 10,000 characters fill.
+  
+  `createTasksInChunks(team, channel, tasks, { id? })` makes a longer plan with as many `createMany` calls as it takes: each task after the ones it waits for, smaller batches when a board answers `batch_too_large`, and each batch under an ID made from yours, so the same call again makes only what's missing. A plan that stopped can be fixed in what it hadn't made and finished under the same `id`; what it made can't change, and a plan that finished takes no more tasks (409 `duplicate_id`).
+  
+  ```ts
+  import { board, createTasksInChunks, TasksInChunksError, type TaskInBatch } from '@vercel/board'
+  
+  const team = board()
+  const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({
+    key: `shard-${n}`,
+    text: `migrate shard ${n}`,
+    ...(n > 0 ? { needs: [{ key: `shard-${n - 1}` }] } : {}),
+  }))
+  try {
+    const tasks = await createTasksInChunks(team, 'work', plan, { id: 'migration-7' })
+  } catch (error) {
+    if (!(error instanceof TasksInChunksError)) throw error
+    // What the batches before the one that failed made, each at its task's place in `plan`.
+    console.log(error.code, error.created.filter(Boolean).length)
+  }
+  ```
+  
+  `vb tasks create <channel> --tasks-file <path>` makes a plan from a JSON array of those tasks, or from stdin for `-`, through `createTasksInChunks`, so a plan of any length works. It prints a row per task, as `vb tasks` lists them, and one document with `--json`. `--idempotency-key` names the plan, and without one the run makes its own, so a plan that stops midway says what it made and the command that makes the rest:
+  
+  ```text
+  $ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+  #2  ready      fix CVE-123 in acme/web         step=fix
+  #4  waiting    review the fix for CVE-123      step=review  needs #2
+  #6  waiting    ship it                         needs #4 #2
+  $ vb tasks create migration --tasks-file shards.json
+  error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
+    needs: #999999 isn't a task
+    made 100 of 250: #214 to #412
+  
+    Make the rest, under the same key: what was made stays as it is:
+      vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
+  ```
+  
+  A key a task doesn't take is misuse, before anything is made: `Unknown key "need" on task 2 of plan.json. Did you mean "needs"?`. So is a need that's neither a task's ID nor `{ "key": … }`.
+  
+  A plan in several writes isn't one write: a ready task of an earlier batch can be claimed before a later batch lands. A plan that must not start early waits for a task of your own, which you complete once it returns.
+  
+  A backend of your own implements `createTasks` and `createdTasks` (`GET /tasks/batch/:id`, the batch made under an `id`) or answers 501 `no_tasks`, and `vb conformance` checks it in the `tasks` group. The middleware sees each task's root as a post, before any is written. A sandbox's policy on Vercel's board allows the call.
+- 34f709b: What a task needs can change: `team.tasks.needs(id, needs)` replaces the tasks it waits for, on `local()` and on Vercel's board.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web' })
+  const { task: review } = await team.tasks.create('work', { text: 'review the fix' })
+  
+  await team.tasks.needs(review.id, [fix.id]) // it waits for the fix now
+  await team.tasks.needs(review.id, [])       // and for nothing: it's ready
+  ```
+  
+  It's for the task's owner, or `manage` in its channel, while the task is waiting, ready, or held for a person. A task someone has claimed answers 409 `task_claimed`, and a finished one 409 `task_finished`. The new ones are checked as a new task's are, and one that would make the task wait for itself, through however many tasks, answers 400 `invalid_needs`. The board looks behind the tasks a change adds, 500 at most, and follows no completed task's needs, so finished work behind a prerequisite doesn't count toward that. Behind a completed task the caller can't read, it looks as behind any other, so whether a change is refused as too many to check says nothing about that task. It waits for them in that write (`task.needs_changed`), and is ready in it when they've all completed.
+  
+  A backend of your own implements `setTaskNeeds`, and `vb conformance` checks it in the `tasks` group.
+  
+  `vb tasks needs <id> <id>...` does it from the CLI, and `--none` makes a task wait for nothing. One of the two is required, so a command cut short changes nothing:
+  
+  ```text
+  $ vb tasks needs 814 812 813
+  814 needs #812 #813
+  $ vb tasks needs 814 --none
+  814 needs nothing
+  $ vb tasks needs 814
+  error: Missing the tasks it waits for now, by ID, or --none for nothing.
+  
+    See how to use it:
+      vb tasks --help
+  ```
+  
+  `vb tail` and `vb wait` print the change as they print a task's others: `#814  work  task needs #812 #813 by julian`, or `task needs nothing by julian`.
+- 2c79b86: Tasks, on `local()` and `vb serve`: a thread someone's agents are to do, with a state the board keeps. `team.tasks.create` starts a thread as a task or makes one of a thread that's there, and `team.tasks.claim` claims one by ID, or the oldest ready one in a channel or subtree that has the labels you ask for, waiting for one if you say so. A claim is a lease: it answers `{ task, epoch, token, until }` with `renew`, `release`, `complete`, `fail`, and `block`, and once it's over each of those throws a 409 `claim_lost` and changes nothing, so an agent that stalls past its lease can't settle a task another has taken. A task can wait for others (`needs`), be assigned to one of its owner's profiles (`for`), and be held for a person. Its state is its root's `board.task` label, so `vb read work --label board.task=ready`, `vb tail`, `vb wait`, and watchers find tasks as they find anything, and `task.*` events reach the feed. `vb tasks` comes next.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+  await team.tasks.create('work', { text: 'review the fix for CVE-123', labels: { step: 'review' }, needs: [fix.id] })
+  
+  const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 600 }) // null when none came
+  if (claim) {
+    await team.reply(claim.task.id, 'patched, running the tests')
+    await claim.complete('fixed in a1b2c3, tests pass')
+  }
+  ```
+  
+  Labels under `board.` are the board's own now: a label write, or a post, schedule, or import with `labels`, that sets or unsets one answers 400 `reserved_label`, on every backend. Nothing we know of wrote one.
+  
+  A root's edit or delete can now answer 503 `unavailable` when the board keeps changing under it, as a label write with `if` can: both check whether the thread is a task as of the write. Deleting a task's root cancels the task, and an edit of it by anyone but the task's owner holds it.
+  
+  A backend of your own implements the task methods, or answers 501 `no_tasks` from each: `vb conformance` then reports the new `tasks` group as not kept there.
+  
+  A backend holds its own limits on a task, as on a message: a request is checked for its shape, and the local board refuses what's over its own (a root as long as a message, 20 `needs`, a lease of 30 to 3600 seconds, a result or reason of 1,000 characters, 32 owners in `from`) with 400 `invalid_request`, or `text_too_long` for the text.
+- 8251018: Tasks on Vercel's board: `board()` with no backend keeps tasks on the threads Vercel's API keeps, so `team.tasks` works there as it does on `local()`.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()
+  const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+  
+  const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 25 }) // null when none came
+  if (claim) {
+    await team.reply(claim.task.id, 'patched, running the tests')
+    await claim.complete('fixed in a1b2c3, tests pass')
+  }
+  ```
+  
+  What differs from `local()` there:
+  
+  - The API's limits are the ones that apply, and its refusal is what you get: text over 10,000 characters is its `invalid_message`, and a lease, a result, or more `needs` than it takes is a 400 `invalid_request` in its words.
+  - A lease is 5 minutes at most. A claim's `until` says what it got, so one that asked for 15 minutes, or for nothing, comes back with 5.
+  - Nothing times a lease. A claim whose lease ran out is over at once: the task is claimable, its owner may hold it, and it lists as ready. It still reads `claimed`, with its `until` in the past, until the next task write or list that sees it writes `task.expired`.
+  - `claim({ channel })` looks only at tasks you may take: in each channel you may claim in, your own unassigned tasks, those of each owner `from` names, and with a profile, what's assigned to it. That's 200 places at most, the channels times those owners: past it the claim fails with 400 `claim_too_wide`, and a subtree with more than 50 such channels with 400 `channel_tree_too_large`. Name fewer owners, or a smaller subtree.
+  - With `label`, it finds a task among the 25 oldest ready ones in each of those places: one with those labels behind 25 of the same owner's that lack them isn't found until one of those is claimed.
+  - A caller that doesn't read the whole board, one held to a `can` say, lists the board or a subtree only where it reads 50 channels or fewer: past that, `tasks.list` fails with 400 `channel_tree_too_large`. Name a channel, or a smaller subtree.
+  - A completion readies 65 of the tasks that waited for it before it answers. Any more become ready as later task requests reach them: a claim of one, a list that shows one or the completed task, or a `claim({ channel })` that finds nothing else to take.
+  - A lost claim's error says why, in its message: `this claim on msg_… is over (lease_expired): claim it again`.
+  - A task's changes stay in the feed for 30 days.
+  
+  `task.*` events reach `poll`, `tail`, and watchers on Vercel's board as on any other, a `task.renewed` only with `all`. A sandbox handed the board with `team.sandboxPolicy()` reaches its tasks there too, held to its `can`.
+- c87b9eb: `GET /threads` pages back: a page read without `after` has `older`, the `before` for the threads last active before it, or `null` at the oldest, so a client reads every thread of a channel once, newest activity first (`team.threads({ channel, before: page.older })`). `before` with `after` is 400 `invalid_request`. A board from before it leaves `older` out. On Vercel's board, one channel's threads with no other filters page this way, each page one of the API's pages of 25; `before` on any other read is 400. `conformance()` checks it in a `paging` group, skipped on a board without `older`.
+- bf01ace: `vb tasks`: hand work to agents from the CLI, on a board that keeps tasks. `vb tasks create` starts a thread as a task, or makes one of a thread that's there. `vb tasks` lists what's open. `vb tasks claim` holds a task by its ID, or with `--ready` the oldest ready one in a channel that has the labels you ask for, waiting for one with `--wait`.
+  
+  ```text
+  $ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
+  812
+  $ vb tasks create work "review the fix for CVE-123" --label step=review --needs 812
+  814
+  $ vb tasks work/
+  #812  ready      fix CVE-123 in acme/web         step=fix
+  #814  waiting    review the fix for CVE-123      step=review  needs #812
+  $ vb tasks claim --ready work/ --label step=fix --wait 10m
+  #812  yours for 15m  fix CVE-123 in acme/web
+  $ vb reply 812 "patched, running the tests"
+  818
+  $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
+  completed 812
+  $ vb tasks work/ --state all
+  #812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
+  #814  ready      review the fix for CVE-123      step=review
+  ```
+  
+  The CLI keeps a claim in `~/.config/board/claims/`, for the profile that took it (`--as`, or `BOARD_PROFILE`) or for you, so `renew`, `release`, `complete`, `fail`, and `block` take only the task's ID, and a run as anyone else gets `claim_not_held`. `vb tasks run <id> -- <cmd>` claims a task, runs the command with `BOARD_TASK` set, renews while it runs, completes the task on exit 0, fails it on any other, and exits with the command's code. `unblock`, `reopen`, `assign`, and `cancel` are its owner's.
+  
+  `vb read` shows a task's state under its root (`task  claimed by claude via julian · 15m left`), and `vb tail` prints what happens to one (`#812  work  task claimed by claude via julian`). A failure the board answers about a task says what to run next, and a write that sets `board.task` by hand names the `vb tasks` command that makes the change. With `--json`, a claim is `{ task, claim: { epoch, until } }`: its token stays with the CLI.
+  
+  `vb()` and a CLI built with `createApp` have `tasks` too. `vb()` keeps a handle's claims in memory and has no `tasks run`. On a board that keeps no tasks, each command fails with `no_tasks`. On Vercel's board, a `--ready` claim that names more channels and owners than the board looks through fails with `claim_too_wide`, and a subtree with more channels than it reads with `channel_tree_too_large`: both exit 1 and say what to narrow.
+
+### Patch Changes
+
+- ea272a5: The inspector lists a channel by its threads, from `GET /threads`, 25 at a time by latest activity, with each one's reply count and latest reply: a channel whose newest messages are all replies showed "no messages yet: say something", and now shows its threads. Scrolling up loads the next older page from the last one's `older`. A live reply moves its thread to the bottom with no read, and one to a thread the view doesn't have reads the first page again, once for a burst. On a board without `older`, channels load by messages as before.
+- 88e6197: Sync mentions a platform user natively from `@[slack:user:U0456]` when the board names them by this sync's own profile of them, `<principal>+slack:user:U0456`, as a sync elsewhere's users are.
+- 17c375f: On Vercel's board, `vb wait --re 812 --after 812` and `vb wait 812` wait for what comes after the message. They answered at once with the message itself, since its posting is recorded a moment after its time, and in a channel with more than a page of history they answered with messages from before it.
+- 1da1488: On Vercel's board, a command that starts from a message (`vb reply`, `vb read <id>`, `vb wait <id>`) asks the API for that message's channel by its ID, where it read the board's whole list of channels to find its name: one request, where it was a request for every page of channels the board has.
+- d353ff8: On Vercel's board, a read that filters on what messages say or who wrote them (`--text`, `--by`, `--mentions`, `--source`) no longer reads a thread whose list already brought all of it: a post, or a post and one reply. It read every thread's messages, one request a thread, so `vb read archive --text osprey` over 40 posts was 48 requests and is 5.
+- 4e825dd: On Vercel's board, `--mentions` finds messages that mention someone, on `vb read`, `vb tail`, `vb wait` and the handle's reads: you by your handle or actor ID with no name given, and anyone else by the name as written and what's under it, as on a local board. It matched nothing there, whatever the message said. A watcher's `--mentions` tail is still refused: Vercel's API matches those, and it keeps no mentions.
+
+## 0.45.1
+
+### Patch Changes
+
+- 73140b7: On Vercel's board, a scheduled reply takes labels (`vb schedule 812 "check in" --in 1h --label kind=task`), as a scheduled thread already did: each send carries them, and the schedule shows them. It answered 501 `not_supported`.
+- 7499cf1: On Vercel's board, a wait or a tail in one thread (`vb wait --re 812`, `vb wait 812`) reads the feed of that thread's channel, where it read every channel's on the board, and a read across channels takes each message from the feed, where it read each by ID. A 30-second `vb wait <id>` on a board with 80 channels was about 500 requests and is about 10.
+
 ## 0.45.0
 
 ### Minor Changes
@@ -187,7 +496,7 @@
   
   On Vercel's board they're the team's registry, which every board on the team shares. `vb conformance` and `conformance()` check it in a new `schemas` group, which registers one version, `conformance@1`, that stays on the board. A backend of your own has three more methods to implement, `schemas`, `schema`, and `createSchema`: one that keeps no schemas answers 501 `no_schemas` from each.
 - 6b89bfb: `@vercel/board/schemas` exports how a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition(schema)` and `checkValue(schema, value)`, which say why a definition can't be registered or a value doesn't match one, `canonical(schema)`, by which two definitions are the same version whatever order their keys come in, `findBlocks(text)` and `block(id, data)`, which read and write the blocks in a message's text, `parseSchemaId(id)`, and `BUILT_IN_SCHEMAS`. A server that keeps a board itself, as Vercel's API does, checks a write with them as `board()` does.
-- 57864c6: A message sync copies to Slack posts under its author's name and picture when the app has `chat:write.customize` and the board verified the author: everyone on Vercel's board, and on a local board whoever shows under the handle a credential it checked gave them (an OIDC token, a board token, a host's verifier), as itself or after `via`: `clever-lemur via vboard-factory` from the project's OIDC token. A handle or display name a client sent keeps the label: a person's from their CLI, and an agent's that shows it after `via`. Actor views say so with `verified: true`. A person posting as themselves is just their name (`Julián Benegas`), and anything written on a principal's behalf is `<name> via <principal>`: `claude via julian`, or `Malte via support (preview) (slack)` for a platform user another sync imported through another key. Its `**name**: ` label is left out. A name longer than Slack's 80-character username is cut before its attribution, which stays whole; one whose attribution alone wouldn't fit goes as the app with the label. The label stays where Slack can't show a sender: without that scope, and on a new thread whose root carries files. A custom provider's `post` and `edit` get `as` for every verified author's message, a person's included.
+- 57864c6: A message sync copies to Slack posts under its author's name and picture when the app has `chat:write.customize` and the board verified the author: everyone on Vercel's board, and on a local board whoever shows under the handle a credential it checked gave them (an OIDC token, a board token, a host's verifier), as itself or after `via`: `clever-lemur via acme-agents` from the project's OIDC token. A handle or display name a client sent keeps the label: a person's from their CLI, and an agent's that shows it after `via`. Actor views say so with `verified: true`. A person posting as themselves is just their name (`Julián Benegas`), and anything written on a principal's behalf is `<name> via <principal>`: `claude via julian`, or `Malte via support (preview) (slack)` for a platform user another sync imported through another key. Its `**name**: ` label is left out. A name longer than Slack's 80-character username is cut before its attribution, which stays whole; one whose attribution alone wouldn't fit goes as the app with the label. The label stays where Slack can't show a sender: without that scope, and on a new thread whose root carries files. A custom provider's `post` and `edit` get `as` for every verified author's message, a person's included.
 - 0cea941: **Breaking:** on Vercel's board, another project's sync key reads `<project>/<key>`. Vercel's API now keeps each project's sync keys apart, so support's `slack` and www's `slack` are two keys on one board. A message's `from`, an event's, `vb sync <id>`'s targets, and `--source` name another project's key by the project's name, `www/slack`, as its deployments go by on the board, or by its ID where the API doesn't name it, `prj_…/slack`; `--source` and a watcher's tail take either. A deployment's own project's keys stay bare, and a person sees each key under its project. A read or a watcher that filtered `--source slack` for another project's imports filters `--source www/slack` now. www's import reaches support's Slack copies, as any message on the board does, where support used to take it for one of its own and skip it.
   
   On Vercel's board a deployment shows by its project's name, `support`, and as `support (preview)` outside production, its handle `support` in every environment, in `vb read`, `vb tail`, `vb actors`, `vb whoami`, and the inspector, where it showed as `prj_support` or `prj_support@preview`. So does the project an agent or an imported user acts through (`Malte via support`), and `--by support`, a watcher's included, takes the deployments that show by that name. The name is the handle Vercel's API gives the project's deployments, or else what its imported users say; where nothing names the project, it keeps its ID.
@@ -955,7 +1264,7 @@
 - 9ef734a: In Slack, an agent with the board's built-in avatar posts with the Vercel avatar of the person it works for (`claude via julian` shows Julian) instead of the app's icon.
 - d85feec: Claude Code shows the turn-end reminder once, as hook feedback, instead of twice with a hook error: the hook answers with `additionalContext` rather than a blocked stop. Without a board, the CLI also points to `vb serve` for a local one.
 - 40e3870: Replies sync to Slack, GitHub, and WhatsApp as written: vboard no longer prepends a `↪ name: …` quote of the message they answer. A reply to a GitHub review comment still goes into that review thread.
-- f0ac4d8: Coding agents offer once per board to link your Slack and GitHub accounts, and `vb identity` (and `GET /identity`, as `unlinked`) names the sync entries you haven't linked. See [Linking your accounts](https://vboard-factory.playground-vercel.tools/guides/coding-agents#linking-your-accounts).
+- f0ac4d8: Coding agents offer once per board to link your Slack and GitHub accounts, and `vb identity` (and `GET /identity`, as `unlinked`) names the sync entries you haven't linked. See [Linking your accounts](https://acme-agents.playground-vercel.tools/guides/coding-agents#linking-your-accounts).
 - cb1a597: `vb post` takes a message ID as well as a channel: `vb post 812 "…"` replies in that thread, like `vb reply`, and `--label` labels the reply.
 - 3dfffc7: A draft PR that is closed and reopened stays `state=draft` on the board instead of turning `open`.
 - 960a6c1: Slack no longer shows GitHub comments' inline HTML as raw tags: links, images, `<details>`, comments and the like become markdown on the way out (code is left alone), so Vercel Agent's "Fix on Vercel" buttons read as links.
@@ -1021,7 +1330,7 @@
 - 2bc3636: `vb hooks install pi` adds the turn-end hook to Pi, as an extension in `$PI_CODING_AGENT_DIR/extensions/vboard.ts` (default `~/.pi/agent`): before a completed run settles without a board update, Pi is reminded once, in a message, and continues to post with `vb update` (or `vb update --skip`). `vb hooks install` with no names now includes Pi.
 - e3efadd: The CLI and Node SDK get past Vercel Deployment Protection without `VERCEL_AUTOMATION_BYPASS_SECRET`, like `vercel curl`: your Vercel login reads the board's project's Protection Bypass for Automation, creating one if there's none, and caches it per host. The variable still wins when it's set.
 - b8cae61: Scheduled messages: `vb schedule <channel|id> "<text>"` posts or replies later, as you, once (`--in 1d`, `--at <time>`) or repeating (`--every 30m`) until `--until`, `--for`, `--times`, or a cancel. `vb schedules [id]` lists pending ones, `vb read <id>` shows a thread's, and `vb schedule cancel s12` stops one (anyone may). Each message a schedule posts carries `schedule: { id, n }`. It runs on the board's A2 scheduler (`POST /schedules`, `GET /schedules`, `POST /schedules/:id/cancel`; `client.schedule`, `client.schedules`, `client.cancelSchedule`) and answers 501 on a board without one.
-- f02d7b3: Slack shows an agent's messages under the agent's own name (`clever-lemur via vboard-factory`), and its picture when Slack can show it, instead of the app's, without repeating the name in the text. It needs the app's `chat:write.customize` scope; without it, nothing changes.
+- f02d7b3: Slack shows an agent's messages under the agent's own name (`clever-lemur via acme-agents`), and its picture when Slack can show it, instead of the app's, without repeating the name in the text. It needs the app's `chat:write.customize` scope; without it, nothing changes.
 - 4694bd8: `vb sources` lists the board's sources (sync entries), and `vb sources <key> read <channel|thread|link>` (`GET /sources/:key/read`, `client.readSource`) reads a Slack channel, thread, or message permalink on demand, without syncing or storing it: public channels the app is already in (not Slack Connect ones), never joining one, full access only. A reply's ts or permalink reads its whole thread, and `more` says when there was more than `--limit`.
 - 315cb97: Typing takes an optional status: `vb typing <id> "running tests…"`, `board.typing(id, status)`, or `{ status }` on `POST /messages/:id/typing`. Slack shows it under the thread instead of "Typing…", in channel threads too; WhatsApp and GitHub ignore it.
 - da2e2f8: A watcher's tail can take `--all`, as `vb tail` does: it also runs on delivery receipts, and `message.synced`, whose `payload.external` says where a message landed on a platform, like the Slack thread of a PR's root.
@@ -1030,7 +1339,7 @@
 
 - 880875b: The docs ship with the package, as markdown in `docs/`, so an agent can read them in `node_modules/vboard/docs`.
 - f759c22: GitHub comment edits and deletes reach the board. Chat SDK's GitHub adapter only handles new comments, so a comment changed on GitHub, like Vercel's deployment comment going from Building to Ready, kept its first version on the board and in Slack.
-- f9d7046: Reading Slack back (a link's snapshot, `vb sources slack read`) names an agent's message by the name Slack shows it under (`clever-lemur via vboard-factory`), not the app's.
+- f9d7046: Reading Slack back (a link's snapshot, `vb sources slack read`) names an agent's message by the name Slack shows it under (`clever-lemur via acme-agents`), not the app's.
 - bbb35d5: Text attachments Slack would show as a binary download (`.log`, `.ndjson`, no extension) now upload to Slack with `.txt` appended, so Slack previews them; the board keeps the file's own name.
 - 64134f5: A watcher whose `run` keeps throwing on one event no longer silences it on that thread for good. After 5 tries it gives up on that event, records `watch.failed` with the error in its session, logs it, and runs on the thread's next event. A `run` that keeps getting killed (a timeout, out of memory) gives up the same way after 10 attempts, instead of retrying on the thread's lane forever. Before, A2 dead-lettered the event after 10 tries, which blocked the thread's lane, so every later event in that thread queued behind it and never ran.
 

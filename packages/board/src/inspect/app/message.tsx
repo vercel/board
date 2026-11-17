@@ -1,17 +1,19 @@
-import { Ellipsis, FileText, MessageSquare, SmilePlus, Tag } from 'lucide-react'
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Clock, Ellipsis, FileText, MessageSquare, SmilePlus, Tag } from 'lucide-react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { LOGOS } from '../../contract/logos.ts'
-import type { MessageView } from '../../api/routes.ts'
-import { authorName, who } from '../../cli/format.ts'
+import type { MessageView, SchemaView } from '../../api/routes.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
-import { fileSize } from '../../contract/files.ts'
-import type { Attachment } from '../../contract/schemas.ts'
+import type { Attachment } from '../../server/index.default.ts'
+import { BlockCard } from './blocks.tsx'
 import * as board from './board.ts'
+import { setEditing, toast, useEditing } from './chrome.ts'
 import { Ago } from './nav.tsx'
-import { continues, sourcePlatform, type Groupable, type Pending } from './store.ts'
+import { bodyParts, continues, isTask, schemaOf, sourcePlatform, type Groupable, type Pending, type ReplySummary, type State } from './store.ts'
+import { TaskLine } from './task.tsx'
+import { authorName, fileSize, shownName, timingWords } from './words.ts'
 import { ContextMenuArea, EmojiPicker, fieldMenu, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
 const MENU_EMOJI = ['thumbs_up', 'heart', 'laugh', 'party', 'eyes', 'check']
@@ -25,18 +27,25 @@ export type RowOptions = {
   /** Shown after the author, e.g. "in #prs" in the activity view. */
   context?: (m: MessageView) => ReactNode
   /** A root's replies, summarized under it. */
-  replies?: (m: MessageView) => MessageView[]
+  summary?: (m: MessageView) => ReplySummary | undefined
   /** Sync key → platform, for each message's source mark. */
   platforms?: Record<string, string>
+  /** The page's state, where a root that's a task shows it in a line; unset in a thread, whose pane shows it in full. */
+  board?: State
+  /** The board's schema registry, once read: what each block's fields mean. */
+  schemas?: SchemaView[] | null
+  /** Each actor the page knows, by ID, as they show: who a mention reads as. */
+  names?: Record<string, string>
 }
 
-const MENTIONS = /((?<![\w@])@[a-z0-9][\w./-]*)/gi
-const MENTION = /^@[a-z0-9][\w./-]*$/i
+// A mention is `@[actor-id]` or `@[email]`, as the board stores one: any other `@word` is text.
+const MENTIONS = /((?<![\w@.-])@\[[^\]\s]+\])/g
+const MENTION = /^@\[([^\]\s]+)\]$/
 
 type MdNode = { type: string; value?: string; children?: MdNode[]; data?: unknown }
 
-/** Picks out @mentions in text, but not inside code or links. */
-function remarkMentions() {
+/** Picks out the mentions in text, but not inside code or links: each reads as who it mentions, by `names`, or as it's written. */
+const remarkMentions = (names: Record<string, string>) => () => {
   const walk = (node: MdNode) => {
     if (!node.children || node.type === 'link' || node.type === 'inlineCode' || node.type === 'code') return
     node.children = node.children.flatMap((child): MdNode[] => {
@@ -47,17 +56,18 @@ function remarkMentions() {
       return (child.value ?? '')
         .split(MENTIONS)
         .filter(Boolean)
-        .map((part) =>
-          MENTION.test(part)
-            ? { type: 'mention', value: part, data: { hName: 'span', hProperties: { className: ['mention'] }, hChildren: [{ type: 'text', value: part }] } }
-            : { type: 'text', value: part },
-        )
+        .map((part) => {
+          const named = MENTION.exec(part)?.[1]
+          if (named === undefined) return { type: 'text', value: part }
+          const shown = `@${names[named] ?? named}`
+          return { type: 'mention', value: shown, data: { hName: 'span', hProperties: { className: ['mention'], title: named }, hChildren: [{ type: 'text', value: shown }] } }
+        })
     })
   }
   return (tree: MdNode) => walk(tree)
 }
 
-const PLUGINS = [remarkGfm, remarkBreaks, remarkMentions]
+const NO_NAMES: Record<string, string> = {}
 const COMPONENTS = {
   a: ({ href, children }: { href?: string; children?: ReactNode }) => (
     <a href={href} target="_blank" rel="noreferrer">
@@ -70,16 +80,41 @@ const COMPONENTS = {
  * Markdown, as GitHub and Slack (through Chat SDK) write it: tables, lists,
  * code, links. Raw HTML is dropped. Right-clicking it gives the browser's menu.
  */
-export const Text = memo(function Text({ text, edited = false }: { text: string; edited?: boolean }) {
+export const Text = memo(function Text({ text, edited = false, names = NO_NAMES }: { text: string; edited?: boolean; names?: Record<string, string> }) {
+  const plugins = useMemo(() => [remarkGfm, remarkBreaks, remarkMentions(names)], [names])
   return (
     <div className="text" {...nativeMenu}>
-      <Markdown remarkPlugins={PLUGINS} components={COMPONENTS} skipHtml>
+      <Markdown remarkPlugins={plugins} components={COMPONENTS} skipHtml>
         {text}
       </Markdown>
       {edited && <span className="edited"> (edited)</span>}
     </div>
   )
 })
+
+/** A message's body: its prose as markdown, and each block it carries as a card, where its fence was. */
+function Body({ m, schemas, names }: { m: MessageView; schemas: SchemaView[] | null | undefined; names: Record<string, string> | undefined }) {
+  const parts = useMemo(() => bodyParts(m.text, m.blocks ?? []), [m.text, m.blocks])
+  const edited = m.editedAt !== null
+  const lastText = parts.findLastIndex((part) => 'text' in part)
+  return (
+    <>
+      {parts.map((part, i) =>
+        'text' in part ? (
+          <Text key={i} text={part.text} edited={edited && i === lastText} {...(names ? { names } : {})} />
+        ) : (
+          <BlockCard
+            key={i}
+            block={part.block}
+            schema={schemaOf({ schemas: schemas ?? null }, part.block.schema, part.block.version)}
+            registry={schemas !== null && schemas !== undefined}
+          />
+        ),
+      )}
+      {edited && lastText === -1 && <span className="edited">(edited)</span>}
+    </>
+  )
+}
 
 /**
  * The platform messages a message links to (Slack permalinks), quoted under it:
@@ -212,14 +247,16 @@ export function DayDivider({ iso, now }: { iso: string; now: number }) {
 /**
  * A list of messages with day dividers and author grouping. `after` is what
  * came just before the list (a thread's root), so its day isn't repeated.
+ * `at` is the time a message is listed by, when it isn't when it was written.
  */
-export function Messages(props: { messages: MessageView[]; options: RowOptions; now: number; after?: MessageView }) {
+export function Messages(props: { messages: MessageView[]; options: RowOptions; now: number; after?: MessageView; at?: (m: MessageView) => string }) {
+  const at = props.at ?? ((m: MessageView) => m.createdAt)
   const rows: ReactNode[] = []
   props.messages.forEach((m, i) => {
     const previous = props.messages[i - 1]
     const before = previous ?? props.after
-    if (!before || day(before.createdAt) !== day(m.createdAt)) rows.push(<DayDivider key={`d${m.id}`} iso={m.createdAt} now={props.now} />)
-    const grouped = continues(previous, m, previous ? (props.options.replies?.(previous).length ?? 0) > 0 : false)
+    if (!before || day(at(before)) !== day(at(m))) rows.push(<DayDivider key={`d${m.id}`} iso={at(m)} now={props.now} />)
+    const grouped = continues(previous, m, previous ? (props.options.summary?.(previous)?.count ?? 0) > 0 : false)
     rows.push(<MessageRow key={m.id} m={m} options={props.options} continued={grouped} />)
   })
   return <>{rows}</>
@@ -239,7 +276,7 @@ function Editor({ m }: { m: MessageView }) {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   }, [value])
   const save = () => {
-    board.setEditing(null)
+    setEditing(null)
     if (value.trim() && value.trim() !== m.text) void board.edit(m.id, value.trim())
   }
   return (
@@ -251,7 +288,7 @@ function Editor({ m }: { m: MessageView }) {
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation()
-            board.setEditing(null)
+            setEditing(null)
           }
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault()
@@ -266,8 +303,8 @@ function Editor({ m }: { m: MessageView }) {
 
 const copy = (text: string, what: string) =>
   navigator.clipboard.writeText(text).then(
-    () => board.toast(`copied ${what}`),
-    () => board.toast(`couldn't copy ${what}`),
+    () => toast(`copied ${what}`),
+    () => toast(`couldn't copy ${what}`),
   )
 
 export function MessageRow({ m, options, continued = false }: { m: MessageView; options: RowOptions; continued?: boolean }) {
@@ -275,13 +312,15 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const [hovered, setHovered] = useState(false)
   const [labelsOpen, setLabelsOpen] = useState(false)
   const row = useRef<HTMLDivElement>(null)
-  const editing = board.useEditing() === m.id
+  const editing = useEditing() === m.id
   const name = authorName(m)
   const mine = m.by.actor === options.me
   const reacted = (emoji: string) => (m.reactions[emoji] ?? []).includes(options.me)
   const toggle = (emoji: string) => void board.react(m.id, emoji, reacted(emoji))
-  const replies = m.re === null ? (options.replies?.(m) ?? []) : []
+  const replies = m.re === null ? options.summary?.(m) : undefined
   const thread = m.re ?? m.id
+  // A task's state is its `board.task` label too, which its line already says.
+  const labels = Object.entries(m.labels).filter(([key]) => !(key.startsWith('board.') && m.task))
 
   const items = (
     <>
@@ -296,7 +335,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
       {mine && (
         <>
           <MenuSeparator />
-          <MenuItem onClick={() => board.setEditing(m.id)}>edit message</MenuItem>
+          <MenuItem onClick={() => setEditing(m.id)}>edit message</MenuItem>
           <MenuItem danger onClick={() => confirm(`Delete #${m.id}? It's removed on Slack and GitHub too.`) && void board.remove(m.id)}>
             delete message
           </MenuItem>
@@ -335,6 +374,11 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               {options.context?.(m)}
               <Ago iso={m.createdAt} />
               {m.noSync && <span className="badge">board only</span>}
+              {m.schedule && (
+                <span className="badge" title={`sent by schedule ${m.schedule.id}: send ${m.schedule.n + 1}`}>
+                  <Clock size={10} /> scheduled
+                </span>
+              )}
             </div>
           )}
           {m.deleted ? (
@@ -345,14 +389,15 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             <Editor m={m} />
           ) : (
             <>
-              {m.text && <Text text={m.text} edited={m.editedAt !== null} />}
+              <Body m={m} schemas={options.schemas} names={options.names} />
               <Attachments items={m.attachments ?? []} />
               <Links items={m.links} />
             </>
           )}
-          {(Object.keys(m.labels).length > 0 || Object.keys(m.reactions).length > 0) && (
+          {options.board && isTask(m) && !m.deleted && <TaskLine root={m} state={options.board} />}
+          {(labels.length > 0 || Object.keys(m.reactions).length > 0) && (
             <div className="chips">
-              {Object.entries(m.labels).map(([key, value]) => (
+              {labels.map(([key, value]) => (
                 <button key={key} className="label" title="edit labels" onClick={() => setLabelsOpen(true)}>
                   {key}={value}
                 </button>
@@ -369,15 +414,15 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               ✗ didn't reach {target}: {error}
             </div>
           ))}
-          {replies.length > 0 && options.openThread && (
+          {replies && replies.count > 0 && options.openThread && (
             <button className="replies" onClick={() => options.openThread!(m.id)}>
               <span className="faces">
-                {[...new Map(replies.map((r) => [r.by.actor, r])).values()].slice(-3).map((r) => (
+                {replies.faces.map((r) => (
                   <Avatar key={r.by.actor} name={authorName(r)} url={r.author?.avatar} size={16} />
                 ))}
               </span>
-              {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
-              <Ago iso={replies.at(-1)!.createdAt} prefix=" · last " />
+              {replies.count} {replies.count === 1 ? 'reply' : 'replies'}
+              {replies.last && <Ago iso={replies.last.createdAt} prefix=" · last " />}
             </button>
           )}
         </div>
@@ -430,7 +475,8 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
     <>
       {props.posts.map((post, i) => {
         const previous = i === 0 ? props.after : seen(props.posts[i - 1]!)
-        const continued = continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
+        // One to send later says when under its own header, so it never runs on from the row above.
+        const continued = post.later === undefined && continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
         return <PendingRow key={post.key} post={post} me={props.me} continued={continued} />
       })}
     </>
@@ -439,7 +485,7 @@ export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView;
 
 /** A post on its way, or one that didn't make it. */
 export function PendingRow({ post, me, continued = false }: { post: Pending; me: Me; continued?: boolean }) {
-  const status = post.error ? "didn't send" : 'sending…'
+  const status = post.later ? (post.error ? "didn't schedule" : 'scheduling…') : post.error ? "didn't send" : 'sending…'
   return (
     <div className={`message pending${continued ? ' continued' : ''}${post.error ? ' failed' : ''}`}>
       <div className="gutter">
@@ -448,14 +494,19 @@ export function PendingRow({ post, me, continued = false }: { post: Pending; me:
             …
           </span>
         ) : (
-          <Avatar name={who(me)} url={me.avatar} />
+          <Avatar name={shownName(me)} url={me.avatar} />
         )}
       </div>
       <div className="body">
         {!continued && (
           <div className="meta-line">
-            <span className="author">{who(me)}</span>
+            <span className="author">{shownName(me)}</span>
             <span className="time">{status}</span>
+            {post.later && (
+              <span className="badge">
+                <Clock size={10} /> {timingWords(post.later)}
+              </span>
+            )}
           </div>
         )}
         {post.text && <Text text={post.text} />}

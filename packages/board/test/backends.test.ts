@@ -40,6 +40,21 @@ async function signedIn(audiences: string[]) {
 }
 
 describe('board() and its backend', () => {
+  it("leaves a write's handles to the team's board, and answers what it said of them", async () => {
+    const { remote, project, seen } = await team()
+    // Julian has written on the team's board: a Vercel login's handle is its user ID.
+    await (await julianOn(remote.fetch))('POST', '/messages', { channel: 'dev', text: 'hi' })
+    const before = seen.length
+    const posted = await project.post('dev', 'over to @u_julian and @nobody')
+    expect(posted.text).toBe('over to @[vercel:user:u_julian] and @nobody')
+    expect(posted.mentions).toEqual([
+      { written: '@u_julian', actor: { id: 'vercel:user:u_julian', handle: 'u_julian', name: 'u_julian' }, candidates: [] },
+      { written: '@nobody', actor: null, candidates: [] },
+    ])
+    // It read no actors of its own to do it: the team's board knows who it sees.
+    expect(seen.slice(before).map((request) => `${request.method} ${new URL(request.url).pathname}`).filter((sent) => sent.includes('/actors'))).toEqual([])
+  })
+
   it("takes a URL, which TypeScript can't check", () => {
     expect(() => http('board.example.com')).toThrow("http: board.example.com isn't a URL")
   })
@@ -188,6 +203,38 @@ describe('a board on http()', () => {
     expect(body.messages.map((message: { text: string; by: { actor: string } }) => [message.text, message.by.actor])).toEqual([
       ['a1b2c3 is live', `${V0}+deploys`],
       ['d4e5f6 is live', `${V0}+deploys`],
+    ])
+  })
+
+  it("makes a task on the board it uses once for its id, as its deployment, and works it from there", async () => {
+    const { remote, project } = await team()
+    const deploys = project.as('deploys')
+    const first = await deploys.tasks.create('work', { text: 'roll out a1b2c3', id: 'rollout-1', labels: { step: 'deploy' } })
+    const again = await project.as('deploys').tasks.create('work', { text: 'roll out a1b2c3', id: 'rollout-1', labels: { step: 'deploy' } })
+    expect(again.task.id).toBe(first.task.id)
+    // The board it uses keeps the task: this one forwards each call, as the token's holder.
+    const claim = await deploys.tasks.claim({ channel: 'work/', label: { step: 'deploy' } })
+    expect(claim).toMatchObject({ task: { id: first.task.id }, epoch: 1 })
+    expect((await claim!.complete('live')).task).toMatchObject({ state: 'completed', result: 'live' })
+    const { body } = await (await julianOn(remote.fetch))('GET', '/tasks?state=all')
+    expect(body.tasks.map((t: { message: { text: string; task: { owner: string; state: string }; by: { actor: string } } }) => [t.message.text, t.message.by.actor, t.message.task.owner, t.message.task.state])).toEqual([
+      ['roll out a1b2c3', `${V0}+deploys`, V0, 'completed'],
+    ])
+    expect((await project.tasks.list({ state: 'all' })).tasks.map((t) => t.message.id)).toEqual([first.task.id])
+  })
+
+  it('makes several tasks on the board it uses in one write, once for its id, as its deployment', async () => {
+    const { remote, project } = await team()
+    const deploys = project.as('deploys')
+    const plan = [{ key: 'build', text: 'build a1b2c3' }, { text: 'roll out a1b2c3', needs: [{ key: 'build' }], labels: { step: 'deploy' } }]
+    const first = await deploys.tasks.createMany('work', plan, { id: 'rollout-1' })
+    const again = await project.as('deploys').tasks.createMany('work', plan, { id: 'rollout-1' })
+    expect(again.map((root) => root.id)).toEqual(first.map((root) => root.id))
+    // The board it uses keeps them: its own handle's id reaches it as this deployment's key, which it takes.
+    const { body } = await (await julianOn(remote.fetch))('GET', '/tasks?state=all')
+    expect(body.tasks.map((t: { message: { text: string; task: { owner: string; state: string; needs: string[] }; by: { actor: string } } }) => [t.message.text, t.message.by.actor, t.message.task.owner, t.message.task.state, t.message.task.needs])).toEqual([
+      ['build a1b2c3', `${V0}+deploys`, V0, 'ready', []],
+      ['roll out a1b2c3', `${V0}+deploys`, V0, 'waiting', [first[0]!.id]],
     ])
   })
 

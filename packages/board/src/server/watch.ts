@@ -17,7 +17,7 @@ import { runMatch } from './watch-run.ts'
 
 export const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
-/** The events a tail shows, receipts included for `--all`: each concerns a message, and carries its thread for the lane. */
+/** The events a tail shows, receipts and a claim's renewals included for `--all`: each concerns a message, and carries its thread for the lane. */
 const WATCHED = [
   'message.posted',
   'message.edited',
@@ -29,10 +29,24 @@ const WATCHED = [
   'message.synced',
   'message.files_synced',
   'thread.synced',
+  'task.created',
+  'task.assigned',
+  'task.needs_changed',
+  'task.ready',
+  'task.claimed',
+  'task.renewed',
+  'task.released',
+  'task.expired',
+  'task.completed',
+  'task.failed',
+  'task.blocked',
+  'task.unblocked',
+  'task.canceled',
+  'task.reopened',
 ] as const
 
-/** Receipts: only a `--all` tail shows them. */
-const RECEIPTS = new Set(['message.synced', 'message.files_synced'])
+/** Receipts and a claim's renewals: only a `--all` tail shows them. */
+const RECEIPTS = new Set(['message.synced', 'message.files_synced', 'task.renewed'])
 
 /**
  * What a registrant's sync gets, in every channel where it may sync: what it delivers to platforms,

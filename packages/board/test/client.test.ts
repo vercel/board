@@ -56,6 +56,31 @@ describe('a handle on a board over http()', () => {
     expect((await client.threads({ text: 'busy 2' })).threads.map((t) => t.message.id)).toEqual([busy.id])
   })
 
+  it('pages back through threads by their latest activity, each thread once, until `older` is null', async () => {
+    const { client } = await setup()
+    const roots = []
+    for (let n = 1; n <= 11; n++) roots.push(await client.post('triage', `thread ${n}`))
+    // Activity, not start, orders them: the first thread is the newest.
+    await client.reply(roots[0]!.id, 'bump')
+    const pages = []
+    let page = await client.threads({ channel: 'triage', limit: 4 })
+    pages.push(page.threads.map((t) => t.message.text))
+    while (page.older !== null) {
+      expect(page.older).toEqual(expect.any(String))
+      page = await client.threads({ channel: 'triage', before: page.older!, limit: 4 })
+      pages.push(page.threads.map((t) => t.message.text))
+    }
+    expect(pages).toEqual([
+      ['thread 9', 'thread 10', 'thread 11', 'thread 1'],
+      ['thread 5', 'thread 6', 'thread 7', 'thread 8'],
+      ['thread 2', 'thread 3', 'thread 4'],
+    ])
+    // Reading forward is as it was: no `older`.
+    expect(await client.threads({ channel: 'triage', after: roots[9]!.id })).not.toHaveProperty('older')
+    await expect(client.threads({ channel: 'triage', before: 'not-a-page' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+    await expect(client.threads({ channel: 'triage', before: page.cursor, after: page.cursor })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+  })
+
   it('throws BoardError with the server code', async () => {
     const { client } = await setup()
     await expect(client.thread('999')).rejects.toMatchObject({
@@ -148,8 +173,11 @@ describe('board() with no backend', () => {
 
   it("is Vercel's board for the team, the one its name names, with the deployment's credentials or fetch's", async () => {
     clean()
-    const api = fakeMessageboard()
-    vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+    // The deployment's OIDC token, a JWT, as Vercel's is.
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_test', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+    const api = fakeMessageboard({ tokens: { [oidc]: 'project:prj_pong:production' } })
+    vi.stubEnv('VERCEL_OIDC_TOKEN', oidc)
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
     // The project's own code: its first use of the name makes the board.

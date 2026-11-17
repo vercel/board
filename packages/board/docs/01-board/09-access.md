@@ -65,9 +65,12 @@ import { board } from '@vercel/board'
 // The board at BOARD_URL, one that keeps grants: vb serve's, say.
 const team = board()
 
-// Close security/ to everyone, then open it to two people.
-await team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
-const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })
+// Close security/ to everyone but two people, in one write.
+const { grants } = await team.createGrants([
+  { principals: [{ kind: 'everyone' }], can: { 'security/': [] } },
+  { principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } },
+])
+const grant = grants[1]
 // acme/web's CI posts in ci/ from its main branch.
 await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'carol@acme.com' }] })
@@ -84,8 +87,9 @@ deployments.
 | CLI | Handle |
 | --- | --- |
 | `vb grants` | `team.grants()` |
-| `vb grants create --everyone --can 'security/=none'` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } })` |
 | `vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'` | `team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })` |
+| `vb grants create --file grants.json` | `team.createGrants([{ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } }, { principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } }])` |
+| `vb grants create --everyone --can 'attic/=none' --lock-me-out` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'attic/': 'none' } }, { lockMeOut: true })` |
 | `vb grants create --project sec --environment production,preview --can 'security/=read,post'` | `team.createGrant({ principals: [{ kind: 'project', project: 'sec', environments: ['production', 'preview'] }], can: { 'security/': ['read', 'post'] } })` |
 | `vb grants create --github acme/web --workflow ci.yml --git-branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
 | `vb grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })` |
@@ -157,7 +161,9 @@ more specific pattern decides first.
   `{ userId, email }`, `{ projectId, name }`, and `{ repositoryId,
   repository }`. A board that verifies tokens itself, such as `vb serve`'s,
   has nothing to look names up with, so it takes a user's ID and a project's
-  `prj_…`, and matches a repository by the token's `repository`.
+  `prj_…`, and matches a repository by the token's `repository`. On a board
+  [behind Tailscale](../03-guides/08-tailnet.md), a person's login is their
+  ID, so `--user ada@example.com` names them there.
 - **A project names its environments,** and `all-projects` only production,
   preview, or development, since a custom environment's ID is one project's.
 - **A project is its team's.** A grant keeps the board's team on each project
@@ -191,12 +197,26 @@ more specific pattern decides first.
   so what `everyone` gets doesn't count. Unless you may list the grants,
   revoking or changing one you can't reach answers the same 403 as one that
   isn't there, so trying g1, g2, and on finds out nothing.
+- **A change you couldn't take back takes saying so.** Closing `security/` to
+  `everyone` closes it to whoever closes it, and lifting it takes `manage`
+  there. So a grant write that takes its caller's own `manage` at a pattern it
+  names is 409 `grant_lockout`, and nothing is written. Keep yourself in with
+  a grant that names you at each pattern the lock names, made before it or in
+  the same write, or pass `lockMeOut` (`--lock-me-out`) to go ahead. Revoking
+  or narrowing the grant that keeps you in is the same lockout.
+- **Several grants go in one write.** `createGrants([…])`
+  (`POST /grants/batch`, 16 at most) makes all of them or none, in the order
+  given. Each needs what it would alone, on the grants as they are, and what
+  they leave you with is judged with all of them made. So a lock and the
+  grant that keeps you in pass together, whichever comes first.
+  `vb grants create --file` makes the ones a JSON file holds.
 - **Naming an `oidc` principal takes `manage` everywhere,** since the board
   then fetches its issuer's keys. Listing grants takes `manage` at `*`.
 - **Owners always may.** On Vercel's API, the team's owners. On a local board,
   its local user, the one `vb serve` mints a token for: a person on the team
-  is a principal like any other. Reading a closed channel still takes a
-  grant, an owner's too.
+  is a principal like any other. Nothing locks an owner out, so no write of
+  theirs is a lockout. Reading a closed channel still takes a grant, an
+  owner's too.
 - **A private channel is two grants and the channel.**
   `createChannel(path, { private: true })` makes a grant letting you in at
   `<path>/`, then one closing it to `everyone`, then the channel. Before it
@@ -324,9 +344,9 @@ Reads show only what the caller can read, everywhere:
   (`@[actor-id]`), and the reactors of what they can read, and themselves. A
   post in a channel you can't read comes back with the text you sent, and
   read back later (`GET /posts/:id`, your schedules), each actor it mentions
-  but you shows as `@…`. A mention is text no write checks, so a handle that's
-  shared, one no one has, and an actor ID the board doesn't know all post
-  alike: no write says which ones exist. Nor does `--mentions`: it finds
+  but you shows as `@…`. A write settles a handle only among the actors its
+  caller can see, and says who it could have meant only from them, so it tells
+  no caller of anyone `vb actors` wouldn't. Nor does `--mentions`: it finds
   someone through their other name (their handle for their ID, or the other
   way round) only for a caller that reads every channel.
 - **Events about no message** (who's who, a thread's sync targets) reach only
@@ -442,6 +462,22 @@ at `security/` with nothing) doesn't: it stays closed to whoever you name,
 and opens to them only as it opens to you, so grants on `*` stay yours to
 make. A grant on `security/` itself doesn't: it would meet the lock there and
 win, being closer. The board's owners always may.
+
+### Why won't the board let me close a channel to everyone?
+
+Because that closes it to you too, and then you couldn't open it again:
+lifting a lock takes `manage` where it applies. Make the grant that keeps you
+in first, and it stays yours to change:
+
+```bash
+vb grants create --user you@acme.com --can 'security/=all'
+vb grants create --everyone --can 'security/=none'
+```
+
+`vb grants create --file` makes both in one write.
+
+`--lock-me-out` makes it anyway. Then only an owner, or someone a grant names
+there with `manage`, can change it.
 
 ### How do I keep a channel from the project's own people?
 

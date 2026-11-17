@@ -405,17 +405,23 @@ describe('scheduled messages', () => {
       return fresh(deployed.fetch, 'u_julian', {})
     }
     const first = instance()
+    // The first instance takes over before the schedule exists. Its first call starts the takeover
+    // without waiting for it, and a takeover that reads the schedules after one was created arms
+    // its send again, under the takeover's name, beside the timer its creation armed.
+    await first('GET', '/me')
+    const takeovers = async () => (await store.log.read(`board-schedules\u001f${SCHEDULES_SESSION}`)).filter((e) => e.type === 'schedule.takeover')
+    await vi.waitFor(async () => expect(await takeovers()).toHaveLength(1))
     await first('POST', '/schedules', { channel: 'dev', text: 'a week later', in: '8d' })
     await vi.waitFor(() => expect(queue.timers).toHaveLength(1))
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    // The next instance arms it again under the takeover's name, which every instance after it shares.
     vi.setSystemTime(T0 + MINUTE)
     await instance()('GET', '/me')
-    await settle()
-    const armed = queue.timers.length
+    await vi.waitFor(() => expect(queue.timers).toHaveLength(2))
     vi.setSystemTime(T0 + 2 * MINUTE)
     await instance()('GET', '/me')
     await settle()
-    expect(queue.timers).toHaveLength(armed)
+    expect(queue.timers).toHaveLength(2)
   })
 
   it('send one created on the newest deployment when an earlier one catches up on it first', async () => {
@@ -504,6 +510,16 @@ describe('scheduled messages', () => {
     ])
   })
 
+  it('send a text as it was settled when the schedule was made: a handle that mentioned no one then mentions no one later', async () => {
+    const { julian, pi, root, replies, advance } = await setup()
+    // A Vercel login's handle is its user ID, and Pi hasn't written: no one goes by u_pi yet.
+    const made = await julian('POST', '/schedules', { re: root.id, in: '1h', text: 'standup, @u_pi' })
+    expect(made.body.mentions).toEqual([{ written: '@u_pi', actor: null, candidates: [] }])
+    await pi('POST', '/messages', { channel: 'dev', text: 'hi' })
+    await advance(3_600_000)
+    expect((await replies()).map((reply) => reply.text)).toEqual(['standup, @u_pi'])
+  })
+
   it('refuse what they cannot do', async () => {
     const { julian, root } = await setup()
     const refused = async (body: object) => (await julian('POST', '/schedules', { re: root.id, text: 'x', ...body })).body.error.message
@@ -518,9 +534,9 @@ describe('scheduled messages', () => {
     expect(await refused({ in: '1m', every: '1h', for: '100000001d' })).toContain('at most a year out')
     expect(await refused({ every: '100000001d' })).toContain('at most a year')
     expect((await julian('GET', '/schedules?all=1')).status).toBe(200)
-    // A mention is text, sent as written: a handle no one has is no reason to refuse.
+    // A handle no one has is no reason to refuse: it's kept as typed, and the answer says it mentions no one.
     const unknown = await julian('POST', '/schedules', { channel: 'dev', in: '1h', text: 'hey @nobody and @[vercel:user:u_nobody]' })
-    expect([unknown.status, Object.keys(unknown.body), unknown.body.schedule.text]).toEqual([201, ['schedule'], 'hey @nobody and @[vercel:user:u_nobody]'])
+    expect([unknown.status, unknown.body.schedule.text, unknown.body.mentions]).toEqual([201, 'hey @nobody and @[vercel:user:u_nobody]', [{ written: '@nobody', actor: null, candidates: [] }]])
 
     const plain = caller(testBoard().fetch, await personToken())
     const { body: thread } = await plain('POST', '/messages', { channel: 'dev', text: 'hi' })

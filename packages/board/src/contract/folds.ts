@@ -2,7 +2,7 @@
 // them to A2, and anything else (a store's tables, a handle) folds with them directly.
 import { canonicalEmoji } from './emoji.ts'
 import { own, setOwn } from './own.ts'
-import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
+import { actorKind, TASK_LABEL, type ActorKind, type Attachment, type Author, type Labels, type TaskState } from './schemas.ts'
 import type { BoardEvent } from './events.ts'
 import { externalMessageKey, isThreadTarget, type Link, type Origin } from './external.ts'
 import type { Via } from './profiles.ts'
@@ -11,6 +11,31 @@ import type { Via } from './profiles.ts'
 // in place: an event costs O(1) instead of a copy of every message. A key a
 // caller or platform chose is read with `own` and written with `setOwn`, so a
 // handle or a channel named `constructor` is like any other.
+
+/**
+ * A task as the board keeps it on its root: the state the root's `board.task` label wears, and what
+ * goes with it. Views show all of it but a claim's `token`.
+ */
+export type Task = {
+  state: TaskState
+  /** The principal that made the thread a task. */
+  owner: string
+  /** The actor it did that as: itself, or one of its profiles, which is held to the tasks it made. */
+  by: string
+  /** The one actor that claims it, or null when anyone who may does. */
+  for: string | null
+  /** The tasks it waits for, by their roots' IDs. */
+  needs: number[]
+  /** How many times it's been claimed: a claim's writes carry the epoch it was made at. */
+  epoch: number
+  /** Who holds it, until when. `token` is the SHA-256 of the claim's secret, hex. */
+  claim: { actor: string; until: string; token: string } | null
+  blocked: { kind: string | null; reason: string } | null
+  /** What it came to, once it's completed. */
+  result: string | null
+  /** Why it failed or was canceled. */
+  reason: string | null
+}
 
 export type Message = {
   id: number
@@ -38,6 +63,8 @@ export type Message = {
   links: Link[]
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: number; n: number }
+  /** Set on a root that's a task. Its `state` is the root's `board.task` label too, while the root isn't deleted. */
+  task?: Task
   /**
    * Set when its author couldn't read its channel, as `authorizeOwn` checks: where they can't read,
    * it's theirs to edit and delete only then. Its event's payload says so too.
@@ -176,8 +203,124 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       delete message.undelivered[event.payload.target]
       return message
     }
+    case 'task.created': {
+      const message = state.byId[event.payload.id]
+      // A thread becomes a task once, at its root, while the root is there.
+      if (!message || message.deleted || message.re !== null || message.task) return undefined
+      const { needs, by } = event.payload
+      message.task = { state: needs.length > 0 ? 'waiting' : 'ready', owner: by.principal, by: by.actor, for: event.payload.for, needs: [...needs], epoch: 0, claim: null, blocked: null, result: null, reason: null }
+      return labeled(message)
+    }
+    case 'task.assigned':
+    case 'task.needs_changed':
+    case 'task.ready':
+    case 'task.claimed':
+    case 'task.renewed':
+    case 'task.released':
+    case 'task.expired':
+    case 'task.completed':
+    case 'task.failed':
+    case 'task.blocked':
+    case 'task.unblocked':
+    case 'task.canceled':
+    case 'task.reopened': {
+      const message = state.byId[event.payload.id]
+      if (!message?.task || !foldTask(message.task, event)) return undefined
+      return labeled(message)
+    }
     default:
       return undefined
+  }
+}
+
+/** `message`, a task's root, wearing its task's state as `board.task`. A tombstone wears no labels, this one included. */
+function labeled(message: Message): Message {
+  if (!message.deleted) setOwn(message.labels, TASK_LABEL, message.task!.state)
+  return message
+}
+
+type TaskEvent = Extract<BoardEvent, { type: `task.${string}` }>
+
+/** Whether a claim's write is by the claim that holds the task: the same epoch, while it's claimed. */
+const holds = (task: Task, epoch: number) => task.state === 'claimed' && task.epoch === epoch
+
+/**
+ * Applies a task's event to it, and says whether it changed anything. Each event lands only from
+ * the states it can leave, so one written against a task that has since moved on changes nothing:
+ * the writes check first, and this is what holds if one didn't.
+ */
+function foldTask(task: Task, event: Exclude<TaskEvent, { type: 'task.created' }>): boolean {
+  switch (event.type) {
+    case 'task.assigned':
+      if (task.for === event.payload.for) return false
+      task.for = event.payload.for
+      return true
+    case 'task.needs_changed':
+      // What it waits for changes while no one holds it and it isn't finished. It waits again when it waits for
+      // any task: `task.ready` follows at once when they've all completed. One held for a person stays held.
+      if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'blocked') return false
+      task.needs = [...event.payload.needs]
+      if (task.state !== 'blocked') task.state = task.needs.length > 0 ? 'waiting' : 'ready'
+      return true
+    case 'task.ready':
+      if (task.state !== 'waiting') return false
+      task.state = 'ready'
+      return true
+    case 'task.claimed': {
+      const { epoch, until, token, by } = event.payload
+      if (task.state !== 'ready' || epoch !== task.epoch + 1) return false
+      task.state = 'claimed'
+      task.epoch = epoch
+      task.claim = { actor: by.actor, until, token }
+      return true
+    }
+    case 'task.renewed':
+      if (!holds(task, event.payload.epoch)) return false
+      task.claim!.until = event.payload.until
+      return true
+    case 'task.released':
+    case 'task.expired':
+      if (!holds(task, event.payload.epoch)) return false
+      task.state = 'ready'
+      task.claim = null
+      return true
+    case 'task.completed':
+      if (!holds(task, event.payload.epoch)) return false
+      task.state = 'completed'
+      task.claim = null
+      task.result = event.payload.result
+      return true
+    case 'task.failed':
+      if (!holds(task, event.payload.epoch)) return false
+      task.state = 'failed'
+      task.claim = null
+      task.reason = event.payload.reason
+      return true
+    case 'task.blocked':
+      if (task.state !== 'waiting' && task.state !== 'ready' && task.state !== 'claimed') return false
+      task.state = 'blocked'
+      task.claim = null
+      task.blocked = { kind: event.payload.kind, reason: event.payload.reason }
+      return true
+    case 'task.unblocked':
+      if (task.state !== 'blocked') return false
+      // Back to waiting when it waits for any task: `task.ready` follows at once when they've all completed.
+      task.state = task.needs.length > 0 ? 'waiting' : 'ready'
+      task.blocked = null
+      return true
+    case 'task.canceled':
+      if (task.state === 'completed' || task.state === 'canceled') return false
+      task.state = 'canceled'
+      task.claim = null
+      task.blocked = null
+      task.reason = event.payload.reason
+      return true
+    case 'task.reopened':
+      // A failed task was claimed, so every task it needs had completed: it's ready.
+      if (task.state !== 'failed') return false
+      task.state = 'ready'
+      task.reason = null
+      return true
   }
 }
 
@@ -285,9 +428,13 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
     case 'thread.synced': {
       const thread = own(state.threads, event.payload.thread)
       if (!thread) return state
+      const claims = (event.payload.kind ?? (isThreadTarget(event.payload.target) ? 'thread' : 'channel')) === 'thread'
+      // A platform thread is one board thread's: a second claim to it, which a write refuses, is ignored.
+      const owner = claims ? own(state.byExternalThread, event.payload.target) : undefined
+      if (owner !== undefined && owner !== event.payload.thread) return state
       addTarget(thread, event.payload.target)
       if (event.payload.kind) setOwn((thread.kinds ??= {}), event.payload.target, event.payload.kind)
-      if ((event.payload.kind ?? (isThreadTarget(event.payload.target) ? 'thread' : 'channel')) === 'thread') {
+      if (claims) {
         setOwn(thread.external, event.payload.target, event.payload.target)
         setOwn(state.byExternalThread, event.payload.target, event.payload.thread)
       }

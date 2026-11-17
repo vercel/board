@@ -5,6 +5,7 @@ import { Popover } from '@base-ui/react/popover'
 import { X } from 'lucide-react'
 import { useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { displayEmoji } from '../../contract/emoji.ts'
+import type { Listed } from './store.ts'
 import { EMOJI_TABLE } from '../../contract/emoji-table.ts'
 
 // Base UI primitives, dressed like Just Chat: square, one hairline, and an
@@ -218,7 +219,8 @@ export function LabelEditor(props: {
     setKey('')
     setValue('')
   }
-  const entries = Object.entries(props.labels)
+  // Labels under `board.` are the board's own: it writes them, and no one else can.
+  const entries = Object.entries(props.labels).filter(([k]) => !k.startsWith('board.'))
   return (
     <div className="labels-editor">
       {entries.length === 0 ? (
@@ -240,7 +242,7 @@ export function LabelEditor(props: {
         <Suggest
           value={key}
           onChange={setKey}
-          items={[...props.known.keys()].filter((k) => !(k in props.labels))}
+          items={[...props.known.keys()].filter((k) => !(k in props.labels) && !k.startsWith('board.'))}
           placeholder="key"
           autoFocus
           onEnter={() => valueRef.current?.querySelector('input')?.focus()}
@@ -262,6 +264,10 @@ export function Panel(props: {
   title: string
   trigger?: ReactNode
   triggerTitle?: string
+  /** The trigger's class: a toolbar's icon button unless it says otherwise. */
+  triggerClass?: string
+  /** Which edge of its trigger it lines up with: the end unless the trigger sits at the start of its row. */
+  align?: 'start' | 'end'
   open: boolean
   onOpenChange: (open: boolean) => void
   anchor?: React.RefObject<Element | null>
@@ -270,12 +276,12 @@ export function Panel(props: {
   return (
     <Popover.Root open={props.open} onOpenChange={props.onOpenChange}>
       {props.trigger && (
-        <Popover.Trigger className="tool" aria-label={props.triggerTitle ?? props.title} title={props.triggerTitle ?? props.title}>
+        <Popover.Trigger className={props.triggerClass ?? 'tool'} aria-label={props.triggerTitle ?? props.title} title={props.triggerTitle ?? props.title}>
           {props.trigger}
         </Popover.Trigger>
       )}
       <Popover.Portal>
-        <Popover.Positioner className="positioner" align="end" sideOffset={6} {...(props.anchor ? { anchor: props.anchor } : {})}>
+        <Popover.Positioner className="positioner" align={props.align ?? 'end'} sideOffset={6} {...(props.anchor ? { anchor: props.anchor } : {})}>
           <Frame>
             <Popover.Popup className="menu popover">
               <Popover.Title className="popover-title">{props.title}</Popover.Title>
@@ -326,4 +332,101 @@ export function ResizeHandle(props: {
       <i />
     </div>
   )
+}
+
+/** A view's header: its title, a quiet line beside it, its controls, and whether the feed is live. */
+export function Header(props: { title: string; meta?: string | undefined; live?: 'connecting' | 'live' | 'reconnecting'; lead?: ReactNode; flat?: boolean; children?: ReactNode }) {
+  return (
+    <header className={`header${props.flat ? ' flat' : ''}`}>
+      {props.lead}
+      <span className="title">{props.title}</span>
+      {props.meta && <span className="meta">{props.meta}</span>}
+      <span className="spacer" />
+      {props.children}
+      {props.live && (
+        <span className={`live ${props.live}`} title={props.live === 'live' ? 'receiving board events' : 'the feed reconnects on its own'}>
+          <i />
+          {props.live === 'live' ? 'live' : props.live}
+        </span>
+      )}
+    </header>
+  )
+}
+
+/** One thing a form asks for: a line, a longer note, or a line with suggestions. */
+export type AskField = { name: string; placeholder: string; required?: boolean; items?: string[]; long?: boolean; value?: string }
+
+/** What a small form asks for, and what it does with the answers. */
+export type AskProps = {
+  fields: AskField[]
+  submit: string
+  note?: string | undefined
+  disabled?: boolean
+  onSubmit: (values: Record<string, string>) => unknown
+}
+
+/** A small form: a field per thing it asks, sent with Enter (⌘Enter from a note). `onDone` hears that it was sent. */
+export function AskForm(props: AskProps & { onDone?: () => void }) {
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(props.fields.map((field) => [field.name, field.value ?? ''])))
+  const value = (name: string) => values[name] ?? ''
+  const put = (name: string, next: string) => setValues((current) => ({ ...current, [name]: next }))
+  const ready = !props.disabled && props.fields.every((field) => !field.required || value(field.name).trim() !== '')
+  const send = () => {
+    if (!ready) return
+    props.onDone?.()
+    props.onSubmit(Object.fromEntries(props.fields.map((field) => [field.name, value(field.name).trim()])))
+  }
+  return (
+    <form
+      className="ask"
+      onSubmit={(event) => {
+        event.preventDefault()
+        send()
+      }}
+      {...fieldMenu}
+    >
+      {props.fields.map((field, i) =>
+        field.items ? (
+          <Suggest key={field.name} value={value(field.name)} onChange={(next) => put(field.name, next)} items={field.items} placeholder={field.placeholder} autoFocus={i === 0} onEnter={send} />
+        ) : field.long ? (
+          <textarea
+            key={field.name}
+            rows={3}
+            autoFocus={i === 0}
+            value={value(field.name)}
+            placeholder={field.placeholder}
+            onChange={(event) => put(field.name, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send()
+            }}
+          />
+        ) : (
+          <label key={field.name} className="suggest">
+            <input autoFocus={i === 0} value={value(field.name)} placeholder={field.placeholder} spellCheck={false} onChange={(event) => put(field.name, event.target.value)} />
+          </label>
+        ),
+      )}
+      {props.note && <p className="hint">{props.note}</p>}
+      <button type="submit" className="send small" disabled={!ready}>
+        {props.submit}
+      </button>
+    </form>
+  )
+}
+
+/** A button that asks before it acts: its form in a popover, closed once it's sent. */
+export function Ask(props: AskProps & { label: ReactNode; title: string; triggerTitle?: string; className?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Panel title={props.title} trigger={props.label} triggerTitle={props.triggerTitle ?? props.title} triggerClass={props.className ?? 'act'} open={open} onOpenChange={setOpen}>
+      <AskForm fields={props.fields} submit={props.submit} note={props.note} {...(props.disabled !== undefined ? { disabled: props.disabled } : {})} onSubmit={props.onSubmit} onDone={() => setOpen(false)} />
+    </Panel>
+  )
+}
+
+/** What shows in place of a list the board hasn't given: it's on its way, or what the board answered instead. */
+export function Unlisted({ listed }: { listed: Listed<unknown> }) {
+  if (listed.is === 'here') return null
+  if (listed.is === 'failed') return <p className="empty error">{listed.why}</p>
+  return <p className="empty">loading…</p>
 }

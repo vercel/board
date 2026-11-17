@@ -105,6 +105,47 @@ describe('the embedded CLI', () => {
     expect(failures.at(-1)![0]).toMatchObject({ class: 'usage', reason: 'unknown_command', next: [{ argv: ['vercel', 'board', '--help'] }] })
   })
 
+  it("has tasks, names the app in a task's ways out, and keeps a claim between its runs", async () => {
+    const home = await isolated()
+    vi.stubEnv('BOARD_URL', url)
+    vi.stubEnv('BOARD_TOKEN', env.BOARD_TOKEN)
+    const app = createApp({ appName: 'vercel board' })
+    expect((await capture(() => app.run(['help']))).stdout).toMatch(/^ {2}tasks \[channel\] +open tasks, oldest first/m)
+    expect((await capture(() => app.run(['tasks', 'run', '--help']))).stdout).toContain('\n    vercel board tasks run 812 --result "tests pass" -- make test\n')
+
+    const made = await capture(() => app.run(['tasks', 'create', 'embedded', 'fix CVE-123 in acme/web']))
+    expect(made).toMatchObject({ code: 0, stderr: '' })
+    const id = made.stdout.trim()
+    // What to run next is the app's command, not vb's.
+    expect(await capture(() => app.run(['tasks', 'complete', id, 'done']))).toEqual({ code: 1, stdout: '', stderr: `error: You hold no claim on task #${id} as yourself.\n\n  Claim it:\n    vercel board tasks claim ${id}\n` })
+    const reserved = await capture(() => app.run(['label', id, 'board.task=claimed']))
+    expect(reserved).toMatchObject({ code: 2, stdout: '' })
+    expect(reserved.stderr).toMatch(new RegExp(`^error: Can't label #${id}\\. Labels under board\\. are the board's own\\.\\n  [^\\n]+\\n\\n  Claim it:\\n    vercel board tasks claim ${id}\\n$`))
+
+    // One run claims and the next settles: the claim is kept where the app's CLI keeps its state.
+    expect(await capture(() => app.run(['tasks', 'claim', id]))).toEqual({ code: 0, stdout: `#${id}  yours for 15m  fix CVE-123 in acme/web\n`, stderr: '' })
+    expect((await readdir(join(home, 'board', 'claims'))).filter((name) => name.endsWith('.json'))).toHaveLength(1)
+    expect(await capture(() => app.run(['tasks', 'complete', id, 'fixed in a1b2c3']))).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(await readdir(join(home, 'board', 'claims'))).toEqual([])
+    expect(await capture(() => app.run(['tasks', 'embedded', '--state', 'all']))).toEqual({ code: 0, stdout: `#${id}  completed  fix CVE-123 in acme/web         fixed in a1b2c3\n`, stderr: '' })
+
+    // What a task waits for is set there too, and a command cut short names the app's help.
+    const next = (await capture(() => app.run(['tasks', 'create', 'embedded/next', 'review the fix']))).stdout.trim()
+    const first = (await capture(() => app.run(['tasks', 'create', 'embedded/next', 'tag the release']))).stdout.trim()
+    expect(await capture(() => app.run(['tasks', 'needs', next, first]))).toEqual({ code: 0, stdout: `${next} needs #${first}\n`, stderr: '' })
+    expect(await capture(() => app.run(['tasks', 'needs', next]))).toEqual({ code: 2, stdout: '', stderr: 'error: Missing the tasks it waits for now, by ID, or --none for nothing.\n\n  See how to use it:\n    vercel board tasks --help\n' })
+    expect(await capture(() => app.run(['tasks', 'needs', next, '--none']))).toEqual({ code: 0, stdout: `${next} needs nothing\n`, stderr: '' })
+    expect(await capture(() => app.run(['tasks', 'embedded/next']))).toEqual({ code: 0, stdout: `#${next}  ready      review the fix\n#${first}  ready      tag the release\n`, stderr: '' })
+
+    // A plan from a file, in as many writes as it takes: one that stops midway names the app's command to finish it.
+    const steps = Array.from({ length: 101 }, (_, n) => ({ text: `step ${n}`, ...(n === 100 ? { needs: ['999999'] } : {}) }))
+    const plan = join(home, 'plan.json')
+    await writeFile(plan, JSON.stringify(steps))
+    const stopped = await capture(() => app.run(['tasks', 'create', 'embedded-plan', '--file', plan]))
+    expect(stopped).toMatchObject({ code: 2, stdout: '' })
+    expect(stopped.stderr).toMatch(new RegExp(`\\n  made 100 of 101: #\\d+ to #\\d+\\n\\n  Make the rest, under the same key: what was made stays as it is:\\n    vercel board tasks create embedded-plan --file ${plan} --idempotency-key [0-9a-f-]{36}\\n$`))
+  }, 30_000)
+
   it("asks for the app's login and team only when a request needs them, and reaches that team's board with them", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme' })
@@ -322,6 +363,154 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("reads on from a filtered page after a cursor without skipping a thread, though Vercel's board places each by its newest match", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    const as = async (who: string, args: string[]) => {
+      vi.stubEnv('VERCEL_AUTH_TOKEN', `user:${who}`)
+      return capture(() => app.run([...args, '--scope', 'acme']))
+    }
+    const app = createApp({ appName: 'vercel board' })
+    try {
+      const start = (await as('u_jb', ['post', 'dev', 'start'])).stdout.trim()
+      const a = (await as('u_val', ['post', 'dev', 'A by val'])).stdout.trim()
+      const b = (await as('u_val', ['post', 'dev', 'B by val'])).stdout.trim()
+      // A reply on A by someone else, after B: A's latest message is now past B's.
+      expect((await as('u_jb', ['reply', a, 'on A, by jb'])).code).toBe(0)
+      // Val's threads since the start, a page at a time, each next command pasted as it says.
+      const seen = new Set<string>()
+      let command = ['read', 'dev', '--by', 'me', '--limit', '1', '--after', start]
+      for (let page = 0; page < 4; page++) {
+        const { stdout } = await as('u_val', command)
+        for (const [, id] of stdout.matchAll(/^#(\S+) /gm)) seen.add(id!)
+        const more = /\nmore since then: vercel board (.+)\n$/.exec(stdout)
+        if (!more) break
+        command = more[1]!.split(' ').filter((word) => word !== '--scope' && word !== 'acme')
+      }
+      expect([...seen].sort()).toEqual([a, b].sort())
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("leaves a --json read the board's page as it answered, its older included, so paging back with it skips none", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const ids: string[] = []
+      for (const n of [1, 2, 3]) ids.push((await capture(() => app.run(['post', 'dev', `job ${n}`, '--scope', 'acme']))).stdout.trim())
+      const read = async (...args: string[]) => JSON.parse((await capture(() => app.run(['read', 'dev', '--limit', '2', '--json', '--scope', 'acme', ...args]))).stdout)
+      const newest = await read()
+      expect(newest.threads.map((thread: { message: { id: string } }) => thread.message.id)).toEqual(ids.slice(1))
+      // The page before it, by the protocol's `older`: the one thread left.
+      expect(newest.older).toEqual(expect.any(String))
+      const handle = board({ backend: vercel({ team: 'team_test', api: 'https://api.vercel.com', fetch: (input, init) => as(api, 'user:u_jb')(input, init) }) })
+      const back = await handle.threads({ channel: 'dev', limit: 2, before: newest.older })
+      expect(back.threads.map((thread) => thread.message.id)).toEqual(ids.slice(0, 1))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("says how long to wait when Vercel's API still rate-limits a command after its retries, and that the limit is the login's, not this agent's", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    // The API's 429, as it answers one: a minute in Retry-After, and the window's end, 42 seconds off, in its own headers.
+    const throttled = () =>
+      Response.json(
+        { error: { code: 'rate_limited', message: 'Too many requests - try again in 60 seconds (more than 600, code: "api-messageboard-read")' } },
+        { status: 429, headers: { 'retry-after': '60', 'x-ratelimit-limit': '600', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 42) } },
+      )
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => throttled())
+    vi.useFakeTimers()
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      for (const json of [false, true]) {
+        const reading = capture(() => app.run(['read', 'dev', '--scope', 'acme', ...(json ? ['--json'] : [])]))
+        await vi.advanceTimersByTimeAsync(60_000)
+        const { code, stderr } = await reading
+        expect(code).toBe(1)
+        if (!json)
+          expect(stderr).toMatch(
+            /^error: Can't read dev\. Too many requests to the board\.\n {2}Vercel's API rate-limited 5 tries in \d+s\. It takes 600 requests a minute per login or token, for all its agents and profiles together\.\n\n {2}Wait 42s, then run it again\n$/,
+          )
+        else expect(JSON.parse(stderr)).toMatchObject({ reason: 'rate_limited', hint: 'Wait 42s, then run it again', data: { error: { status: 429, retryAfter: 42 } } })
+      }
+    } finally {
+      vi.useRealTimers()
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("says what a task command was doing when Vercel's API refuses it for a limit of its own, with the API's words under it", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const run = (...args: string[]) => capture(() => app.run([...args, '--scope', 'acme']))
+      // A root's text is a message's: what to do with the long part, as for a post, where a task takes it.
+      expect(await run('tasks', 'create', 'dev', 'x'.repeat(10_001))).toEqual({
+        code: 1,
+        stdout: '',
+        stderr: "error: Can't create a task in dev. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
+      })
+      const id = (await run('tasks', 'create', 'dev', 'a long build')).stdout.trim()
+      const refused = async (args: string[], lines: string[]) => expect(await run(...args), args.slice(0, 2).join(' ')).toEqual({ code: 2, stdout: '', stderr: `${lines.join('\n')}\n` })
+      // What it waits for, and whose tasks a claim takes: the API says how many.
+      const others: string[] = []
+      for (let n = 0; n < 21; n++) others.push((await run('tasks', 'create', 'dev', `step ${n}`)).stdout.trim())
+      await refused(['tasks', 'create', 'dev', 'after them all', ...others.flatMap((other) => ['--needs', other])], ["error: Can't create a task in dev.", '  needs is at most 20 thread IDs, with no repeats.'])
+      await refused(['tasks', 'claim', '--ready', 'dev', ...Array.from({ length: 33 }, (_, n) => ['--from', `vercel:user:u_${n}`]).flat()], ["error: Can't claim a task in dev.", '  from is at most 32 owner IDs.'])
+      // A result, a reason, and a hold's kind: how long each may be.
+      expect((await run('tasks', 'claim', id)).code).toBe(0)
+      const note = 'x'.repeat(1001)
+      await refused(['tasks', 'complete', id, note], [`error: Can't complete task #${id}.`, '  result is 1 to 1,000 characters, not blank.'])
+      await refused(['tasks', 'fail', id, note], [`error: Can't fail task #${id}.`, '  reason is 1 to 1,000 characters, not blank.'])
+      await refused(['tasks', 'block', id, 'approve the deploy?', '--kind', 'k'.repeat(65)], [`error: Can't block task #${id}.`, '  kind is up to 64 lowercase letters, numbers, and _.-'])
+      await refused(['tasks', 'cancel', id, note], [`error: Can't cancel task #${id}.`, '  reason is 1 to 1,000 characters, not blank.'])
+      // What a task waits for, changed: the API's own code for too many, said as the command says a set it can't take.
+      expect(await run('tasks', 'needs', others[0]!, ...others.slice(1), id)).toEqual({
+        code: 2,
+        stdout: '',
+        stderr: `error: Can't change what task #${others[0]} needs. It waits for tasks you can read, and none that waits for it.\n  A task waits for 20 tasks at most.\n\n  See what it waits for now:\n    vercel board read ${others[0]}\n  Or see the tasks there are:\n    vercel board tasks --state all\n`,
+      })
+      // A plan's tasks are held to the same: the longest text says what the API's refusal of one means.
+      const plan = join(home, 'plan.json')
+      await writeFile(plan, JSON.stringify([{ text: 'fix CVE-123 in acme/web' }, { text: 'x'.repeat(10_001) }]))
+      expect(await run('tasks', 'create', 'plans', '--file', plan)).toEqual({
+        code: 1,
+        stdout: '',
+        stderr: "error: Can't create tasks in plans. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
+      })
+      // The task is as it was, and what's within the API's limits lands.
+      expect(await run('tasks', 'complete', id, 'x'.repeat(1000))).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it("names where another project's import came from by that project, and takes it to --source by its name or its ID", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' } })
@@ -423,7 +612,7 @@ describe('the embedded CLI', () => {
       const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
       fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
       const owner = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
-      expect(owner).toMatchObject({ code: 0, stdout: expect.stringMatching(/^Julián Benegas \(vercel:user:u_jb\)\n/) })
+      expect(owner).toMatchObject({ code: 0, stdout: expect.stringMatching(/^Ada Lovelace \(vercel:user:u_jb\)\n/) })
       expect(owner.stdout).not.toMatch(/^(can|token) /m)
       vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
       const viewer = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
@@ -435,9 +624,10 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("sends your login to Vercel's API and never BOARD_TOKEN, from vb and from a CLI that runs board's, and says to log in again when it's refused", async () => {
+  it("sends BOARD_TOKEN to Vercel's API ahead of your login, from vb and from a CLI that runs board's, and your login without it, each refusal saying what to renew", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_TOKEN', 'user:u_bo')
     vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
     const api = fakeMessageboard({ tokens: { p9Lr4vTzQ2wc: 'user:u_ada' } })
     const sent: (string | null)[] = []
@@ -445,23 +635,81 @@ describe('the embedded CLI', () => {
       sent.push(new Request(input, init).headers.get('authorization'))
       return api.fetch(input, init)
     })
+    const run = (...args: string[]) => capture(() => main([...args, '--scope', 'test'], { name: 'board', commands: local }))
     const cwd = process.cwd()
     process.chdir(home)
     try {
-      const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      const whoami = await run('whoami')
       expect(whoami.code).toBe(0)
-      expect(whoami.stdout).toMatch(/^.* \(vercel:user:u_jb\)\n/)
-      expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
-      // `vercel board`: the login it hands over.
+      expect(whoami.stdout).toMatch(/^.* \(vercel:user:u_ada\)\n/)
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+      // `vercel board`: BOARD_TOKEN goes ahead of the login it hands over too.
       sent.length = 0
       const app = createApp({ appName: 'vercel board', login: async () => 'user:u_jb', team: async () => 'team_test' })
       expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+      // A BOARD_TOKEN it refuses is yours to replace: logging in changes nothing.
+      vi.stubEnv('BOARD_TOKEN', 'not-a-token')
+      expect((await run('read', 'general')).stderr).toContain('BOARD_TOKEN')
+      // Without it, your login, and never VERCEL_TOKEN.
+      vi.stubEnv('BOARD_TOKEN', '')
+      sent.length = 0
+      expect((await run('whoami')).stdout).toMatch(/^.* \(vercel:user:u_jb\)\n/)
       expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
-      // A login it refuses is yours to renew: BOARD_TOKEN has nothing to do with it.
       vi.stubEnv('VERCEL_AUTH_TOKEN', 'not-a-token')
-      const refused = await capture(() => main(['read', 'general', '--scope', 'test'], { name: 'board', commands: local }))
+      const refused = await run('read', 'general')
       expect(refused).toMatchObject({ code: 1, stderr: expect.stringContaining('vercel login') })
       expect(refused.stderr).not.toContain('BOARD_TOKEN')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("sends the token an app was passed to Vercel's API itself, ahead of a deployment's own, BOARD_TOKEN, and the app's login, and says it's the one to replace when it's refused", async () => {
+    const home = await isolated()
+    // On a deployment, with a BOARD_TOKEN too: each is someone else, and so is the app's login.
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_test', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+    for (const [key, set] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, BOARD_TOKEN: 'p9Lr4vTzQ2wc' })) vi.stubEnv(key, set)
+    const api = fakeMessageboard({ tokens: { [oidc]: 'project:prj_pong:production', p9Lr4vTzQ2wc: 'user:u_bo', w3Nc8sJd1hFy: 'user:u_ada' } })
+    const sent: (string | null)[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      sent.push(new Request(input, init).headers.get('authorization'))
+      return api.fetch(input, init)
+    })
+    // The app's fetch adds its own login's credentials to whatever it sends, as `vercel board`'s does.
+    const appFetch: typeof fetch = (input, init) => {
+      const headers = new Headers(init?.headers)
+      headers.set('authorization', 'Bearer user:u_jb')
+      return globalThis.fetch(input, { ...init, headers })
+    }
+    const app = (token?: string) => createApp({ appName: 'vercel board', team: async () => 'team_test', login: async () => 'user:u_jb', fetch: appFetch, ...(token ? { token } : {}) })
+    const whoami = async (token?: string) => JSON.parse((await capture(() => app(token).run(['whoami', '--json']))).stdout) as { principal: string; source: string }
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await whoami('w3Nc8sJd1hFy')).toMatchObject({ principal: 'vercel:user:u_ada', source: 'the token you passed' })
+      expect(new Set(sent)).toEqual(new Set(['Bearer w3Nc8sJd1hFy']))
+      // Off a deployment, BOARD_TOKEN doesn't go ahead of it either.
+      vi.stubEnv('VERCEL', '')
+      vi.stubEnv('VERCEL_OIDC_TOKEN', '')
+      expect(await whoami('w3Nc8sJd1hFy')).toMatchObject({ principal: 'vercel:user:u_ada' })
+      expect(await whoami()).toMatchObject({ principal: 'vercel:user:u_bo', source: 'BOARD_TOKEN' })
+      // With neither, the app's login goes, through the app's fetch: the one a passed token never takes.
+      vi.stubEnv('BOARD_TOKEN', '')
+      expect(await whoami()).toMatchObject({ principal: 'vercel:user:u_jb', source: 'the Vercel CLI' })
+      expect(await whoami('w3Nc8sJd1hFy')).toMatchObject({ principal: 'vercel:user:u_ada' })
+      vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
+      // It's the run's: the next one, passed none, is the deployment again.
+      vi.stubEnv('VERCEL', '1')
+      vi.stubEnv('VERCEL_OIDC_TOKEN', oidc)
+      expect(await whoami()).toMatchObject({ principal: 'vercel:project:prj_pong:production', source: 'Vercel OIDC' })
+      // One Vercel's API refuses is yours to replace: neither logging in nor BOARD_TOKEN changes what's passed.
+      const refused = await capture(() => app('not-a-token').run(['read', 'general']))
+      expect(refused).toMatchObject({ code: 1, stderr: expect.stringContaining('Pass a token it accepts') })
+      expect(refused.stderr).not.toMatch(/vercel login|BOARD_TOKEN/)
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -498,7 +746,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("narrows a connection to Vercel's API with x-board-can, on your login and on VERCEL_TOKEN alike", async () => {
+  it("narrows a connection to Vercel's API with x-board-can, on your login", async () => {
     const home = await isolated()
     const api = fakeMessageboard()
     const sent: { can: string | null; type: string | null; authorization: string | null }[] = []
@@ -519,7 +767,7 @@ describe('the embedded CLI', () => {
     const cwd = process.cwd()
     process.chdir(home)
     try {
-      for (const [name, value] of [['VERCEL_AUTH_TOKEN', 'user:u_jb'], ['VERCEL_TOKEN', 'user:u_ada']] as const) {
+      for (const [name, value] of [['VERCEL_AUTH_TOKEN', 'user:u_jb']] as const) {
         vi.stubEnv(name, value)
         sent.length = 0
         expect(await capture(() => main(['probe', '--scope', 'test'], { name: 'board', commands: { probe } }))).toMatchObject({ code: 0, stdout: 'dev\n' })
@@ -789,8 +1037,8 @@ describe('the embedded CLI', () => {
 
   it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
     const home = await isolated()
-    // As a deployment, which Vercel's board takes watchers from.
-    vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+    // As a project, which Vercel's board takes watchers from.
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:production')
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
     const api = fakeMessageboard()
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))

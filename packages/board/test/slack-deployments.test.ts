@@ -11,7 +11,7 @@ const thread = 'C1:1700000000.000100'
 const LABEL = '**vercel[bot] (github)**: '
 
 /** Vercel's comment as sync hands it to a platform: the markdown that lists its deployments a line each, and the deployments. */
-const comment = (text: string, label = LABEL) => ({ markdown: `${label}${displayText(text, VERCEL_BOT)}`, deployments: vercelDeployments(text)! })
+const comment = (text: string, label = LABEL) => ({ markdown: `${label}${displayText(text, true)}`, deployments: vercelDeployments(text)! })
 /** Vercel's comment about one project, with its status changed. */
 const withStatus = (status: string) => VERCEL_BUILDING.replaceAll('Building', status).replaceAll('building', status.toLowerCase())
 
@@ -23,11 +23,11 @@ const link = (text: string, url: string) => ({ type: 'link', text, url })
 const status = (emoji: string, name: string, url: string) => rich({ type: 'emoji', name: emoji }, { type: 'text', text: ' ' }, link(name, url))
 const HEADERS = [cell('Project'), cell('Deployment'), cell('Actions'), cell('Updated')]
 /** The row of the project in `VERCEL_BUILDING`, as its links and its time (`2026-10-06T20:30:32.400Z`) have it. */
-const factory = 'https://vercel.com/vercel-internal-playground/vboard-factory'
+const factory = 'https://vercel.com/acme/acme-agents'
 const builtRow = (emoji: string, name: string) => [
-  rich(link('vboard-factory', factory)),
+  rich(link('acme-agents', factory)),
   status(emoji, name, `${factory}/7ZEaNBTETQjaUF4Bd1VCxbM8rR3n`),
-  rich(link('Preview', 'https://vboard-factory-git-pi-224.playground-vercel.tools')),
+  rich(link('Preview', 'https://acme-agents-git-pi-224.acme.dev')),
   // In seconds, which Slack shows as how long ago, with Vercel's own words for a client that can't.
   rich({ type: 'date', timestamp: Date.UTC(2026, 9, 6, 20, 30, 32) / 1000, format: '{ago}', fallback: 'Oct 6, 2026 8:30pm UTC' }),
 ]
@@ -90,19 +90,19 @@ describe("Vercel's deployment comment in Slack", () => {
         channel: 'C1',
         thread_ts: '1700000000.000100',
         // What a notification shows: the text as Slack's mrkdwn, and the deployments in plain words.
-        text: '*vercel[bot] (github)*: *▲ Vercel*\nvboard-factory: Building\n1 skipped: <https://vercel.com/basehub/vboard|vboard>',
+        text: '*vercel[bot] (github)*: *▲ Vercel*\nacme-agents: Building\n1 skipped: <https://vercel.com/acme/vboard|vboard>',
         blocks: [
           heading,
           table([
             HEADERS,
             [
-              rich(link('vboard-factory', factory)),
+              rich(link('acme-agents', factory)),
               status('large_yellow_circle', 'Building', `${factory}/AKYQCQiM4Vf5Zp1AAcH6nQDYUC4n`),
-              rich(link('Preview', 'https://vboard-factory-git-changeset-release-main.playground-vercel.tools')),
+              rich(link('Preview', 'https://acme-agents-git-changeset-release-main.acme.dev')),
               rich({ type: 'date', timestamp: Date.UTC(2026, 9, 6, 17, 25, 54) / 1000, format: '{ago}', fallback: 'Oct 6, 2026 5:25pm UTC' }),
             ],
           ]),
-          { type: 'markdown', text: '1 skipped: [vboard](https://vercel.com/basehub/vboard)' },
+          { type: 'markdown', text: '1 skipped: [vboard](https://vercel.com/acme/vboard)' },
         ],
         unfurl_links: false,
         unfurl_media: false,
@@ -156,7 +156,7 @@ describe("Vercel's deployment comment in Slack", () => {
       {
         channel: 'C1',
         ts: '1700000000.000200',
-        text: '*vercel[bot] (github)*: *▲ Vercel*\nvboard-factory: Ready',
+        text: '*vercel[bot] (github)*: *▲ Vercel*\nacme-agents: Ready',
         blocks: [heading, table([HEADERS, builtRow('large_green_circle', 'Ready')])],
       },
     ])
@@ -178,7 +178,7 @@ describe("Vercel's deployment comment in Slack", () => {
     const { provider, posted } = slackWith(['chat:write'])
     // A renderer's own words before the list, with the Chat SDK's placeholder for an emoji, which the adapter writes as Slack's name for it.
     await provider.post(thread, 'thread', comment(VERCEL_BUILDING, 'deployed {{emoji:thumbs_up}}\n\n'))
-    expect(posted[0]).toMatchObject({ text: 'deployed :+1:\n\n*▲ Vercel*\nvboard-factory: Building', blocks: [{ type: 'markdown', text: 'deployed :+1:\n\n**▲ Vercel**' }, expect.objectContaining({ type: 'data_table' })] })
+    expect(posted[0]).toMatchObject({ text: 'deployed :+1:\n\n*▲ Vercel*\nacme-agents: Building', blocks: [{ type: 'markdown', text: 'deployed :+1:\n\n**▲ Vercel**' }, expect.objectContaining({ type: 'data_table' })] })
     const long = 'word '.repeat(1200).trim()
     await provider.post(thread, 'thread', comment(VERCEL_BUILDING, `${long}\n\n`))
     const { text, blocks } = posted[1] as { text: string; blocks: { text?: string }[] }
@@ -213,7 +213,7 @@ describe('the comment goes out as markdown, a line per deployment, as before', (
 
   it("when a renderer wrote the deployments its own way, so there's no list to put a table in place of", async () => {
     const { provider, posted, updated, viaAdapter, editsViaAdapter } = slackWith(['chat:write'])
-    const own = { markdown: 'Vercel is building vboard-factory', deployments: body.deployments }
+    const own = { markdown: 'Vercel is building acme-agents', deployments: body.deployments }
     await provider.post(thread, 'thread', own)
     await provider.edit(thread, '1700000000.000200', own)
     expect([viaAdapter, editsViaAdapter]).toEqual([[{ markdown: own.markdown }], [{ markdown: own.markdown }]])

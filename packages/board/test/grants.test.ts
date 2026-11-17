@@ -89,8 +89,8 @@ describe('grants', () => {
   })
 
   it('lets no one in through everyone alone, and narrows whoever else is let in', async () => {
-    const { person, as } = await setUp()
-    await person('POST', '/grants', { principals: [everyone], can: { '*': 'all', 'ci/': [] } })
+    const { owner, as } = await setUp()
+    await owner('POST', '/grants', { principals: [everyone], can: { '*': 'all', 'ci/': [] } })
     expect((await (await as(workflowToken()))('GET', '/me')).status).toBe(403)
     // A project on the team is let in by g2, and everyone's ci/ is more specific than g2's *.
     expect((await (await as(deploymentToken('web', 'prj_web', 'production')))('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync'], 'ci/': [] })
@@ -199,7 +199,7 @@ describe('grants', () => {
 
   it("lets the board's local user, its owner, change any grant, though a closed channel still takes a grant to read", async () => {
     const { owner, person, narrowed } = await setUp()
-    const lock = await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    const lock = await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] }, lockMeOut: true })
     // A person on the team is no owner: once security/ is closed to them, they open it to no one, and can't undo it.
     expect((await person('POST', '/grants', { principals: [user('u_julian')], can: { 'security/': 'all' } })).status).toBe(403)
     expect((await person('POST', `/grants/${lock.body.grant.id}/revoke`, {})).status).toBe(403)
@@ -213,6 +213,110 @@ describe('grants', () => {
     const reader = await narrowed(localUserToken(), 'security/=read')
     expect((await reader('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })).status).toBe(403)
     expect((await reader('GET', '/grants')).status).toBe(403)
+  })
+
+  it("refuses a grant its maker couldn't take back, until it says lockMeOut", async () => {
+    const { owner, person } = await setUp()
+    // Read-only for everyone, the person who makes it included: they may, and then no one but an owner changes it.
+    const lock = { principals: [everyone], can: { 'factory/': ['read'], 'factory/memory/': [] } }
+    const refused = await person('POST', '/grants', lock)
+    expect([refused.status, refused.body.error.code]).toEqual([409, 'grant_lockout'])
+    // It names a pattern they'd lose, which they wrote themselves.
+    expect(refused.body.error.message).toContain('factory/')
+    expect((await person('GET', '/grants')).body.grants.map((grant: { id: string }) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+    expect((await person('POST', '/grants/batch', { grants: [lock] })).status).toBe(409)
+    // Told to, the board makes it, and it holds against its maker.
+    const made = await person('POST', '/grants', { ...lock, lockMeOut: true })
+    expect(made.status).toBe(200)
+    expect((await person('GET', '/me')).body.can).toMatchObject({ 'factory/': ['read'], 'factory/memory/': [] })
+    expect((await person('POST', `/grants/${made.body.grant.id}/revoke`, {})).status).toBe(403)
+    expect((await person('POST', `/grants/${made.body.grant.id}/revoke`, { lockMeOut: true })).status).toBe(403)
+    // An owner is never locked out, so nothing asks one to say so.
+    expect((await owner('POST', `/grants/${made.body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
+    expect((await owner('POST', '/grants', lock)).status).toBe(200)
+  })
+
+  it('makes a lock with the grant that keeps its maker in, in one write and in either order, or after it', async () => {
+    const { person } = await setUp()
+    const lock = { principals: [everyone], can: { 'factory/': ['read'], 'factory/memory/': [] } }
+    const keeps = { principals: [user('u_julian')], can: { 'factory/': 'all', 'factory/memory/': 'all' } }
+    // The lock first: made one at a time, the grant after it would be refused.
+    const both = await person('POST', '/grants/batch', { grants: [lock, keeps] })
+    expect(both.status).toBe(200)
+    expect(both.body.grants).toMatchObject([
+      { id: 'g4', principals: [everyone], can: lock.can, by: 'vercel:user:u_julian' },
+      { id: 'g5', principals: [{ kind: 'user', userId: 'u_julian' }], can: keeps.can },
+    ])
+    expect((await person('GET', '/me')).body.can).toEqual({ '*': ALL })
+    // So it's theirs to lift: the lock, and then the grant that kept them in.
+    expect((await person('POST', '/grants/g4/revoke', {})).body).toEqual({ revoked: true })
+    expect((await person('POST', '/grants/g5/revoke', {})).body).toEqual({ revoked: true })
+    // One at a time, the grant that keeps them in goes first.
+    expect((await person('POST', '/grants', keeps)).status).toBe(200)
+    expect((await person('POST', '/grants', lock)).status).toBe(200)
+  })
+
+  it("refuses a lock whose maker is kept in at only some of its patterns, naming one it'd lose", async () => {
+    const { person } = await setUp()
+    const lock = { principals: [everyone], can: { 'factory/': ['read'], 'factory/memory/': [] } }
+    // factory/memory/ is more specific than factory/, so a grant on factory/ alone leaves it closed to them.
+    const refused = await person('POST', '/grants/batch', { grants: [{ principals: [user('u_julian')], can: { 'factory/': 'all' } }, lock] })
+    expect([refused.status, refused.body.error.code]).toEqual([409, 'grant_lockout'])
+    expect(refused.body.error.message).toContain('factory/memory/')
+    expect((await person('GET', '/grants')).body.grants).toHaveLength(3)
+  })
+
+  it('makes all of a batch or none of it, each grant judged as one made alone is', async () => {
+    const { owner, person, as } = await setUp()
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    const run = { kind: 'github', repository: 'acme/web' }
+    const bob = await as(personToken('u_bob'))
+    // The second is on security/, where Bob manages nothing: neither is made.
+    const refused = await bob('POST', '/grants/batch', { grants: [{ principals: [run], can: { 'ci/': ['post'] } }, { principals: [run], can: { 'security/': ['read'] } }] })
+    expect(refused.status).toBe(403)
+    expect((await owner('GET', '/grants')).body.grants).toHaveLength(4)
+    // Two issuers that name the same principals can't sit side by side, in one grant or across a batch's.
+    const twice = await person('POST', '/grants/batch', {
+      grants: [
+        { principals: [{ kind: 'oidc', issuer: 'https://ci.example.com/a', claims: { sub: 'x' } }], can: { 'ci/': ['post'] } },
+        { principals: [{ kind: 'oidc', issuer: 'https://ci.example.com/a/', claims: { sub: 'y' } }], can: { 'ci/': ['post'] } },
+      ],
+    })
+    expect([twice.status, twice.body.error.code]).toEqual([400, 'invalid_grant'])
+    expect((await person('POST', '/grants/batch', { grants: [] })).status).toBe(400)
+    expect((await person('POST', '/grants/batch', { grants: Array.from({ length: 17 }, () => ({ principals: [run], can: { 'ci/': ['post'] } })) })).status).toBe(400)
+    expect((await person('POST', '/grants/batch', { grants: [{ principals: [run], can: { 'ci/': ['post'] }, lockMeOut: true }] })).status).toBe(400)
+    expect((await owner('GET', '/grants')).body.grants).toHaveLength(4)
+  })
+
+  it('calls revoking or narrowing the grant that keeps its caller in a lockout too', async () => {
+    const { owner, person, narrowed } = await setUp()
+    await person('POST', '/grants/batch', { grants: [{ principals: [everyone], can: { 'factory/': ['read'] } }, { principals: [user('u_julian'), user('u_ada')], can: { 'factory/': 'all' } }] })
+    const revoked = await person('POST', '/grants/g5/revoke', {})
+    expect([revoked.status, revoked.body.error.code]).toEqual([409, 'grant_lockout'])
+    // They may list the grants, so they're told where.
+    expect(revoked.body.error.message).toContain('factory/')
+    for (const change of [{ can: { 'factory/': ['read', 'post'] } }, { remove: [user('u_julian')] }]) {
+      const updated = await person('PATCH', '/grants/g5', change)
+      expect([JSON.stringify(change), updated.status, updated.body.error?.code]).toEqual([JSON.stringify(change), 409, 'grant_lockout'])
+    }
+    // Refused, it changed nothing.
+    expect((await person('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === 'g5')).toMatchObject({ principals: [{ userId: 'u_julian' }, { userId: 'u_ada' }], can: { 'factory/': 'all' } })
+    // Someone else out of it costs them nothing.
+    expect((await person('PATCH', '/grants/g5', { remove: [user('u_ada')] })).status).toBe(200)
+    // A caller that can't list the grants isn't told where a stored one reaches.
+    const scoped = await narrowed(personToken(), 'factory/=all')
+    const hidden = await scoped('POST', '/grants/g5/revoke', {})
+    expect([hidden.status, hidden.body.error.code, JSON.stringify(hidden.body).includes('factory')]).toEqual([409, 'grant_lockout', false])
+    // Told to, it's done, and then only the owner changes anything there.
+    expect((await person('PATCH', '/grants/g5', { remove: [user('u_julian')], add: [user('u_ada')], lockMeOut: true })).status).toBe(200)
+    expect((await person('POST', '/grants/g4/revoke', { lockMeOut: true })).status).toBe(403)
+    expect((await owner('POST', '/grants/g5/revoke', {})).body).toEqual({ revoked: true })
+    // A revoke told to go ahead is done too, and leaves them out.
+    await person('POST', '/grants/batch', { grants: [{ principals: [everyone], can: { 'attic/': [] } }, { principals: [user('u_julian')], can: { 'attic/': 'all' } }] })
+    expect((await person('POST', '/grants/g7/revoke', {})).status).toBe(409)
+    expect((await person('POST', '/grants/g7/revoke', { lockMeOut: true })).body).toEqual({ revoked: true })
+    expect((await person('GET', '/me')).body.can).toMatchObject({ 'attic/': [] })
   })
 
   it("names no stored grant's channels to a caller that can't list the grants", async () => {
@@ -384,6 +488,34 @@ describe('grants', () => {
       // Its own document, naming it and its keys, is how it's let in.
       routes = { [DISCOVERY]: () => Response.json({ issuer: ISS, jwks_uri: `${ISS}/jwks` }), [`${ISS}/jwks`]: () => Response.json(testKeys) }
       expect(await me()).toBe(200)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("fetches an issuer's discovery once for tokens that arrive together, and again after it failed", async () => {
+    const ISS = 'https://idp-once.acme.dev'
+    const DISCOVERY = `${ISS}/.well-known/openid-configuration`
+    const { person, as } = await setUp()
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['read'] } })
+    const call = await as(oidcToken({}, ISS))
+    let discoveries = 0
+    let up = false
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL): Promise<Response> => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url === DISCOVERY) {
+        discoveries++
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return up ? Response.json({ issuer: ISS, jwks_uri: `${ISS}/jwks` }) : new Response('down', { status: 503 })
+      }
+      return url === `${ISS}/jwks` ? Response.json(testKeys) : new Response('not found', { status: 404 })
+    })
+    try {
+      const together = await Promise.all(Array.from({ length: 5 }, async () => (await call('GET', '/me')).status))
+      expect([together, discoveries]).toEqual([[401, 401, 401, 401, 401], 1])
+      up = true
+      expect((await call('GET', '/me')).status).toBe(200)
+      expect(discoveries).toBe(2)
     } finally {
       vi.unstubAllGlobals()
     }

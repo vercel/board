@@ -55,6 +55,8 @@ function history(seed: number, length: number): BoardEvent[] {
   const r = random(seed)
   const events: BoardEvent[] = []
   const posted: { id: number; re: number | null; channel: string; thread: string }[] = []
+  /** Where each task stood when the generator last wrote to it, to pick what comes next. */
+  const tasks = new Map<number, { state: string; epoch: number }>()
   let at = Date.parse('2026-10-01T00:00:00Z')
   const push = (type: string, payload: unknown, id = `e${events.length + 1}`) => {
     at += 1000
@@ -96,6 +98,93 @@ function history(seed: number, length: number): BoardEvent[] {
         from: imported ? 'slack' : null,
       })
       posted.push({ id: events.length, re: root, channel: rootPost.channel, thread: rootPost.thread })
+    } else if (roll < 0.68) {
+      // What happens to tasks. Most of it follows a task along, so histories reach every state:
+      // `tasks` only steers which event comes next, and what's expected is still the fold's word.
+      // The rest lands anywhere, at any epoch, on replies too: writes a task has moved on from,
+      // which the fold lets change nothing.
+      const until = new Date(at + 60_000).toISOString()
+      const stale = (root: { id: number; thread: string }) => {
+        const about = { id: root.id, thread: root.thread }
+        const epoch = r.pick([1, 2, 3])
+        const kind = r.pick(['created', 'ready', 'claimed', 'renewed', 'released', 'expired', 'completed', 'failed', 'blocked', 'unblocked', 'canceled', 'reopened', 'assigned', 'needs'] as const)
+        if (kind === 'created') push('task.created', { ...about, needs: [], for: null, by: author })
+        else if (kind === 'needs') push('task.needs_changed', { ...about, needs: r.chance(0.5) ? [] : [r.pick(posted).id], by: author })
+        else if (kind === 'ready') push('task.ready', about)
+        else if (kind === 'claimed') push('task.claimed', { ...about, epoch, until, token: 'b'.repeat(64), by: author })
+        else if (kind === 'renewed') push('task.renewed', { ...about, epoch, until, by: author })
+        else if (kind === 'released') push('task.released', { ...about, epoch, by: author })
+        else if (kind === 'expired') push('task.expired', { ...about, epoch })
+        else if (kind === 'completed') push('task.completed', { ...about, epoch, result: null, by: author })
+        else if (kind === 'failed') push('task.failed', { ...about, epoch, reason: text(), by: author })
+        else if (kind === 'blocked') push('task.blocked', { ...about, kind: null, reason: text(), by: author })
+        else if (kind === 'unblocked') push('task.unblocked', { ...about, by: author })
+        else if (kind === 'canceled') push('task.canceled', { ...about, reason: text(), by: author })
+        else if (kind === 'reopened') push('task.reopened', { ...about, by: author })
+        else push('task.assigned', { ...about, for: r.pick(AUTHORS).actor, by: author })
+      }
+      const roots = posted.filter((p) => p.re === null)
+      const known = roots.filter((p) => tasks.has(p.id))
+      if (r.chance(0.2)) stale(target)
+      else {
+        const root = known.length && r.chance(0.75) ? r.pick(known) : r.pick(roots)
+        const about = { id: root.id, thread: root.thread }
+        const task = tasks.get(root.id)
+        const others = known.filter((p) => p.id !== root.id)
+        /** What it waits for changes, to another task or to none: it waits again with any, as the fold has it, unless it's held. */
+        const rewire = (held = false) => {
+          const needs = others.length && r.chance(0.6) ? [r.pick(others).id] : []
+          push('task.needs_changed', { ...about, needs, by: author })
+          return held ? ('blocked' as const) : needs.length ? ('waiting' as const) : ('ready' as const)
+        }
+        if (!task) {
+          const needs = others.length && r.chance(0.3) ? [r.pick(others).id] : []
+          push('task.created', { ...about, needs, for: r.chance(0.2) ? r.pick(AUTHORS).actor : null, by: author })
+          tasks.set(root.id, { state: needs.length ? 'waiting' : 'ready', epoch: 0 })
+        } else if (task.state === 'waiting') {
+          const kind = r.pick(['ready', 'ready', 'blocked', 'canceled', 'needs'] as const)
+          if (kind === 'ready') push('task.ready', about)
+          else if (kind === 'blocked') push('task.blocked', { ...about, kind: 'needs_input', reason: text(), by: author })
+          else if (kind === 'canceled') push('task.canceled', { ...about, reason: text(), by: author })
+          task.state = kind === 'needs' ? rewire() : kind
+        } else if (task.state === 'ready') {
+          const kind = r.pick(['claimed', 'claimed', 'claimed', 'claimed', 'blocked', 'canceled', 'assigned', 'needs'] as const)
+          if (kind === 'claimed') push('task.claimed', { ...about, epoch: ++task.epoch, until, token: 'a'.repeat(64), by: author })
+          else if (kind === 'blocked') push('task.blocked', { ...about, kind: null, reason: text(), by: author })
+          else if (kind === 'canceled') push('task.canceled', { ...about, reason: text(), by: author })
+          else if (kind === 'assigned') push('task.assigned', { ...about, for: r.chance(0.5) ? r.pick(AUTHORS).actor : null, by: author })
+          if (kind === 'needs') task.state = rewire()
+          else if (kind !== 'assigned') task.state = kind
+        } else if (task.state === 'claimed') {
+          const { epoch } = task
+          const kind = r.pick(['renewed', 'released', 'expired', 'completed', 'completed', 'failed', 'failed', 'blocked', 'canceled'] as const)
+          if (kind === 'renewed') push('task.renewed', { ...about, epoch, until, by: author })
+          else if (kind === 'released') push('task.released', { ...about, epoch, by: author })
+          else if (kind === 'expired') push('task.expired', { ...about, epoch })
+          else if (kind === 'completed') push('task.completed', { ...about, epoch, result: r.chance(0.5) ? text() : null, by: author })
+          else if (kind === 'failed') push('task.failed', { ...about, epoch, reason: text(), by: author })
+          else if (kind === 'blocked') push('task.blocked', { ...about, kind: 'edited', reason: text(), by: author })
+          else push('task.canceled', { ...about, reason: text(), by: author })
+          if (kind !== 'renewed') task.state = kind === 'released' || kind === 'expired' ? 'ready' : kind
+        } else if (task.state === 'blocked') {
+          if (r.chance(0.2)) task.state = rewire(true)
+          else if (r.chance(0.7)) {
+            push('task.unblocked', { ...about, by: author })
+            task.state = 'ready'
+          } else {
+            push('task.canceled', { ...about, reason: text(), by: author })
+            task.state = 'canceled'
+          }
+        } else if (task.state === 'failed') {
+          if (r.chance(0.7)) {
+            push('task.reopened', { ...about, by: author })
+            task.state = 'ready'
+          } else {
+            push('task.canceled', { ...about, reason: text(), by: author })
+            task.state = 'canceled'
+          }
+        } else stale(root)
+      }
     } else {
       const base = { id: target.id, thread: target.thread, by: author, from: null }
       const kind = r.pick(['edit', 'delete', 'react', 'unreact', 'labels', 'linked', 'synced', 'synced', 'files', 'failed', 'attach', 'attach'] as const)
@@ -141,6 +230,13 @@ function expectedMessages(state: MessagesState, matches: (m: Message | undefined
   if (page.before !== undefined) found = found.filter((m) => m.id < page.before!)
   return page.after !== undefined ? found.filter((m) => m.id > page.after!).slice(0, page.limit) : found.slice(-page.limit)
 }
+/** Threads whose root matches, by the root's ID, each with its summary: what `roots` answers, over the full state. */
+function expectedRoots(state: MessagesState, matches: (m: Message | undefined) => boolean, page: { before?: number; after?: number; limit: number }) {
+  return expectedMessages(state, (m) => m !== undefined && m.re === null && matches(m), page).map((root) => {
+    const replies = (state.replies[root.id] ?? []).map((reply) => state.byId[reply]!).filter((reply) => !reply.deleted)
+    return { root, replies: replies.length, last: replies.at(-1) ?? null }
+  })
+}
 function expectedThreads(state: MessagesState, matches: (m: Message | undefined) => boolean, page: { after?: number; limit: number }) {
   const roots = new Set<number>()
   for (const message of Object.values(state.byId)) if (matches(message)) roots.add(message.re ?? message.id)
@@ -182,6 +278,10 @@ const FILTERS: ParsedFilters[] = [
   { label: [['tag.x', ['y']]], channel: 'dev/' },
   { label: [['constructor', null]] },
   { by: 'ada', label: [['pr', ['1']]], text: 'fix' },
+  // A task's state is a label the fold writes: the tables index it as any other.
+  { label: [['board.task', null]] },
+  { label: [['board.task', ['ready', 'claimed']]] },
+  { label: [['board.task', ['waiting', 'blocked', 'completed', 'failed', 'canceled']]], channel: 'dev/' },
 ]
 
 /**
@@ -234,6 +334,58 @@ function conformance(open: () => Promise<MessageTables>) {
       }
     }
     await tables.close()
+  })
+
+  it.each([4, 6])('list roots that match by their own ID, each with its thread\'s summary, for every filter and page (history %i)', async (seed) => {
+    const events = history(seed, 400)
+    const tables = await applied(events)
+    const { messages, actors } = fold(events)
+    const me = { id: 'vercel:user:u_bo', handle: 'bo' }
+    for (const filters of FILTERS) {
+      const matches = compileFilter(filters, { me, actors, messages, access: FULL_ACCESS })
+      const filter = toMessageFilter(filters, { me, actors, access: FULL_ACCESS })
+      for (const page of [{ limit: 50 }, { limit: 7, after: 0 }, { limit: 7, after: 120 }, { limit: 7, before: 300 }, { limit: 500 }]) {
+        const got = await tables.roots(filter, page)
+        expect(got.threads, JSON.stringify({ filters, page })).toEqual(expectedRoots(messages, matches, page))
+        expect(got.position).toBe(events.length)
+      }
+    }
+    // Roots only, and enough of them with replies that a summary is more than a root.
+    const all = (await tables.roots({}, { limit: 500 })).threads
+    expect(all.every((thread) => thread.root.re === null)).toBe(true)
+    expect(all.filter((thread) => thread.replies > 0 && thread.last !== null).length).toBeGreaterThan(10)
+    await tables.close()
+  })
+
+  it('keep each task on its root as the full-state fold does, in every state a task has', async () => {
+    const seen = new Set<string>()
+    // Three histories that between them leave tasks in every state: one alone reaches five or six.
+    for (const seed of [2, 3, 13]) {
+      const events = history(seed, 400)
+      const tables = await applied(events)
+      const { messages } = fold(events)
+      const tasks = Object.values(messages.byId).filter((m) => m.task)
+      // The history made tasks, and moved them: there's something here to disagree about.
+      expect(tasks.length, `history ${seed}`).toBeGreaterThanOrEqual(8)
+      expect(new Set(tasks.map((m) => m.task!.state)).size, `history ${seed}`).toBeGreaterThanOrEqual(4)
+      for (const message of tasks) {
+        seen.add(message.task!.state)
+        expect(message.re).toBeNull()
+        const stored = await tables.message(message.id)
+        expect(stored?.task, `history ${seed}, #${message.id}`).toEqual(message.task)
+        // The label is the state, on every root that's still there, and on none that's gone.
+        expect(stored?.labels['board.task'], `history ${seed}, #${message.id}`).toBe(message.deleted ? undefined : message.task!.state)
+      }
+      const labeled = (await tables.roots({ labels: [{ key: 'board.task', values: null }] }, { limit: 500 })).threads.map((thread) => thread.root.id)
+      expect(labeled).toEqual(tasks.filter((m) => !m.deleted).map((m) => m.id).sort((a, b) => a - b))
+      // Some were claimed more than once, so a later epoch's writes were folded too.
+      expect(Math.max(...tasks.map((m) => m.task!.epoch)), `history ${seed}`).toBeGreaterThanOrEqual(2)
+      // And some came to wait for other tasks than they were made with, or for none.
+      const made = new Map(events.flatMap((event) => (event.type === 'task.created' ? [[event.payload.id, JSON.stringify(event.payload.needs)] as const] : [])))
+      expect(tasks.filter((m) => made.get(m.id) !== JSON.stringify(m.task!.needs)).length, `history ${seed}`).toBeGreaterThanOrEqual(1)
+      await tables.close()
+    }
+    expect([...seen].sort()).toEqual(['blocked', 'canceled', 'claimed', 'completed', 'failed', 'ready', 'waiting'])
   })
 
   it('let a writer apply only the very next event, never ahead of a gap', async () => {

@@ -115,7 +115,7 @@ describe('a write-only source', () => {
     await reader.cancel()
   })
 
-  it('answers a write-only caller’s mentions alike, whoever has the handle, and they still reach who they name', async () => {
+  it('answers a caller that can see no one alike, whoever has the handle it typed', async () => {
     const board = await granting([intake], { scheduler: fakeQueue().scheduler })
     // A Vercel login's handle is its user ID: Julian's is `julian`.
     const julian = caller(board.fetch, await personToken('julian'), {})
@@ -123,6 +123,8 @@ describe('a write-only source', () => {
     await julian('POST', '/messages', { channel: 'dev', text: 'hi' })
     // A person and a project's deployments go by sam.
     for (const sam of [await personToken('sam'), await deploymentToken('sam', 'prj_sam', 'production')]) await caller(board.fetch, sam, {})('POST', '/messages', { channel: 'dev', text: 'hi' })
+    // Without g2's every project on the team, front only posts to feedback: it reads nothing, and sees no one.
+    await board.revokeGrant('g2')
     // One has the handle, two share one, and no one has the last: nothing in the answers tells them apart.
     const answers = []
     for (const handle of ['julian', 'sam', 'nobody']) {
@@ -131,12 +133,28 @@ describe('a write-only source', () => {
       const scheduled = await front('POST', '/schedules', { channel: 'feedback', text, in: '1h' })
       const edited = await front('POST', `/messages/${posted.body.message.id}/edit`, { text: `${text}!` })
       expect([posted.status, posted.body.message.text, scheduled.status, scheduled.body.schedule.text, edited.status], handle).toEqual([201, text, 201, text, 200])
-      answers.push([Object.keys(posted.body).sort(), Object.keys(posted.body.message).sort(), Object.keys(scheduled.body).sort(), edited.body])
+      // Each handle is a mention of no one, with no word of who goes by it.
+      const none = [{ written: `@${handle}`, actor: null, candidates: [] }]
+      expect([posted.body.mentions, scheduled.body.mentions, edited.body.mentions], handle).toEqual([none, none, none])
+      answers.push([Object.keys(posted.body).sort(), Object.keys(posted.body.message).sort(), Object.keys(scheduled.body).sort(), Object.keys(edited.body).sort()])
     }
     expect(answers[1]).toEqual(answers[0])
     expect(answers[2]).toEqual(answers[0])
-    // Julian finds the one that names him.
+    // What it typed is kept as text, which a filter still finds for Julian.
     expect((await julian('GET', '/messages?channel=feedback&mentions=me')).body.messages.map((m: { text: string }) => m.text)).toEqual(['thanks @julian!'])
+  })
+
+  it("tells a caller who it mentioned where it can't read what it wrote, and still shows it no ID there", async () => {
+    const board = await granting([intake])
+    const julian = caller(board.fetch, await personToken('julian'), {})
+    // Front reads dev, where Julian wrote, as every project on the team does, and only posts to feedback.
+    const front = caller(board.fetch, await deploymentToken())
+    await julian('POST', '/messages', { channel: 'dev', text: 'hi' })
+    const posted = await front('POST', '/messages', { channel: 'feedback', text: 'thanks @julian', id: 'thanks-2' })
+    expect(posted.body.mentions).toEqual([{ written: '@julian', actor: { id: 'vercel:user:julian', handle: 'julian', name: 'julian' }, candidates: [] }])
+    // Its own post, read back, masks who it mentions, as any exact mention there; whoever reads feedback has it.
+    expect((await front('GET', '/posts/thanks-2')).body.message.text).toBe('thanks @…')
+    expect((await julian('GET', '/messages?channel=feedback')).body.messages.map((m: { text: string }) => m.text)).toEqual(['thanks @[vercel:user:julian]'])
   })
 
   it('never shows a write-only caller an actor ID in its own post or schedule read back', async () => {
@@ -162,10 +180,11 @@ describe('a write-only source', () => {
     for (const text of ['@u_sam can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]']) await julian('POST', '/messages', { channel: 'feedback', text })
     const texts = async (as: typeof julian, mentions: string) =>
       ((await as('GET', `/messages?channel=feedback&mentions=${encodeURIComponent(mentions)}`)).body.messages as { text: string }[]).map((m) => m.text)
-    expect(await texts(julian, 'vercel:user:u_sam')).toEqual(['@u_sam can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]'])
+    // Julian sees Sam, so his handle for him was stored as a mention of him; Sam's agent has never written, so its handle is text.
+    expect(await texts(julian, 'vercel:user:u_sam')).toEqual(['@[vercel:user:u_sam] can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]'])
     // Front gets what it names, as written: no saying that vercel:user:u_sam goes by u_sam.
-    expect(await texts(front, 'vercel:user:u_sam')).toEqual(['cc @[vercel:user:u_sam]'])
-    expect(await texts(front, 'u_sam')).toEqual(['@u_sam can you look?', 'over to @u_sam/claude'])
+    expect(await texts(front, 'vercel:user:u_sam')).toEqual(['@[vercel:user:u_sam] can you look?', 'cc @[vercel:user:u_sam]'])
+    expect(await texts(front, 'u_sam')).toEqual(['over to @u_sam/claude'])
   })
 
   for (const middleware of [undefined, [async ({ next }) => next()] satisfies Middleware[]]) {

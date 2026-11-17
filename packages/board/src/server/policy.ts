@@ -8,6 +8,7 @@ import {
   grantIssuers,
   verifiedIssuers,
   hostPrincipal,
+  namesByLogin,
   VERCEL_ISSUER,
   verifiesTokens,
   type Authenticate,
@@ -183,6 +184,8 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   return {
     /** Whether requests are served at all: only where the backend keeps the board. */
     open: keeps,
+    /** Whether the verifier names people by their logins, so a grant here names a user by one. */
+    logins: options.authenticate !== undefined && namesByLogin(options.authenticate),
     project,
     discoveryIdentity,
     /**

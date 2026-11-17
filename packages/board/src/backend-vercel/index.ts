@@ -1,22 +1,34 @@
 // Your team's board in Vercel's API, internal: board()'s default backend, and the CLI's. In Node, it finds credentials the way
-// the Vercel CLI and a deployment do: `VERCEL_TOKEN`, the deployment's OIDC token, or `vercel login`.
+// a deployment and the Vercel CLI do: the deployment's OIDC token, or else `BOARD_TOKEN` or your login. Never
+// `VERCEL_TOKEN`, a name people set for other reasons, and nothing in the environment replaces a deployment's
+// own token: only a token someone passed the CLI for this run goes ahead of it.
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
-import { asYou, environmentProfile, loginHanded, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
+import { asYou, environmentProfile, loginHanded, PASSED, passedToken, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
 
 /** On Vercel, or with its OIDC token pulled (`vercel env pull`): a deployment acts as its project. */
 const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_TOKEN
 
+/** Off a deployment, a credential Vercel's API takes, set for board: what a sandbox or CI passes. */
+const boardToken = () => (deployed() ? null : process.env.BOARD_TOKEN || null)
+
+/** Whether what goes is a Vercel login: a token passed for this run, or with no deployment's token and no `BOARD_TOKEN`, yours. */
+const asLogin = () => passedToken() !== null || (!deployed() && !boardToken())
+
 /**
- * A token Vercel's API takes: `VERCEL_TOKEN`, this deployment's OIDC token, or your Vercel login,
- * the one the CLI that runs board's hands it (`vercel board`'s) or your `vercel login`.
+ * A token Vercel's API takes: the one this run was passed (`vercel board --token`), or else this
+ * deployment's OIDC token, or else `BOARD_TOKEN`, or your Vercel login, the one the CLI that runs
+ * board's hands it (`vercel board`'s, or `VERCEL_AUTH_TOKEN`) or your `vercel login`.
  */
 async function token(): Promise<string> {
-  if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN
+  const passed = passedToken()
+  if (passed !== null) return passed
   if (deployed()) return getVercelOidcToken()
+  const set = boardToken()
+  if (set) return set
   // With no login to send, that's what it says, as `http()`'s does, not that the API didn't answer.
   return vercelLogin().catch(() => {
     throw new HttpError(401, 'not_logged_in', "You're not logged in to Vercel.", { hint: 'Run vercel login.', origin: 'handle' })
@@ -25,8 +37,9 @@ async function token(): Promise<string> {
 
 /** Where `token` comes from, in words: what `vb whoami` says. */
 export function credentialSource(): string {
-  if (process.env.VERCEL_TOKEN) return 'VERCEL_TOKEN'
+  if (passedToken() !== null) return PASSED
   if (deployed()) return 'Vercel OIDC'
+  if (boardToken()) return 'BOARD_TOKEN'
   return loginHanded() ? 'the Vercel CLI' : 'vercel login'
 }
 
@@ -55,7 +68,7 @@ async function team(): Promise<string | null> {
     }
   }
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
-  if (!process.env.VERCEL_TOKEN && deployed()) {
+  if (deployed()) {
     try {
       const owner = decodeJwt(await getVercelOidcToken()).owner_id
       if (typeof owner === 'string') return owner
@@ -74,9 +87,8 @@ const environment: VercelEnvironment = {
   fetch: () => async (input, init = {}) => {
     const credential = await token()
     // Your login goes through the fetch the CLI that runs board's hands it, which adds its own
-    // credentials. A token you set goes as it is.
-    if (!process.env.VERCEL_TOKEN && !deployed())
-      return asYou(input, init, credential)
+    // credentials. A deployment's token, or BOARD_TOKEN, goes as it is.
+    if (asLogin()) return asYou(input, init, credential)
     const headers = new Headers(init.headers)
     headers.set('authorization', `Bearer ${credential}`)
     return globalThis.fetch(input, { ...init, headers })

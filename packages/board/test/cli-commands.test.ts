@@ -42,7 +42,7 @@ describe("the CLI's commands, as data", () => {
     const read = await capture(() => main(['read', '--help'], app))
     expect(read.code).toBe(0)
     expect(read.stdout).toMatch(/^usage: board read \[channel\|id\|link\] \[filters\] \[options\]\n\nthe latest threads/)
-    expect(read.stdout).toMatch(/\noptions:\n  -n, --limit <N>  threads to list \(default: 50\)\n/)
+    expect(read.stdout).toMatch(/\noptions:\n  -n, --limit <N>  threads to list \(default: 50, at most 500\)\n/)
     expect(read.stdout).toMatch(/\nfilters:\n  --re <id> +in a thread/)
     // A bare --mentions means you: its value is optional.
     expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)
@@ -89,7 +89,10 @@ describe("the CLI's commands, as data", () => {
   it("parses every example, which lands on its own command's page", async () => {
     for (const path of every)
       for (const example of path.at(-1)!.examples) {
-        const shown = await capture(() => main([...words(example.value), '--help'], app))
+        // What follows `--` is the command `tasks run` starts, its own `--help` included: board's goes before it.
+        const argv = words(example.value)
+        const own = argv.includes('--') ? argv.indexOf('--') : argv.length
+        const shown = await capture(() => main([...argv.slice(0, own), '--help', ...argv.slice(own)], app))
         expect(shown, example.value).toMatchObject({ code: 0, stderr: '' })
         // An alias's page is its command's, by its own name.
         const named = path.map((command) => commands.find((own) => own.aliases?.includes(command.name)) ?? command)

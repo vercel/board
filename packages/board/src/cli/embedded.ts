@@ -23,16 +23,22 @@ export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
  * (`--scope` still wins): board asks for each only when a request needs it, so help, a typo, or
  * misuse never refreshes a login or looks a team up. With `fetch`, board's requests to Vercel's API
  * with that login go through the app's own, which adds its credentials (a DPoP proof, say).
+ *
+ * `token` is a Vercel token someone passed the app for this run, as `vercel board --token` takes
+ * one: the login to use, in place of `login` and ahead of everything the environment holds, a
+ * deployment's own token and `BOARD_TOKEN` included. A variable never goes ahead of those. Board
+ * sends it itself, as a Bearer token, never through `fetch`, which would add the app's own login's.
  */
 export function createApp(options: {
   appName: string
   onError?: (failure: Failure, mode: { json: boolean }) => void
   onWarning?: (warning: Warning) => void
   login?: () => Promise<string>
+  token?: string
   team?: () => Promise<string | null>
   fetch?: typeof globalThis.fetch
 }): { run(args: string[]): Promise<number> } {
-  const { appName, onError, onWarning, login, team, fetch } = options
+  const { appName, onError, onWarning, login, token, team, fetch } = options
   return {
     run: (args) =>
       main(args, {
@@ -42,6 +48,7 @@ export function createApp(options: {
         ...(onError ? { onError } : {}),
         ...(onWarning ? { onWarning } : {}),
         ...(login ? { login } : {}),
+        ...(token ? { token } : {}),
         ...(team ? { team } : {}),
         ...(fetch ? { fetch } : {}),
       }),
@@ -111,9 +118,11 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
     const decoder = new TextDecoder()
     const code = await mainWith(argv, { name: 'board', commands: {} }, {
       board: (options.signal && stoppedBy(board, options.signal)) || board,
+      // A call with a signal runs on a handle of its own: its claims are the caller's handle's all the same.
+      claimsOf: board,
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
-      readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --text-file can't read files", 'readFile'),
+      readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --file can't read files", 'readFile'),
       writeFile: options.writeFile ? async (path, data, writeOptions) => options.writeFile!(path, data, writeOptions) : lacking("download can't save files", 'writeFile'),
       stdin: options.stdin !== undefined ? async () => options.stdin! : lacking("- can't read stdin", 'stdin'),
       ...(options.signal ? { signal: options.signal } : {}),

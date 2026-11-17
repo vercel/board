@@ -328,8 +328,8 @@ a platform user another sync speaks for. A text that opens a block (a code
 block, a list, a heading, a quote, or a table) goes on a line of its own under
 that label, where it's still one, and under yours when your renderer opens with
 the same label. board still adds a line per attachment the platform
-didn't take, and resolves mentions to the platform's own form after your
-renderer runs, against this sync's own users
+didn't take, and puts each mention of one of this sync's own users in the
+platform's own form after your renderer runs
 ([mentions](../01-board/03-identity.md#mentions)).
 
 Each channel can render its own way, since `render` wraps any function:

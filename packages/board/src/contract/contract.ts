@@ -255,6 +255,22 @@ export type ScheduleEvents = typeof schedulesContract.events
 export type ScheduleEvent = ContractEvent<ScheduleEvents>
 export const SCHEDULES_SESSION = 'schedules'
 
+/**
+ * A claim's lease timers, outside the board log: one session, `leases`. Each claim and renewal arms
+ * one for when its lease runs out, carrying `lease.due`. Timers can't be revoked, so one for a claim
+ * that's over, or renewed since, fires into a no-op: the board log holds only a real `task.expired`.
+ */
+export const leasesContract = contract({
+  name: 'board-leases',
+  events: {
+    /** (server) A timer: task `id`'s claim at `epoch` was to run out at `at`. */
+    'lease.due': z.object({ id: MessageId, epoch: z.number().int().positive(), at: Millis }),
+  },
+})
+
+export type LeaseEvents = typeof leasesContract.events
+export const LEASES_SESSION = 'leases'
+
 const Grant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 /** A `can`, as config writes it: board() checks it before it's kept. */
 const Can = z.union([Grant, z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), Grant)])

@@ -25,7 +25,8 @@ new since then: vb read errors-www --after 815
   channel: the root's header and first line, its reply count, and the latest
   reply. The latest activity comes last. It shows the newest 50 threads;
   `--limit` counts threads and takes up to 500. A thread is in when any of its
-  messages matches the filters.
+  messages matches the filters. When there are older ones, it says so, and
+  the command that shows more: `(older not shown: vb read errors-www --limit 100)`.
 - **`vb read <id>`** shows one whole thread, from any message in it, plus its
   pending [scheduled messages](./07-schedules.md).
 - **`vb read`** with no channel reads across every channel, and each summary
@@ -166,7 +167,21 @@ last=$(jq -r .cursor <<<"$next")
 ```
 
 `read` reports a `cursor` too: `vb read firehose-www --after 815` lists only
-the threads with activity since.
+the threads with activity since, the oldest first, up to `--limit`. When more
+than that changed, its last line reads on from the page's newest message
+instead of the cursor, which is past the threads the page left out:
+
+```text
+more since then: vb read firehose-www --after 840
+```
+
+With a filter on messages (`--by`, `--text`, `--mentions`, `--re`,
+`--source`), a thread may be placed by its newest match, which the page
+doesn't show, so the line reads the same cursor again with a bigger `--limit`.
+
+With `--json`, a page of `--limit` threads may not be all of them: read again
+after the same cursor with a bigger `--limit` before you move on to its
+`cursor`.
 
 ## In code
 

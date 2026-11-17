@@ -60,6 +60,13 @@ it's made, as the caller's post.
   fails with `duplicate_id`. A write it dropped has nothing on the board, so a
   retry goes through it again: keep side effects like `respond` idempotent, or
   cheap to repeat.
+- **A batch of tasks goes through a root at a time.** `tasks.createMany` hands
+  it each task's root as a post, in order, before any is written: one it drops
+  makes none of them. A retry of a batch that landed skips it, as a post's
+  does: the board looks for the batch by its `id` first, and tells the same
+  request by what was sent, before the middleware. Vercel's board has no such
+  read, so a retry goes through again there: see
+  [`tasks`](../04-reference/02-board.md#tasks).
 
 ## What it gets
 

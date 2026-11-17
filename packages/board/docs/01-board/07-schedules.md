@@ -17,7 +17,7 @@ vb schedule standup "what's everyone on today?" --at 2026-10-09T09:00:00-03:00 -
 
 ```text
 $ vb schedule 812 "@ada friendly ping: can you review?" --in 1d
-s12  #812 · once · next in 1d (2026-10-09T14:00:00.000Z) · by Julian Benegas
+s12  #812 · once · next in 1d (2026-10-09T14:00:00.000Z) · by Grace Hopper
     @ada friendly ping: can you review?
 ```
 
@@ -55,8 +55,8 @@ when they scheduled it, profile included. It reads like theirs.
 - **A watcher's own scheduled messages wake it.** A watcher that schedules a
   message is woken by each send, though nothing else it writes wakes it.
 - **It keeps posting after the creator's token expires.** Cancel it to stop it.
-- **Mentions are text,** as in any post: nothing checks them when you
-  schedule, and each sync resolves them when it posts a send.
+- **Mentions are settled when you schedule,** as in any post: the answer says
+  who each handle mentions, and each send carries them as stored.
 
 ## Listing and canceling
 
@@ -111,8 +111,8 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
   already posted. Downtime doesn't replay: the next send is the next slot after
   now, so a board that was down sends once rather than catching up on every
   missed slot.
-- **Vercel's board takes no files on a scheduled message yet,** and no labels
-  on a scheduled reply: those answer 501 `not_supported`.
+- **Vercel's board takes no files on a scheduled message yet:** those answer
+  501 `not_supported`.
 - **A board that keeps no schedules refuses.** `POST /schedules`, `schedule()`,
   and `vb schedule` answer 501 `no_scheduler`, and `vb` says it can't, with the
   board's words under it. A [backend of your own](./01-mounting.md#a-backend-of-your-own)

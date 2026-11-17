@@ -48,6 +48,8 @@ export default defineConfig([
       'cli-embedded': 'src/cli/embedded.ts',
       // `@vercel/board/cli/commands`: the CLI's commands as data, for a host to render, with no imports.
       'cli-commands': 'src/cli/commands.ts',
+      // `@vercel/board/inspect`: the inspector as a route handler in your app, with its page beside it.
+      inspect: 'src/inspect/handler.ts',
     },
     format: 'esm',
     platform: 'node',

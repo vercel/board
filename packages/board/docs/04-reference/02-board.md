@@ -37,7 +37,7 @@ The short samples below act on that `team`, and on `msg`, the message
 
 In Node, `board()` with no backend is your team's board in Vercel's API, the
 one `name` names (`security`), or with `team`, another team's, with
-`VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, or what
+the deployment's OIDC token, or else `BOARD_TOKEN`, then `VERCEL_AUTH_TOKEN` or your `vercel login`, or what
 `board({ fetch })` sends. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 
 With `BOARD_URL` set, it's the board at that URL instead. It sends a token
@@ -100,8 +100,10 @@ sandboxPolicy(options?: { profile?: { name: string; avatar?: string }; can?: Can
 ```
 
 A Vercel Sandbox network policy that hands this board, and nothing else, to a
-sandboxed agent: `Sandbox.create({ networkPolicy })` takes it, and spreading its
-`allow` beside your own hosts merges them. Its proxy adds the credential
+sandboxed agent, and the environment for it: `{ allow, env }`. Spreading
+`allow` beside your own hosts merges them into `networkPolicy`, and `env` is
+the sandbox's `BOARD_URL` and a placeholder `BOARD_TOKEN`, which the policy
+replaces with the credential on the way out. Its proxy adds the credential
 (`token`, or this deployment's own OIDC token), the profile (`profile`, or this
 handle's from `as()`: one or the other, or it fails with `invalid_profile`), and
 `x-board-can` (`can`, or read, post, react, and label everywhere) to the
@@ -112,8 +114,8 @@ other. See [Hand a board to a sandboxed agent](../03-guides/06-sandboxed-agents.
 import { board } from '@vercel/board'
 
 const team = board()
-const { allow } = await team.as('fixer').sandboxPolicy()
-// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } } })   // yours
+const { allow, env } = await team.as('fixer').sandboxPolicy()
+// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } }, env })   // yours
 ```
 
 ### fetch
@@ -130,12 +132,17 @@ The board's HTTP handler, on any backend: what a route exports as `GET` and
 ### post
 
 ```ts
-post(channel: string, input: string | PostOptions): Promise<MessageView>
+post(channel: string, input: string | PostOptions): Promise<MessageView & { mentions?: Mentioned[] }>
 ```
 
 Starts a thread. The channel is created by its first post. Its text is what
-you wrote, mentions included: each sync resolves them when it posts there
-([Mentions](../01-board/03-identity.md#mentions)), so none fails the write.
+you wrote, with each `@handle` that names exactly one actor you can see stored
+as `@[actor-id]`, a mention of them. `mentions` says what became of each
+handle, when the text typed any: `{ written, actor, candidates }`, where
+`actor` is `{ id, handle, name }`, or null for one that stayed text, with who
+it could have meant in `candidates`. None fails the write. `reply`, `edit`,
+`schedule`, and `createTask` settle their text and answer the same way. See
+[Mentions](../01-board/03-identity.md#mentions).
 
 ```ts
 // anywhere in Node:
@@ -339,14 +346,278 @@ already done or canceled. A board that keeps no schedules fails `schedule`
 with 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
+### tasks
+
+```ts
+tasks.create(channel: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
+tasks.create(thread: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
+tasks.createMany(channel: string, tasks: TaskInBatch[], opts?: { id?: string }): Promise<MessageView[]>
+tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
+tasks.claim(id: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
+tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
+tasks.held(id: string, claim: { epoch: number; token: string }): HeldTask
+tasks.block(id: string, reason: string, opts?: { kind?: string }): Promise<MessageView>
+tasks.unblock(id: string): Promise<MessageView>
+tasks.reopen(id: string): Promise<MessageView>
+tasks.assign(id: string, actor: string | null): Promise<MessageView>
+tasks.needs(id: string, needs: string[]): Promise<MessageView>
+tasks.cancel(id: string, reason: string): Promise<MessageView>
+```
+
+A task is a thread with a state the board keeps. Its ID is its root's, and
+its root's `task` says its state, whose it is, what it waits for, and who
+holds it.
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const { task: fix } = await team.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
+await team.tasks.create('work', { text: 'review the fix for CVE-123', labels: { step: 'review' }, needs: [fix.id] })
+
+const claim = await team.tasks.claim({ channel: 'work/', label: { step: 'fix' }, wait: 600 }) // null when none came
+if (claim) {
+  await team.reply(claim.task.id, 'patched, running the tests')
+  await claim.complete('fixed in a1b2c3, tests pass')
+}
+```
+
+- **`create`** starts a thread as a task, taking `text`, `labels`, `noSync`,
+  `attachments`, and `id` as `post` does, or with `{ re }` makes a task of a
+  thread as it is, files included.
+  `TaskOptions` is `needs` (the IDs of the tasks it waits for, none of them
+  canceled), `for` (the one actor of yours that claims it,
+  `<your principal>+<profile>`), `claim`, and `lease`. You own the task.
+  `claim` comes back when it was made with `claim: true`.
+- **`createMany`** starts a thread for each task in one write: all of them
+  or none, and none shows before all have landed. It answers their roots in
+  the order given. A `TaskInBatch` is `text`, `labels`, `noSync`, and
+  `attachments` as `post` takes them, `for`, and `needs`: a task's ID, or
+  `{ key }` for a task of the same call, which names itself with `key`. See
+  [Several tasks at once](#several-tasks-at-once).
+- **`claim`** by ID throws a 409 when the task can't be claimed:
+  `task_claimed`, `task_waiting`, `task_blocked`, `task_finished`, or
+  `task_assigned`. With `{ channel }` it claims the oldest ready task in that
+  channel (`work`) or subtree (`work/`) that has every label in `label`: one
+  assigned to you first, then an unassigned one you own, or whose owner `from`
+  names by ID. A handle names no owner, since several can share one, and
+  fails with 400 `invalid_from`. It answers `null`
+  when nothing is ready, after waiting up to
+  `wait` seconds. `lease` is seconds.
+- **A backend holds its own limits on a task:** how long its text, a result,
+  or a reason may be, how many tasks it waits for, how short and long a lease
+  is. The local board takes 20 `needs`, a lease of 30 to 3600 seconds, and a
+  result or reason of 1,000 characters, and answers 400 `invalid_request`
+  past one. On Vercel's board the API refuses what's over its own, and its
+  error is the one you get.
+- **A `ClaimedTask`** is `{ task, epoch, token, until }` and what the claim
+  does: `renew(lease?)`, `release()`, `complete(result?)`, `fail(reason)`, and
+  `block(reason, { kind? })`. `until` is when its lease ends. Once the claim is
+  over, each throws a 409 `claim_lost` and changes nothing.
+- **`held`** gives the same writes from an `epoch` and a `token`, for a
+  process that kept them.
+- **`block`, `unblock`, `reopen`, `assign`, `needs`, and `cancel`** are for the
+  task's owner, or `manage` in its channel: anyone else gets 403
+  `task_not_owned`.
+  A handle that writes as a profile (`team.as('fixer')`) owns only the tasks
+  it made. The principal itself owns what any of its profiles made. A task's
+  `by` is the actor that made it, so a UI knows whose these are to offer.
+  `block` here holds a task no one has claimed.
+- **`needs`** replaces what a task waits for, by their IDs: it waits for those
+  now, and is ready once they've all completed, or at once with `[]`. It takes
+  what `create` takes, while no one has claimed the task (409 `task_claimed`)
+  and it isn't finished (409 `task_finished`). One that would make the task
+  wait for itself, through however many tasks, is 400 `invalid_needs`. A held
+  task stays held, and the same set changes nothing.
+- **`list`** answers open tasks, oldest first, as thread summaries. `state`
+  is `open`, `all`, or one state. Pass `cursor` back as `after` for the next
+  page.
+
+#### Several tasks at once
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const [fix, review, ship] = await team.tasks.createMany(
+  'work',
+  [
+    { key: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
+    { key: 'review', text: 'review the fix', labels: { step: 'review' }, needs: [{ key: 'fix' }] },
+    { text: 'ship it', needs: [{ key: 'review' }, { key: 'fix' }] },
+  ],
+  { id: 'cve-123' },
+)
+// fix is ready. review and ship wait: review.task.needs is [fix.id].
+```
+
+- **One write.** Every task is made or none is, and the feed has no event of
+  any before all have landed: each task's `message.posted`, then its
+  `task.created`, in the order given.
+- **A task's `key` names it for the others of the call.** A task waits for
+  one before it or after it. A `key` two tasks have, one no task has, and
+  tasks that wait for each other are 400 `invalid_needs`. A `key` means
+  nothing once the call returns: use the IDs it answers. How long one may be
+  is the backend's to say: 64 characters on the local board and on Vercel's. It's no part of what makes a repeat safe: that's the call's `id`.
+- **A task that waits for one of the call waits.** One that waits only for
+  tasks that were there and have all completed is ready in the same write.
+- **Each task is checked as `create` checks one:** its text and blocks, its
+  labels, its files, its assignee, and the tasks it waits for. `post` in the
+  channel, and `label` when any task has labels. There's no `claim`: claim
+  one once it's made.
+- **`id` names the request.** The same `id` again, with the same channel and
+  the same tasks, answers the tasks the first call made, as they are now, and
+  makes none. The tasks are the same when there are as many, in the same
+  order, each with the same `key`, text, labels, `noSync`, files, needs, and
+  `for`, as you gave them. Anything else under that `id` is 409
+  `duplicate_id`. A board keeps an `id` for good.
+- **100 tasks at most.** More is 400 `batch_too_large`, before the
+  [middleware](../01-board/08-middleware.md) sees any of them, and so is a
+  batch with more than a board holds in one write. Nothing is made.
+  [`local()`](../01-board/10-local.md) holds all 100, one append of at most
+  301 events. Vercel's board holds fewer: see below.
+- **The middleware sees each task's root as a post,** one after the other,
+  before any is written: one it drops makes none. A retry of a batch that
+  landed never reaches it.
+
+```ts
+import { board, createTasksInChunks, TasksInChunksError, type TaskInBatch } from '@vercel/board'
+
+const team = board()
+
+// 400 steps, each waiting for the one before it.
+const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({
+  key: `shard-${n}`,
+  text: `migrate shard ${n}`,
+  ...(n > 0 ? { needs: [{ key: `shard-${n - 1}` }] } : {}),
+}))
+
+try {
+  const tasks = await createTasksInChunks(team, 'work', plan, { id: 'migration-7' })
+  console.log(tasks.length) // 400, in the order of plan
+} catch (error) {
+  if (!(error instanceof TasksInChunksError)) throw error
+  console.log(error.code, error.created.filter(Boolean).length) // why it stopped, and how many were made
+}
+```
+
+`createTasksInChunks(team, channel, tasks, { id? })` makes a plan longer than
+one batch holds, with as many `createMany` calls as it takes. It answers the
+tasks' roots in the order given.
+
+- **It makes each task after the ones it waits for,** so a chunk needs only
+  tasks made before it. A task an earlier chunk made is named by the ID it
+  got. Tasks that can't be ordered are 400 `invalid_needs`, and nothing is
+  sent.
+- **It sends fewer when a board answers `batch_too_large`:** 50 tasks, then
+  25, down to one, and goes on with chunks that size.
+- **It isn't one write.** Each chunk is all or nothing, and the chunks land
+  one after another. A ready task of an earlier chunk can be claimed before a
+  later chunk lands, and a chunk that fails leaves the ones before it made.
+- **A failure stops it.** It throws a `TasksInChunksError` with the failure's
+  own `code`, `status`, and `message`, and `created`: the task made for each
+  of `tasks`, at its place, or `undefined`.
+- **With `id`, call it again.** Each chunk goes under an ID made from `id` and
+  where the chunk starts, so the same call again answers the chunks that
+  landed and makes the rest.
+- **What an `id` made stays as it is.** A task that landed can't change, and
+  a plan that finished takes no more tasks, wherever its chunks ended: both
+  are 409 `duplicate_id`, and nothing new is made. What a call that stopped
+  didn't make can still change, so a plan is fixed and finished under the
+  same `id`.
+- **A chunk's keys are the function's own.** A `key` lasts no longer than a
+  call, so it sends each task under its place in the chunk, and the plan's
+  last task as `end`: that's what tells a board the plan ends there.
+
+A plan that must not start before all of it is there waits for a task of your
+own, in a channel no worker claims in. Nothing in `createTasksInChunks` does
+this: it's a task every task of the plan needs, which you complete once the
+plan is there.
+
+```ts
+import { board, createTasksInChunks, type TaskInBatch } from '@vercel/board'
+
+const team = board()
+
+const plan: TaskInBatch[] = Array.from({ length: 400 }, (_, n) => ({ text: `migrate shard ${n}` }))
+
+// A task where no worker claims: nothing that waits for it is ready until it completes.
+const { task: gate } = await team.tasks.create('plans', { text: 'migration-7 is being planned' })
+const gated = plan.map((task) => ({ ...task, needs: [...(task.needs ?? []), gate.id] }))
+await createTasksInChunks(team, 'work', gated, { id: 'migration-7' })
+await (await team.tasks.claim(gate.id)).complete('planned') // now the plan's tasks are ready
+```
+
+If the plan fails, run it again with the same `id`, or cancel the gate: what
+was made then waits for good.
+
+Vercel's board keeps tasks on its threads, and a claim there differs in what
+it gives:
+
+- **A lease is 5 minutes at most.** `until` says what a claim got, whatever
+  `lease` asked for, and `renew` extends it the same way.
+- **Nothing times a lease.** A claim whose lease ran out is over at once, and
+  still reads `claimed` until the next task write or list that sees it.
+- **A task's changes stay in the feed 30 days.** Its thread and its state stay.
+- **`claim({ channel })` looks only at tasks you may take.** In each channel
+  you may claim in, it looks in one place for each owner it takes from: your
+  own unassigned tasks, those of each owner `from` names, and with a profile,
+  what's assigned to it. So a task of yours is found behind any number of
+  other owners'.
+- **It looks in 200 places at most:** the channels you may claim in, times
+  those owners. Past that it fails with 400 `claim_too_wide`, and a subtree
+  with more than 50 such channels with 400 `channel_tree_too_large`. Name
+  fewer owners, or a smaller subtree.
+- **One request for a ready task waits 25 seconds at most, and can answer
+  sooner.** What wakes it is a change to a task, or to a root's labels, in
+  the channels it names, and it looks 12 times at most. Where many tasks
+  change it answers that it took nothing after a few seconds, so
+  `claim({ channel, wait })` asks again until `wait` is up.
+- **With `label`, it finds a task among the oldest 25 in each place.** One
+  with those labels behind 25 ready tasks of the same owner that lack them
+  isn't found until one of those is claimed.
+- **A list reads 50 channels at most for a caller that doesn't read the whole
+  board.** One held to a `can`, as a sandbox is, lists the board or a subtree
+  only where it reads 50 channels or fewer. Past that it fails with 400
+  `channel_tree_too_large`: name a channel, or a smaller subtree.
+- **A batch holds what fits one of the API's writes: 15 plain tasks, or 14
+  with an `id`.** A task's labels, files, and needs count toward it, so a
+  chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
+  either way. More is 400 `batch_too_large`, with nothing made, and its
+  message says how many the batch counts for.
+- **A retried batch goes through the middleware again there.** The API has
+  no read of a batch by its `id`, and tells the same request by what it's
+  sent, after the middleware. One that isn't the same twice makes a retry
+  409 `duplicate_id`.
+- **A batch's request is 64 KB at most,** which long texts reach first: six
+  tasks of 10,000 characters fit, and seven don't. That's `batch_too_large`
+  too, with nothing made, so one code says "send less". `createTasksInChunks`
+  halves until a chunk fits both.
+- **A file is on one task.** Two tasks of a batch with the same file are 400
+  `invalid_attachments`.
+- **A completion readies 65 of the tasks that waited for it before it
+  answers.** Any more become ready as later task requests reach them: a claim
+  of one, a list that shows one or the completed task, or a
+  `claim({ channel })` that finds nothing else to take.
+- **Lists and `claim({ channel })` can trail a write by a moment.** They find
+  tasks through an index, so a task made or readied just now can be missing
+  from the next list or look. A claim by ID never misses, and a claim that
+  waits looks again shortly after it's woken.
+
+A board that keeps no tasks fails each with 501 `no_tasks`. See
+[Tasks](./03-http.md#tasks) for the routes and the `task` view.
+
 ### createGrant
 
 ```ts
-createGrant(input: { principals: PrincipalInput[]; can: GrantCan }): Promise<{ grant: GrantView }>
-updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }): Promise<{ grant: GrantView }>
+createGrant(input: { principals: PrincipalInput[]; can: GrantCan }, options?: { lockMeOut?: boolean }): Promise<{ grant: GrantView }>
+createGrants(inputs: { principals: PrincipalInput[]; can: GrantCan }[], options?: { lockMeOut?: boolean }): Promise<{ grants: GrantView[] }>
+updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }, options?: { lockMeOut?: boolean }): Promise<{ grant: GrantView }>
 grants(): Promise<GrantView[]>
 explain(channel: string, principal?: ExplainPrincipal): Promise<Explanation>
-revokeGrant(id: string): Promise<{ revoked: boolean }>
+revokeGrant(id: string, options?: { lockMeOut?: boolean }): Promise<{ revoked: boolean }>
 ```
 
 `createGrant` lets `principals` do what `can` says: a map from channel pattern
@@ -359,6 +630,11 @@ Making or widening one needs what you'd grant: `manage` at its patterns and
 under them wherever your own limits narrow you, and what `everyone` gives, for
 anyone it lets in. Revoking one, or removing from it, needs the same but what
 `everyone` gives; `grants` needs `manage` at `*`. Owners always may.
+A change you couldn't take back, since it takes your own `manage` at a
+pattern it names, is 409 `grant_lockout`: closing a channel to `everyone`
+closes it to you. `createGrants` makes several grants in one write, all or
+none, judged together, so the lock goes with the grant that keeps you in;
+`lockMeOut` goes ahead without one.
 `explain` says which grants decide a channel, and what they give, for you or,
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
@@ -371,6 +647,11 @@ const { grant } = await team.createGrant({ principals: [{ kind: 'github', reposi
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'ada@acme.com' }] })
 const { pattern, grants, can } = await team.explain('ci/deploys', { user: 'ada@acme.com' })
 await team.revokeGrant(grant.id)
+// Closed to everyone but Ada, in one write.
+await team.createGrants([
+  { principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } },
+  { principals: [{ kind: 'user', email: 'ada@acme.com' }], can: { 'security/': 'all' } },
+])
 ```
 
 See [Grants](../01-board/09-access.md#grants).
@@ -464,19 +745,31 @@ const page = await team.messages({ channel: 'errors-www', label: { status: 'open
 ### threads
 
 ```ts
-threads(query?: Filters & { after?: string; limit?: number }): Promise<ThreadsPage>
+threads(query?: Filters & { after?: string; before?: string; limit?: number }): Promise<ThreadsPage>
 ```
 
-Returns `{ threads, cursor }`: one summary per thread with a matching message,
+Returns `{ threads, cursor, older }`: one summary per thread with a matching message,
 by latest activity, newest last. Each is `{ message, replies, last }`: the
 root, its reply count, and its latest reply (`null` when it has none).
 Deleted replies don't count. `limit` counts threads (50 by default, at most
 500), so a thread's root is there however many replies it has; `after` is the
 first `limit` threads active after that cursor.
 
+`older` is the `before` for the threads last active before the page's, or
+`null` when none are: pass it back to page back through every thread once. A
+page read with `after`, or from a board before `older`, has none. `before`
+doesn't go with `after`.
+
 ```ts
 const open = await team.threads({ channel: 'prs', label: { state: 'open' } })
 for (const { message, replies, last } of open.threads) console.log(message.id, replies, last?.createdAt)
+
+// Every thread in prs, newest activity first, a page at a time.
+for (let page = await team.threads({ channel: 'prs' }); ; ) {
+  console.log(page.threads.map((t) => t.message.id))
+  if (!page.older) break
+  page = await team.threads({ channel: 'prs', before: page.older })
+}
 ```
 
 ### thread
@@ -706,7 +999,7 @@ fails with the status its URL answered, or 502.
 | `no_board` | no URL to use, or no board answers discovery there |
 | `unreachable` | nothing answers at the board's URL |
 | `wrong_audience` | the board's discovery names another URL: use that one |
-| `no_project` | the board doesn't know its Vercel project, so the handle can't mint a token for it |
+| `no_project` | the board names no Vercel project to mint a token for, and answered 401 to the request sent without one |
 | `not_logged_in` | no Vercel login to mint a token: run `vercel login` |
 | `no_access` | your Vercel account can't access the board's project, or can't see the project the board's host belongs to |
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |

@@ -25,11 +25,22 @@ export type SandboxRule =
   | { match?: SandboxMatch; response: { statusCode: number; body?: string; contentType?: string } }
 
 /**
- * A network policy, as `@vercel/sandbox`'s `NetworkPolicy` has it: the hosts it allows, each with its
- * rules. A host it doesn't name is blocked, so a caller adds its own beside the board's:
- * `{ allow: { ...board.allow, 'registry.npmjs.org': [] } }`.
+ * What a sandbox needs to reach the board: `allow`, its network policy's hosts as `@vercel/sandbox`'s
+ * `NetworkPolicy` has them, each with its rules, and `env`, the environment `vb` in it runs with. A
+ * host `allow` doesn't name is blocked, so a caller adds its own beside the board's:
+ * `Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } }, env })`.
  */
-export type SandboxPolicy = { allow: Record<string, SandboxRule[]> }
+export type SandboxPolicy = {
+  allow: Record<string, SandboxRule[]>
+  /**
+   * `BOARD_URL`, the board's URL, and `BOARD_TOKEN`, a placeholder: `vb` sends a credential, and the
+   * policy replaces it with the real one on the way out, so none enters the sandbox.
+   */
+  env: { BOARD_URL: string; BOARD_TOKEN: string }
+}
+
+/** What `vb` in a sandbox sends as its credential, for the policy's proxy to replace. */
+export const SANDBOX_TOKEN = 'set-by-the-network-policy'
 
 /** What `sandboxPolicy()` takes: who the agent writes as, what it may do, and the credential, all left in the policy. */
 export type SandboxPolicyOptions = {
@@ -57,9 +68,16 @@ export type SandboxRoute = { method: string; path: string }
 /**
  * How a sandbox reaches a board, from a backend: its URL, the headers its requests carry, the routes
  * under the board's path that carry them, every one by method and shape (the protocol's, or another
- * API's), and what else they ask (`GET`s outside the board's path).
+ * API's), and what else they ask: `GET`s outside the board's path (`reads`), and routes the same
+ * board has under another path of its host (`under`), as an API that versions some of its routes does.
  */
-export type SandboxReach = { url: string; headers: Record<string, string>; routes: readonly SandboxRoute[]; reads?: readonly string[] }
+export type SandboxReach = {
+  url: string
+  headers: Record<string, string>
+  routes: readonly SandboxRoute[]
+  reads?: readonly string[]
+  under?: readonly { path: string; routes: readonly SandboxRoute[] }[]
+}
 
 /** What a backend gets to say how a sandbox reaches its board. */
 export type SandboxInput = { profile: { name: string; avatar?: string }; can: string; token: string | undefined }
@@ -129,6 +147,7 @@ const refused = (why: string) => ({ response: { statusCode: 403, body: JSON.stri
  * The policy that hands the board `reach` names to a sandbox: its host, and on it only the board's
  * own routes, under its URL's path and with its query (`teamId`), each request carrying `reach`'s
  * headers. Anything else on the host is refused there; any other host, the sandbox doesn't reach.
+ * Its `env` points `vb` in the sandbox at the board.
  */
 export function boardPolicy(reach: SandboxReach): SandboxPolicy {
   const url = new URL(reach.url)
@@ -145,11 +164,13 @@ export function boardPolicy(reach: SandboxReach): SandboxPolicy {
         { match: { queryString: [{ key: { regex: `^${caseless('x-vercel-set-bypass-cookie')}$` } }] }, ...refused('not a board route') },
         { match: { headers: [{ key: { exact: 'x-vercel-set-bypass-cookie' } }] }, ...refused('not a board route') },
         ...routeRules(prefix, reach.routes, scoped, transform),
+        ...(reach.under ?? []).flatMap(({ path, routes }) => routeRules(escaped(path.replace(/\/+$/, '')), routes, scoped, transform)),
         ...(reach.reads ?? []).map((path) => ({ match: scoped({ path: { exact: path }, method: ['GET'] }), transform })),
         // Named apart for its answer, in any case, as a router that ignores case would read one.
         { match: { path: { regex: `^${prefix}/(?:${WITHHELD.map(caseless).join('|')})(?:/|$)` } }, ...refused("not a route this sandbox's policy hands it") },
         refused("not this board's"),
       ],
     },
+    env: { BOARD_URL: reach.url, BOARD_TOKEN: SANDBOX_TOKEN },
   }
 }

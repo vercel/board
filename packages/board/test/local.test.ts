@@ -24,7 +24,7 @@ const over = (fetch: (request: Request) => Promise<Response>, token: () => Promi
   board({ backend: http(BOARD_URL, { fetch: bearer((input, init) => fetch(new Request(input, init)), token) }) }).as(null)
 
 describe('local()', () => {
-  it('passes the whole conformance kit, schedules and files included', async () => {
+  it('passes the whole conformance kit, schedules, tasks, and files included', async () => {
     const team = localBoard()
     try {
       // With headers of its own, as a proxy holding the person's token sends them: x-board-can, a profile.
@@ -41,7 +41,7 @@ describe('local()', () => {
         ['skipped', 'lets a member grant on a pattern after a lock under it'],
         ['skipped', 'lets a project on another team in, in its environments'],
       ])
-      expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+      expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     } finally {
       await team.close()
     }

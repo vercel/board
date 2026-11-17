@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import * as board from './board.ts'
+import { useToasts } from './chrome.ts'
 
 // --- the scrolling list --------------------------------------------------------------
 
@@ -56,6 +56,8 @@ export function Feed(props: {
       if (pinned.current && !restore.current) ref.current!.scrollTop = ref.current!.scrollHeight
     })
     observer.observe(content.current!)
+    // And the list itself: what sits above a thread comes and goes.
+    observer.observe(ref.current!)
     return () => observer.disconnect()
   }, [])
 
@@ -95,7 +97,7 @@ export function Feed(props: {
 }
 
 export function Toasts() {
-  const toasts = board.useToasts()
+  const toasts = useToasts()
   return (
     <div className="toasts" role="status">
       {toasts.map((t) => (

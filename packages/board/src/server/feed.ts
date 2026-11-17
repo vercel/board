@@ -1,12 +1,12 @@
 import type { z } from 'zod'
-import type { ActorView, Filters, LinkView, MessageView, BoardEventView } from '../api/routes.ts'
+import type { ActorView, Filters, LinkView, MessageView, BoardEventView, TaskView } from '../api/routes.ts'
 import type { ParsedFilters } from '../api/routes.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import { hasCriteria } from './watch-spec.ts'
 import { channelsReducer } from '../contract/reducers.ts'
-import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
+import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Message, type MessagesState, type Task } from '../contract/folds.ts'
 import { blocksIn } from '../contract/blocks.ts'
 import { authorView, type Author } from '../contract/schemas.ts'
 import { actorParts, type Via } from '../contract/profiles.ts'
@@ -19,8 +19,8 @@ import type { BoardReads } from './reads.ts'
 
 export { concernedMessageId }
 
-/** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
-const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
+/** Bookkeeping events, shown only with `all`: who's who, delivery receipts, and a claim's renewals. */
+const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced', 'task.renewed'])
 
 /** Whether the board checked who an actor is, as people see them, at their last write (`actor.seen`'s `verified`). */
 export const verifiedRecord = (actor: Pick<Actor, 'verified'>): boolean => actor.verified === true
@@ -113,12 +113,24 @@ export const scheduleRef = (index: number): string => `s${index}`
 /** The log index a ref names on this board, or null for a string that names nothing here. */
 export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.test(value) ? Number(value) : null)
 
+/** A task as every reader sees it: the tasks it waits for as refs, and its claim without the token, hashed or not. */
+export function taskView(task: Task): TaskView {
+  const { needs, claim, ...shown } = task
+  return {
+    ...shown,
+    needs: needs.map(ref),
+    claim: claim && { actor: claim.actor, until: claim.until },
+    blocked: task.blocked && { ...task.blocked },
+  }
+}
+
 /** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
 export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
   // A message folded before mentions were text alone keeps the actor IDs they resolved to.
-  const { blind, version, revision, schedule, platformText, mentions: _mentions, ...shown } = message as Message & { mentions?: unknown }
+  const { blind, version, revision, schedule, task, platformText, mentions: _mentions, ...shown } = message as Message & { mentions?: unknown }
   return {
     ...shown,
+    ...(task ? { task: taskView(task) } : {}),
     by: authorView(message.by),
     ...(blind ? { blind } : {}),
     id: ref(message.id),
@@ -340,11 +352,14 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
   } as BoardEventView
 }
 
-/** An event's payload as clients see it: the message IDs in it are refs. */
+/** An event's payload as clients see it: the message IDs in it are refs, and a claim's token is left out. */
 function payloadView(payload: Record<string, unknown>, links: LinkView[] | undefined): Record<string, unknown> {
+  // Only `task.claimed` carries a `token`: its hash is the board's to check claims against, and no reader's.
   // A post or an edit from before mentions were text alone carries the actor IDs they resolved to.
-  const { mentions: _mentions, ...shown }: Record<string, unknown> = payload
+  // A post's `along` is the board's own count of what its append carried.
+  const { token: _token, mentions: _mentions, along: _along, ...shown }: Record<string, unknown> = payload
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
+  if (Array.isArray(shown.needs)) shown.needs = (shown.needs as number[]).map(ref)
   if (typeof shown.by === 'object' && shown.by !== null) shown.by = authorView(shown.by as Author)
   const schedule = shown.schedule as { id: number; n: number } | undefined
   if (schedule) shown.schedule = { id: scheduleRef(schedule.id), n: schedule.n }

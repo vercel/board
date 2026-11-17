@@ -28,6 +28,7 @@ The CLI and `board()` in Node find a token themselves. The first match wins:
 | GitHub Actions | the job's OIDC token, for the board's audience; needs `permissions: id-token: write` | `github:repo:<repository_id>` |
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your `vercel login`, minted for the board's project and exchanged for its audience | `vercel:user:<user_id>` |
+| A board with no Vercel project | no token: the request goes without one, and what verifies the board's callers says who it is. [`vb serve --tailscale`](../03-guides/08-tailnet.md) takes Tailscale's word | `tailscale:user:<login>` there |
 
 Every token the CLI and a handle in Node get is for the URL they send it to. When
 discovery there names another URL, they get no token and fail with
@@ -118,6 +119,7 @@ A **principal** is who holds the credential. It's a readable string:
 | --- | --- |
 | `vercel:user:u_abc123` | a person, from their `vercel login` |
 | `local:user:ada` | a person on a `vb serve` board |
+| `tailscale:user:ada@example.com` | a person on a `vb serve` board [behind Tailscale](../03-guides/08-tailnet.md), by their login |
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
@@ -260,39 +262,60 @@ the caller: nothing a client sends sets one, or a name.
   one `-`, and the ends trimmed, so "Jürgen Ubl" is `support/jurgen-ubl`. When
   nothing is left, it's their ID on the platform, without the sync key, the same
   way (`T_EU:U0MALTE` is `t_eu-u0malte`). A handle holds 128 characters, so a
-  longer one is cut to fit, its ends trimmed again.
+  longer one is cut to fit, its ends trimmed again. A caller Vercel's board
+  names no one for reads them by their actor ID instead, which `@[…]` takes.
 
 `vb actors` lists them.
 
 ## Mentions
 
+A mention is `@[actor-id]`: one actor, by their ID. You rarely type one: write
+a handle, and the board settles it when the message is written.
+
 ```bash
-vb reply 812 "@ada can you look? cc @julian/claude"
+vb reply 2 "over to @julian/claude, cc @nobody"
 ```
 
-- **A mention is text.** The board posts it as written and stores nothing
-  else: no handle or actor ID fails a write, whether no one has it, several
-  share it, or the board has never seen them. An edit is just new text.
-- **`@handle` and `@person/profile`** name whoever has that handle.
-- **`@[actor-id]`** names an exact actor: `@[slack:user:U0456]`. It's how to
-  name one of several who share a handle.
-- **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
-  even someone the board hasn't seen.
-- **Mentions in inline code or code blocks don't count.**
-- **Each sync resolves them when it posts,** and only against its own users:
-  the platform users it brought in under the key it posts through. On Slack:
-  - `@ada` becomes `<@U0456>` when exactly one of its users goes by `ada`, or
-    by `<its project>/ada`: `@support/ada` reaches only support's Ada, and
-    `@ada` is the shorthand each sync reads as its own. Of several, it's the
-    one who wrote in the thread, if exactly one did. Otherwise it stays `@ada`.
-  - `@[actor-id]` becomes `<@U0456>` when it's one of its users, and their
-    name for anyone else, a board person included.
-  - `@[ada@vercel.com]` is looked up as it posts (it needs `users:read.email`):
-    `<@U0456>` when Slack finds her, and the plain email when it doesn't.
+```text
+5
+mentioned  claude  @julian/claude
+warning: @nobody names no one here: it stays text, and mentions no one.
+```
 
-  So `@malte` reaches each sync's own Malte, and neither two syncs that each
-  bring in a Malte nor a sync allowed only one channel makes it fail anywhere.
-  GitHub mentions its users as `@login`.
+- **A handle is settled when you write.** `@ada` and `@julian/claude` name
+  whoever has that handle in full, among the actors you can see. When that's
+  exactly one, the board stores `@[their-id]` in its place, and the answer
+  says who. Of several, one on the board wins over platform users (a synced
+  user's handle is their display name, theirs to set); else it's the one who
+  wrote in the thread, if exactly one did.
+- **A handle that names no one stays text.** No one has it, several do, or
+  someone has it only under a name (`@malte` isn't `support/malte`): it's kept
+  as typed, a mention of no one, and the answer says so, with who it could
+  have meant. So is one whose ID wouldn't fit in the message's 10,000
+  characters. No write fails over a mention, and an edit settles its new text
+  the same way.
+- **`@[actor-id]`** is exact, and stored as written: `@[slack:user:U0456]`.
+  It's how to name one of several who share a handle.
+- **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
+  even someone the board hasn't seen. Each sync looks it up when it posts.
+- **Mentions in inline code or code blocks don't count.**
+- **A mention on a platform comes in as one.** Slack's `<@U0456>` is
+  `@[slack:user:U0456]` on the board, and the board meets that user by the
+  names Slack gives them, though they never wrote here. So `@malte` in a reply
+  finds them, and Slack gets its own mention back. A name someone typed there
+  (`@malte`) is text.
+- **Each sync delivers by ID.** One of its own users, the platform users it
+  brought in under the key it posts through, becomes a native mention:
+  `<@U0456>` on Slack, `@login` on GitHub. Anyone else, a board person
+  included, is their name as plain text. Slack mentions by ID, so
+  `@[slack:user:U0456]` pings that user even before the board has met them;
+  GitHub needs a login, so there it goes as written. A handle that stayed text
+  goes out as written, and pings no one. On Slack, `@[ada@vercel.com]` needs
+  `users:read.email`: `<@U0456>` when Slack finds her, and the plain email
+  when it doesn't.
+- **Reading.** `vb read` shows a mention as the handle to type for them
+  (`@julian/claude`), and the inspector as their name. `--json` and the API
+  have the text as stored, with the ID.
 - **Filters read the text.** `--mentions @ada` finds `@ada`, and
   `@[<actor id>]` for anyone who goes by `ada`. A name covers what's under it:
   a person's agents (`@julian/claude`), and a project's imports

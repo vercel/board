@@ -1,5 +1,5 @@
 import type { BoardEventView } from '../api/routes.ts'
-import { BoardError, createBoardClient, eventsState, type BoardClient, type EventsOptions, type PostOptions, type ProfileOption, type ReplyOptions } from '../client/client.ts'
+import { BoardError, createBoardClient, eventsState, type BoardClient, type EventsOptions, type NewTaskOptions, type ProfileOption, type TaskOptions } from '../client/client.ts'
 import { derivedId } from '../client/ids.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { SYNC, type Backend, type BoardBinding, type Caller, type SelfCaller, type Subscription, type SyncEntry } from './backend.ts'
@@ -52,7 +52,12 @@ export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
    * deployment `sync` in those channels.
    */
   sync?: Record<string, SyncProvider>
-  /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
+  /**
+   * The board's public URL, which every token's audience must equal. Inferred from requests
+   * otherwise only on Vercel, which routes a request to a deployment only for its own domains, and
+   * in development: elsewhere a request's sender chooses its Host, so a production board without
+   * one verifies no tokens.
+   */
   url?: string
   /** The mount path, e.g. `/api/board`. Inferred from requests otherwise: the shallowest one they show. */
   basePath?: string
@@ -119,7 +124,7 @@ type DefaultOptions = {
   backend?: undefined
   /**
    * How requests reach Vercel's API, with credentials it takes: a token for the team. In Node it
-   * defaults to `VERCEL_TOKEN`, the deployment's OIDC token, or your `vercel login`; elsewhere, a
+   * defaults to the deployment's OIDC token, `BOARD_TOKEN`, or your Vercel login, never `VERCEL_TOKEN`; elsewhere, a
    * browser say, pass one. A board at `BOARD_URL` gets the credentials `vb` sends it instead.
    */
   fetch?: typeof fetch
@@ -155,6 +160,18 @@ export type BoardContext = {
   /** The handle, acting as `caller`: a watcher's, the middleware's, or a schedule's creator's. */
   handleOf(caller: Caller, trigger: string | null): Board
 }
+
+const hostChecked = new WeakSet<BoardOptions>()
+
+/** `options`, for a board behind a server that lets a request name only hosts it allows, as `vb serve` does. */
+export function hostCheckedBy<T extends BoardOptions>(options: T): T {
+  hostChecked.add(options)
+  return options
+}
+
+/** Whether a board without `url` can take it from a request's Host: on Vercel, or behind a server that checks Host. */
+export const hostTrusted = (options: BoardOptions): boolean =>
+  hostChecked.has(options) || (typeof process !== 'undefined' && process.env.VERCEL === '1')
 
 /** A handle's own, with every request it makes ended by a signal: what `vb()` runs a command on. Global, so another copy of board finds it. */
 const STOPPED_BY = Symbol.for('@vercel/board/stopped-by')
@@ -353,7 +370,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     if ('identity' in caller) return handle({ ...client, events: (query, opts) => events(client, query, opts) }, () => ownUrl() ?? inProcess, caller, trigger, stop, writes)
     const via = caller.origin.via?.kind ?? 'client'
     const id = (given: string) => derivedId(`board-${via === 'watcher' ? 'watch' : via}`, caller.self ?? '', given)
-    const owned = async <T extends PostOptions | ReplyOptions>(input: string | T): Promise<string | T> =>
+    const owned = async <T extends { id?: string }>(input: string | T): Promise<string | T> =>
       typeof input === 'string' || input.id === undefined ? input : { ...input, id: await id(input.id) }
     return handle(
       {
@@ -361,6 +378,13 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
         post: async (channel, input) => client.post(channel, await owned(input)),
         reply: async (re, input) => client.reply(re, await owned(input)),
         posted: async (given) => client.posted(await id(given)),
+        // A task's new thread is a post: its `id` is this caller's own too.
+        tasks: {
+          ...client.tasks,
+          create: (async (target: string | { re: string }, input?: string | NewTaskOptions | TaskOptions) =>
+            typeof target === 'string' ? client.tasks.create(target, await owned(input as string | NewTaskOptions)) : client.tasks.create(target, input as TaskOptions | undefined)) as BoardClient['tasks']['create'],
+          createMany: async (channel, tasks, opts = {}) => client.tasks.createMany(channel, tasks, opts.id !== undefined ? { id: await id(opts.id) } : opts),
+        },
         // In-process, a request is this caller's whatever its headers say: another profile is another handle's.
         request: (path, init = {}) => {
           const { as: profile, ...rest } = init
@@ -429,6 +453,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     accessNow: (principal, grants) => policy.accessNow(principal, grants),
     explain: (principal, channel) => policy.explain(principal, channel),
     project: () => policy.project(),
+    logins: policy.logins,
     handle: (caller) => handleOf(caller, null),
     url: ownUrl,
   }

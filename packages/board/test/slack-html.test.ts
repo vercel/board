@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
-import { slack, withoutHtml, type SlackClient } from '../src/sync/slack.ts'
+import { slack, withoutBroadcasts, withoutHtml, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 
 const thread = 'C1:1700000000.000100'
@@ -85,5 +85,40 @@ describe('withoutHtml', () => {
   it('tidies whitespace around code blocks, never inside them', () => {
     const block = '```\nkeep  \n\n\n\nthis\n```'
     expect(withoutHtml(`<b>x</b>\n\n\n\n${block}`)).toBe(`**x**\n\n${block}`)
+  })
+})
+
+describe('Slack broadcasts from other platforms', () => {
+  const comment = 'cc <!channel> <!here> <!everyone> <!subteam^S123|oncall> and <@U123>, <https://x.dev|x>, `<!here>`, <!-- note -->'
+  const inert = (text: string) => {
+    expect(text).not.toMatch(/(?<!`)<!(channel|everyone|subteam)/)
+    expect(text).toContain('<@U123>')
+    expect(text).toContain('<https://x.dev|x>')
+    expect(text).toContain('`<!here>`') // code keeps its text
+  }
+
+  it('reach Slack as text, in posts, edits, and messages sent under an agent’s name', async () => {
+    const { provider, sent, posted } = slackWith()
+    await provider.post(thread, 'thread', { markdown: comment, external: true })
+    await provider.edit(thread, '1700000000.000300', { markdown: comment, external: true })
+    await provider.post(thread, 'thread', { markdown: comment, external: true, as: { name: 'pi', avatar: null } })
+    for (const text of [(sent[0] as { markdown: string }).markdown, (sent[1] as { markdown: string }).markdown, String(posted[0]!.markdown_text)]) inert(text)
+  })
+
+  it('stay as written when the board wrote them, so its authors can ping a group', async () => {
+    const { provider, sent } = slackWith()
+    await provider.post(thread, 'thread', { markdown: 'paging <!subteam^S123|oncall>' })
+    expect((sent[0] as { markdown: string }).markdown).toContain('<!subteam^S123|oncall>')
+  })
+
+  it('keep their words', () => {
+    expect(withoutBroadcasts('hey <!channel>').replace('\u2060', '')).toBe('hey <!channel>')
+    expect(withoutBroadcasts('<!-- c --> a <! b')).toBe('<!-- c --> a <! b')
+    expect(withoutBroadcasts('```\n<!here>\n```')).toBe('```\n<!here>\n```')
+  })
+
+  it("defuse what only looks like code: tildes, and a fence nobody closed", () => {
+    for (const text of ['prefix ~~~ <!channel>', '~~~\n<!channel>\n~~~', '```\n<!channel>', 'a ` b <!channel>', '`a` <!channel> `b`'])
+      expect([text, withoutBroadcasts(text)]).toEqual([text, text.replace('<!', '<\u2060!')])
   })
 })

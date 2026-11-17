@@ -30,11 +30,18 @@ async function pageOf(): Promise<string> {
   return found
 }
 
+/** The hosts `--allow-host`, or `--tailscale`, names: each a host, with its port when that isn't its scheme's default. */
+export function allowedHosts({ flags, usage }: Pick<CommandContext, 'flags' | 'usage'>, flag: 'allow-host' | 'tailscale' = 'allow-host'): string[] {
+  const hosts = flags[flag] ?? []
+  const bad = hosts.find((host) => !/^[a-z0-9.-]+(:\d+)?$/i.test(host))
+  if (bad !== undefined) throw usage(`--${flag} takes a host, with a port if it isn't the default, like box.tailnet.ts.net: not ${bad}.`)
+  // Written with a scheme's own port, it's the host without it too: that's how a browser sends it.
+  return [...new Set(hosts.flatMap((host) => [host, host.replace(/:(443|80)$/, '')]))]
+}
+
 export async function inspect({ flags, out, usage, portFlag, client, openBrowser }: CommandContext): Promise<number> {
   const port = portFlag()
-  const hosts = flags['allow-host'] ?? []
-  const bad = hosts.find((host) => !/^[a-z0-9.-]+(:\d+)?$/i.test(host))
-  if (bad !== undefined) throw usage(`--allow-host takes a host, with a port if it isn't the default, like box.tailnet.ts.net: not ${bad}.`)
+  const hosts = allowedHosts({ flags, usage })
   const page = await pageOf()
   const inspector = await startInspector({ client: client(), page, hosts, ...(port !== undefined ? { port } : {}) })
   out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)

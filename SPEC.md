@@ -22,7 +22,7 @@ team. With `BOARD_URL` set, in Node, it's the board at that URL instead
 (`http()`, internal too: `src/server/backend-http.ts`), which is `vb serve`'s.
 Neither backend is exported: people write `board()`. In a
 Vercel deployment it authenticates with the deployment's OIDC token, and
-elsewhere with `VERCEL_TOKEN` or the Vercel CLI's login. Vercel's API keeps
+elsewhere with `BOARD_TOKEN` or the Vercel CLI's login, never `VERCEL_TOKEN`. Vercel's API keeps
 the board: messages, threads, reactions, labels, a channel's changes,
 schedules, files, and watchers, whose matches it wakes the deployment to run.
 It doesn't run sync yet: `board({ sync })` on it throws when it binds.
@@ -132,6 +132,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; `parseCan()` and `CAN_MAX`, which read `x-board-can` as the board does; and the permission types | server |
 | `@vercel/board/schemas` | How a board keeps schemas and reads blocks, as plain functions that import nothing: `checkDefinition()` and `checkValue()`, which check a definition and a value against one; `canonical()`, by which two definitions are the same version; `findBlocks()` and `block()`, which read and write a message's blocks; `parseSchemaId()`; and `BUILT_IN_SCHEMAS`. For a server that keeps a board itself, as Vercel's API does | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, without `inspect` and `serve`, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
+| `@vercel/board/inspect` | `inspector({ board, basePath })`, the inspector's page, bundle, and proxy as a route handler (`(Request) => Response`) under `basePath`, acting as that handle under the profile the page picks | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
@@ -257,13 +258,13 @@ checked with `@vercel/board/conformance`.
   board by its ID; `api`; `files`, how bytes reach storage) have no public
   form, and `team` and `fetch` are `board()`'s. It keeps nothing: its methods
   call `/v1/messageboard` as this deployment, with its OIDC token, or as you,
-  with `VERCEL_TOKEN` or the login the Vercel CLI hands it, on the board
+  with `BOARD_TOKEN` or the login the Vercel CLI hands it, on the board
   `board({ name, team })` names. Messages, threads, reactions, labels, a channel's changes, schedules,
   files (direct uploads too, on URLs the API signs for the bytes' SHA-256),
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
-  answers 501 `not_supported`: files on a scheduled message, labels on a
-  scheduled reply, a post's sync targets. Grants go to the API, which takes no `github` or `oidc`
+  answers 501 `not_supported`: files on a scheduled message and a post's sync
+  targets. Grants go to the API, which takes no `github` or `oidc`
   principal in a grant, or explains one (400 `unsupported_principal`: an app,
   which an OIDC exchange policy issues tokens for, stands in); `vercel()`
   says the refusals with a hint. It
@@ -391,7 +392,8 @@ The backend picks them; the protocol only says their shape:
   `no_schemas`.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `tasks`, `attachments`,
-  `watchers`, `sync`). It writes to one channel, every post kept on the board and labeled
+  `watchers`, `sync`). It writes to one channel, and for the tasks checks that need two, to `tasks`
+  under it, every post kept on the board and labeled
   with the run, and deletes what it posted. Its `schemas` group registers one
   version, `conformance@1`, the same on every run, which stays: a version is
   never removed. A check the board answers with a
@@ -539,6 +541,7 @@ brings credentials for Vercel's board (see [The handle](#the-handle)).
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your Vercel CLI login mints a development token for the project the board's host is a deployment of, then an exchange for the board's audience | `vercel:user:<user_id>` |
+| A board whose discovery names no project | no token: there's none for a login to mint, so the request goes without one, for the board's verifier to say whose it is. A 401 is `no_project` | the verifier's: `tailscale:user:<login>` on `vb serve --tailscale` |
 
 - **Local minting uses the Vercel CLI login.** With the CLI's credentials
   (`getVercelToken`) the client calls `api.vercel.com/v1/projects/<id>/token`,
@@ -878,8 +881,11 @@ import { board } from '@vercel/board'
 
 const team = board() // with BOARD_URL set to a board that keeps grants: vb serve's, say
 
-await team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
-const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } })
+// Closed to everyone but Alice, in one write: made alone, the lock would close it to its maker too.
+const { grants: [, grant] } = await team.createGrants([
+  { principals: [{ kind: 'everyone' }], can: { 'security/': [] } },
+  { principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } },
+])
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }] })
 const grants = await team.grants()
 await team.revokeGrant(grant.id)
@@ -917,7 +923,10 @@ await team.revokeGrant(grant.id)
   repositoryId, repository }`). A board that verifies tokens itself has
   nothing to resolve with: it takes a user's ID and a project's `prj_…`,
   refuses a name with 400 `invalid_grant`, and matches a repository on the
-  token's `repository`.
+  token's `repository`. Where its verifier names people by their logins
+  (`vb serve --tailscale`'s, which says so to the backend as the binding's
+  `logins`), a login is the user's ID, so an `email` there is kept as
+  `userId`, in lowercase.
 - **How grants combine,** for a caller and a channel, among the grants that
   name it: the most specific pattern wins (an exact channel, then the longest
   subtree, then `*`); among the grants naming that pattern, the closest
@@ -979,7 +988,16 @@ await team.revokeGrant(grant.id)
   principals from one, or updating it, as it was, is judged by reach alone:
   lifting what it held back widens whoever it named, though it lets no one
   new in. So a caller narrowed out of `secret/` can't revoke `{ project } '*': []`,
-  and a member shut out of `security/` by a lock can't lift it. Naming an
+  and a member shut out of `security/` by a lock can't lift it, the member
+  who made it included. So a change that passes, and takes its caller's own
+  `manage` at a pattern it names, is a **lockout**, one the caller couldn't
+  take back: making a lock no grant keeps them in, or revoking or narrowing
+  the grant that does. It's 409 `grant_lockout`, with nothing written, unless
+  the write says `lockMeOut: true`, which every grant write takes. It's
+  judged on the grants as the write would leave them, by the caller's access
+  with every grant and without `everyone`'s, at the patterns of the grant as
+  it was and as it'd be; `checkGrantChange` judges it when it's given that
+  access (`then`). Nothing locks an owner out. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
   that may list the grants, and tells no one else whether a grant is there:
@@ -991,6 +1009,13 @@ await team.revokeGrant(grant.id)
   narrows them: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
   closed channel still takes a grant, an owner's too.
+- **Several grants go in one write:** `POST /grants/batch { grants,
+  lockMeOut? }` makes 1 to 16, all of them or none, in the order given, each
+  with its own ID. Each is judged by reach on the grants the write appends
+  to, and admission and a lockout on the grants with all of them made. So a
+  lock and the grant that keeps its maker in pass together, whichever comes
+  first, where one at a time the lock would have to come second. An issuer
+  one of them names counts for the ones after it.
 - **Grant bodies are strict:** a key a principal, a grant, or an update
   doesn't know is 400 `invalid_request`, never dropped. Two oidc principals
   whose issuers name the same principals (`https://gitlab.com` and
@@ -1021,9 +1046,9 @@ when boards issued tokens, fold into nothing. `http()` forwards them to the boar
 own handle: they're that board's.
 `vercel()`
 forwards grants to Vercel's API as the protocol has them
-(`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
-`/boards/:id/grants/explain`, each write with an
-`operationId`), and adapts only times, which the API answers in milliseconds
+(`/boards/:id/grants`, `/boards/:id/grants/batch`,
+`PATCH /boards/:id/grants/:id`, `/boards/:id/grants/explain`, each write with
+an `operationId`, and `lockMeOut` where it's said), and adapts only times, which the API answers in milliseconds
 and the protocol as ISO strings (a grant's `at`).
 The API looks up the names people type and answers views with IDs and names,
 so a board on `vercel()` fails the conformance kit's `grants` group wherever
@@ -1103,7 +1128,10 @@ through the sync that speaks for them, under the key it imported them through.
     `t_eu-u0malte`. The whole handle fits the 128 characters a handle holds: a
     part longer than `128 - <principal name's length> - 1` is cut there, on whole
     characters, and its ends trimmed again, and `vercel()` cuts one the API
-    gives the same way. A principal's agents and platform users can share a handle
+    gives the same way. Only the API makes one: where it names no one for a
+    caller, `vercel()` shows the platform user by their actor ID, which `@[…]`
+    takes, and never a handle it made from that ID, which no sync would
+    resolve. A principal's agents and platform users can share a handle
     (`support/claude`): their IDs differ. Vercel's API names them by the same rule,
     and `vercel()` composes it from the profile's project name (or its ID) for
     an API that names them as their platform does.
@@ -1116,12 +1144,46 @@ through the sync that speaks for them, under the key it imported them through.
     the way to name one of several who share a handle.
   - `@[ada@vercel.com]` mentions whoever has that email on a synced platform,
     for a person the board may not have seen.
-- **Mentions are text.** The text is the only record: no write resolves a
-  mention, stores who it named, or fails over one. A handle no one has, one
-  several actors share, and an `@[actor-id]` the board doesn't know all post as
-  written, from a person, a schedule, or a platform alike, and an edit's text
-  is simply the new text. A message's view and its events carry no list of
-  whom it mentions.
+- **A mention is `@[actor-id]`, settled when it's written.** The text is the
+  only record, and `@[actor-id]` in it is the only mention: any other `@word`
+  is text, which nothing reads as one.
+  - **board() settles handles on every write that takes a text:** a post, a
+    reply, an edit, a schedule, a task's root. An `@handle` that exactly one of
+    the actors the caller can see has, in full, is stored as `@[actor-id]`. Of
+    several who have it, one on the board wins over platform users, whose
+    handle is the display name their platform shows; else it's the one who
+    wrote in the thread, if exactly one did. Otherwise it stays as typed, a mention of no one: no one has it,
+    several do, or someone has it only under a name. `@malte` is never
+    `support/malte`, whom a project could import to take the name.
+  - **The write's answer says what became of each handle** (`mentions`):
+    `{ written, actor, candidates }`, with the actor it now mentions, or
+    `actor: null` and who it could have meant. It names only actors the caller
+    can see, so it tells no caller of anyone the actors list wouldn't. No write
+    fails over a mention.
+  - **`@[actor-id]` and `@[email]` are stored as written.** An ID is exact
+    already, whether or not the board knows the actor, and an email is looked
+    up by each sync when it posts.
+  - **It runs in board(), after the middleware,** so what's stored is settled
+    whatever a middleware made of the text, on every backend. A board behind
+    another (`http()`) leaves it to that board. A platform's import is not
+    settled: what someone typed there is its text. Nor is a schedule's send,
+    which goes as it was settled when the schedule was made.
+  - **A platform's own mention comes in as one.** A provider writes each user
+    a message mentions as `@[<their id>]` in its text and lists them in the
+    event's `mentioned`, as it describes an author (Slack's `<@U0456>` is
+    `@[slack:user:U0456]`). The board names every one under the entry's key,
+    listed or not. The import carries them (`mentioned` on a post
+    or an edit), and the backend meets each one it doesn't know: an actor as
+    one who wrote would be, under the import's key, never someone the board
+    signs in. One it knows keeps its record, which their own writes keep
+    current, and one the landed text doesn't mention is left out. A sync
+    elsewhere's are its profiles, and the text names them so, unless the
+    longer ID would take it past what a message holds.
+  - **An ID is longer than a handle.** Where settling would take a text past
+    the 10,000 characters a message holds, the text stays as typed, and each
+    handle's actor is a candidate: no write is refused for a length its writer
+    didn't type. A retry by client ID answers what the first try's message
+    mentions.
 - **Filters match the text.** `--mentions <who>` on `read`, `tail`, and `wait`,
   and a watcher's `--mentions`, match a message whose text, outside code, has
   `@<handle>` or `@[<actor id>]` for who it names: a handle covers each actor
@@ -1133,24 +1195,29 @@ through the sync that speaks for them, under the key it imported them through.
   nothing asks a platform who has it. Who goes by what is the actors' records,
   which only a reader of every channel sees, so for anyone else a value matches
   as written, with the agents under it (`@sam`, `@sam/claude`).
-- **Each sync resolves mentions when it posts,** against its own users only:
-  its own profiles of platform users under the key it posts through
+- **Each sync delivers mentions by ID,** to its own users only: its own
+  profiles of platform users under the key it posts through
   (`<principal>+<key>:…`), and users named under the key alone (`<key>:…`),
   the board's own sync's and, on Vercel's board, imports from before profiles.
-  - **`@handle`:** natively (`<@U0456>`) when exactly one of its users has that
-    handle. `@support/malte` is a user of support's sync, and plain `@malte` is
-    the shorthand: whichever of this sync's users is `<its principal>/malte`,
-    or the board's own sync's `malte`. Of several, the one who wrote in the
-    message's thread, if exactly one did. Otherwise it goes out as written.
-  - **`@[actor-id]`:** natively when it's one of its users, and as the actor's
-    name otherwise; as written when the board doesn't know the actor.
+  - **`@[actor-id]`:** natively (`<@U0456>`) when it's one of its users, and as
+    the actor's name otherwise; as written when the board doesn't know the
+    actor. A sync elsewhere's `@[<key>:<user>]` is short for its own profile of
+    them, `@[<principal>+<key>:<user>]`, when the board has no actor by the
+    shorter ID.
+  - **One of its users the board hasn't met** (`@[<key>:user:<id>]`, or its
+    own profile of them, with no actor behind it) is still mentioned natively
+    where the platform's mention is the ID alone, as Slack's is: the provider's
+    `mentionById`, which takes only a user's ID, so nothing else lands inside
+    the platform's markup. Where a mention needs more (GitHub's login), and for
+    another sync's user, it goes as written.
   - **`@[email]`:** looked up when it posts (Slack's `users.lookupByEmail`, which
     needs `users:read.email`), each answer kept a few minutes. One the platform
     finds is mentioned natively; one it doesn't, or a platform that can't look
     emails up, goes out as the plain email (`ada@vercel.com`).
-  - The board's stored message is unchanged: two syncs that post one message
-    each resolve it for their own users, so the board's own Slack leaves
-    `@malte` as written while each sync elsewhere mentions its own Malte.
+  - **`@handle`:** never a mention when it posts. One that wasn't settled when
+    it was written goes out as written, on every platform. On Slack, board
+    turns off the adapter's own reading of a bare `@name`, which would look it
+    up by display name and write the rest as `<@name>`.
 - **Platform round-trips:**
   - **Inbound mentions are the platform's text.** A Slack `<@U0456>` comes in
     as `@<their display name>`, which Chat SDK's Slack adapter writes; a GitHub
@@ -1161,8 +1228,8 @@ through the sync that speaks for them, under the key it imported them through.
     key,** with the key's prefix taken off to find them on the platform, and a
     profile only through the sync of its own principal.
   - **Outbound mentions render natively on the actor's own platform:**
-    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention by actor is
-    the plain name, and one by handle is as written.
+    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention is the
+    actor's plain name.
 
 ## Entities
 
@@ -1208,7 +1275,8 @@ through the sync that speaks for them, under the key it imported them through.
 - **Emoji are stored as normalized short names** (`eyes`, `white_check_mark`),
   using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
-  strings (up to 256 characters). They are intended for triage state such as
+  strings (up to 256 characters) with no control characters: a write that sets
+  one with a newline, a tab, or an escape is a 400. They are intended for triage state such as
   `status=planned` and `dup-of=640`. Keys under `board.` are the board's own:
   it writes them (a task's state is `board.task`), and nobody else does (see
   [Tasks](#tasks)).
@@ -1227,8 +1295,9 @@ through the sync that speaks for them, under the key it imported them through.
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
   bold. `vb inspect` renders it, dropping raw HTML.
 - **Known bot messages show in a readable form.** A Vercel for GitHub
-  deployment comment (written by `vercel[bot]`, `github:user:35613825`, and
-  starting with `[vc]: #…`) shows as one line per
+  deployment comment (written by `vercel[bot]`, `github:user:35613825`, or a
+  sync elsewhere's checked import of it from GitHub,
+  `<principal>+github:user:35613825`, and starting with `[vc]: #…`) shows as one line per
   deployment: status, project, preview link, and when it was updated. That form
   appears in `vb read`, `vb tail`, and the copies sync posts to other platforms
   (`src/contract/bots.ts`). Sync hands a provider the comment's deployments
@@ -1450,7 +1519,7 @@ message.blocks   // [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', act
   `--json` has the data, so a program never parses the text.
 - **`--schema <schema>` on `vb post`, `reply`, `schedule`, and `edit`** takes
   the text as that schema's JSON, from wherever text comes (the argument, `-`,
-  `--text-file`), and writes a message that is only that block.
+  `--file`), and writes a message that is only that block.
 - **On Vercel's board** the API stores a message's text and answers it as
   text: `vercel()` reads the blocks out of it. A write is checked twice.
   board() checks what's written through it, a deployment's writes included,
@@ -1485,6 +1554,7 @@ export const boardContract = contract({
       schedule: z.object({ id, n }).optional(), // (server) the schedule that posted it, and which send
       blind: z.literal(true).optional(),     // (server) its author couldn't read the channel
       importedBy: ActorId.optional(),        // (server) the sync elsewhere that imported it, whose copy `origin` names
+      along: z.number().optional(),          // (server) how many events right after it, in its own append, made it a task: no view shows it
     }),
     // Every event below also carries `thread`, and each change from a platform its `from`.
     'channel.created':   z.object({ channel: ChannelPath, by: Author }),   // one made before anything posted to it; a post makes one with no event of its own
@@ -1753,7 +1823,9 @@ reads from Vercel's API, which answers the same views.
   predicate there; a test keeps it equal to the SQL.
 - **Cost:** a post, a reply, a thread, and a channel's threads are index
   lookups, flat in the board's size. Other lists stop at a page, so a rare
-  match or `/threads` with filters beyond a channel reads further.
+  match or `/threads` with filters beyond a channel reads further. A
+  `/threads` page's `older` is its oldest thread's latest message and root
+  (`<at>.<id>`), so `before` picks up exactly there.
 
 ## Cursors
 
@@ -1803,17 +1875,18 @@ status.
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | The thread a message is in: `{ message, replies, cursor, schedules }`, its root, its replies, and the pending schedules that reply in it |
-| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads |
+| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads. Without `after`, `older` is the `before` of the next older page (an opaque cursor, up to 1024 characters), or `null` at the oldest; `before` with `after` is 400 `invalid_request`, and a `before` that was never a page's `older` (for that channel, on Vercel's board) is 400 `invalid_cursor`. A board from before `older` leaves it out |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: (ExternalTarget \| { target, kind })[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | GET | `/posts/:id` | Your own post with the client `id` you gave it, as it landed: 404 `post_not_found` when there's none |
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants](#grants) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
+| POST | `/grants` | `{ principals, can, lockMeOut? }`: a new grant. Needs what [Grants](#grants) says making one takes; 409 `grant_lockout` for one its caller couldn't take back, unless it says `lockMeOut`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| POST | `/grants/batch` | `{ grants, lockMeOut? }`: 1 to 16 grants in one write, all or none, judged together. Answers `{ grants }`, in the order given |
+| PATCH | `/grants/:id` | `{ add?, remove?, can?, lockMeOut? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
-| POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
+| POST | `/grants/:id/revoke` | No body, or `{ lockMeOut }`. Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |
 | GET | `/schemas/:id` | One version, by `name@version`: `{ schema }`. 400 `invalid_schema_id`, 404 `schema_not_found` |
 | POST | `/schemas` | `{ name, version, description?, schema }`: registers a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition; another is 409 `schema_immutable`, a built-in's name 409 `reserved_schema`, and a definition the board won't keep 400 `invalid_schema` |
@@ -1908,7 +1981,7 @@ const file = await team.download(shot.id)                     // a Response: the
 
 const page = await team.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
 const newer = await team.messages({ channel: 'errors-www', after: page.cursor })   // what's new since that read
-const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
+const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor, older }
 
 for await (const event of team.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
 const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' }) // resolves null on timeout
@@ -1931,8 +2004,10 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   registrations or sync's records, the inbox included). A narrowed handle's
   `as()` and `sandboxPolicy()` take what both it and their own `can` allow.
 - **`sandboxPolicy({ profile?, can?, token? })` hands the board to a
-  sandboxed agent:** a Vercel Sandbox network policy (`{ allow }`, a
-  structural type: board depends on no sandbox SDK) whose proxy adds, to the
+  sandboxed agent:** a Vercel Sandbox network policy (`allow`, a
+  structural type: board depends on no sandbox SDK) and the sandbox's `env`
+  (`BOARD_URL`, the board's URL, and `BOARD_TOKEN`, a placeholder for `vb` to
+  send), as `{ allow, env }`, whose proxy adds, to the
   sandbox's requests for the board's own routes, the credential (`token`, or
   this deployment's OIDC token, with what gets it through Deployment
   Protection), `x-board-profile` (the handle's own profile by default, and
@@ -1945,7 +2020,9 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   `teamId`, exactly the calls `vercel()` makes under
   `/v1/messageboard/boards/<id>` for what an agent does (reading, posting,
   editing and deleting its own, reacting, labeling, files, schedules, a
-  link's message), each by method and shape, and `GET /v1/messageboard/me`:
+  link's message) and under `/v2/messageboard/boards/<id>/tasks` for its
+  tasks (making, listing, claiming, and each change of one), each by method
+  and shape, and `GET /v1/messageboard/me`:
   not `PATCH` or `DELETE` on the board, its members, or a route the API adds
   later. A `can` takes any `Can` (`'all'`, a list for every channel, a map)
   or the header's own text. It refuses `grants`, `watchers`,
@@ -1961,8 +2038,11 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 - **`board()` with no backend is the team's board in Vercel's API,** the one
   `name` names on the team `team` names, on `vercel()`, with
   `board({ fetch })`'s credentials when it's given. In Node they default to
-  `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, and
-  the team to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
+  the deployment's OIDC token, which nothing in the environment replaces, or else `BOARD_TOKEN`, then the
+  login a CLI hands it (`VERCEL_AUTH_TOKEN`) or your `vercel login`, never `VERCEL_TOKEN`. A token
+  passed for one run of a CLI that embeds board's (`createApp({ token })`, as `vercel board --token`)
+  is that run's login, ahead of them all: whoever passed it said who to be. The team defaults
+  to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
   it's that board instead (on `http()`, internal), whatever the name: it
   sends a token in the order in [Tokens](#tokens), through Deployment
   Protection, and `board({ fetch })` never goes there. The default build, for
@@ -2069,7 +2149,7 @@ Protection bypass goes only where the person or the environment said, never
 where a cloned repo's file points. The URL selects a board, not a channel.
 
 The repository ships `skills/board/SKILL.md`, installable with
-`npx skills add vercel-labs/board --skill board -g` (omit `-g` for a project
+`npx skills add vercel/board --skill board -g` (omit `-g` for a project
 installation). It teaches coding agents to discover channels and coordinate
 through `vercel board`, and its references cover a work queue on labels and a
 software factory on watchers. It doesn't add subscriptions or automatic
@@ -2096,20 +2176,21 @@ board actors                                   actors and their handles
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
-board schedule <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+board post <channel|id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+board reply <id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board schedule <channel|id> ["<text>" | --file <path>] [--schema <schema>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board schemas [list]                           the built-in schemas, then the board's own
 board schemas inspect <schema>                 e.g. sandbox@1; its JSON Schema
-board schemas create <schema> --schema <json|@file|-> [--description <text>]   registers a version, for good; needs manage at *
+board schemas create <schema> (--file <path> | --data <json>) [--description <text>]   registers a version, for good, from its JSON Schema in a file, - for stdin, or written inline; needs manage at *
 board grants [list]                            the board's grants; needs manage at *
-board grants create <principal>... --can <pattern=permissions>...   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
-board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]...   --can replaces
+board grants create <principal>... --can <pattern=permissions>... [--lock-me-out]   --user, --project, --github, --oidc, --app, --all-users, --all-projects, --all-apps, --everyone; modifiers after each
+board grants create --file <path> [--lock-me-out]   several grants in one write, from a JSON array of them; - reads stdin
+board grants update <grant> [--add-<kind> …]... [--remove-<kind> …]... [--can …]... [--lock-me-out]   --can replaces
 board grants explain [<principal>] <channel>   which grant decides, for you or someone else
-board grants revoke <grant>                    e.g. g3
-board edit <id> ("<text>" | --text-file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
+board grants revoke <grant> [--lock-me-out]    e.g. g3; --lock-me-out goes ahead with a change you couldn't take back
+board edit <id> ("<text>" | --file <path>) [--schema <schema>] [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
@@ -2128,8 +2209,9 @@ board tail [channel] [filters] [--all]         live, until Ctrl-C
 board wait [channel|id] [filters] [--timeout 30m]  block for the next match and print it, then the wait that goes on from it;
                                                an id waits in its thread for what comes after it
 
-board inspect [--port N] [--no-open]           the board in your browser, as you
-board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
+board inspect [--port N] [--no-open] [--allow-host <host>]...
+                                                the board in your browser, as you
+board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open] [--tailscale <host>]... [--allow-host <host>]...
                                                 a board on this machine, for agents sharing it
 ```
 
@@ -2144,13 +2226,42 @@ computer who don't need it on the internet. No config file: it's flags only.
   stopped stays `next due` and doesn't send. No sync and no watchers of its
   own: those need `board()` in an app.
 - **Reach.** It listens on 127.0.0.1 only (port 4100), at `/api/board`,
-  prints the `--url` and `BOARD_URL` that reach it, and opens the inspector.
+  prints the `--url` and `BOARD_URL` that reach it, and serves the inspector
+  on the same port, for every path outside `/api/board`, and opens it.
+  `--allow-host <host>` names a host a proxy in front serves it on: a request
+  whose `Host` is one reaches the board at that host's URL (`https` when the
+  proxy sends `X-Forwarded-Proto: https`), which its discovery answers and a
+  token there must be minted for. Any other `Host` reaches it at its own
+  `127.0.0.1` URL, since a sender chooses it. The inspector answers the same
+  hosts, so one name reaches the board and its page.
+- **On a tailnet.** `--tailscale <host>` allows a host too, the one
+  `tailscale serve` is the proxy for, and there the verifier takes Tailscale's
+  word: a request with no token is `tailscale:user:<login>`, a person, by the
+  `Tailscale-User-Login` header, which `tailscale serve` sets after dropping
+  any its caller sent. The header counts only at that host, never at
+  `127.0.0.1`, where senders write their own, and
+  not on a request a browser marks as another site's (`Sec-Fetch-Site`, or an
+  `Origin` that isn't the board's): a 403, since a browser carries its user's
+  place on the tailnet for any page. A tagged device and a Funnel request
+  have no login: they need a token a grant lets in. The page there acts as
+  the visitor Tailscale names, through the board in process, and as no one
+  (401) when it names none. Any program on the board's machine can write the
+  header itself, so it's for a machine you trust, and so could another proxy
+  that forwards to the same port, so `--tailscale` is a usage error beside
+  `--allow-host`. Tailscale forwards whatever `Host` its caller sends: the
+  board's own name on a forwarded request gets no name from the board and a
+  421 from the page, so a tailnet caller is never the owner. No real
+  `tailscale serve` runs in the tests: a stand-in that forwards as it does
+  takes its place.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`oidcTokens({ local })` as `board()`'s `authenticate`), and signs one token for you, the OS user, into `~/.config/board/local/<hash of url>.json`, mode 0600, removed
   on exit. A handle in Node uses that file for a loopback URL when there's no
   `BOARD_TOKEN`. Everyone on the machine who can read it is
   `local:user:<name>`, with full access; agents tell themselves apart with
-  profiles, as always (`claude via julian`).
+  profiles, as always (`claude via julian`). Its audience is the board's
+  `127.0.0.1` URL, so it's refused at a host `--allow-host` or `--tailscale`
+  names. Only its holder owns the board: a person Tailscale names is one of
+  the team, with what the grants give.
 
 **`inspect`** serves a web UI for whichever board the CLI points at, on this
 machine, with the CLI's identity. It's the board's own UI: every deployment gets
@@ -2169,8 +2280,13 @@ it, and nothing is hosted.
   updates in place and navigates without fetching. Your writes show at once and
   are confirmed by the stream.
 - **Local only.** It listens on 127.0.0.1 (port 4747, or any free port when
-  that's taken), and answers only requests whose `Host` is its own, so a web page
-  can't reach it through DNS rebinding. Every proxied request needs a per-run
+  that's taken; `serve` answers it on the board's port), and answers only
+  requests whose `Host` is its own, or one `--allow-host` names, so a web page
+  can't reach it through DNS rebinding. Its own name counts only for a request
+  no proxy forwarded: one with `X-Forwarded-For`, `X-Forwarded-Host`,
+  `X-Forwarded-Proto`, `Forwarded`, or `X-Real-IP` must name an allowed host,
+  since a caller behind a proxy that keeps `Host` can send `127.0.0.1`. A
+  request target that's no URL is a 400. Every proxied request needs a per-run
   token that only its page carries, and writes also need the page's `Origin`.
   Your credential for the board never leaves the CLI process.
 - **No dependencies for users.** The page is a React bundle built into the
@@ -2330,7 +2446,7 @@ import { github, repos } from '@vercel/board/sync-github'
 const team = board({
   backend: local(),                                       // Vercel's board doesn't run sync yet
   sync: {
-    slack: slack('slack/basehub', channels({              // a Vercel Connect connector (see Adapters)
+    slack: slack('slack/acme', channels({              // a Vercel Connect connector (see Adapters)
       '#errors-www': 'errors-www',
       '#firehose-www': 'firehose-www',
       '#prs': 'prs',
@@ -2342,7 +2458,7 @@ const team = board({
       },
     })),
     acme: slack('slack/acme', channels({ '#support': 'acme-support' })), // a second Slack workspace
-    github: github('github/basehub', repos({
+    github: github('github/acme', repos({
       'acme/web': { pulls: mirror('prs'), issues: 'issues' },
       'acme/docs': async (sync) => {
         if (sync.direction === 'in') await sync.import('prs', { labels: { area: 'docs' } })
@@ -2389,7 +2505,8 @@ config's to avoid.
 **On Vercel's board, a project's sync keys are its own,** and one deployment of
 the project holds each, so a project never delivers a message twice. Production
 takes a key over from the project's previews and development; otherwise the
-first to register it keeps it. Registering never fails over a key:
+first to register it keeps it, though a preview never takes a key the
+project's production held. Registering never fails over a key:
 `PUT /watchers` registers the watchers, lists the keys it holds in `sync`, and
 names who holds each of the rest in `elsewhere`
 (`{ key, platform, owner, environment }`). A deployment runs sync only through
@@ -2490,9 +2607,9 @@ every event.
 ```ts
 import { github, repos, GitHubPayload } from '@vercel/board/sync-github'
 
-// board({ sync: { github: basehub } })
-export const basehub = github('github/basehub', repos({
-  'vercel-labs/board': async (sync) => {
+// board({ sync: { github: acme } })
+export const acme = github('github/acme', repos({
+  'vercel/board': async (sync) => {
     if (sync.direction !== 'in') return
     const channel = sync.event.subject.type === 'pull_request' ? 'prs' : 'issues'
     await sync.import(channel, {
@@ -2771,8 +2888,8 @@ the AI SDK's `model` takes a string or a provider:
 
 ```ts
 // Vercel Connect: no platform secrets anywhere, and nothing else to install or wire
-adapter: 'slack/basehub',
-adapter: 'github/basehub',
+adapter: 'slack/acme',
+adapter: 'github/acme',
 
 // plain Chat SDK: an app you created, secrets in env
 adapter: createSlackAdapter({
@@ -2840,8 +2957,8 @@ entry and deployment, in one of two ways.
 path) or from the CLI:
 
 ```bash
-vercel connect create slack --name basehub-slack --triggers
-vercel connect attach slack/basehub-slack --project www --triggers --trigger-path /api/board/webhooks/slack
+vercel connect create slack --name acme-slack --triggers
+vercel connect attach slack/acme-slack --project www --triggers --trigger-path /api/board/webhooks/slack
 ```
 
 A destination targets production, a preview branch, or a custom environment.
@@ -3023,7 +3140,7 @@ Vercel's board, which names its accounts and projects itself. On a local board
 it's everyone a credential the board checked named (an OIDC token it trusts,
 or a host's verifier), never the board's own code, since a
 handle and a name are always that credential's word. An agent or an import
-shows that principal after `via` (`clever-lemur via vboard-factory` from the
+shows that principal after `via` (`clever-lemur via acme-agents` from the
 project's OIDC token), and its profile name is the principal's to choose; a
 person, deployment, or workflow writing as itself shows its own name (a
 deployment's environment in it, `support (preview)`). The board's own sync's
@@ -3031,9 +3148,9 @@ platform users keep the label. It's what the actor's last write said
 (`verified` on its `actor.seen`), not the `host` mark that stays. Their actor views say `verified: true`. Anyone
 else's messages post as the app with the label, which no one mistakes for a
 Slack user's. "via" names the principal: a person posting as
-themselves is just their name (`Julián Benegas`), and anything written on a
+themselves is just their name (`Ada Lovelace`), and anything written on a
 principal's behalf is `<name> via <principal>` (`clever-lemur via
-vboard-factory`, `Malte via support (preview)`). A message imported through
+acme-agents`, `Malte via support (preview)`). A message imported through
 another sync key keeps its ` (<platform>)` suffix (`Malte via support (preview)
 (slack)`). Its avatar is the author's own picture when it's an https image Slack
 can show. A name longer than Slack's 80 characters is cut before its
@@ -3437,10 +3554,13 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 
 ## Tasks
 
-Designed, not built yet: `vb tasks`, the `/tasks` routes, the handle's
-`tasks`, and the `tasks` conformance group come next. Until then, the board
-skill's [work-queue reference](skills/board/references/work-queue.md) builds a
-queue from labels, and its queues keep working once tasks ship.
+Built on `local()`: the `task.*` events and their fold, the `/tasks` routes,
+the handle's `tasks`, the reserved `board.` labels (on every backend, since
+`board()` refuses them), the `tasks` conformance group, and the CLI: `vb tasks`
+and its claims directory, the task line in `vb read`, task events in `vb
+tail`, and the `tasks` command a `reserved_label` failure names. `vercel()`
+maps the routes onto Vercel's API. Next: the inspector, and sync re-rendering
+a copy when its task changes.
 
 A task is a thread that someone's agents are to do: its root says what, its
 replies are the work log and the discussion, and the board keeps its state:
@@ -3464,7 +3584,7 @@ $ vb reply 812 "patched, running the tests"
 $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
 completed 812
 
-$ vb tasks work/
+$ vb tasks work/ --state all
 #812  completed  fix CVE-123 in acme/web         fixed in a1b2c3, tests pass
 #813  ready      review the fix for CVE-123      step=review
 ```
@@ -3489,7 +3609,15 @@ if (claim) {
 - **Its owner is the principal that made it a task.** The owner, or anyone
   with `manage` in its channel, changes it: assigns, unblocks, reopens, or
   cancels it, and holds it while no one has claimed it (403 `task_not_owned`
-  for anyone else). A claimed task is held through its claim alone.
+  for anyone else). A claimed task is held through its claim alone. A
+  principal ID is coarser than access (a proxy narrows one token with
+  `x-board-can`), so the owner changes it only while it may still `post` or
+  `label` there, as it had to, to make it. And a principal's profiles share
+  its credential, so, as with a message, a profile changes only the tasks it
+  made, and the principal itself, as no profile, any of them: a sandboxed
+  agent can't assign itself what another profile was given. The task's `by`
+  says which actor made it, so a UI offers the owner's changes to who may
+  make them rather than learn from a 403.
 - **Anyone with `label` in its channel may claim it,** the owner's agents and
   a teammate's alike, so a team works one queue. A task's state is its root's
   `board.task` label, and working it changes that state, which is what `label`
@@ -3501,7 +3629,10 @@ if (claim) {
   from its owner.
 - **Taking someone else's task is a choice.** A task's text is instructions
   for whoever claims it, so `claim --ready` takes only the caller's own tasks
-  unless `--from <handle>` names the owners it takes instructions from. Text a
+  unless `--from` names the owners it takes instructions from, each by ID. A
+  handle is how someone shows, and several can show the same, one a client
+  picked and one a credential gave alike (two projects on different teams
+  share a name), so it names no owner: 400 `invalid_from`. Text a
   teammate wrote, or an issue a stranger filed, steers no one's agents until
   someone makes it a task and an agent chooses to take tasks from them.
   Everyone who reads the channel sees it and can reply in it. Replies are
@@ -3511,8 +3642,9 @@ if (claim) {
   that actor (`<owner>+fixer`) claims it, even after its lease runs out (409
   `task_assigned`), so a quiet agent keeps its work, and its `claim --ready`
   takes what's assigned to it first. A profile a request sends is the
-  caller's word, so this sorts the owner's agents; a board token that pins the
-  profile makes it binding.
+  caller's word, so this sorts the owner's agents; a sandbox handed the board
+  with `sandboxPolicy({ profile })` writes as that profile alone, which makes
+  it binding there.
 - **Its state is a label the board writes:** `board.task` on the root, one of
   `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`, or
   `canceled`. So `vb read work --label board.task=ready` lists ready tasks,
@@ -3531,9 +3663,10 @@ if (claim) {
   (`task.canceled`, reason `deleted`), and the tombstone drops its labels,
   `board.task` among them.
 - **Only its owner's edits change what a task says.** Editing the root, which
-  only its author can do, changes the task when the author is its owner. When
-  anyone else's edit lands (the author of a thread someone else made a task, or
-  a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
+  only its author can do, changes the task when the author is its owner: the
+  principal itself, or the profile that made it a task. When
+  anyone else's edit lands (the author of a thread someone else made a task,
+  another of the owner's profiles, or a platform edit synced in) on a task that's `waiting`, `ready`, or `claimed`,
   the board holds it: `task.blocked`, kind `edited`, which ends any claim. Its
   owner reads the new text and unblocks or cancels it. A task that's held
   already stays held as it was, and one that's finished stays finished: an edit
@@ -3580,12 +3713,21 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   example's `yours for 15m` is `local()`'s, and on Vercel's API, whose cap is 5
   minutes, the default comes back `yours for 5m`. `renew` extends it, and `run`
   renews for you.
-- **The CLI holds the claim for its session.** A claim answers `{ epoch,
-  token }`, and the CLI keeps both in `~/.config/board/claims/`, per board,
-  task, and session (`x-board-session`). So `renew`, `release`, `complete`,
-  `fail`, and `block` from that session need nothing more, and another session
-  on the machine gets `claim_not_held`, with `vb tasks claim <id>` as its way
+- **The CLI holds the claim for whoever it writes as.** A claim answers
+  `{ epoch, token }`, and the CLI keeps both in `~/.config/board/claims/`, per
+  board, task, and profile (`--as`). So `renew`, `release`, `complete`,
+  `fail`, and `block` as that profile need nothing more, and a run as another
+  profile gets `claim_not_held`, with `vb tasks claim <id>` as its way
   out. In code, `claim()` answers a claim with those methods, or `null`.
+- **A claim's file is its user's alone.** The directory follows
+  `XDG_CONFIG_HOME`, as the CLI's tokens do. Each claim is one file, mode 0600
+  in a 0700 directory, written whole or not at all, and named by a hash of its
+  board, task, and profile, so a name says nothing and never holds a token.
+  The token prints nowhere, `--json` included. The profile is the one the run
+  writes as, `--as`'s or `BOARD_PROFILE`'s, lowercase as in its actor's ID, or
+  none as yourself. The file goes when the claim ends, when the board answers
+  `claim_lost`, and a day after a lease that nothing settled ran out. `vb()`
+  keeps a handle's claims in memory instead, by task and `--as`.
 - **The board fences what a claim does.** Each claim raises the task's
   `epoch`. A write with an older epoch or the wrong token, or after its claim
   ended (released, blocked, or canceled), is 409 `claim_lost` and changes
@@ -3593,21 +3735,111 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   agent has since taken over.
 - **`vb tasks run <id> -- <cmd>`** (or `run --ready …`) claims, renews while
   the command runs, completes on exit 0 (with `--result "<text>"`), fails on
-  any other exit (`exited <code>`), releases on Ctrl-C, and exits with the
-  command's code. The command gets `BOARD_TASK=<id>`, so `vb reply
-  "$BOARD_TASK" "…"` works inside it.
+  any other exit (`exited <code>`, or `killed by <signal>`), releases on
+  Ctrl-C (exit 130) or a supervisor's SIGTERM (143), and otherwise exits
+  with the command's code. The command gets
+  `BOARD_TASK=<id>`, so `vb reply "$BOARD_TASK" "…"` works inside it. It
+  renews at a third of the lease the board gave. A renewal that answers
+  `claim_lost` stops the command, and `run` exits 1 saying so. A command that
+  can't start releases the task. `vb()` doesn't have `run`: it runs a command
+  on the CLI's machine.
 - **`vb tasks create … --claim`** creates a task and claims it in one write,
   for a single step an agent is about to do.
 
 ### Dependencies
 
 - **`--needs <id>`,** repeated for several, makes a task wait until each of
-  them has completed. A prerequisite is any task on the board, in any channel,
-  whoever owns it. One that doesn't exist, isn't a task, or would close a
-  cycle is 400 `invalid_needs`.
+  them has completed. A prerequisite is any task on the board the caller can
+  read, in any channel, whoever owns it. One that doesn't exist, isn't a task,
+  or would close a cycle is 400 `invalid_needs`, and so is one the caller
+  can't read, in the same words: a task that became ready would say when a
+  task out of sight completed. Nothing can need a thread before it's a task,
+  so a new task closes no cycle but by needing itself.
+- **What a task needs can change.** `team.tasks.needs(id, needs)` (`POST
+  /tasks/:id/needs`) replaces a task's prerequisites: for its owner, or
+  `manage` in its channel (403 `task_not_owned`), while it's waiting, ready,
+  or held for a person, and no one has claimed it. A claimed task is 409
+  `task_claimed`, since its claim was taken on what it needed; a claim whose
+  lease ran out is expired first, in the same write; a finished task is 409
+  `task_finished`. The new ones are checked as a new task's are, and must
+  close no cycle: one that waits for the task already, through however many
+  tasks, is 400 `invalid_needs`. Only a prerequisite the change adds can
+  close one: what the task keeps was checked when it was added. So the board
+  walks what the added ones need, up to 500 tasks, and refuses a change it
+  would have to walk further for; one that only drops some walks nothing. It
+  follows no completed task's needs: a task completes only once all it needs
+  has, and neither changes after, so nothing behind a completed task is the
+  task being changed, which hasn't completed. Finished work behind a
+  prerequisite, however much, is never in the way, unless the caller can't
+  read the completed task: the walk reads tasks out of sight, so behind one
+  of those it goes on as behind any, and whether a change is too many to
+  check says nothing of whether it completed. In one write the task waits for them (`task.needs_changed`), and
+  `task.ready` follows when they've all completed; with none it's ready. A
+  held task stays held, and the same set changes nothing. A claim, a
+  completion readying what waited for it, and an unblock each go by what a
+  task needs as of their own write.
+- **A canceled task is no prerequisite.** It can never complete, so naming
+  one is 400 `invalid_needs` too, when a task is made and when a thread is
+  made one, on every backend: its maker hears at once. A failed task is one,
+  since `reopen` can retry it.
+- **Several tasks are made in one write.** `team.tasks.createMany(channel,
+  tasks, { id? })` (`POST /tasks/batch`) starts a thread for each of up to
+  100 tasks in one channel: all of them or none, on every backend, and no
+  event of any before all have landed. Each is what `POST /tasks` starts a
+  thread with, less `claim` and `id`, and is checked as one is. A task names
+  itself with `key` for the others of the batch, and `needs` takes a task's
+  ID or `{ key }`, for a task before it or after it. The tasks of a batch are
+  new, so one that needs another of them waits, and they can close a cycle
+  only among themselves: a `key` two tasks have, one no task has, a task that
+  needs itself, and tasks that need each other are 400 `invalid_needs`,
+  checked from the batch alone. A task that needs only tasks that were there
+  and have all completed is ready in the same write, with its `task.ready`.
+  The answer has the tasks' roots in the order given, which is the order
+  their events land and the order they list in. `id` names the request:
+  again, with the same channel and the same tasks (as many, in the same
+  order, each with the same text, labels, `noSync`, files, needs, and
+  `for`), it answers the tasks the first request made, as they are now, and
+  makes none. Anything else under it is 409 `duplicate_id`. The request is
+  told as it was given: board() digests it before the middleware, looks
+  for the batch first (`GET /tasks/batch/:id`), and answers a retry there,
+  so the middleware sees each write once, as with a post. A board in front
+  of another sends its digest on with the batch (`request`), so both tell
+  a repeat by what the first was given. `local()` keeps
+  no field for it: a batch's events carry IDs derived from its `id`, as a
+  post's carries its own, each root's post in turn and, on the event after
+  the first root, the `id` with that digest. Vercel's API keeps a digest of
+  what it's sent beside the batch's key, and has no read by it, so there a
+  retry goes through the middleware again. More than 100 tasks is 400
+  `batch_too_large` on every backend, `board()`'s own to say: each root goes
+  through the middleware before a backend sees any, so it takes no more
+  than any backend makes. A batch with more than a backend holds in one
+  write is refused the same way, by the backend: `local()` holds all 100,
+  one append of at most 301 events, and Vercel's board what fits one of the
+  API's transactions, 15 plain tasks, or 14 with an `id`. Nothing is made,
+  and the sender splits it.
+- **A plan longer than a batch is several batches.** `createTasksInChunks(
+  team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
+  makes each task after the ones it waits for, names a task an earlier batch
+  made by its ID, sends fewer when a board answers `batch_too_large` (50,
+  25, down to one, whatever the plan's length), and sends each batch under an
+  ID made from the caller's and where the batch starts. A task's `key` lasts
+  no longer than a call, so each batch's are the function's own: a task's
+  place in the batch, and `end` for the plan's last task. So a task that
+  landed can't change and a plan that finished takes no more, wherever its
+  batches ended (409 `duplicate_id`, nothing new made), and what a call that
+  stopped didn't make can still change. `vb tasks create <channel> --file <path>` is that
+  function on a JSON array of tasks: it prints a row per task, and when a
+  plan stops midway, what it made and the command that makes the rest under
+  the same key, which is `--idempotency-key`'s or the run's own. It isn't one write: a ready
+  task of an earlier batch can be claimed before a later one lands, and a
+  batch that fails stops it with what the batches before it made. A plan
+  that must not start early waits for a task of its maker's, in a channel no
+  worker claims in, which its maker completes when the plan is there: the
+  caller composes that.
 - **A failed or canceled prerequisite never readies its dependents.** `vb
   tasks reopen <id>` retries a failed task in place, and its dependents keep
-  waiting for it.
+  waiting for it. One canceled after its dependents were made leaves them
+  waiting, until their owner cancels them.
 - **Completing a task readies its dependents,** in the completion's own
   request. On `local()` it's the same write: one append holds `task.completed`
   and a `task.ready` for each dependent whose last prerequisite it was.
@@ -3618,21 +3850,25 @@ that task, a `claim --ready` that found nothing ready there, or a list.
 ### Blocking for a person
 
 `vb tasks block 813 "approve the prod deploy?" --kind awaiting_approval` holds
-a task for a person: `kind` is open (`needs_input`, `awaiting_approval`). A
+a task for a person: `kind` is open (`needs_input`, `awaiting_approval`) but
+for `edited`, which is the board's own and a request can't ask for. A
 claimed task is held through its claim, by its claimant alone, whoever owns
 the task, and the hold ends the claim. A task no one has claimed is held by
 its owner, or by `manage` in its channel: their hold of a task someone holds
-is 409 `task_claimed`, so they cancel claimed work they want stopped.
+is 409 `task_claimed`, so they cancel claimed work they want stopped. Once a
+lease has run out the task is no one's, and its owner holds it.
 `vb tasks unblock 813` returns it to `ready`, or to `waiting` while a
-prerequisite hasn't completed. The person answers in the task's thread, which,
+prerequisite hasn't completed. Unblocking a task that isn't blocked, or
+reopening one that's open, changes nothing and answers the task as it is. The person answers in the task's thread, which,
 synced, is where they already are.
 
 ### `vb tasks`
 
 ```text
 vb tasks [<channel>|<prefix/>] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--text-file <path>] [--idempotency-key <key>]
-vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <handle>]... [--wait <duration>]) [--lease <duration>]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>] [--claim] [--lease <duration>] [--no-sync] [--idempotency-key <key>]   - as the text reads it from stdin
+vb tasks create <channel> --file <path> [--idempotency-key <key>]                                   a plan: a JSON array of tasks, - for stdin, in as many writes as it takes
+vb tasks claim (<id> | --ready <channel>|<prefix/> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready …) [--result "<text>"] [--lease <duration>] -- <cmd>
 vb tasks renew <id> [--lease <duration>]
 vb tasks release <id>
@@ -3642,19 +3878,37 @@ vb tasks block <id> "<reason>" [--kind <kind>]
 vb tasks unblock <id>
 vb tasks reopen <id>
 vb tasks assign <id> (<profile> | --pool)
+vb tasks needs <id> (<id>... | --none)
 vb tasks cancel <id> "<reason>"
 ```
 
 - **`vb tasks` lists open tasks** (`waiting`, `ready`, `claimed`, `blocked`)
   oldest first, the order a queue works them in: one line each, its ID, state,
   first line, and labels, and `needs #810` while it waits. `--state all`
-  includes finished ones.
-- **Writes say what happened, in a line:** `completed 812`, `claimed 812`.
-  `--json` is `{ tasks, cursor }` for a list, `{ task, claim }` for a claim,
-  and `{ task, outcome }` for the rest. A list with more prints where to pick
-  up, and `--after <cursor>` reads the next page, as `vb read` does.
+  includes finished ones, which say how they ended where an open one has its
+  labels, as a blocked one says what it's held for.
+- **A word after `tasks` that's one of its commands is that command.** A
+  channel named like one (`run`) lists as a prefix: `vb tasks run/`.
+- **A claim prints the task and how long it's yours:** `#812  yours for 15m
+  fix CVE-123 in acme/web`, for `claim`, `renew`, and `create --claim`.
+  **Other writes say what happened, in a line:** `completed 812`, `blocked
+  813`, `unassigned 815`. An `unblock` or a `reopen` that changed nothing says
+  `813 wasn't blocked`. **`needs` says what the task waits for now:** `814
+  needs #812 #813`, or `814 needs nothing` for `--none`. It takes the tasks
+  or `--none`, never neither, so a command cut short changes nothing.
+- **`--json`** is `{ tasks, cursor }` for a list, `{ task, claim }` for a
+  claim, its `claim` being `{ epoch, until }` without the token, and `{ task,
+  outcome }` for the rest, `outcome` being what the line says, `set` for
+  `needs`, or `unchanged`.
+  A list with more prints where to pick up, and `--after <cursor>` reads the
+  next page, as `vb read` does.
 - **`vb read` shows a task's state under its root:** `task  claimed by claude
-  via ada · 12m left · needs #810`.
+  via ada · 12m left · needs #810`. **`vb tail` prints what happens to one:**
+  `#812  work  task claimed by claude via ada`.
+- **A failure names the way on.** The board's task codes each get a headline
+  and the command to run next: `task_claimed` reads the task, `claim_lost`
+  claims it again, and a `reserved_label` on `board.task` names the `tasks`
+  command for the state it asked for.
 
 ### The task view
 
@@ -3665,10 +3919,11 @@ A root that's a task carries `task` in every message view, so `read`,
 task: {
   state: 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'failed' | 'canceled'
   owner: PrincipalId
+  by: ActorId                                                                // the actor its owner made it a task as: who changes it as its owner
   for: ActorId | null                                                        // the profile it's assigned to
   needs: MessageId[]
   epoch: number
-  claim: { actor: ActorId, session: string | null, until: string } | null  // never its token
+  claim: { actor: ActorId, until: string } | null                          // never its token
   blocked: { kind: string | null, reason: string } | null
   result: string | null                                                      // when completed
   reason: string | null                                                      // when failed or canceled
@@ -3680,20 +3935,36 @@ task: {
 Task changes are board facts, in the board log:
 
 ```ts
-'task.created':   z.object({ id: MessageId, needs: z.array(MessageId), for: ActorId.nullable(), by: Author }), // the thread at `id` is a task; by.principal owns it
-'task.assigned':  z.object({ id, for: ActorId.nullable(), by }),                    // null: back to the pool
-'task.ready':     z.object({ id: MessageId }),                                       // (server) its last prerequisite completed
-'task.claimed':   z.object({ id, epoch, until, session, token, by }),                // (server) token: the claim's hash, in no view
-'task.renewed':   z.object({ id, epoch, until, by }),
-'task.released':  z.object({ id, epoch, by }),
-'task.expired':   z.object({ id, epoch }),                                           // (server) its lease ran out
-'task.completed': z.object({ id, epoch, result: z.string().nullable(), by }),
-'task.failed':    z.object({ id, epoch, reason: z.string(), by }),
-'task.blocked':   z.object({ id, kind: z.string().nullable(), reason: z.string(), by }), // kind `edited`: the board's, `by` whoever edited the root
-'task.unblocked': z.object({ id, by }),
-'task.canceled':  z.object({ id, reason: z.string(), by }),                          // reason `deleted` when its root was
-'task.reopened':  z.object({ id, by }),
+// Each carries `thread`, its root's thread key, beside `id`, as every by-ID event does: lanes go by it.
+'task.created':   z.object({ id: MessageId, thread, needs: z.array(MessageId), for: ActorId.nullable(), by: Author }), // the thread at `id` is a task; by.principal owns it
+'task.assigned':  z.object({ id, thread, for: ActorId.nullable(), by }),             // null: back to the pool
+'task.needs_changed': z.object({ id, thread, needs: z.array(MessageId), by }),       // what it waits for now, in place of what it waited for
+'task.ready':     z.object({ id, thread }),                                          // (server) every prerequisite has completed
+'task.claimed':   z.object({ id, thread, epoch, until, token, by }),                 // (server) until: ISO; token: the SHA-256 of the claim's secret, in no view
+'task.renewed':   z.object({ id, thread, epoch, until, by }),
+'task.released':  z.object({ id, thread, epoch, by }),
+'task.expired':   z.object({ id, thread, epoch }),                                   // (server) its lease ran out
+'task.completed': z.object({ id, thread, epoch, result: TaskNote.nullable(), by }),  // a result or reason is up to 1000 characters
+'task.failed':    z.object({ id, thread, epoch, reason: TaskNote, by }),
+'task.blocked':   z.object({ id, thread, kind: TaskHoldKind.nullable(), reason: TaskNote, by }), // kind `edited`: the board's, `by` whoever edited the root
+'task.unblocked': z.object({ id, thread, by }),
+'task.canceled':  z.object({ id, thread, reason: TaskNote, by }),                    // reason `deleted` when its root was
+'task.reopened':  z.object({ id, thread, by }),
 ```
+
+- **A task with `needs` is `waiting` from `task.created` until `task.ready`.**
+  Each event changes one root, so a fold of one message can't look at
+  another's: `task.ready` is what says its prerequisites completed. A task made
+  when they already have gets it in the same write, and so does one unblocked
+  once they have, and one whose needs change to ones that have: from
+  `task.needs_changed` it waits again while it has any, and with none it's
+  ready. A task needs at most 20 others on the local board: how many is the
+  backend's to say, as every length and count of a task is. A request's
+  schema checks its shape, and a backend refuses what's over its own limits,
+  so on `vercel()` the refusal is Vercel's API's.
+- **A write a task has moved on from changes nothing in the fold:** an older
+  epoch, a finished task, a second `task.created`. The writes refuse first;
+  the fold is what holds for whoever folds the log themselves.
 
 - **They reach `/events` and watchers like any board event,** with the same
   filters: one is delivered if its root matched before or after it, so `vb
@@ -3707,24 +3978,30 @@ Task changes are board facts, in the board log:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/tasks` | `{ channel, text, labels?, needs?, for?, claim?, id? }` starts a thread as a task, or `{ re, needs?, for?, claim? }` makes the thread `re` one. Answers `{ task, claim? }`. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one |
+| POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, needs?, for?, claim?, lease?, id? }` starts a thread as a task (its root takes files as a post does, and may be empty with one), or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` one. Answers 201 `{ task, claim? }`, where `task` is its root. Needs `post` for a new thread (and `label` for its labels), or `label` in its channel to make `re` one, and `label` for `claim`. `re` is a root that's there: 409 `already_a_task` for one that's a task. A retry with the same `id` answers the task that landed, without the claim it was made with, whose token was answered once |
+| POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks in one write, all or none. A task is `{ key?, text, labels?, noSync?, attachments?, needs?: (MessageId \| { key })[], for? }`. Answers 201 `{ tasks }`, their roots in order. 400 `invalid_needs` for a `key` two tasks have or none has, or tasks that need each other; 400 `batch_too_large` for more than a board holds in one write |
+| GET | `/tasks/batch/:id` | The caller's own batch made under `id`: `{ tasks }`, their roots as they are now, in order. 404 `batch_not_found` for none. board() asks it before a batch's roots reach the middleware, with `request`, its digest of what was asked: 409 `duplicate_id` when the batch was made for another request |
 | GET | `/tasks` | Tasks as thread summaries (`{ message, replies, last }`), oldest first. Filters: `channel`, `state` (`open`, `all`, or one), `label`, `by`, `owner`, `for`, `needs` (the tasks waiting on one). Answers `{ tasks, cursor }`; `after` (a `cursor` it reported) and `limit` page |
-| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`; the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
+| POST | `/tasks/claim` | `{ channel, label?, from?, lease?, wait? }`: the oldest ready task in `channel` (a channel or a `prefix/`) assigned to the caller, then one unassigned that it owns or whose owner `from` lists by ID, claimed. `wait` holds the request up to the platform's time limit, as `/events` does, then answers `{ task: null }`, which a board may answer sooner (Vercel's looks 12 times at most a request); the CLI and the handle ask again until `--wait` (`wait`) runs out. Answers `{ task, claim }`, or `{ task: null }` |
 | POST | `/tasks/:id/claim` | `{ lease? }`. Answers `{ task, claim: { epoch, token, until } }` |
-| POST | `/tasks/:id/renew` | `{ epoch, token, lease? }` |
-| POST | `/tasks/:id/release` | `{ epoch, token }` |
+| POST | `/tasks/:id/renew` | `{ epoch, token, lease? }`. Answers `{ task, until }` |
+| POST | `/tasks/:id/release` | `{ epoch, token }`. Answers `{ task }`, as the routes below do |
 | POST | `/tasks/:id/complete` | `{ epoch, token, result? }` |
 | POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
-| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim |
+| POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim. `kind` is any name but `edited`, the board's own |
 | POST | `/tasks/:id/unblock` | `{}` |
 | POST | `/tasks/:id/reopen` | `{}`: a failed task only |
 | POST | `/tasks/:id/assign` | `{ for: ActorId \| null }`: one of the owner's actors, or the pool |
+| POST | `/tasks/:id/needs` | `{ needs: MessageId[] }`: what the task waits for now, in place of what it waited for, and none for a task that waits for nothing. Its owner's or `manage`'s, while no one holds it and it isn't finished |
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled; a claimed one's claim ends |
 
-A task reads like the thread it is: `GET /messages/:id`. Errors: 404
+A task reads like the thread it is: `GET /messages/:id`. `lease` and `wait`
+are seconds, as `/events`'s `wait` is: a `wait` of at most 300, and a lease as
+long as the backend gives (the local board takes 30 to 3600). Errors: 404
 `not_a_task` for a thread that isn't one; 403 `forbidden` (a claim without `label`) and `task_not_owned`; 409
-`task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`, and
-`claim_lost`; 400 `invalid_needs` and `reserved_label`; 501 `no_tasks` on a
+`task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`,
+`already_a_task`, and
+`claim_lost`; 400 `invalid_needs`, `invalid_from`, and `reserved_label`; 501 `no_tasks` on a
 board that keeps none.
 
 ### Tasks and sync
@@ -3754,11 +4031,18 @@ board that keeps none.
 - **`local()`** keeps tasks in its log, folds them into each root's `task` view
   and `board.task` label in the tables, checks every claim and fenced write
   with the engine's conditional append (as label `if` does), and times leases
-  with its scheduler.
+  with its scheduler. A root's edit and delete are conditional appends too, so
+  a thread made a task while its author was editing or deleting it is held or
+  canceled all the same. Lease timers are a side session's (`leases`), so the
+  board log holds only a real `task.expired`; a board with no scheduler arms
+  none, and a claim still checks the clock.
+- **`board()`** refuses a write under `board.` itself, before the backend, so
+  it holds on every backend, whatever the board behind it does.
 - **`vercel()`** maps the routes onto Vercel's API, where a thread carries
   task state the same way: stored with the thread, with no text, channel, or
   ID of its own, and each task change a thread event in the feed, in order
-  with the thread's messages. The tasks that API had before, a record of
+  with the thread's messages. It asks the API nothing first: where the API
+  serves no task routes, a task call fails with the API's own error. The tasks that API had before, a record of
   their own beside threads, aren't board tasks: their routes stay as they are
   for the tools that call them, and `vb tasks` neither lists nor changes
   them. What a caller can notice there, against `local()`:
@@ -3774,8 +4058,6 @@ board that keeps none.
   whoever claims, and keeps only its hash, since it keeps each answer to
   replay a retry with. So `vercel()` makes the token itself, and answers it
   as the routes here say.
-
-  Until the API serves those routes, `vercel()` answers 501 `no_tasks`.
 - **A backend that keeps no tasks** answers 501 `no_tasks`, which the kit
   reports as not kept here.
 
@@ -3784,7 +4066,7 @@ board that keeps none.
 - A new task is its thread: `read` shows its root with `task`, a reply
   lands in that thread, and `board.task=ready` finds it.
 - Of claims that race, one lands, and the rest get `task_claimed`.
-- After a lease runs out, another session claims it, and the first
+- After a lease runs out, another agent claims it, and the first
   claimant's `complete` is `claim_lost`.
 - A task waits for its `--needs` tasks to complete, and a failed or canceled
   one never readies it.
@@ -3807,6 +4089,16 @@ board that keeps none.
 - `tail` with `--label board.task=ready` sees a task become ready when its
   last prerequisite completes, and get claimed.
 
+What the kit checks today, through the one handle a run has: all of the above
+but what needs a second principal (another's claim and completion, another's
+cancel, hold, or assign, and `--from`), which board's own tests check, and a
+lease running out, which it won't wait out: it checks instead that a claim is
+lost with the wrong token, after its release, and once another claim holds the
+task. `forbidden` without `label` is checked by the same principal narrowed
+with `x-board-can` to reading and posting, where a run can send the header. The
+edit check imports a thread as a platform user, since a run owns every task it
+makes and writes every root it posts.
+
 ### Not in this version
 
 - Handing a task to another owner (offer and accept).
@@ -3823,18 +4115,32 @@ board that keeps none.
 ### Open
 
 - Whether the default renderer shows a task's state on its platform copies.
+- Platform copies don't re-render on task changes yet: sync delivers
+  `labels.changed`, and a task's state changes through `task.*` events, which
+  it doesn't deliver.
+- A backend's own refusal of `board.` writes is out of the kit's sight: the
+  handle it runs through is a `board()`, which refuses one before any request
+  leaves it. Vercel's API needs its own check for callers that don't run
+  board().
+- A racing-claims check through a handle in the board's own process proves
+  little: its requests rarely interleave. Over HTTP it does.
 - Whether claiming an unassigned task assigns it to the claimant, so a quiet
   agent's task isn't taken by another's `claim --ready` once its lease runs
   out. The cost: a crashed agent's task waits until its owner reassigns it.
-- `--from` matches owners by handle, which a person's CLI asserts on
-  `local()` today; it's as safe as handles are verified.
 - Whether a board with no clock of its own should still announce a lease
   running out: on Vercel's board the next task request does.
 - Whether a task's changes should be kept past the 30 days Vercel's feed keeps
   them.
-- A review that sends work back: the work-queue reference's `review` state
-  does that today. Here a review is a task that `--needs` the fix, and a completed
-  task can't be reopened.
+- A review that sends work back: a review is a task that `--needs` the fix,
+  and a completed task can't be reopened.
+- Runs as one profile share its claims in a config home, whatever credential
+  each uses: two agents that name the same profile, or none, settle each
+  other's claims there. The board still fences every write by its token.
+- `vb tasks run` signals only the command it started, and once (`SIGTERM`
+  when the claim is lost): a command that ignores it, or its own children,
+  keep running.
+- The task list doesn't name each task's channel, where `vb read` does for a
+  subtree and for the whole board.
 
 ## Non-goals for v1
 

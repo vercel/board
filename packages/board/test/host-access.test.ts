@@ -44,10 +44,10 @@ describe("a host's authenticate", () => {
     const tenant = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
     const ada = caller(tenant.fetch, 'pt_ada')
     const carol = caller(tenant.fetch, 'pt_carol')
-    // g1 lets both in, as every person: Ada lets Carol into security/, then closes it to everyone.
+    // g1 lets both in, as every person: Ada lets Carol into security/, then closes it to everyone, herself included.
     expect((await ada('POST', '/channels', { path: 'security' })).status).toBe(201)
     expect((await ada('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_carol' }], can: { 'security/': 'all' } })).status).toBe(200)
-    expect((await ada('POST', '/grants', { principals: [{ kind: 'everyone' }], can: { 'security/': [] } })).status).toBe(200)
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'everyone' }], can: { 'security/': [] }, lockMeOut: true })).status).toBe(200)
     expect((await carol('POST', '/messages', { channel: 'security', text: 'in' })).status).toBe(201)
     expect((await ada('POST', '/messages', { channel: 'security', text: 'out' })).status).toBe(403)
     expect((await ada('GET', '/me')).body.can).toMatchObject({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'security/': [] })

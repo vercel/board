@@ -10,8 +10,8 @@ import { fakeQueue } from './queue.ts'
  * 403. A new route fails the first test until it has an entry here.
  */
 type Fixture = {
-  secret: { root: number; reply: number; schedule: number; file: string }
-  open: { root: number; schedule: number }
+  secret: { root: number; reply: number; schedule: number; file: string; task: number }
+  open: { root: number; schedule: number; task: number }
 }
 type Call = { method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown; status: number; check?: (body: any) => void }
 type Walk = 'public' | ((fixture: Fixture) => Call[])
@@ -99,11 +99,91 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/${secret.schedule}/cancel`, status: 404 },
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
+  // Tasks are threads: one it can't read isn't there, and where it only reads, it starts, claims, and changes none.
+  tasks: () =>
+    ['', '?state=all', '?channel=secret', '?owner=keeper', '?label=private'].map((query) => ({ method: 'GET' as const, path: `/tasks${query}`, status: 200, check: nothingFrom('tasks') })),
+  createTask: ({ secret, open }) => [
+    { method: 'POST', path: '/tasks', body: { channel: 'secret', text: 'hi' }, status: 403 },
+    { method: 'POST', path: '/tasks', body: { channel: 'open', text: 'hi' }, status: 403 },
+    { method: 'POST', path: '/tasks', body: { re: secret.root }, status: 404 },
+    { method: 'POST', path: '/tasks', body: { re: open.root }, status: 403 },
+  ],
+  createTasks: ({ secret }) => [
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'secret', tasks: [{ text: 'hi' }] }, status: 403 },
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'open', tasks: [{ text: 'hi' }, { text: 'and this' }] }, status: 403 },
+    // What it would wait for is checked only once it may post there: a task it can't read stays out of sight.
+    { method: 'POST', path: '/tasks/batch', body: { channel: 'open', tasks: [{ text: 'hi', needs: [String(secret.task)] }] }, status: 403 },
+  ],
+  // Only your own batch, by the id you gave it.
+  createdTasks: () => [
+    { method: 'GET', path: '/tasks/batch/secret-plan', status: 404 },
+    { method: 'GET', path: '/tasks/batch/nothing', status: 404 },
+  ],
+  claimReadyTask: () => [
+    { method: 'POST', path: '/tasks/claim', body: { channel: 'secret' }, status: 403 },
+    { method: 'POST', path: '/tasks/claim', body: { channel: 'secret/' }, status: 403 },
+    { method: 'POST', path: '/tasks/claim', body: { channel: 'open' }, status: 403 },
+  ],
+  claimTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/claim`, body: {}, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/claim`, body: {}, status: 403 },
+  ],
+  // What a claim does takes the claim: one it can't read isn't there, and one it reads is lost without the claim's secret.
+  renewTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/renew`, body: { epoch: 1, token: 'guess' }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/renew`, body: { epoch: 1, token: 'guess' }, status: 409 },
+  ],
+  releaseTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/release`, body: { epoch: 1, token: 'guess' }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/release`, body: { epoch: 1, token: 'guess' }, status: 409 },
+  ],
+  completeTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/complete`, body: { epoch: 1, token: 'guess' }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/complete`, body: { epoch: 1, token: 'guess' }, status: 409 },
+  ],
+  failTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/fail`, body: { epoch: 1, token: 'guess', reason: 'mine now' }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/fail`, body: { epoch: 1, token: 'guess', reason: 'mine now' }, status: 409 },
+  ],
+  blockTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/block`, body: { reason: 'mine now' }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/block`, body: { reason: 'mine now' }, status: 403 },
+    { method: 'POST', path: `/tasks/${open.task}/block`, body: { reason: 'mine now', epoch: 1, token: 'guess' }, status: 409 },
+  ],
+  unblockTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/unblock`, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/unblock`, status: 403 },
+  ],
+  reopenTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/reopen`, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/reopen`, status: 403 },
+  ],
+  assignTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/assign`, body: { for: null }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/assign`, body: { for: null }, status: 403 },
+  ],
+  setTaskNeeds: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/needs`, body: { needs: [] }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/needs`, body: { needs: [] }, status: 403 },
+    // What it would wait for is checked only once it's the caller's to change: a task it can't read stays out of sight.
+    { method: 'POST', path: `/tasks/${open.task}/needs`, body: { needs: [secret.task] }, status: 403 },
+  ],
+  cancelTask: ({ secret, open }) => [
+    { method: 'POST', path: `/tasks/${secret.task}/cancel`, body: { reason: 'mine now' }, status: 404 },
+    { method: 'POST', path: `/tasks/${open.task}/cancel`, body: { reason: 'mine now' }, status: 403 },
+  ],
   // Listing grants takes manage at *, and changing one manage at each pattern it names: g1 names *.
   grants: () => [{ method: 'GET', path: '/grants', status: 403 }],
   createGrant: () => [
     { method: 'POST', path: '/grants', body: { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }, status: 403 },
     { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }, status: 403 },
+    // Saying to go ahead with a lockout is no way past what it may not do.
+    { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] }, lockMeOut: true }, status: 403 },
+  ],
+  // A batch is judged grant by grant: one it may not make refuses them all.
+  createGrants: () => [
+    { method: 'POST', path: '/grants/batch', body: { grants: [{ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }] }, status: 403 },
+    { method: 'POST', path: '/grants/batch', body: { grants: [{ principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }], lockMeOut: true }, status: 403 },
   ],
   updateGrant: () => [{ method: 'PATCH', path: '/grants/g1', body: { can: { '*': 'all' } }, status: 403 }],
   // What it may do itself, anywhere, without the grants that decide it; anyone else's only with manage at *.
@@ -204,7 +284,13 @@ async function setup() {
   await keeper('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
   const openRoot = (await host('POST', '/messages', { channel: 'open', text: 'hello' })).body.message.id
   const openSchedule = (await host('POST', '/schedules', { re: openRoot, text: 'hello later', in: '1d' })).body.schedule.id
-  const fixture: Fixture = { secret: { root, reply, schedule, file }, open: { root: openRoot, schedule: openSchedule } }
+  // A task in each, in a thread of its own, held by a claim: what the walker must neither see, take, nor settle.
+  const task = (await keeper('POST', '/tasks', { channel: 'secret', text: 'hush, a task', labels: { private: 'yes' }, claim: true })).body.task.id
+  const openTask = (await host('POST', '/tasks', { channel: 'open', text: 'hello, a task', claim: true })).body.task.id
+  // And a batch of them under an id, which finds it again for whoever made it, and no one else.
+  expect((await keeper('POST', '/tasks/batch', { channel: 'secret', id: 'secret-plan', tasks: [{ text: 'hush, a plan', labels: { private: 'yes' } }] })).status).toBe(201)
+  expect((await keeper('GET', '/tasks/batch/secret-plan')).body.tasks).toMatchObject([{ text: 'hush, a plan' }])
+  const fixture: Fixture = { secret: { root, reply, schedule, file, task }, open: { root: openRoot, schedule: openSchedule, task: openTask } }
   return { board, fixture, outsider: caller(board.fetch, await workflowToken()) }
 }
 
@@ -214,7 +300,7 @@ describe('every route', () => {
   })
 
   it('shows nothing of a channel the caller can’t read, and refuses writes where it only reads', async () => {
-    const { fixture, outsider } = await setup()
+    const { board, fixture, outsider } = await setup()
     for (const [name, walk] of Object.entries(WALK) as [RouteName, Walk][]) {
       if (walk === 'public') continue
       for (const call of walk(fixture)) {
@@ -225,5 +311,7 @@ describe('every route', () => {
         call.check?.(body)
       }
     }
+    // None of it changed a task: each is still held by the claim it was made with.
+    for (const id of [fixture.secret.task, fixture.open.task]) expect((await board.thread(String(id))).message.task).toMatchObject({ state: 'claimed', epoch: 1, for: null })
   })
 })

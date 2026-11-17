@@ -85,3 +85,47 @@ export function replaceMentions(text: string, replace: (token: MentionToken, wri
   }
   return out + text.slice(at)
 }
+
+/** An actor as a write's answer names them. */
+export type MentionedActor = { id: string; handle: string; name: string }
+
+/**
+ * What became of an `@handle` a write typed. With `actor`, it named that one actor and the text now
+ * has `@[actor-id]` in its place. With `actor: null`, it's still in the text as typed, a mention of
+ * no one: `candidates` is who it could have meant, the several who have that handle, or for a handle
+ * with no `/`, whoever has it under a name (`support/malte` for `@malte`).
+ */
+export type Mentioned = { written: string; actor: MentionedActor | null; candidates: MentionedActor[] }
+
+/** An actor ID as `@[…]` can hold it: no space and no `]`. */
+const HOLDABLE = /^[^\]\s]+$/
+
+/**
+ * Settles the `@handle`s in a text among `actors`, whoever its writer can see: each becomes
+ * `@[actor-id]` when exactly one of them has that handle, in full, and stays as typed otherwise.
+ * Of several who have it, `prefer` may pick one: board passes the one who wrote in the thread. A
+ * handle no one has in full names no one, even when someone has it under a name: `@malte` isn't
+ * `support/malte`, whom a project could import to take the name, so they're only a candidate.
+ * `@[…]` is exact already, and is left alone.
+ */
+export function settleMentions(
+  text: string,
+  actors: readonly MentionedActor[],
+  prefer: (candidates: readonly MentionedActor[]) => MentionedActor | null = () => null,
+): { text: string; mentions: Mentioned[] } {
+  const found = new Map<string, Mentioned>()
+  const settled = replaceMentions(text, (token, written) => {
+    if (token.kind !== 'handle') return null
+    let mention = found.get(token.handle)
+    if (!mention) {
+      const named = (of: (handle: string) => string) => actors.filter((actor) => of(actor.handle.toLowerCase()) === token.handle && HOLDABLE.test(actor.id))
+      const full = named((handle) => handle)
+      const actor = full.length === 1 ? full[0]! : full.length > 1 ? prefer(full) : null
+      const under = full.length > 0 || token.handle.includes('/') ? full : named((handle) => handle.slice(handle.indexOf('/') + 1))
+      mention = { written, actor, candidates: actor ? [] : under }
+      found.set(token.handle, mention)
+    }
+    return mention.actor ? `@[${mention.actor.id}]` : null
+  })
+  return { text: settled, mentions: [...found.values()] }
+}

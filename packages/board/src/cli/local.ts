@@ -4,9 +4,9 @@
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectDir } from '../client/node.ts'
-import { startInspector } from '../inspect/server.ts'
+import { createInspector } from '../inspect/server.ts'
 import { option } from './commands.ts'
-import { stopped } from './inspect.ts'
+import { allowedHosts, stopped } from './inspect.ts'
 import type { Command, CommandContext } from './main.ts'
 
 /** Keeps the local board's log (`.board/`) out of the project's Git. */
@@ -44,33 +44,57 @@ const serve: Command = {
     description:
       "run a board on this machine (127.0.0.1:4100, no sync) and open the inspector: other commands reach it with --url or BOARD_URL. Its log lives in .board/, and you're local:user:<your OS user>",
     arguments: [],
-    options: [option('port', 'the port to listen on (default: 4100)'), option('dir'), option('no-inspect'), option('no-open')],
-    examples: [{ name: 'run a board here, and open it', value: 'serve' }],
+    options: [
+      option('port', 'the port to listen on (default: 4100)'),
+      option('dir'),
+      option('no-inspect'),
+      option('no-open'),
+      option('allow-host', 'also answer requests for this host, from a proxy in front: the board is at its URL there, and whoever reaches the inspector there acts as you'),
+      option('tailscale'),
+    ],
+    examples: [
+      { name: 'run a board here, and open it', value: 'serve' },
+      { name: 'share it on your tailnet, behind tailscale serve', value: 'serve --tailscale box.tailnet.ts.net' },
+      { name: 'serve it behind another proxy, on another name', value: 'serve --allow-host box.example.com' },
+    ],
   },
   async run(args, { flags, out, usage, portFlag, connection, openBrowser }: CommandContext) {
     if (args.length > 0) throw usage('serve takes no arguments: pass its port with --port, and its directory with --dir.')
     const port = portFlag()
+    const hosts = allowedHosts({ flags, usage })
+    const tailscale = allowedHosts({ flags, usage }, 'tailscale')
+    // Another proxy to the same port could carry a caller's own Tailscale-User-Login, at Tailscale's host.
+    if (tailscale.length > 0 && hosts.length > 0)
+      throw usage("--tailscale takes Tailscale's word for who's calling, which another proxy in front could forge: it doesn't go with --allow-host.")
     const root = projectDir()
     const { serveLocal } = await import('./serve.ts')
     const local = await serveLocal({
       dir: flags.dir ?? join(root, '.board'),
+      hosts,
+      tailscale,
       ...(port !== undefined ? { port } : {}),
     })
-    let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
+    let inspector: { close(): void } | null = null
     try {
       if (!flags.dir) await ignoreLog(root)
       out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
       out(`reach it with --url ${local.url}, or BOARD_URL=${local.url}`)
+      // What to hand the people on it, and the one command that puts Tailscale in front.
+      for (const host of new Set(tailscale.map((named) => new URL(`https://${named}`).host)))
+        out(`on your tailnet, behind tailscale serve --bg ${local.port}: BOARD_URL=https://${host}/api/board`)
       if (!flags['no-inspect']) {
-        // With this board's token, whatever BOARD_TOKEN says.
+        // With this board's token, whatever BOARD_TOKEN says, and on the board's own server: one port to open, or to proxy.
         const { board } = connection(local.url, { token: local.token })
-        inspector = await startInspector({ client: board.as(null) })
-        out(`inspector at ${inspector.url}`)
-        if (!flags['no-open']) openBrowser(inspector.url)
+        const page = (await createInspector({ client: board.as(null), hosts: [...hosts, ...tailscale], visitor: local.visitor })).at(local.port)
+        inspector = page
+        local.page(page.handle)
+        const at = new URL(local.url).origin
+        out(`inspector at ${at}`)
+        if (!flags['no-open']) openBrowser(at)
       }
       await stopped()
     } finally {
-      await inspector?.close()
+      inspector?.close()
       await local.close()
     }
     return 0

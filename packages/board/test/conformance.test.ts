@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { conformance } from '../src/conformance/index.ts'
@@ -70,6 +70,8 @@ const NO_HEADERS = "this run can't call the board with headers of its own"
 /** The checks of a caller narrowed with x-board-can, which a run that can't send the header skips. */
 const NARROWED = [
   'narrows a caller to what its x-board-can says',
+  'takes label in its channel to claim a task: a caller narrowed to reading and posting claims none',
+  "takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it",
   'refuses a caller narrowed with x-board-can a schema, and lets it read them',
   "refuses a caller narrowed with x-board-can its principal's watchers: registering, pulling, and acking",
   "refuses a caller narrowed with x-board-can sync's records: imports, receipts, and the inbox",
@@ -80,7 +82,13 @@ const NO_CAN = "this run can't call the board with an x-board-can header"
 const NO_ROLES = ['caps a person by their team role, so a viewer reads but neither posts nor manages', 'name a viewer in principals to check it: a board without team roles caps no one']
 const NO_APPS = ['names an app by its slug or client ID, keeps it by client ID, and every app as a group', 'name an app in principals to check it: a local board has no apps']
 const CROSS_TEAM = ['lets a project on another team in, in its environments', "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later"]
+/** The tasks check a board's own code skips: its profiles are `board:client:<profile>`, principals of their own. */
+/** The tasks check that sends headers of its own: a profile, narrowed to no `manage`. */
+const TASKS_OWNED = 'lets a profile change only the tasks it made, and its principal all of them'
+const OWN_PROFILES = ['keeps a task assigned to a profile for that actor alone', "this handle's profiles are principals of their own, so none is its principal's actor"]
 /** And one no run can check: shut out by a lock, it couldn't lift the lock after. */
+/** The check a run nothing locks out skips: the board's own code here, and a board's owner. */
+const NEVER_LOCKED_OUT = ["refuses a grant its maker couldn't take back, unless it says lockMeOut", "nothing locks this run out of a channel, so no grant it makes is a lockout: it owns the board, or it's the board's own code"]
 const LOCKED_OUT = ['lets a member grant on a pattern after a lock under it', "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it"]
 const skipped = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.status !== 'passed').map((check) => [check.name, check.detail])
 
@@ -148,6 +156,9 @@ function wakingByPath(fetch: Fetch): Fetch {
 const watcherStatuses = (report: Awaited<ReturnType<typeof conformance>>) =>
   report.checks.filter((check) => check.group === 'watchers' || check.group === 'sync').map((check) => check.status)
 
+// Each of these runs the kit against a board, some more than once: seconds each, and more under a full run.
+vi.setConfig({ testTimeout: 30_000 })
+
 describe('the conformance kit', () => {
   it('passes a board on a2(), checking the whole protocol, and deletes what it posted', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
@@ -155,32 +166,42 @@ describe('the conformance kit', () => {
     const report = await conformance(client, { withHeaders: withHeaders(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
     // withHeaders stands in for withCan, so the narrowing checks run too.
-    expect(report.checks.filter((check) => [...NARROWED, ...GRANTS_NARROWED].includes(check.name)).map((check) => check.status)).toEqual(Array(7).fill('passed'))
+    expect(report.checks.filter((check) => [...NARROWED, ...GRANTS_NARROWED].includes(check.name)).map((check) => check.status)).toEqual([...NARROWED, ...GRANTS_NARROWED].map(() => 'passed'))
     expect(report.checks.filter((check) => [...HEADERS, 'shows no session on a message, its event, or you'].includes(check.name)).map((check) => check.status)).toEqual(Array(5).fill('passed'))
     expect(skipped(report)).toEqual([NO_ROLES, NO_APPS, LOCKED_OUT, CROSS_TEAM])
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+    expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 23 }, () => 'passed'))
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
+    // Every task it made went with its root: none is left open, and none still wears a state.
+    expect((await client.tasks.list({ channel: 'conformance', state: 'all' })).tasks).toEqual([])
+    expect((await client.messages({ channel: 'conformance', limit: 500, label: ['board.task'] })).messages).toEqual([])
   })
 
   it("passes through a board's own handle, in-process", async () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
     const report = await conformance(team)
-    // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it.
+    // The board's own code needs no grant to keep it in what it closes, and no proxy narrows it. Each
+    // of its profiles is a principal of its own there, so none is an actor a task of its own could be for.
     expect(skipped(report)).toEqual([
       [NARROWED[0], NO_CAN],
       ...HEADERS.map((name) => [name, NO_HEADERS]),
+      OWN_PROFILES,
+      [TASKS_OWNED, NO_HEADERS],
+      [NARROWED[1], NO_CAN],
+      [NARROWED[2], NO_CAN],
       NO_ROLES,
       NO_APPS,
       ...GRANTS_NARROWED.map((name) => [name, NO_CAN]),
+      NEVER_LOCKED_OUT,
       LOCKED_OUT,
       CROSS_TEAM,
-      [NARROWED[1], NO_CAN],
-      [NARROWED[2], NO_CAN],
       [NARROWED[3], NO_CAN],
+      [NARROWED[4], NO_CAN],
+      [NARROWED[5], NO_CAN],
     ])
     expect((await team.me()).actor).toBe('board:client')
   })
@@ -210,6 +231,95 @@ describe('the conformance kit', () => {
     expect(owns(await conformance(await clientOf(strict), { withHeaders: withHeaders(board.fetch) }))).toMatchObject({ status: 'failed', detail: expect.stringContaining('only the author can edit a message') })
   })
 
+  it('fails a board that takes a change of what a task needs and changes nothing', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // It answers the task as it is, whatever it was asked to wait for.
+    const deaf: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      const changing = request.method === 'POST' ? /\/tasks\/([^/]+)\/needs$/.exec(pathname) : null
+      if (!changing) return board.fetch(request)
+      const read = await board.fetch(new Request(`${BOARD_URL}/messages/${changing[1]}`, { headers: request.headers }))
+      return Response.json({ task: (await read.json()).message })
+    }
+    const report = await conformance(await clientOf(deaf))
+    const failed = report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    expect(failed).toEqual([
+      ['changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none', 'a ready task, once it needs one that has not completed: expected "waiting", got "ready"'],
+      ['refuses a change of needs that would make a task wait for itself, straight back or through others', 'a task that would need itself: expected 400 invalid_needs, and it succeeded'],
+      ['changes what a task needs only while no one holds it and it has not finished', 'changing what a claimed task needs: expected 409 task_claimed, and it succeeded'],
+    ])
+  }, 60_000)
+
+  it("fails a board that answers a create under a reply's ID with the task its thread is", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // It finds the post the ID landed with, and answers its thread's task whatever that post is.
+    let made: string | null = null
+    const threadFirst: Fetch = async (request) => {
+      const creating = request.method === 'POST' && new URL(request.url).pathname.endsWith('/tasks')
+      const response = await board.fetch(request)
+      if (!creating) return response
+      if (response.status === 201) made = await response.clone().text()
+      return response.status === 409 && made !== null ? new Response(made, { status: 201, headers: { 'content-type': 'application/json' } }) : response
+    }
+    const report = await conformance(await clientOf(threadFirst))
+    expect(report.checks.find((check) => check.name === 'makes a task once for a client ID, and none under an ID a reply or a plain thread landed with')).toMatchObject({
+      status: 'failed',
+      detail: 'a task under an ID a reply landed with: expected 409 duplicate_id, and it succeeded',
+    })
+  }, 60_000)
+
+  it("fails a board that lists what waits for a task from every channel, or lets a caller wait for one it can't read", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const find = (report: Awaited<ReturnType<typeof conformance>>, name: string) => report.checks.find((check) => check.name === name)
+    // One whose list of what waits for a task looks past the channel it was asked for, to every one its caller reads.
+    const everywhere = broken(board.fetch, {
+      request: (url) => {
+        if (url.pathname.endsWith('/tasks') && url.searchParams.has('needs') && !url.searchParams.get('channel')?.endsWith('/')) url.searchParams.delete('channel')
+      },
+    })
+    expect(find(await conformance(await clientOf(everywhere)), 'lists the tasks that wait for one in the channel a list names, or its subtree, and no other')).toMatchObject({
+      status: 'failed',
+      detail: expect.stringMatching(/^the tasks that wait for one, in conformance: expected \["(\d+)"\], got \["\1","\d+"\]$/),
+    })
+    // And one that checks a prerequisite against what its caller's credential reads, not what the caller was narrowed to.
+    const unheld: Fetch = async (request) => {
+      if (request.method !== 'POST' || !new URL(request.url).pathname.endsWith('/tasks') || !('needs' in ((await request.clone().json()) as object))) return board.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.delete('x-board-can')
+      return board.fetch(new Request(request, { headers }))
+    }
+    expect(find(await conformance(await clientOf(board.fetch), { withCan: withCan(unheld) }), "takes read in a prerequisite's channel to wait for it: a caller narrowed out of it makes no task that needs it")).toMatchObject({
+      status: 'failed',
+      detail: "a task that needs one its caller can't read: expected 400 invalid_needs, and it succeeded",
+    })
+    // What the kit made there went with the run.
+    expect((await board.tasks.list({ channel: 'conformance/', state: 'open' })).tasks).toEqual([])
+  }, 60_000)
+
+  it("fails a board that lets a profile change its principal's tasks or another profile's, or holds no task when a profile edits its thread", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const owned = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === TASKS_OWNED)
+    /** A board that takes the requests `match` picks as the principal's, whatever profile sent them. */
+    const principalOnly = (match: (method: string, path: string) => boolean): Fetch => (request) => {
+      if (!match(request.method, new URL(request.url).pathname)) return board.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.delete('x-board-profile')
+      return board.fetch(new Request(request, { headers }))
+    }
+    // One that goes by the principal alone for a task's owner-side changes: a profile gives itself its principal's task.
+    const changes = principalOnly((method, path) => method === 'POST' && /\/tasks\/[^/]+\/(assign|block|unblock|reopen|cancel)$/.test(path))
+    expect(owned(await conformance(await clientOf(board.fetch), { withHeaders: withHeaders(changes) }))).toMatchObject({
+      status: 'failed',
+      detail: "assigning its principal's task to itself, by a profile: expected 403 task_not_owned, and it succeeded",
+    })
+    // And one that takes a profile's edit of its thread as its principal's, the task's owner: nothing holds the task.
+    const edits = principalOnly((method, path) => method === 'POST' && /\/messages\/[^/]+\/edit$/.test(path))
+    expect(owned(await conformance(await clientOf(board.fetch), { withHeaders: withHeaders(edits) }))).toMatchObject({
+      status: 'failed',
+      detail: `its principal's task, once the profile that wrote its root edited it: expected "blocked", got "ready"`,
+    })
+  }, 60_000)
+
   it('fails a board that says it made a schema version that was there, or takes another definition for one', async () => {
     const registers = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('registers a schema version once'))
     const plain = testBoard({ scheduler: fakeQueue().scheduler })
@@ -229,6 +339,48 @@ describe('the conformance kit', () => {
     expect(registers(await conformance(await clientOf(lenient)))).toMatchObject({ status: 'failed', detail: 'another definition for a version that is there: expected 409 schema_immutable, and it succeeded' })
   })
 
+  it("fails a board that lets its caller lock itself out without a word, and one that takes no lockMeOut before it makes a lock", async () => {
+    const lockout = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === NEVER_LOCKED_OUT[0])
+    const grantWrite = (request: Request) => request.method === 'POST' && /\/grants(\/batch)?$/.test(new URL(request.url).pathname)
+    const again = (request: Request, body: unknown) => new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
+    const plain = testBoard({ scheduler: fakeQueue().scheduler })
+    expect(lockout(await conformance(await clientOf(plain.fetch)))).toMatchObject({ status: 'passed' })
+
+    // A board that judges no lockout: every grant write goes ahead, as if it had said to.
+    const loose = testBoard({ scheduler: fakeQueue().scheduler })
+    const careless: Fetch = async (request) => (grantWrite(request) ? loose.fetch(again(request, { ...(await request.json()), lockMeOut: true })) : loose.fetch(request))
+    expect(lockout(await conformance(await clientOf(careless)))).toMatchObject({ status: 'failed', detail: expect.stringContaining('expected 409 grant_lockout, and the board made') })
+
+    // A board from before lockMeOut refuses the key, as an unknown one, and judges no lockout either.
+    // The check stops at the refusal, so it makes no lock there that the run couldn't revoke.
+    const old = testBoard({ scheduler: fakeQueue().scheduler })
+    const strict: Fetch = async (request) => {
+      if (!grantWrite(request)) return old.fetch(request)
+      const body = await request.json()
+      if ('lockMeOut' in body) return Response.json({ error: { code: 'invalid_request', message: 'unknown key: lockMeOut' } }, { status: 400 })
+      return old.fetch(again(request, { ...body, lockMeOut: true }))
+    }
+    expect(lockout(await conformance(await clientOf(strict)))).toMatchObject({ status: 'failed', detail: 'a grant that says lockMeOut: expected it made, got 400 invalid_request' })
+    expect((await old.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+  }, 60_000)
+
+  it('fails a board that makes part of a batch of grants it refuses, and revokes what it made of it', async () => {
+    const BATCH_OF_GRANTS = 'makes several grants in one write, or none of them, a lock with the grant that keeps its maker in'
+    const batch = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === BATCH_OF_GRANTS)
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    expect(batch(await conformance(await clientOf(board.fetch)))).toMatchObject({ status: 'passed' })
+    // A board that makes a batch's grants one by one, up to the one it refuses.
+    const piecemeal: Fetch = async (request) => {
+      const response = await board.fetch(request.clone())
+      if (request.method !== 'POST' || !new URL(request.url).pathname.endsWith('/grants/batch') || response.status !== 400) return response
+      const { grants } = await request.json()
+      await board.fetch(new Request(request.url.replace(/\/batch$/, ''), { method: 'POST', headers: request.headers, body: JSON.stringify(grants[0]) }))
+      return response
+    }
+    expect(batch(await conformance(await clientOf(piecemeal)))).toMatchObject({ status: 'failed', detail: expect.stringMatching(/^the grants after a batch that was refused: expected /) })
+    expect((await board.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+  }, 60_000)
+
   it('fails a board that ignores x-board-can, and skips its checks where it can\'t send the header', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     // A board that answers as if no proxy narrowed the caller, as one that doesn't read the header does.
@@ -240,6 +392,8 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(board.fetch), { withCan: withCan(ignoring) })
     expect(report.checks.filter((check) => NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual([
       ['failed', 'what a caller narrowed to read says it may do: expected {"conformance":["read"]}, got {"*":["read","post","react","label","sync","manage"]}'],
+      ['failed', 'a claim by a caller without label in its channel: expected 403 forbidden, and it succeeded'],
+      ['failed', "a task that needs one its caller can't read: expected 400 invalid_needs, and it succeeded"],
       ['failed', 'registering a schema, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'registering watchers, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
       ['failed', 'an import, by a caller narrowed with x-board-can: expected 403 forbidden, and it succeeded'],
@@ -266,14 +420,14 @@ describe('the conformance kit', () => {
       const before = await registered()
       const report = await conformance(asV0, narrowedV0)
       // What registers is skipped; noSync, an account lookup, and a narrowed caller's refused registration register nothing.
-      expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
+      expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
       expect(await registered()).toEqual(before)
     }
     // One with nothing in it is checked, and is left as it was.
     const empty = { owner: 'vercel:project:prj_v0:production', url: null, watch: {}, sync: [] }
     expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(200)
     const report = await conformance(asV0, narrowedV0)
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect(await registered()).toEqual([empty])
   })
 
@@ -284,7 +438,7 @@ describe('the conformance kit', () => {
     const narrowedV0 = { withCan: withCan(older, () => deploymentToken('v0', 'prj_v0', 'production')) }
     const watching = { url: null, watch: { fix: { tail: 'feedback' } }, sync: [] }
     expect((await v0('POST', '/watchers', watching)).status).toBe(200)
-    expect(watcherStatuses(await conformance(asV0, narrowedV0))).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
+    expect(watcherStatuses(await conformance(asV0, narrowedV0))).toEqual(['skipped', 'skipped', 'passed', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'skipped'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([watching])
     // An empty one fails the check, since the board took the path, and is left as it was.
     expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(200)
@@ -300,12 +454,12 @@ describe('the conformance kit', () => {
     const v0 = caller(byPath, await deploymentToken('v0', 'prj_v0', 'production'))
     expect((await v0('POST', '/watchers', { path: '/api/board', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'production')), { withCan: withCan(byPath, () => deploymentToken('v0', 'prj_v0', 'production')) })
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', watch: {} }])
     // A person's token names no project to wake.
     const personal = wakingByPath(testBoard({ scheduler: fakeQueue().scheduler }).fetch)
     const person = await conformance(await clientOf(personal), { withCan: withCan(personal) })
-    expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
   })
 
   it("checks a preview's path with its branch, and gives the branch back", async () => {
@@ -313,8 +467,33 @@ describe('the conformance kit', () => {
     const preview = caller(byPath, await deploymentToken('v0', 'prj_v0', 'preview'))
     expect((await preview('POST', '/watchers', { path: '/api/board', branch: 'jb/watchers', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')), { withCan: withCan(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')) })
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
+  })
+
+  it('skips paging back on a board from before `older`, and fails one that lists a thread twice', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const paging = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'paging').map((check) => [check.status, check.detail])
+    const unpaged: Fetch = async (request) => {
+      const response = await board.fetch(request)
+      if (!new URL(request.url).pathname.endsWith('/threads') || !response.ok) return response
+      const { older: _, ...page } = await response.json()
+      return Response.json(page)
+    }
+    expect(paging(await conformance(await clientOf(unpaged)))).toEqual([
+      ['skipped', "this board doesn't page threads back: its pages have no older"],
+      ['skipped', "this board doesn't page threads back: its pages have no older"],
+    ])
+    // A board whose `older` starts over: the second page is the first again.
+    const restarted: Fetch = async (request) => {
+      const url = new URL(request.url)
+      if (!url.pathname.endsWith('/threads')) return board.fetch(request)
+      const again = url.searchParams.get('before') === 'again'
+      url.searchParams.delete('before')
+      const page = await (await board.fetch(new Request(url, request))).json()
+      return Response.json({ ...page, older: again ? null : page.older && 'again' })
+    }
+    expect(paging(await conformance(await clientOf(restarted)))[0]).toEqual(['failed', expect.stringMatching(/^paging back should list each thread once, got \[/)])
   })
 
   it("fails a board that reads who writes as boards did before: a profile's name alone, an avatar from x-board-avatar, and a session on each by", async () => {
@@ -356,8 +535,178 @@ describe('the conformance kit', () => {
       ['grants', 'skipped', LOCKED_OUT[1]],
       ['grants', 'skipped', CROSS_TEAM[1]],
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
+      ['attachments', 'skipped', 'not kept here: this board keeps no files'],
     ])
   })
+
+  it('reports tasks as not kept here on a board that answers 501 no_tasks, and writes none of what the group would', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const asked: string[] = []
+    // A board that keeps no tasks, as a backend of one's own may answer: every task route says so.
+    const taskless: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      if (!/\/tasks(\/|$)/.test(pathname)) return board.fetch(request)
+      asked.push(`${request.method} ${pathname.slice(pathname.indexOf('/tasks'))}`)
+      return Response.json({ error: { code: 'no_tasks', message: 'this board keeps no tasks' } }, { status: 501 })
+    }
+    const report = await conformance(await clientOf(taskless))
+    expect(report.ok).toBe(true)
+    const tasks = report.checks.filter((check) => check.group === 'tasks')
+    expect(tasks).toHaveLength(23)
+    // The one that needs no task route is about labels, which a board has either way.
+    expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
+    expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
+    // The check that imports from a platform asks about tasks first, so nothing was imported for it.
+    expect((await board.messages({ channel: 'conformance', limit: 500 })).messages.filter((message) => message.text.includes('to make a task'))).toEqual([])
+    expect(asked.length).toBeGreaterThan(0)
+  })
+
+  it("fails a board that gets tasks wrong: one that drops needs, one that ignores a lease, and one that shows a claim's token", async () => {
+    const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    /** A board in front of `fetch` that changes the JSON body of the requests `match` picks. */
+    const rewriting = (fetch: Fetch, match: (method: string, path: string) => boolean, change: (body: Record<string, unknown>) => void): Fetch => async (request) => {
+      if (!match(request.method, new URL(request.url).pathname)) return fetch(request)
+      const body = (await request.json()) as Record<string, unknown>
+      change(body)
+      return fetch(new Request(request, { body: JSON.stringify(body) }))
+    }
+    // A board that hasn't built dependencies: a task that needs another is ready at once.
+    const flat = testBoard({ scheduler: fakeQueue().scheduler })
+    const noNeeds = rewriting(flat.fetch, (method, path) => method === 'POST' && path.endsWith('/tasks'), (body) => delete body.needs)
+    expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
+      ['holds a task until the tasks it needs complete, which a failed or canceled one never does', 'a task that needs one that has not completed: expected "waiting", got "ready"'],
+      ['refuses a prerequisite that was canceled, which can never complete, and takes one that failed', 'a task that needs a canceled one: expected 400 invalid_needs, and it succeeded'],
+      ['lists the tasks that wait for one in the channel a list names, or its subtree, and no other', expect.stringMatching(/^what the task in the channel needs: expected \["\d+"\], got \[\]$/)],
+      // It never waits, so nothing says it became ready: its feed has no task.ready.
+      [
+        'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
+        expect.stringContaining('got [["task.created","ready"],["task.claimed","claimed"],["task.blocked","blocked"],["task.unblocked","ready"]]'),
+      ],
+      // Nothing was made to wait for another, so no change closes a cycle.
+      ['refuses a change of needs that would make a task wait for itself, straight back or through others', 'a task that would need one that waits for it: expected 400 invalid_needs, and it succeeded'],
+      ['shows a feed that filters on board.task=ready a task becoming ready and being claimed, and never a token', 'the feed should show the task become ready, within a few seconds'],
+    ])
+    // One that gives every claim its own default lease, whatever it asked for.
+    const fixed = testBoard({ scheduler: fakeQueue().scheduler })
+    const noLease = rewriting(fixed.fetch, (method, path) => method === 'POST' && /\/tasks\/[^/]+\/(claim|renew)$/.test(path), (body) => delete body.lease)
+    expect(failed(await conformance(await clientOf(noLease)))).toMatchObject([
+      ['gives a claim the lease it asks for, up to 5 minutes, and says when it ends', expect.stringMatching(/^a claim that asks for 300 seconds should end in 300, got /)],
+    ])
+    // One that shows a claim's token to whoever reads the task: its thread carries what the claim answered.
+    const leaky = testBoard({ scheduler: fakeQueue().scheduler })
+    const tokens = new Map<string, string>()
+    const showing: Fetch = async (request) => {
+      const { pathname } = new URL(request.url)
+      const response = await leaky.fetch(request)
+      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return response
+      const body = await response.json()
+      if (request.method === 'POST' && /\/tasks\/[^/]+\/claim$/.test(pathname)) tokens.set(body.task.id, body.claim.token)
+      const read = request.method === 'GET' ? /\/messages\/([^/]+)$/.exec(pathname)?.[1] : undefined
+      if (read !== undefined && body.message?.task?.claim && tokens.has(read)) body.message.task.claim.token = tokens.get(read)
+      return Response.json(body, { status: response.status })
+    }
+    expect(failed(await conformance(await clientOf(showing)))).toEqual([
+      ['gives a task to one of the claims that race for it, and takes its result', "a task's thread shouldn't show its claim's token"],
+    ])
+    // A board that takes a write under board. can't be played here: the handle the kit runs through
+    // is a board() too, which refuses one before any request leaves it. The routes' own refusal is
+    // checked where requests reach the board with no handle in front (test/tasks.test.ts).
+  }, 60_000)
+
+  it("fails a board that gets a batch of tasks wrong: one that makes them in turn, one that keeps part of a batch it refuses, one that forgets a batch's id, two that take an id for other tasks, one that drops what its tasks wait for, and one that answers out of order", async () => {
+    const BATCH = 'makes several tasks in one write, in the order given: each waits for the ones it names, of the batch or there already, and an id makes them once'
+    const ATOMIC = 'makes none of a batch when one of its tasks can not be made, wherever it comes in it'
+    const failed = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.group === 'tasks' && check.status === 'failed').map((check) => [check.name, check.detail])
+    const batching = (request: Request) => request.method === 'POST' && new URL(request.url).pathname.endsWith('/tasks/batch')
+    type Sent = { channel: string; id?: string; tasks: { key?: string; text: string; needs?: (string | { key: string })[] }[] }
+    // A board that makes a batch's tasks in turn, each with what makes one task: a task that needs a later one can't be
+    // made, and it never looks at how the batch's tasks name each other.
+    const turns = testBoard({ scheduler: fakeQueue().scheduler })
+    const inTurn: Fetch = async (request) => {
+      if (!batching(request)) return turns.fetch(request)
+      const { channel, tasks } = (await request.json()) as Sent
+      const made = new Map<string, string>()
+      const roots: unknown[] = []
+      for (const { key, needs, ...task } of tasks) {
+        const waits = (needs ?? []).map((need) => (typeof need === 'string' ? need : (made.get(need.key) ?? '999999')))
+        const answer = await turns.fetch(new Request(`${BOARD_URL}/tasks`, { method: 'POST', headers: request.headers, body: JSON.stringify({ channel, ...task, ...(waits.length ? { needs: waits } : {}) }) }))
+        if (!answer.ok) return answer
+        const { task: root } = (await answer.json()) as { task: { id: string } }
+        if (key !== undefined) made.set(key, root.id)
+        roots.push(root)
+      }
+      return Response.json({ tasks: roots }, { status: 201 })
+    }
+    expect(failed(await conformance(await clientOf(inTurn)))).toEqual([
+      [BATCH, "needs: #999999 isn't a task"],
+      [ATOMIC, 'a batch with a key two of its tasks have: expected 400 invalid_needs, and it succeeded'],
+    ])
+    // One that refuses what it should, with the batch's first task already written.
+    const partly = testBoard({ scheduler: fakeQueue().scheduler })
+    const partial: Fetch = async (request) => {
+      if (!batching(request)) return partly.fetch(request)
+      const sent = (await request.clone().json()) as Sent
+      const response = await partly.fetch(request)
+      if (response.status === 400) {
+        const { key: _key, needs: _needs, ...first } = sent.tasks[0]!
+        await partly.fetch(new Request(`${BOARD_URL}/tasks`, { method: 'POST', headers: request.headers, body: JSON.stringify({ channel: sent.channel, ...first }) }))
+      }
+      return response
+    }
+    expect(failed(await conformance(await clientOf(partial)))).toEqual([
+      [ATOMIC, expect.stringMatching(/^a refused batch should make none of its tasks, and these are there: \["conformance: never made, first of a refused batch",/)],
+    ])
+    // One that drops a batch's id: a retry makes its tasks again.
+    const forgetful = testBoard({ scheduler: fakeQueue().scheduler })
+    const noId: Fetch = async (request) => {
+      if (!batching(request)) return forgetful.fetch(request)
+      const { id: _id, ...body } = (await request.json()) as Sent
+      return forgetful.fetch(new Request(request, { body: JSON.stringify(body) }))
+    }
+    expect(failed(await conformance(await clientOf(noId)))).toEqual([[BATCH, expect.stringMatching(/^the tasks a retry with the same id answers: expected \[.+\], got \[.+\]$/)]])
+    // One that finds a batch by its id whatever is asked under it: other tasks under the id get the first ones back.
+    const careless = testBoard({ scheduler: fakeQueue().scheduler })
+    const byIdAlone: Fetch = async (request) => {
+      const url = new URL(request.url)
+      if (request.method !== 'GET' || !/\/tasks\/batch\/[^/]+$/.test(url.pathname)) return careless.fetch(request)
+      url.searchParams.delete('request')
+      return careless.fetch(new Request(url, request))
+    }
+    expect(failed(await conformance(await clientOf(byIdAlone)))).toEqual([[BATCH, 'another batch under the same id: expected 409 duplicate_id, and it succeeded']])
+    // And one that knows a batch by its id and its size: as many other tasks under the id get the first ones back.
+    const counting = testBoard({ scheduler: fakeQueue().scheduler })
+    const first = new Map<string, Sent>()
+    const bySize: Fetch = async (request) => {
+      // It has no way to ask whether a batch landed: every batch is sent to be made.
+      if (request.method === 'GET' && /\/tasks\/batch\/[^/]+$/.test(new URL(request.url).pathname)) return Response.json({ error: { code: 'batch_not_found', message: 'no batch of yours has that id' } }, { status: 404 })
+      if (!batching(request)) return counting.fetch(request)
+      const body = (await request.json()) as Sent
+      const before = body.id !== undefined ? first.get(body.id) : undefined
+      if (body.id !== undefined && !before) first.set(body.id, body)
+      return counting.fetch(new Request(request, { body: JSON.stringify(before && before.tasks.length === body.tasks.length ? before : body) }))
+    }
+    expect(failed(await conformance(await clientOf(bySize)))).toEqual([[BATCH, 'another plan of the same size under the same id: expected 409 duplicate_id, and it succeeded']])
+    // One whose batches drop what each task waits for: every one is ready as it's made, and nothing about them is refused.
+    const flat = testBoard({ scheduler: fakeQueue().scheduler })
+    const noNeeds: Fetch = async (request) => {
+      if (!batching(request)) return flat.fetch(request)
+      const body = (await request.json()) as Sent
+      return flat.fetch(new Request(request, { body: JSON.stringify({ ...body, tasks: body.tasks.map(({ needs: _needs, ...task }) => task) }) }))
+    }
+    expect(failed(await conformance(await clientOf(noNeeds)))).toEqual([
+      [BATCH, 'a batched task that needs a later one of the batch: expected "waiting", got "ready"'],
+      [ATOMIC, 'a batch with a task that needs a key no task of it has: expected 400 invalid_needs, and it succeeded'],
+    ])
+    // One that answers them newest first.
+    const backwards = testBoard({ scheduler: fakeQueue().scheduler })
+    const reversed: Fetch = async (request) => {
+      const response = await backwards.fetch(request)
+      if (!batching(request) || !response.ok) return response
+      const body = (await response.json()) as { tasks: unknown[] }
+      return Response.json({ tasks: body.tasks.reverse() }, { status: response.status })
+    }
+    expect(failed(await conformance(await clientOf(reversed)))).toEqual([[BATCH, expect.stringMatching(/^a batch's tasks, in the order it gave them: expected \["conformance: batched, waits for the one after it",/)]])
+  }, 60_000)
 
   it('leaves the grants as it found them as a project, which a grant keeps in what it closes, and as a run no grant could keep in, which skips closing', async () => {
     const team = await ownPrincipals()
@@ -370,11 +719,12 @@ describe('the conformance kit', () => {
     expect(asRun.checks.filter((check) => check.detail?.startsWith('closing a pattern to everyone')).map((check) => check.name)).toEqual([
       'lets the most specific pattern decide, then the closest principal there, and adds up ties',
       'lets everyone narrow what something else lets in, and lets no one in itself',
+      'makes several grants in one write, or none of them, a lock with the grant that keeps its maker in',
     ])
     expect(await grantIds()).toEqual(before)
   })
 
-  it('makes every grant inside conformance/grants/, and no channel but the one it posts in', async () => {
+  it('makes every grant inside conformance/grants/, and no channel but the two it posts in', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const patterns: string[] = []
     // Every grant write it sends, by itself or narrowed with x-board-can, refused or not.
@@ -386,7 +736,7 @@ describe('the conformance kit', () => {
     expect(report.ok).toBe(true)
     expect(patterns.length).toBeGreaterThan(20)
     expect(patterns.filter((pattern) => !pattern.startsWith('conformance/grants/'))).toEqual([])
-    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance'])
+    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance', 'conformance/tasks'])
   })
 
   it('refuses principals that are its own before it writes anything, which the checks would change under it', async () => {

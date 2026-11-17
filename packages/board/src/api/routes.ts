@@ -10,16 +10,22 @@ import {
   LabelKey,
   Labels,
   LabelValue,
+  NewLabels,
   MESSAGE_TEXT_MAX,
   MessageText,
   SentText,
   platformAvatar,
   storable,
+  TASK_BATCH_MAX,
+  EDITED_HOLD,
+  SentTaskHoldKind,
+  SentTaskNote,
+  TaskState,
 } from '../contract/schemas.ts'
-import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
+import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, MENTIONED_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
-import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
+import type { Actor, Channel, ExternalCopy, Message, Task } from '../contract/folds.ts'
 import type { Via } from '../contract/profiles.ts'
 import type { AccessSummary, Permission, WrittenCan } from '../server/access.ts'
 
@@ -78,10 +84,21 @@ export const MessagesQuery = Filters.extend({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
-/** `limit` counts threads: each thread with a matching message, by its latest reply. */
+/** How many threads a read lists without a `limit`, and with one at most. */
+export const THREADS_LIMIT_DEFAULT = 50
+export const THREADS_LIMIT_MAX = 500
+
+/**
+ * `limit` counts threads: each thread with a matching message, by its latest reply. `before` is a page's
+ * `older`, for the threads last active before it; it pages backward, so it takes no `after`.
+ */
 export const ThreadsQuery = Filters.extend({
   after: Ref.optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
+  before: z.string().min(1).max(1024).optional(),
+  limit: z.coerce.number().int().min(1).max(THREADS_LIMIT_MAX).optional(),
+}).refine((query) => query.before === undefined || query.after === undefined, {
+  message: '`before` pages back from a page\'s `older`, and `after` reads forward: pass one',
+  path: ['before'],
 })
 
 export const EventsQuery = Filters.extend({
@@ -96,7 +113,7 @@ export const PostBody = z
     re: Ref.optional(),
     /** May be empty when the message has attachments. */
     text: z.string().default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     /**
      * External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. The
@@ -142,7 +159,7 @@ export const ScheduleBody = z
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     text: z.string().default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).optional(),
     in: Duration.optional(),
@@ -180,6 +197,158 @@ export const SchedulesQuery = z.object({
   all: flag.optional(),
 })
 
+/** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a grant's pattern for either. */
+const ChannelOrSubtree = z.string().max(CHANNEL_PATTERN_MAX).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
+
+/** What a claim gets when it asks for no lease, in seconds. */
+export const LEASE_DEFAULT_S = 900
+/**
+ * How long a claim holds its task, in seconds, 900 when left out. How short and how long one may
+ * be is the backend's to say: the local board takes 30 to 3600, and a board gives what's asked up
+ * to its own cap, never under 300.
+ */
+const Lease = z.number()
+
+/** What a claim's own writes carry: the `epoch` and `token` its claim answered. */
+const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
+
+/**
+ * A new thread that's a task (`channel` and `text`, with `labels`, `noSync`, `attachments`, and an
+ * `id` as a post takes them), or the thread `re` roots made one. `needs` are the tasks it waits for,
+ * `for` the one actor of its owner's that claims it, and `claim` claims it in the same write, for
+ * `lease` seconds.
+ */
+export const CreateTaskBody = z
+  .object({
+    channel: ChannelPath.optional(),
+    re: Ref.optional(),
+    /** As long as a post's text may be: the backend says how long that is. */
+    text: z.string().optional(),
+    labels: NewLabels.optional(),
+    noSync: z.boolean().optional(),
+    /** IDs from `POST /attachments`, as a post takes them. */
+    attachments: z.array(AttachmentId).optional(),
+    /** How many tasks one may wait for is the backend's to say. */
+    needs: z.array(Ref).optional(),
+    for: ActorId.nullable().optional(),
+    claim: z.boolean().optional(),
+    lease: Lease.optional(),
+    id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+  })
+  .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
+    message: 'a task needs `channel` and `text` for a new thread, or `re` for a thread that\'s there',
+  })
+  .refine((body) => body.channel === undefined || (body.text ?? '').trim().length > 0 || (body.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
+  .refine((body) => body.text === undefined || storable(body.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] })
+  .refine((body) => body.re === undefined || (body.text === undefined && body.labels === undefined && body.noSync === undefined && body.attachments === undefined && body.id === undefined), {
+    message: '`text`, `labels`, `noSync`, `attachments`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
+  })
+  .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
+
+/** A digest of what a batch asks for: what tells the same request under an `id` from another. */
+const BatchRequest = z.string().min(1).max(64)
+
+/** A task another task of the same batch waits for, by the `key` it goes by there. */
+const TaskKey = z.string().min(1).refine(storable, 'key has a NUL character or a lone surrogate')
+
+/**
+ * Several new threads in one channel, each a task, made in one write: all of them or none. A task is
+ * what `POST /tasks` starts a thread with, less `claim`. `key` names it for the batch's others, and
+ * `needs` takes a task's ID, or `{ key }` for one of the batch, before or after it. `id` names the
+ * batch: a retry with it answers the same tasks. At most `TASK_BATCH_MAX` tasks, 400
+ * `batch_too_large` past that, which a board that holds fewer in one write answers too.
+ */
+export const CreateTasksBody = z.object({
+  channel: ChannelPath,
+  tasks: z
+    .array(
+      z
+        .object({
+          key: TaskKey.optional(),
+          /** May be empty when the task's root has attachments. As long as a post's text may be: the backend says how long that is. */
+          text: z.string(),
+          labels: NewLabels.optional(),
+          noSync: z.boolean().optional(),
+          /** IDs from `POST /attachments`, as a post takes them. */
+          attachments: z.array(AttachmentId).optional(),
+          /** How many tasks one may wait for is the backend's to say. */
+          needs: z.array(z.union([Ref, z.object({ key: TaskKey }).strict()])).optional(),
+          for: ActorId.nullable().optional(),
+        })
+        .refine((task) => task.text.trim().length > 0 || (task.attachments?.length ?? 0) > 0, { message: 'message text is empty', path: ['text'] })
+        .refine((task) => storable(task.text), { message: 'message text has a NUL character or a lone surrogate', path: ['text'] }),
+    )
+    .min(1)
+    .max(TASK_BATCH_MAX),
+  id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+  /**
+   * From a board in front of this one: its digest of what the batch asked for as it was given, before
+   * its own middleware changed anything, so both boards tell a repeat by the same request. A board
+   * with none in front makes its own. It says nothing of who writes or what: a caller that sends one
+   * changes only which of its own requests its own `id` answers.
+   */
+  request: BatchRequest.optional(),
+})
+
+/**
+ * `request` is a board's digest of what a batch asked for, as it was given: with it, the batch
+ * answers only that request, and any other under the `id` is 409 `duplicate_id`.
+ */
+export const CreatedTasksQuery = z.object({ request: BatchRequest.optional() })
+
+/** Which tasks to list: open ones unless `state` says `all` or names one. A claim whose lease has run out counts as `ready`. */
+export const TasksQuery = z.object({
+  channel: z.string().optional(),
+  state: z.union([z.enum(['open', 'all']), TaskState]).optional(),
+  label: repeated.pipe(z.array(LabelFilter)).optional(),
+  /** Who wrote the root: a handle or an actor ID, as on `/messages`. */
+  by: z.string().optional(),
+  /** Whose task it is: a handle or a principal ID. */
+  owner: z.string().optional(),
+  /** The actor it's assigned to: a handle or an actor ID. */
+  for: z.string().optional(),
+  /** A task's ID: the tasks that wait for it. */
+  needs: Ref.optional(),
+  /** A `cursor` an earlier page reported. */
+  after: Ref.optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
+
+export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
+
+/**
+ * Claims the oldest ready task in `channel` that has every label in `label`: one assigned to the
+ * caller first, then an unassigned one it owns, or whose owner `from` names by ID. `wait`
+ * holds the request up to that many seconds for one.
+ */
+export const ClaimReadyTaskBody = z.object({
+  channel: ChannelOrSubtree,
+  label: Labels.optional(),
+  /** How many owners one claim takes from is the backend's to say. */
+  from: z.array(z.string().min(1).max(256)).optional(),
+  lease: Lease.optional(),
+  wait: z.number().min(0).max(300).optional(),
+})
+
+export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })
+export const ReleaseTaskBody = z.object(Claimed)
+export const CompleteTaskBody = z.object({ ...Claimed, result: SentTaskNote.optional() })
+export const FailTaskBody = z.object({ ...Claimed, reason: SentTaskNote })
+/** A hold for a person. A claimed task's comes from its claim, with the claim's `epoch` and `token`. Kind `edited` is the board's own, so none asks for it. */
+export const BlockTaskBody = z
+  .object({
+    reason: SentTaskNote,
+    kind: SentTaskHoldKind.refine((kind) => kind !== EDITED_HOLD, "`edited` is the board's own kind, for a task whose root someone else edited: name another").optional(),
+    epoch: Claimed.epoch.optional(),
+    token: Claimed.token.optional(),
+  })
+  .refine((body) => (body.epoch === undefined) === (body.token === undefined), { message: 'a claim is its `epoch` and its `token`: pass both, or neither' })
+/** The one actor of its owner's that claims the task, or null for anyone who may. */
+export const AssignTaskBody = z.object({ for: ActorId.nullable() })
+/** The tasks it waits for now, in place of what it waited for: none, for a task that waits for nothing. How many it may wait for is the backend's to say. */
+export const TaskNeedsBody = z.object({ needs: z.array(Ref) })
+export const CancelTaskBody = z.object({ reason: SentTaskNote })
+
 const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
 const ClaimValue = z.string().min(1).max(1000)
 const Environments = z.array(z.string().min(1).max(100)).min(1).max(16)
@@ -214,11 +383,36 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
 export const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), CanGrant)
 
+/**
+ * Says to go ahead with a grant change its caller couldn't take back: one that takes their own
+ * `manage` at a pattern it names, which is 409 `grant_lockout` without it.
+ */
+const LockMeOut = z.boolean().optional()
+
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
-export const GrantBody = z.strictObject({
+const GrantSpec = z.strictObject({
   principals: z.array(PrincipalInput).min(1).max(32),
   can: GrantCan,
 })
+
+/** What `POST /grants` takes: a grant, and `lockMeOut` to make one its caller couldn't take back. */
+export const GrantBody = GrantSpec.extend({ lockMeOut: LockMeOut })
+
+/** How many grants one write makes. */
+export const GRANT_BATCH_MAX = 16
+
+/**
+ * Several grants made in one write, all of them or none, judged together: each by the grants as
+ * they are, and what it leaves its caller with by the grants as they'd be with all of them. So a
+ * lock and the grant that keeps its maker in go in one request, in any order.
+ */
+export const CreateGrantsBody = z.strictObject({
+  grants: z.array(GrantSpec).min(1).max(GRANT_BATCH_MAX),
+  lockMeOut: LockMeOut,
+})
+
+/** What revoking a grant takes: nothing, or `lockMeOut`. */
+export const RevokeGrantBody = z.strictObject({ lockMeOut: LockMeOut }).optional()
 
 /**
  * Which grant decides a channel, and what it gives, for the caller or a principal it names: a
@@ -251,6 +445,7 @@ export const UpdateGrantBody = z
     add: z.array(PrincipalInput).min(1).max(32).optional(),
     remove: z.array(PrincipalInput).min(1).max(32).optional(),
     can: GrantCan.optional(),
+    lockMeOut: LockMeOut,
   })
   .refine((body) => body.add !== undefined || body.remove !== undefined || body.can !== undefined, 'name principals to add or remove, or a can')
 
@@ -380,6 +575,13 @@ const PlatformUser = ExternalAuthor.extend({ avatar: z.string().nullable().trans
 const Imported = { author: PlatformUser, from: SyncKey.nullable() }
 
 /**
+ * The platform's users a text mentions as `@[<their id>]`. One the board hasn't met becomes known
+ * to it, as one who wrote does: named, and seen where the message is. One the text doesn't mention
+ * is left out.
+ */
+const Mentioned = z.array(PlatformUser).max(MENTIONED_PER_MESSAGE_MAX).optional()
+
+/**
  * Where the platform event an import comes from is: its sync entry, platform channel, and thread.
  * The middleware is told, and answers there when it drops the write.
  */
@@ -403,23 +605,24 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
+    mentioned: Mentioned,
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** A reply's precondition, as a post's: a sync callback's reply after the newest message it read. */
     after: Ref.optional(),
   }),
   /** `revision`, as an edit's or a delete's: only if the message is still at it. */
-  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional() }),
+  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional(), mentioned: Mentioned }),
   z.object({ op: z.literal('delete'), ...Imported, ...Changed, revision: Revision.optional() }),
   z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
   z.object({
     op: z.literal('labels'),
     ...Imported,
     ...Changed,
-    set: Labels.optional(),
+    set: NewLabels.optional(),
     unset: z.array(LabelKey).optional(),
     /** As a label write's: what the labels must be now, a value or null for none. */
     if: z.record(LabelKey, LabelValue.nullable()).optional(),
@@ -502,7 +705,7 @@ export const LABEL_CONDITIONS_MAX = 16
 
 export const LabelBody = z
   .object({
-    set: Labels.optional(),
+    set: NewLabels.optional(),
     unset: z.array(LabelKey).optional(),
     /**
      * What the message's labels must be now: a key's value, or null for one that mustn't be set.
@@ -517,6 +720,10 @@ export const LabelBody = z
     message: 'nothing to change: pass `set` or `unset`',
   })
 
+export type CreateTaskInput = z.input<typeof CreateTaskBody>
+export type CreateTasksInput = z.input<typeof CreateTasksBody>
+export type TasksQueryInput = z.input<typeof TasksQuery>
+export type ClaimReadyTaskInput = z.input<typeof ClaimReadyTaskBody>
 export type FiltersInput = z.input<typeof Filters>
 export type SyncImportInput = z.input<typeof SyncImportBody>
 export type SyncReceiptInput = z.input<typeof SyncReceiptBody>
@@ -539,8 +746,13 @@ export type PrincipalInput = z.input<typeof PrincipalInput>
 export type CanAt = 'all' | 'none' | readonly Permission[]
 /** A grant's `can`, as a handle takes it: each channel pattern and what it gives. */
 export type GrantCan = Readonly<Record<string, CanAt>>
-/** What `createGrant` takes. */
+/** A grant, as a handle takes it: who it names, and what they may do. */
 export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan }
+/**
+ * What a grant write takes beside its change. `lockMeOut` goes ahead with one you couldn't take
+ * back: it takes your own `manage` at a pattern it names, and is 409 `grant_lockout` without it.
+ */
+export type GrantWriteOptions = { lockMeOut?: boolean }
 /** What `updateGrant` takes: principals to add, principals to remove (by who they are, environments aside), and a `can` that replaces the grant's. */
 export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
 /** What `createSchema` takes: a version's name, its number, and its JSON Schema. */
@@ -635,6 +847,21 @@ export type SchemaView = {
 }
 
 /**
+ * A task, on its root: its state (the root's `board.task` label too), whose it is and which of its
+ * owner's actors made it one (`by`, who changes it as its owner), what it waits for, and who holds
+ * it until when. A claim's token shows nowhere but in the answer that made it.
+ */
+export type TaskView = Omit<Task, 'needs' | 'claim'> & {
+  /** The tasks it waits for, by their IDs. */
+  needs: string[]
+  /** Who holds it. One whose `until` has passed is over: the task is claimable, and `ready` once the board says so. */
+  claim: { actor: string; until: string } | null
+}
+
+/** What a claim answers, once: `epoch` and `token` go on every write the claim makes, until `until`. */
+export type TaskClaim = { epoch: number; token: string; until: string }
+
+/**
  * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
  * `via` is who one with a profile acts through: an agent's person or project, or the principal whose sync speaks for a
  * platform user (`Malte via www (preview)`). `platform` is a platform user's platform (`slack`), for display: their ID
@@ -644,7 +871,7 @@ export type SchemaView = {
  */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar' | 'via' | 'platform'> & { verified?: true }
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
-export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision' | 'platformText'> & {
+export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'task' | 'version' | 'revision' | 'platformText'> & {
   id: string
   /** The thread's root, or null for a root. */
   re: string | null
@@ -660,6 +887,8 @@ export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'sch
   links: LinkView[]
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: string; n: number }
+  /** Set on a root that's a task. */
+  task?: TaskView
   author: ActorView | null
   /**
    * The data its text carries, in order: each fence that names a schema (```json#sandbox@1), which
@@ -680,15 +909,17 @@ export type BlockView = {
 /** A link in a message: a board message it names is a ref. */
 export type LinkView = Omit<Link, 'message'> & { message: string | null }
 
-/** An event's payload as clients see it: message IDs are refs. */
+/** An event's payload as clients see it: message IDs are refs, and a claim's `token` is left out. */
 type PayloadView<P> = {
-  [K in keyof P]: K extends 'id' | 're' | 'replyTo'
+  [K in keyof P as K extends 'token' ? never : K]: K extends 'id' | 're' | 'replyTo'
     ? P[K] extends number ? string : P[K] extends number | null ? string | null : P[K]
     : K extends 'links'
       ? LinkView[]
-      : K extends 'schedule'
-        ? P[K] extends undefined ? undefined : { id: string; n: number } | Exclude<P[K], object>
-        : P[K]
+      : K extends 'needs'
+        ? string[]
+        : K extends 'schedule'
+          ? P[K] extends undefined ? undefined : { id: string; n: number } | Exclude<P[K], object>
+          : P[K]
 }
 
 /** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */
@@ -844,7 +1075,17 @@ export type ThreadView = {
 }
 /** A thread at a glance: its root, how many replies it has, and the latest one (null when none). Deleted replies don't count. */
 export type ThreadSummaryView = { message: MessageView; replies: number; last: MessageView | null }
-export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: string }
+export type ThreadsPage = {
+  threads: ThreadSummaryView[]
+  cursor: string
+  /**
+   * The `before` for the threads last active before this page's, or null when there are none. A board that pages
+   * threads backward sends it on every read without `after`; one from before it leaves it out.
+   */
+  older?: string | null
+}
+/** Tasks, oldest first, each as its thread's summary: `message.task` is the task. `cursor` reads the next page, as `after`. */
+export type TasksPage = { tasks: ThreadSummaryView[]; cursor: string }
 export type EventsPage = { events: BoardEventView[]; cursor: string }
 
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
@@ -909,7 +1150,7 @@ export const routes = {
   actors: { method: 'GET', path: '/actors' },
   messages: { method: 'GET', path: '/messages', query: MessagesQuery },
   message: { method: 'GET', path: '/messages/:id' },
-  /** Threads with a matching message, one summary each, by latest activity. */
+  /** Threads with a matching message, one summary each, by latest activity. `before` takes a page's `older`. */
   threads: { method: 'GET', path: '/threads', query: ThreadsQuery },
   post: { method: 'POST', path: '/messages', body: PostBody },
   edit: { method: 'POST', path: '/messages/:id/edit', body: EditBody },
@@ -929,13 +1170,41 @@ export const routes = {
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
+  /** Tasks, oldest first: open ones unless `state` says otherwise. */
+  tasks: { method: 'GET', path: '/tasks', query: TasksQuery },
+  /** Starts a thread as a task (`post` there, and `label` for its labels), or makes the thread `re` roots one (`label` there). */
+  createTask: { method: 'POST', path: '/tasks', body: CreateTaskBody },
+  /** Starts several threads in one channel as tasks, in one write: all of them or none, and nothing shows before all have landed. */
+  createTasks: { method: 'POST', path: '/tasks/batch', body: CreateTasksBody },
+  /** The caller's own batch made under the `id` it gave, its tasks as they are now: for telling a retry before making anything. */
+  createdTasks: { method: 'GET', path: '/tasks/batch/:id', query: CreatedTasksQuery },
+  /** Claims the oldest ready task in a channel or subtree: `label` where it is. Answers `{ task: null }` when none is. */
+  claimReadyTask: { method: 'POST', path: '/tasks/claim', body: ClaimReadyTaskBody },
+  /** Claims a task: `label` in its channel. Its answer's `claim` goes on what the claim does next. */
+  claimTask: { method: 'POST', path: '/tasks/:id/claim', body: ClaimTaskBody },
+  /** What a claim does, with its `epoch` and `token`: 409 `claim_lost` once it's over. */
+  renewTask: { method: 'POST', path: '/tasks/:id/renew', body: RenewTaskBody },
+  releaseTask: { method: 'POST', path: '/tasks/:id/release', body: ReleaseTaskBody },
+  completeTask: { method: 'POST', path: '/tasks/:id/complete', body: CompleteTaskBody },
+  failTask: { method: 'POST', path: '/tasks/:id/fail', body: FailTaskBody },
+  /** Holds a task for a person: its claim while it's claimed, its owner or `manage` in its channel otherwise. */
+  blockTask: { method: 'POST', path: '/tasks/:id/block', body: BlockTaskBody },
+  /** What a task's owner does, or `manage` in its channel. */
+  unblockTask: { method: 'POST', path: '/tasks/:id/unblock' },
+  reopenTask: { method: 'POST', path: '/tasks/:id/reopen' },
+  assignTask: { method: 'POST', path: '/tasks/:id/assign', body: AssignTaskBody },
+  /** Replaces what a task waits for, while no one holds it and it isn't finished. */
+  setTaskNeeds: { method: 'POST', path: '/tasks/:id/needs', body: TaskNeedsBody },
+  cancelTask: { method: 'POST', path: '/tasks/:id/cancel', body: CancelTaskBody },
   /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },
+  /** Several grants in one write, all or none, judged together. */
+  createGrants: { method: 'POST', path: '/grants/batch', body: CreateGrantsBody },
   updateGrant: { method: 'PATCH', path: '/grants/:id', body: UpdateGrantBody },
   /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
   explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
-  revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
+  revokeGrant: { method: 'POST', path: '/grants/:id/revoke', body: RevokeGrantBody },
   /** Every schema: the built-ins, then the board's own. Anyone the board lets in reads them. */
   schemas: { method: 'GET', path: '/schemas' },
   /** One schema version, by `name@version`. */

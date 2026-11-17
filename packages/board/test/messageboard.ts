@@ -1,11 +1,13 @@
 // An in-memory `/v1/messageboard`, as Vercel's API behaves: what
 // `vercel()` from `@vercel/board/backend-vercel` is tested against. A bearer token names its principal:
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
 import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 import { parseProfileHeader } from '../src/contract/profile-header.ts'
 import { compileAccess, parseCan } from '../src/server/access.ts'
+import { findBlocks } from '../src/contract/blocks.ts'
+import { checkValue } from '../src/contract/data-values.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -68,6 +70,25 @@ type Schedule = {
   revision: number
 }
 type Attachment = { id: string; boardId: string; name: string; type: string; size: number; sha256: string; state: 'pending' | 'ready'; messageId?: string; createdAt: number; createdBy: Actor }
+type TaskState = 'waiting' | 'ready' | 'claimed' | 'blocked' | 'completed' | 'failed' | 'canceled'
+/** A thread's task, as Vercel's API keeps it on the thread: of a claim's token, only `hash`, its SHA-256, which no answer shows. */
+type Task = {
+  state: TaskState
+  owner: string
+  /** The actor its owner made it as: itself, or one of its profiles, which is held to the tasks it made. */
+  by: string
+  for: string | null
+  needs: string[]
+  epoch: number
+  claim: { actor: string; until: number; hash: string; by: Actor } | null
+  blocked: { kind: string | null; reason: string } | null
+  result: string | null
+  reason: string | null
+  /** Who completed it, and when: a dependent readied later is readied in their name. No answer shows it. */
+  completed?: { by: Actor; at: number }
+  /** It completed with tasks waiting for it that haven't all been readied: whoever sees it goes on. No answer shows it. */
+  marked?: true
+}
 type Thread = {
   id: string
   channelId: string
@@ -77,6 +98,7 @@ type Thread = {
   createdAt: number
   createdBy: Actor
   messages: Message[]
+  task?: Task
 }
 type Change = Record<string, unknown> & { createdAt: number; messageId?: string }
 /** On a platform user a project's sync imported, `via` is the project's name, or null, and its environment, and `platform` its key's platform. */
@@ -95,19 +117,38 @@ const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_(\d+)$/
 
+/** An operation ID's shape: a UUIDv7, lowercase. Its first 48 bits are when it was made, in milliseconds. */
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** How old a write's operation ID may be, and how far ahead of the API's clock, when no receipt answers it; and how long a receipt is kept. */
+const OPERATION_MAX_AGE_DAYS = 7
+const OPERATION_MAX_SKEW_S = 300
+const RECEIPT_KEPT_DAYS = 8
+const DAY_MS = 24 * 60 * 60 * 1000
+/** The bytes of JSON a batch's request may be. */
+const BATCH_BODY_BYTES = 65_536
+
 class Refused extends Error {
   readonly status: number
   readonly code: string
-  constructor(status: number, code: string, message = code) {
+  /** Why, for a code that says more: a lost claim's `not_claimed`, `epoch_changed`, `lease_expired`, or `token_mismatch`. */
+  readonly reason: string | undefined
+  /** For `task_claimed`: when the claim in the way ends, in milliseconds. */
+  readonly until: number | undefined
+  /** What else its error says: a batch's `items` and `limit`. */
+  readonly more: Record<string, number> | undefined
+  constructor(status: number, code: string, message = code, reason?: string, until?: number, more?: Record<string, number>) {
     super(message)
     this.status = status
     this.code = code
+    this.reason = reason
+    this.until = until
+    this.more = more
   }
 }
 
 /** Vercel accounts the fake knows, by user ID: how the API names a person (their username, then their name). */
 const ACCOUNTS: Record<string, { username: string; name: string }> = {
-  u_jb: { username: 'julian', name: 'Julián Benegas' },
+  u_jb: { username: 'julian', name: 'Ada Lovelace' },
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 
@@ -232,16 +273,28 @@ const whoOf = (actor: Actor): Who => {
 type Shared = {
   teamId: string
   inlineThreadMessages: boolean
+  channelNames: boolean
+  inlineActors: boolean
+  threadsLimit: boolean
+  /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
+  feedReads: number
+  matchMessages: boolean
   accounts: Accounts
   directory: Directory
   now: () => number
+  /** Notes that `actor`'s operation was answered: a retry of it is answered again, however old its ID has grown. */
+  receipt: (actor: Actor, operationId: unknown) => void
   stored: Map<string, Uint8Array<ArrayBuffer>>
   externalImports: boolean
   actorsById: boolean
+  namesNarrowed: boolean
   platformHandles: boolean
   boardWideKeys: boolean
   projectIdHandles: boolean
   unscopedSync: boolean
+  tasks: boolean
+  /** A schema the team has, by its ID: a built-in, or one it registered. */
+  schemaOf: (id: string) => Record<string, unknown> | undefined
 }
 
 const STORAGE = 'http://storage.test/'
@@ -259,10 +312,15 @@ function fakeBoard(shared: Shared, boardId: string) {
   const once = <T,>(actor: Actor, operationId: unknown, write: () => T): T => {
     if (typeof operationId !== 'string') return write()
     const key = `${principalId(actor.principal)}|${operationId}`
-    if (!posted.has(key)) posted.set(key, write())
+    if (!posted.has(key)) {
+      posted.set(key, write())
+      shared.receipt(actor, operationId)
+    }
     return posted.get(key) as T
   }
   const feeds = new Map<string, Change[]>()
+  /** How many changes in each channel could have made a task claimable: what wakes a claim-next that waits there. */
+  const wakes = new Map<string, number>()
   const actors = new Map<string, ActorView>()
   const attachments = new Map<string, Attachment>()
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
@@ -309,6 +367,19 @@ function fakeBoard(shared: Shared, boardId: string) {
     return position
   }
 
+  /** A task as every answer shows it: never its claim's token, or the hash kept of it. */
+  const showTask = ({ claim, completed: _completed, marked: _marked, ...task }: Task) => ({
+    ...task,
+    needs: [...task.needs],
+    claim: claim ? { actor: claim.actor, until: claim.until } : null,
+    blocked: task.blocked ? { ...task.blocked } : null,
+  })
+  /** A root's labels as the API answers them: its own, and for a task, `board.task`, which is its state and no stored label. */
+  const rootLabels = (t: Thread): Record<string, string> => ({ ...(t.messages[0]?.labels ?? {}), ...(t.task ? { 'board.task': t.task.state } : {}) })
+  /** A message's labels as answered: a task's root wears `board.task`. */
+  const labelsOf = (m: Message): Record<string, string> => (m.sequence === 1 && threads.get(m.threadId)?.task ? rootLabels(threads.get(m.threadId)!) : m.labels)
+  const taskOn = (m: Message) => (m.sequence === 1 ? threads.get(m.threadId)?.task : undefined)
+
   const show = (m: Message) => ({
     id: m.id,
     threadId: m.threadId,
@@ -324,18 +395,19 @@ function fakeBoard(shared: Shared, boardId: string) {
     ...(m.reactions.size ? { reactions: Object.fromEntries([...m.reactions].map(([emoji, by]) => [emoji, by.size])) } : {}),
     // Up to 20 reactors an emoji, earliest first: the count is exact.
     ...(m.reactions.size ? { reactors: Object.fromEntries([...m.reactions].map(([emoji, by]) => [emoji, [...by.keys()].slice(0, 20)])) } : {}),
-    ...(Object.keys(m.labels).length ? { labels: { ...m.labels } } : {}),
+    ...(Object.keys(labelsOf(m)).length ? { labels: { ...labelsOf(m) } } : {}),
     ...(m.attachments?.length ? { attachments: m.attachments } : {}),
     ...(m.schedule ? { schedule: m.schedule } : {}),
     ...(m.from !== undefined ? { from: m.from } : {}),
     ...(m.origin ? { origin: m.origin } : {}),
     ...(m.noSync ? { noSync: true } : {}),
     ...(m.links?.length ? { links: m.links } : {}),
+    ...(taskOn(m) ? { task: showTask(taskOn(m)!) } : {}),
   })
   const showThread = (t: Thread) => {
-    const { messages, ...rest } = t
-    const labels = messages[0]?.labels ?? {}
-    return { ...rest, teamId, boardId, ...(Object.keys(labels).length ? { labels: { ...labels } } : {}) }
+    const { messages: _messages, task, ...rest } = t
+    const labels = rootLabels(t)
+    return { ...rest, teamId, boardId, ...(Object.keys(labels).length ? { labels } : {}), ...(task ? { task: showTask(task) } : {}) }
   }
   const meta = (m: Message) => {
     const { id, threadId, sequence, version, reactions, reactors, labels } = show(m)
@@ -347,6 +419,10 @@ function fakeBoard(shared: Shared, boardId: string) {
     feeds.set(channelId, feed)
     const made = { id: `evt_${randomUUID()}`, channelId, actor, createdAt: now(), shard: 0, sequence: feed.length + 1, ...change } as Change
     feed.push(made)
+    // A change to a task, or to a first message's labels, wakes a claim-next that waits in the channel. A post, a
+    // reply, a reaction, an edit, and a label on a reply wake nobody.
+    const { type, message } = change as { type: string; message?: number }
+    if (type.startsWith('task.') || (type === 'message.labeled' && message === 1)) wakes.set(channelId, (wakes.get(channelId) ?? 0) + 1)
     seen(actor)
     match(made)
     return feed.length
@@ -375,10 +451,16 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
       return
     }
-    if (!String(change.type).startsWith('message.')) return
+    const about = String(change.type)
+    // A task's change is about its root, and wakes watchers like any change to it, but a renewal, which wakes none.
+    const ofTask = about.startsWith('task.')
+    if (!(about.startsWith('message.') || ofTask) || about === 'task.renewed') return
     const thread = threads.get(message.threadId)!
     const channel = channels.find((c) => c.id === thread.channelId)!
-    const rootLabels = thread.messages[0]?.labels ?? {}
+    const after = rootLabels(thread)
+    // A task's change is matched with the root's labels before it and after it, `board.task` among them.
+    const was = (change as { labels?: { 'board.task'?: { from?: string } } }).labels?.['board.task']
+    const before = ofTask && was ? Object.fromEntries(Object.entries({ ...after, 'board.task': was.from }).filter(([, value]) => value !== undefined)) as Record<string, string> : after
     const scheduled = change.type === 'message.posted' && (message as { schedule?: unknown }).schedule !== undefined
     const hasLabel = (labels: Record<string, string>, { key, values }: { key: string; values?: string[] }) =>
       Object.hasOwn(labels, key) && (values === undefined || values.includes(labels[key]!))
@@ -388,12 +470,13 @@ function fakeBoard(shared: Shared, boardId: string) {
       (filter.threadId === undefined || filter.threadId === message.threadId) &&
       (filter.authors === undefined || filter.authors.includes(message.createdBy.id) || filter.authors.includes(principalId(message.createdBy.principal))) &&
       (filter.text === undefined || message.text.toLowerCase().includes(filter.text.toLowerCase())) &&
-      (filter.labels ?? []).every((label) => hasLabel(message.labels, label) || hasLabel(rootLabels, label))
-    for (const registration of registrations.values())
-      // A sync gets every message change on the board as a match of its watcher `@sync`.
-      if (registration.sync.length > 0) {
-        queue(registration.owner, '@sync')
-      }
+      [after, before].some((root) => (filter.labels ?? []).every((label) => hasLabel(message.labels, label) || hasLabel(root, label)))
+    // A sync gets every message change on the board as a match of its watcher `@sync`, and no task's.
+    if (!ofTask)
+      for (const registration of registrations.values())
+        if (registration.sync.length > 0) {
+          queue(registration.owner, '@sync')
+        }
     for (const registration of registrations.values())
       for (const [watcher, spec] of Object.entries(registration.watch)) {
         // A watcher's own writes never wake it, but for what a schedule of its own posted.
@@ -424,6 +507,30 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (!channel) throw new Refused(404, 'channel_not_found')
     return channel
   }
+  /**
+   * The channel a read names: by `channelId`, or, on an API that takes it, by `channel`, its name. An API from before
+   * that takes no `channel`, as it takes no other parameter it doesn't know. A read makes no channel: a name no channel
+   * has, or one the caller can't read, isn't there. Null when the read names none.
+   */
+  const channelRead = (url: URL, actor: Actor) => {
+    const id = url.searchParams.get('channelId')
+    const name = url.searchParams.get('channel')
+    if (name === null) return id === null ? null : channelAt(id)
+    if (!shared.channelNames) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `channel`.')
+    if (id !== null) throw new Refused(400, 'bad_request', 'Invalid request: should match exactly one schema in oneOf.')
+    const channel = channels.find((c) => c.name === name)
+    if (!channel || !mayRead(actor, channel.id)) throw new Refused(404, 'channel_not_found')
+    return channel
+  }
+  /** `include=channel` on a message or a thread: its channel with it, on an API that takes the parameter, to a caller who may read it. */
+  const withChannel = (url: URL, actor: Actor, channelId: string) => {
+    const include = url.searchParams.get('include')
+    if (include === null) return {}
+    if (!shared.channelNames) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
+    if (include !== 'channel') throw new Refused(400, 'bad_request')
+    if (!mayRead(actor, channelId)) throw new Refused(404, 'channel_not_found')
+    return { channel: channelAt(channelId) }
+  }
 
   /** A caller narrowed with `x-board-can` does only what it gives at the channel's closest pattern: the channel, then its parents (`dev/`), then `*`. */
   function tokenMay(actor: Actor, permission: string, channelId: string) {
@@ -446,6 +553,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
+    // A message carries so many files, each once: the body's shape, refused before any is looked up.
+    if ((body.attachments?.length ?? 0) > 10 || new Set(body.attachments).size !== (body.attachments?.length ?? 0)) throw bad('A message carries up to 10 different attachments.')
     const files = (body.attachments ?? []).map((id) => {
       const attachment = attachments.get(id)
       if (!attachment || !samePrincipal(attachment.createdBy.principal, uploader.principal)) throw new Refused(404, 'attachment_not_found')
@@ -454,7 +563,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       return attachment
     })
     // A post with attachments may have no text.
-    if (typeof body.text !== 'string' || (!body.text.trim() && !(files.length && body.text === '')) || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+    if (typeof body.text !== 'string' || (!body.text.trim() && !(files.length && body.text === '')) || body.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
     if (body.replyTo !== undefined && (body.replyTo < 1 || body.replyTo > thread.messageCount)) throw new Refused(400, 'invalid_reply')
     const sequence = thread.messageCount + 1
     const createdAt = now()
@@ -487,6 +596,40 @@ function fakeBoard(shared: Shared, boardId: string) {
     return message
   }
 
+  const makeChannel = (name: unknown) => {
+    if (typeof name !== 'string' || name.length > 80 || !CHANNEL.test(name)) throw new Refused(400, 'invalid_channel_name')
+    if (channels.some((c) => c.name === name)) throw new Refused(409, 'channel_name_taken')
+    const channel = { id: `chn_${randomUUID()}`, name }
+    channels.push(channel)
+    return channel
+  }
+
+  /**
+   * A new thread and its first message, as a post starts one: by `channel`, its name, it checks `post` there and makes
+   * the channel on its first post, as a board does; or by `channelId`. `check` runs with the channel's name before
+   * anything is made, and `made` with what it answered, once the first message is posted.
+   */
+  function startThread<C>(actor: Actor, body: Record<string, any>, check: (channel: string) => C, made: (thread: Thread, checked: C) => void) {
+    if (body.channel !== undefined) tokenMayIn(actor, 'post', String(body.channel))
+    const known = body.channel !== undefined ? channels.find((c) => c.name === body.channel) : channelAt(body.channelId)
+    if (known) tokenMay(actor, 'post', known.id)
+    if (Object.keys(body.labels ?? {}).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+    // A first message whose embedded block doesn't match the schema it names starts no thread, and makes no channel.
+    for (const found of typeof body.text === 'string' && body.text.includes('json#') ? findBlocks(body.text) : []) {
+      const schema = found.problem === undefined ? shared.schemaOf(found.id) : undefined
+      const problem = schema ? checkValue(schema, found.data) : null
+      if (problem !== null) throw new Refused(400, 'invalid_block', `The ${found.id} block doesn't match its schema: ${problem}`)
+    }
+    const checked = check(known?.name ?? String(body.channel))
+    const channel = known ?? makeChannel(body.channel)
+    const createdAt = now()
+    const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
+    threads.set(thread.id, thread)
+    const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string>; attachments?: string[]; noSync?: boolean })
+    made(thread, checked)
+    return { thread, message }
+  }
+
   /** Whether `actor` may read in the channel: a narrowed caller only where its `x-board-can` gives `read`. */
   const mayRead = (actor: Actor, channelId: string) => {
     try {
@@ -508,6 +651,836 @@ function fakeBoard(shared: Shared, boardId: string) {
     const message = thread.messages[Number(sequence) - 1]!
     if (!mayRead(actor, thread.channelId)) return { thread: { id: thread.id }, message: { id: message.id, threadId: thread.id, sequence: message.sequence } }
     return { thread: showThread(thread), message: show(message) }
+  }
+
+  // Thread tasks, as the API's wire contract says them: a thread carries task state, each change is an
+  // event about its root in its channel's feed, and nothing runs outside a request.
+  const THREAD_ID = /^thr_[0-9a-f-]{36}$/
+  const CLAIM_TOKEN = /^[a-zA-Z0-9_-]{43}$/
+  const KIND = /^[a-z0-9][a-z0-9_.-]{0,63}$/
+  const LEASE_MAX_S = 300
+  /** The dependents a completion readies in its own write: the rest come in writes after it, before it answers. */
+  const READIED_WITH = 15
+  /** How many more a completion goes over before it answers, and how many whoever goes on with one does, a request. */
+  const GONE_OVER = 50
+  /** The completions a claim-next that found nothing to take goes on with, oldest first. */
+  const MARKED_SEEN = 3
+  /** What a list or a claim-next repairs, a request at most: lapsed claims it writes as expired, and waiting tasks a list finds ready. */
+  const REPAIRS = 10
+  /** How many tasks a change of what a task needs walks, behind the ones it adds, to see that none waits for it. */
+  const NEEDS_WALKED = 500
+  /** The places a claim-next looks in at most: the channels it may claim in, times the owners it takes from. */
+  const PLACES = 200
+  /** How many times one claim-next looks at most: the look it starts with, the one before it waits, and up to three for each wake-up. */
+  const LOOKS = 12
+  /** How long after a look that a wake-up brought and that found nothing it looks again, and again: the event can come before the index has the task. */
+  const LOOKS_AGAIN_MS = [200, 800]
+  /** What it reads of each place, of ready tasks and of lapsed claims, and of all of them. */
+  const PLACE_READS = 25
+  const READY_IN_ALL = 200
+  const LAPSED_IN_ALL = 50
+  /** What one batch's transaction holds at most, by the count its body gives. */
+  const BATCH_ITEMS = 100
+  /** The feed shards a channel has: a batch's threads take a head on each they land on, eight at most. */
+  const FEED_SHARDS = 8
+  /** What each batch's operation answered, by its caller, with the body it was sent with. */
+  const batches = new Map<string, { sent: string; key: string | null; channelId: string; tasks: ReturnType<typeof taskOf>[] }>()
+  /** The batch each caller's own key made, by its caller's principal, kept for good: a digest of the request, and the threads it made. */
+  const keyed = new Map<string, { digest: string; channelId: string; threads: string[] }>()
+  /**
+   * What makes two batch requests the same: the channel as it was named, by ID or by name, and the tasks, as many, in
+   * the same order, each with the same fields. A field left out is its empty value, and the operation ID is no part of it.
+   */
+  const batchDigest = (body: Record<string, any>) =>
+    JSON.stringify([
+      body.channelId !== undefined ? { id: body.channelId } : { name: body.channel },
+      (body.tasks as Record<string, any>[]).map((task) => [task.key ?? null, task.text, Object.entries(task.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : 1)), task.noSync ?? false, task.attachments ?? [], task.needs ?? [], task.for ?? null]),
+    ])
+  /** A profile's name, as an actor ID ends with one. */
+  const PROFILE_PART = /^[a-z0-9][a-z0-9-]{0,31}$/
+  /** One of `owner`'s profiles, `<owner>+<profile>`: what a task is assigned to, never the bare owner. */
+  const profileOf = (owner: string, actor: unknown) => typeof actor === 'string' && actor.startsWith(`${owner}+`) && PROFILE_PART.test(actor.slice(owner.length + 1))
+  /**
+   * Whether `actor` is who a task is assigned to: its owner's principal, writing as that actor. The ID alone doesn't
+   * say whose it is, since another principal's own ID can end in `+<profile>` and read the same.
+   */
+  const assignedTo = (task: Task, actor: Actor) => task.for === actor.id && task.owner === principalId(actor.principal)
+  const hashOf = (token: string) => createHash('sha256').update(token).digest('hex')
+  const bad = (message: string) => new Refused(400, 'bad_request', message)
+  const finishedFor = (task: Task) => task.state === 'completed' || task.state === 'canceled'
+  /** What a change of a finished task is refused with: one code, and words that say a failed one can be reopened. */
+  const finishedTask = (task: Task) =>
+    new Refused(409, 'task_finished', task.state === 'failed' ? 'The task failed: reopen it to make it claimable again, or cancel it.' : 'The task is finished.')
+  /** Set by a test: the next completion ends after its own write, as a request cut off there does, readying no more than fit in it. */
+  let cut = false
+
+  /**
+   * What a caller may do in a channel: one narrowed with `x-board-can` at most what it gives, a viewer reading and
+   * reacting, a project or an app everything but `manage`, and anyone else on the team everything.
+   */
+  function mayIn(actor: Actor, permission: string, name: string): boolean {
+    try {
+      tokenMayIn(actor, permission, name)
+    } catch {
+      return false
+    }
+    if (actor.principal.type === 'user') return (shared.directory.roles[actor.principal.userId] ?? 'member') !== 'viewer' || permission === 'read' || permission === 'react'
+    return permission !== 'manage'
+  }
+  const may = (actor: Actor, permission: string, channelId: string) => mayIn(actor, permission, channels.find((channel) => channel.id === channelId)?.name ?? '')
+  const need = (actor: Actor, permission: string, channelId: string) => {
+    if (!may(actor, permission, channelId)) throw new Refused(403, 'forbidden', `You may not ${permission} there.`)
+  }
+  /** A thread the caller reads: one it can't is as missing as one that isn't there. */
+  function readableThread(actor: Actor, id: string): Thread {
+    const thread = threads.get(id)
+    if (!thread || !may(actor, 'read', thread.channelId)) throw new Refused(404, 'thread_not_found')
+    return thread
+  }
+  function taskThread(actor: Actor, id: string): Thread & { task: Task } {
+    const thread = readableThread(actor, id)
+    if (!thread.task) throw new Refused(404, 'not_a_task', 'That thread is not a task.')
+    return thread as Thread & { task: Task }
+  }
+  /**
+   * Whether `actor` is a task's owner, to change it or what it says: the principal that made it a task, as itself, or
+   * as the profile it made it as. Another of its profiles isn't: they share a credential, so a sandbox pinned to one
+   * would otherwise assign itself what another was given.
+   */
+  const ownedBy = (task: Task, actor: Actor) => task.owner === principalId(actor.principal) && (actor.id === task.owner || actor.id === task.by)
+  /** The task's owner while it may still write there, or anyone with `manage`: what assigns, holds, unblocks, reopens, and cancels. */
+  function ownerOrManage(actor: Actor, thread: Thread & { task: Task }) {
+    if (may(actor, 'manage', thread.channelId)) return
+    const writes = may(actor, 'post', thread.channelId) || may(actor, 'label', thread.channelId)
+    if (!writes) throw new Refused(403, 'forbidden')
+    if (!ownedBy(thread.task, actor)) throw new Refused(403, 'task_not_owned', 'Only its owner as itself, the profile that made it, or manage in its channel, changes a task.')
+  }
+  const note = (value: unknown, what: string, required: boolean): string | null => {
+    if (value === undefined && !required) return null
+    if (typeof value !== 'string' || value.trim().length === 0 || value.length > 1000) throw bad(`${what} is 1 to 1,000 characters, not blank.`)
+    return value
+  }
+  /** A lease as it's given: what was asked, 30 to 3,600 seconds, up to 300, and 300 when none was. */
+  const leaseMs = (asked: unknown) => {
+    if (asked !== undefined && !(typeof asked === 'number' && asked >= 30 && asked <= 3600)) throw bad('leaseSeconds is 30 to 3,600.')
+    return Math.min((asked as number | undefined) ?? LEASE_MAX_S, LEASE_MAX_S) * 1000
+  }
+  const tokenOf = (value: unknown) => {
+    if (typeof value !== 'string' || !CLAIM_TOKEN.test(value)) throw bad('claimToken is 32 random bytes in base64url.')
+    return value
+  }
+  const done = (task: Task) => task.needs.every((id) => threads.get(id)?.task?.state === 'completed')
+
+  /** One task change, as an event about the thread's root: its labels' change when its state did, and the task after it. */
+  function taskEvent(thread: Thread, type: string, actor: Actor, from: TaskState | undefined, operationId: unknown) {
+    const task = thread.task!
+    const root = thread.messages[0]!
+    root.changes++
+    emit(
+      thread.channelId,
+      {
+        type,
+        threadId: thread.id,
+        message: 1,
+        messageId: root.id,
+        // A request's own, or for what no request asked for (an expiry), one derived from what it's about.
+        operationId: typeof operationId === 'string' ? operationId : `derived-${thread.id}-${task.epoch}`,
+        ...(from !== task.state ? { labels: { 'board.task': { ...(from !== undefined ? { from } : {}), to: task.state } } } : {}),
+        task: showTask(task),
+      },
+      actor,
+    )
+  }
+
+  /** Writes a claim's expiry once its lease ran out, as the claimant's: whether there was one to write. */
+  function expire(thread: Thread): boolean {
+    const task = thread.task
+    if (task?.state !== 'claimed' || task.claim!.until > now()) return false
+    const by = task.claim!.by
+    Object.assign(task, { state: 'ready', claim: null })
+    taskEvent(thread, 'task.expired', by, 'claimed', undefined)
+    return true
+  }
+  /**
+   * Readies a waiting task whose prerequisites have all completed: a completion's dependents, or one a completion that
+   * was cut off left waiting. It's whoever completed the last of them to complete that readied it, or with none on
+   * record, the caller of the request that found it.
+   */
+  function ready(thread: Thread, actor: Actor, operationId: unknown): boolean {
+    const task = thread.task
+    if (task?.state !== 'waiting' || !done(task)) return false
+    const last = task.needs.map((id) => threads.get(id)!.task!.completed).filter((record) => record !== undefined).sort((a, b) => b.at - a.at)[0]
+    task.state = 'ready'
+    taskEvent(thread, 'task.ready', last?.by ?? actor, 'waiting', operationId)
+    return true
+  }
+
+  /**
+   * Goes on with a completion that hasn't readied everything that waited for it, for up to `budget` tasks, as whoever
+   * completed it: the mark comes off once none is left. It answers what's left of the budget.
+   */
+  function goOn(completed: Thread, budget: number, operationId: unknown): number {
+    const task = completed.task!
+    const left = [...threads.values()].filter((t) => t.task?.state === 'waiting' && t.task.needs.includes(completed.id) && done(t.task)).sort(oldestFirst)
+    for (const dependent of left.slice(0, budget)) ready(dependent, task.completed!.by, operationId)
+    if (left.length <= budget) delete task.marked
+    return Math.max(0, budget - left.length)
+  }
+
+  /** What makes a thread a task, checked before anything is written: `self` is the thread, when it's there already. */
+  /** The tasks a task waits for, checked before anything is written: tasks the caller reads, none canceled, and not `self`, the task itself. */
+  function checkedNeeds(actor: Actor, needs: unknown, self: string | null): string[] {
+    if (!Array.isArray(needs) || needs.length > 20 || needs.some((id) => typeof id !== 'string' || !THREAD_ID.test(id)) || new Set(needs).size !== needs.length) throw bad('needs is at most 20 thread IDs, with no repeats.')
+    for (const id of needs as string[]) {
+      const wanted = threads.get(id)
+      if (id === self || !wanted?.task || wanted.task.state === 'canceled' || !may(actor, 'read', wanted.channelId)) throw new Refused(400, 'invalid_needs', `${id} is not a task you can wait for.`)
+    }
+    return needs as string[]
+  }
+  /**
+   * Refuses prerequisites that would make task `self` wait for itself: one that waits for it already, through however
+   * many tasks. Only one the change adds can close a cycle, so it walks what those need, and what those need, and
+   * gives up past `NEEDS_WALKED` tasks: a change that only drops some walks nothing. A completed task's needs
+   * aren't followed: they have all completed, and this task hasn't. The task itself counts like any it reaches.
+   */
+  function acyclic(self: string, needs: readonly string[]) {
+    const from = new Map(needs.map((id) => [id, id]))
+    for (let level = [...needs]; level.length > 0; ) {
+      const next: string[] = []
+      for (const at of level) {
+        const task = threads.get(at)?.task
+        if (!task || task.state === 'completed') continue
+        for (const need of task.needs) {
+          if (need === self) throw new Refused(400, 'invalid_needs', `${from.get(at)} waits for this task already: they would wait for each other.`)
+          if (from.has(need)) continue
+          from.set(need, from.get(at)!)
+          next.push(need)
+        }
+      }
+      if (from.size > NEEDS_WALKED) throw new Refused(400, 'invalid_needs', `More than ${NEEDS_WALKED} tasks are behind those: too many to check that none waits for this task.`)
+      level = next
+    }
+  }
+
+  function checkedTask(actor: Actor, channel: string, spec: Record<string, any>, self: string | null) {
+    const owner = principalId(actor.principal)
+    const needs = checkedNeeds(actor, spec.needs ?? [], self)
+    const assigned: unknown = spec.for ?? null
+    if (assigned !== null && !profileOf(owner, assigned)) throw new Refused(400, 'invalid_for', "A task is assigned to one of its owner's profiles.")
+    const waits = needs.some((id) => threads.get(id)!.task!.state !== 'completed')
+    let claim: { hash: string; lease: number } | null = null
+    if (spec.claim !== undefined) {
+      if (typeof spec.claim !== 'object' || spec.claim === null) throw bad('claim is { claimToken, leaseSeconds? }.')
+      claim = { hash: hashOf(tokenOf(spec.claim.claimToken)), lease: leaseMs(spec.claim.leaseSeconds) }
+      if (!mayIn(actor, 'label', channel)) throw new Refused(403, 'forbidden', 'You may not label there.')
+      // A task that can't be claimed as it would start isn't made.
+      if (waits) throw new Refused(409, 'task_waiting', 'The task would wait for others.')
+      if (assigned !== null && assigned !== actor.id) throw new Refused(409, 'task_assigned', 'The task would be assigned to another actor.')
+    }
+    return { owner, needs, for: assigned as string | null, waits, claim }
+  }
+  function hold(thread: Thread, actor: Actor, claim: { hash: string; lease: number }, operationId: unknown) {
+    const task = thread.task!
+    const from = task.state
+    task.epoch++
+    task.state = 'claimed'
+    task.claim = { actor: actor.id, until: now() + claim.lease, hash: claim.hash, by: actor }
+    taskEvent(thread, 'task.claimed', actor, from, operationId)
+  }
+  /**
+   * Whether the claim a create asked for, with `spec.claim.claimToken`, is the one that holds the task now: what both
+   * create routes answer as `claimed`. A retry by client ID that sends another token doesn't, and neither does a create
+   * that asked for none.
+   */
+  const claimedBy = (thread: Thread, spec: Record<string, any> | undefined): boolean => {
+    const claim = thread.task?.claim
+    const token: unknown = spec?.claim?.claimToken
+    return thread.task?.state === 'claimed' && claim !== null && claim !== undefined && claim.until > now() && typeof token === 'string' && claim.hash === hashOf(token)
+  }
+  function makeTask(thread: Thread, actor: Actor, checked: ReturnType<typeof checkedTask>, operationId: unknown) {
+    // One that needs others waits as it's made, always: when they have all completed already, its `task.ready` follows
+    // in the same write, before its claim. One that needs none is ready as it's made, with no `task.ready`.
+    thread.task = { state: checked.needs.length > 0 ? 'waiting' : 'ready', owner: checked.owner, by: actor.id, for: checked.for, needs: checked.needs, epoch: 0, claim: null, blocked: null, result: null, reason: null }
+    taskEvent(thread, 'task.made', actor, undefined, operationId)
+    ready(thread, actor, operationId)
+    if (checked.claim) hold(thread, actor, checked.claim, operationId)
+  }
+
+  /**
+   * The items a batch's transaction would hold, from its body alone: the board check and the receipt, one for the
+   * caller's key when it has one, a feed head for each task up to the channel's shards, six for each task, and one for
+   * each label (and one more for a task with any), each attachment, each need, each different task that was there, and
+   * each task whose needs are all such.
+   */
+  function batchItems(tasks: { labels?: Record<string, string>; attachments?: string[]; needs?: (string | { key: string })[] }[], keyed: boolean): number {
+    const there = new Set(tasks.flatMap((task) => (task.needs ?? []).filter((need) => typeof need === 'string')))
+    let items = 2 + (keyed ? 1 : 0) + Math.min(tasks.length, FEED_SHARDS) + there.size
+    for (const task of tasks) {
+      const labels = Object.keys(task.labels ?? {}).length
+      const needs = task.needs ?? []
+      items += 6 + labels + (labels > 0 ? 1 : 0) + (task.attachments?.length ?? 0) + needs.length + (needs.length > 0 && needs.every((need) => typeof need === 'string') ? 1 : 0)
+    }
+    return items
+  }
+
+  /**
+   * Several threads in one channel, each started as a task, in one transaction: every refusal comes before any task is
+   * written, in the order the API checks. Each task is made a millisecond after the one before it, so they list and are
+   * claimed in the body's order.
+   */
+  function makeBatch(actor: Actor, body: Record<string, any>): { made: Thread[] } | { repeat: { channelId: string; threads: string[] } } {
+    type Asked = { key?: string; text: string; labels?: Record<string, string>; noSync?: boolean; attachments?: string[]; needs?: (string | { key: string })[]; for?: string | null }
+    const aKey = (value: unknown): value is string => typeof value === 'string' && value.length >= 1 && value.length <= 64
+    // The body's shape.
+    if (!Array.isArray(body.tasks) || body.tasks.length < 1 || body.tasks.length > 100) throw bad('tasks is 1 to 100 tasks.')
+    if ((body.channelId === undefined) === (body.channel === undefined)) throw bad('Name the channel by channelId or by channel.')
+    if (body.idempotencyKey !== undefined && (typeof body.idempotencyKey !== 'string' || body.idempotencyKey.length < 1 || body.idempotencyKey.length > 512)) throw bad('idempotencyKey is 1 to 512 characters.')
+    for (const task of body.tasks as Record<string, any>[]) {
+      if (typeof task !== 'object' || task === null) throw bad('A task is an object.')
+      if (task.key !== undefined && !aKey(task.key)) throw bad('key is 1 to 64 characters.')
+      if (task.claim !== undefined || task.clientId !== undefined) throw bad('A batch takes no claim and no clientId.')
+      const needs: unknown[] = task.needs ?? []
+      const named = Array.isArray(needs) ? needs.map((need) => (typeof need === 'string' && THREAD_ID.test(need) ? `task ${need}` : typeof need === 'object' && need !== null && aKey((need as { key?: unknown }).key) ? `key ${(need as { key: string }).key}` : null)) : [null]
+      if (named.length > 20 || named.includes(null) || new Set(named).size !== named.length) throw bad('needs is at most 20 task IDs or keys, each named once.')
+      const files: unknown[] = task.attachments ?? []
+      if (!Array.isArray(files) || files.length > 10 || new Set(files).size !== files.length) throw bad('A message carries up to 10 different attachments.')
+    }
+    const tasks = body.tasks as Asked[]
+    // What the caller may: post there, and label when a task has labels.
+    const name = body.channel !== undefined ? String(body.channel) : channelAt(body.channelId).name
+    const known = channels.find((channel) => channel.name === name)
+    if (!mayIn(actor, 'post', name)) throw new Refused(403, 'forbidden', `This caller may not post in ${name}.`)
+    if (tasks.some((task) => Object.keys(task.labels ?? {}).length > 0) && !mayIn(actor, 'label', name)) throw new Refused(403, 'forbidden', `This caller may not label in ${name}.`)
+    // Each task's own fields, in the body's order, then a file two of them carry.
+    const owner = principalId(actor.principal)
+    for (const task of tasks) {
+      if (typeof task.text !== 'string' || (!task.text.trim() && !(task.attachments?.length && task.text === '')) || task.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
+      const labels = task.labels ?? {}
+      if (typeof labels !== 'object' || Object.values(labels).some((value) => typeof value !== 'string')) throw new Refused(400, 'invalid_label')
+      if (Object.keys(labels).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+      if (Object.keys(labels).length > 16) throw new Refused(400, 'too_many_labels')
+      if ((task.for ?? null) !== null && !profileOf(owner, task.for)) throw new Refused(400, 'invalid_for', "A task is assigned to one of its owner's profiles.")
+    }
+    const carried = tasks.flatMap((task) => task.attachments ?? [])
+    if (new Set(carried).size !== carried.length) throw new Refused(400, 'invalid_attachments', 'Two tasks carry the same attachment.')
+    // How the batch's tasks wait for each other.
+    const places = new Map<string, number>()
+    for (const [at, task] of tasks.entries()) {
+      if (task.key === undefined) continue
+      if (places.has(task.key)) throw new Refused(400, 'invalid_needs', `Two tasks have the key ${task.key}.`)
+      places.set(task.key, at)
+    }
+    const inside = tasks.map((task, at) =>
+      (task.needs ?? []).flatMap((need) => {
+        if (typeof need === 'string') return []
+        const found = places.get(need.key)
+        if (found === undefined) throw new Refused(400, 'invalid_needs', `No task has the key ${need.key}.`)
+        if (found === at) throw new Refused(400, 'invalid_needs', `The task with the key ${need.key} needs itself.`)
+        return [found]
+      }),
+    )
+    const settled = new Set<number>()
+    for (let left = tasks.length; left > 0; ) {
+      const next = tasks.flatMap((_, at) => (!settled.has(at) && inside[at]!.every((other) => settled.has(other)) ? [at] : []))
+      if (next.length === 0) throw new Refused(400, 'invalid_needs', 'Tasks of the batch wait for each other.')
+      for (const at of next) settled.add(at)
+      left -= next.length
+    }
+    // What fits one transaction, by the body's count, and one kept answer.
+    const items = batchItems(tasks, body.idempotencyKey !== undefined)
+    if (items > BATCH_ITEMS) throw new Refused(400, 'batch_too_large', `This batch takes ${items} items, and a transaction holds ${BATCH_ITEMS}: send it in parts.`, undefined, undefined, { items, limit: BATCH_ITEMS })
+    // The caller's own key, its principal's on this board, before anything about the batch is read: the same request
+    // under it stops here with what the first made, checked against nothing as it is by now, and another is refused.
+    const named = body.idempotencyKey !== undefined ? `${owner}|${body.idempotencyKey}` : null
+    const digest = batchDigest(body)
+    const landed = named !== null ? keyed.get(named) : undefined
+    if (landed && landed.digest !== digest) throw new Refused(409, 'idempotency_key_reused', 'That key made another batch: another channel, or other tasks.')
+    if (landed) return { repeat: landed }
+    // What takes a read, in the API's order. A caller narrowed to channels is first told of a task it can't read there.
+    const wanted = tasks.map((task) => (task.needs ?? []).filter((need) => typeof need === 'string'))
+    if (actor.can) for (const id of wanted.flat()) if (threads.has(id) && !mayRead(actor, threads.get(id)!.channelId)) throw new Refused(400, 'invalid_needs', `${id} is not a task you can wait for.`)
+    for (const task of tasks)
+      for (const found of task.text.includes('json#') ? findBlocks(task.text) : []) {
+        const schema = found.problem === undefined ? shared.schemaOf(found.id) : undefined
+        const problem = schema ? checkValue(schema, found.data) : null
+        if (problem !== null) throw new Refused(400, 'invalid_block', `The ${found.id} block doesn't match its schema: ${problem}`)
+      }
+    const there = wanted.map((needs) => checkedNeeds(actor, needs, null))
+    // A batch by a channel's name makes the channel once all but its files have passed, as one task by name does: only a
+    // batch refused for a file leaves a channel behind.
+    const channel = known ?? makeChannel(name)
+    for (const id of carried) {
+      const attachment = attachments.get(id)
+      if (!attachment || !samePrincipal(attachment.createdBy.principal, actor.principal)) throw new Refused(404, 'attachment_not_found')
+      if (attachment.state !== 'ready') throw new Refused(409, 'attachment_not_ready')
+      if (attachment.messageId) throw new Refused(409, 'attachment_already_posted')
+    }
+    // The write: each task, a millisecond after the one before.
+    const first = now()
+    const made = tasks.map((_, at): Thread => ({ id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: first + at, createdAt: first + at, createdBy: actor, messages: [] }))
+    for (const [at, task] of tasks.entries()) {
+      const thread = made[at]!
+      threads.set(thread.id, thread)
+      const message = post(actor, thread, { text: task.text, ...(task.labels ? { labels: task.labels } : {}), ...(task.attachments?.length ? { attachments: task.attachments } : {}), ...(task.noSync ? { noSync: true } : {}) })
+      message.createdAt = thread.lastActivityAt = first + at
+      thread.lastMessage = { ...thread.lastMessage!, createdAt: first + at }
+      makeTask(thread, actor, { owner, needs: [...there[at]!, ...inside[at]!.map((other) => made[other]!.id)], for: task.for ?? null, waits: false, claim: null }, body.operationId)
+    }
+    if (named !== null) keyed.set(named, { digest, channelId: channel.id, threads: made.map((thread) => thread.id) })
+    return { made }
+  }
+
+  /** Refuses a write whose claim doesn't hold the task now, saying why. */
+  function fenced(thread: Thread & { task: Task }, actor: Actor, body: Record<string, any>) {
+    const token = tokenOf(body.claimToken)
+    if (!Number.isInteger(body.epoch) || body.epoch < 1) throw bad('epoch is the claim\'s.')
+    need(actor, 'label', thread.channelId)
+    const { task } = thread
+    // The fence is the task's state, its epoch, the claim's token, and its lease, never who asks: whatever else the
+    // task is, a finished one included, a claim that doesn't hold it is lost.
+    const lost = (reason: string) => new Refused(409, 'claim_lost', 'That claim is not the task\'s.', reason)
+    if (task.state !== 'claimed') throw lost('not_claimed')
+    if (task.epoch !== body.epoch) throw lost('epoch_changed')
+    if (task.claim!.until <= now()) throw lost('lease_expired')
+    if (task.claim!.hash !== hashOf(token)) throw lost('token_mismatch')
+  }
+
+  /** The root ties: deleting a task's root cancels it, and an edit by anyone but its owner holds it. */
+  function rootDeleted(thread: Thread, actor: Actor) {
+    const task = thread.task
+    if (!task || finishedFor(task)) return
+    expire(thread)
+    const from = task.state
+    Object.assign(task, { state: 'canceled', claim: null, blocked: null, reason: 'deleted' })
+    taskEvent(thread, 'task.canceled', actor, from, undefined)
+  }
+  function rootEdited(thread: Thread, actor: Actor) {
+    const task = thread.task
+    // Its owner is the principal that made it a task, as itself or as the profile it made it as: another of its
+    // profiles isn't. Nor is a platform user a sync imported, though they write as a profile of the project whose sync
+    // speaks for them: the edit is theirs, made elsewhere.
+    const platformUser = actor.principal.type === 'external' || actor.profile?.platform !== undefined
+    const owner = task !== undefined && ownedBy(task, actor) && !platformUser
+    if (!task || owner || !['waiting', 'ready', 'claimed'].includes(task.state)) return
+    expire(thread)
+    const from = task.state
+    Object.assign(task, { state: 'blocked', claim: null, blocked: { kind: 'edited', reason: 'Its root was edited by someone who does not own the task.' } })
+    taskEvent(thread, 'task.blocked', actor, from, undefined)
+  }
+
+  /** The channels a claim-next or a list names: one by its name, or `prefix/` for it and every one under it. */
+  const channelsNamed = (name: string) => (name.endsWith('/') ? channels.filter((c) => c.name === name.slice(0, -1) || c.name.startsWith(name)) : channels.filter((c) => c.name === name))
+  const oldestFirst = (a: Thread, b: Thread) => a.createdAt - b.createdAt
+
+  /** The oldest ready task there the caller takes: one assigned to its actor first, then an unassigned one it owns or `from` names. */
+  function claimNext(actor: Actor, body: Record<string, any>, claim: { hash: string; lease: number }, share: { expiries: number; goneOver: number; looks: number; first: boolean }): Thread | null {
+    const named = channelsNamed(String(body.channel))
+    // Channels where the caller lacks `label` are skipped: with it in none, there's nothing it claims. The limit counts those it may claim in.
+    const labeled = named.filter((channel) => may(actor, 'label', channel.id))
+    if (named.length > 0 && labeled.length === 0) throw new Refused(403, 'forbidden', 'You may not label there.')
+    if (labeled.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a prefix with at most 50 channels you may claim in under it.')
+    // It looks only at what the caller may take: in each channel, one place for each owner it takes unassigned tasks
+    // from, its own principal and each other one `from` names, and with a profile, one for what's assigned to its actor.
+    const self = principalId(actor.principal)
+    const owners = [self, ...new Set(((body.from ?? []) as string[]).filter((owner) => owner !== self))]
+    if (labeled.length * (owners.length + (actor.profile ? 1 : 0)) > PLACES) throw new Refused(400, 'claim_too_wide', `Name fewer owners or a smaller tree: this would look in more than ${PLACES} places.`)
+    const wanted = Object.entries((body.labels ?? {}) as Record<string, string>)
+    const places = labeled.flatMap((channel) => {
+      const tasks = [...threads.values()].filter((t) => t.channelId === channel.id && t.task)
+      return [...owners.map((owner) => tasks.filter((t) => t.task!.for === null && t.task!.owner === owner)), ...(actor.profile ? [tasks.filter((t) => assignedTo(t.task!, actor))] : [])]
+    })
+    const lapsed = (t: Thread) => t.task!.state === 'claimed' && t.task!.claim!.until <= now()
+    const longestLapsed = (a: Thread, b: Thread) => a.task!.claim!.until - b.task!.claim!.until
+    /** What's assigned to the caller's actor first, then in `order`. */
+    const assignedFirst = (order: (a: Thread, b: Thread) => number) => (a: Thread, b: Thread) => Number(assignedTo(b.task!, actor)) - Number(assignedTo(a.task!, actor)) || order(a, b)
+    const look = () => {
+      share.looks++
+      // From each place, its oldest ready tasks and its claims whose lease ran out longest ago, a few of each, and of
+      // all those a bounded number, the assigned ones first. Each is the caller's to take, so only `labels` narrow them.
+      const ready = places.flatMap((tasks) => tasks.filter((t) => t.task!.state === 'ready').sort(oldestFirst).slice(0, PLACE_READS)).sort(assignedFirst(oldestFirst)).slice(0, READY_IN_ALL)
+      const over = places.flatMap((tasks) => tasks.filter(lapsed).sort(longestLapsed).slice(0, PLACE_READS)).sort(assignedFirst(longestLapsed)).slice(0, LAPSED_IN_ALL)
+      const mine = [...ready, ...over].filter((t) => wanted.every(([key, value]) => rootLabels(t)[key] === value)).sort(assignedFirst(oldestFirst))
+      return { found: mine[0] ?? null, over }
+    }
+    let { found, over } = look()
+    const first = share.first
+    share.first = false
+    if (!found && first) {
+      // Nothing to take: once a request, it goes on with the completions on the board that haven't readied everything
+      // that waited for them, the oldest few, wherever they and what waited are, and looks again when that readied
+      // any. It looks through no waiting task itself.
+      const before = share.goneOver
+      const marked = [...threads.values()].filter((t) => t.task?.marked).sort((a, b) => a.task!.completed!.at - b.task!.completed!.at).slice(0, MARKED_SEEN)
+      for (const completed of marked) share.goneOver = goOn(completed, share.goneOver, undefined)
+      if (share.goneOver < before) ({ found, over } = look())
+    }
+    // The lapsed claims it found are ended, a few a request, beside the one it takes over, whose expiry goes with its
+    // claim. One on a task that isn't the caller's to take it never read, so it leaves it.
+    for (const thread of over) if (thread !== found && share.expiries > 0 && expire(thread)) share.expiries--
+    if (found) {
+      expire(found)
+      hold(found, actor, claim, body.operationId)
+    }
+    return found
+  }
+
+  /**
+   * What each claim-next claimed, by its caller and operation, with the hash of the token it claimed with. One that
+   * claimed nothing wrote nothing, so the same operation looks again.
+   */
+  const claimed = new Map<string, { thread: Thread; hash: string }>()
+
+  /** A task's state as every task route answers it: a claim whose lease ran out is over, whether or not its expiry is written. */
+  const live = (task: Task): TaskState => (task.state === 'claimed' && task.claim!.until <= now() ? 'ready' : task.state)
+  /**
+   * A task as the task routes answer it: the thread's ID, its state at the top, and its first message as the message
+   * routes answer it, without its `task`. A claim whose lease ran out reads as over here.
+   */
+  function taskOf(thread: Thread) {
+    const task = thread.task!
+    const state = live(task)
+    const { task: _facet, ...message } = show(thread.messages[0]!)
+    return {
+      id: thread.id,
+      channelId: thread.channelId,
+      ...showTask(task),
+      state,
+      claim: state === task.state ? showTask(task).claim : null,
+      message: { ...message, labels: { ...message.labels, 'board.task': state } },
+      messageCount: thread.messageCount,
+      lastActivityAt: thread.lastActivityAt,
+      ...(thread.lastMessage ? { lastMessage: thread.lastMessage } : {}),
+    }
+  }
+
+  /**
+   * The task routes, version 2 of them: `/tasks…`, each answering `{ task }`. Undefined for a route that isn't one.
+   * `signal` aborts when the request's response closes.
+   */
+  function taskRoute(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor, signal?: AbortSignal): unknown {
+    const answer = (thread: Thread) => ({ task: taskOf(thread) })
+    if (method === 'GET' && rest === '/tasks') return listTasks(url, actor)
+    if (method === 'POST' && rest === '/tasks/claim') {
+      const key = `${principalId(actor.principal)}|${body.operationId}`
+      const claim = { hash: hashOf(tokenOf(body.claimToken)), lease: leaseMs(body.leaseSeconds) }
+      if (typeof body.channel !== 'string' || !/^[a-z0-9_-]+(\/[a-z0-9_-]+)*\/?$/.test(body.channel)) throw bad('channel is a channel, or a prefix and a slash.')
+      if (body.from !== undefined && !(Array.isArray(body.from) && body.from.length <= 32 && body.from.every((id: unknown) => typeof id === 'string'))) throw bad('from is at most 32 owner IDs.')
+      if (body.wait !== undefined && !(typeof body.wait === 'number' && body.wait >= 0 && body.wait <= 25)) throw bad('wait is 0 to 25 seconds.')
+      const until = Date.now() + (body.wait ?? 0) * 1000
+      // What one request spends on what it finds undone, and how often it has looked.
+      const share = { expiries: REPAIRS, goneOver: GONE_OVER, looks: 0, first: true }
+      const nothing = { task: null }
+      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      /** How many changes that could make a task claimable the channels it names have seen. */
+      const woken = () => channelsNamed(body.channel).reduce((sum, channel) => sum + (wakes.get(channel.id) ?? 0), 0)
+      /** One look, and the claim it took: its answer, or undefined for nothing to take. */
+      const look = () => {
+        // Once the operation claimed, a retry with its token answers that claim, as it was made, and any other token is
+        // refused. It answers it only while the caller may still claim in the task's channel, one the request names:
+        // otherwise nothing, as for a channel it can't claim in.
+        const prior = claimed.get(key)
+        if (prior && prior.hash !== claim.hash) throw new Refused(409, 'operation_conflict', 'That operation claimed with another token.')
+        if (prior) return may(actor, 'label', prior.thread.channelId) && channelsNamed(body.channel).some((channel) => channel.id === prior.thread.channelId) ? answer(prior.thread) : nothing
+        // A client that went away is claimed nothing new for: it looks at that before each look.
+        if (signal?.aborted) return nothing
+        const found = claimNext(actor, body, claim, share)
+        if (!found) return undefined
+        claimed.set(key, { thread: found, hash: claim.hash })
+        shared.receipt(actor, body.operationId)
+        return answer(found)
+      }
+      return (async () => {
+        // The look it starts with.
+        const started = look()
+        if (started || !(body.wait > 0)) return started ?? nothing
+        for (let woke = false; ; woke = true) {
+          // What it's woken by is watched before it looks again, so a task that turns ready in between wakes it.
+          const seen = woken()
+          // The look before it waits, or the one a wake-up brings. That one is followed by two more, a little apart,
+          // when it finds nothing: the event can come before the index has the task.
+          let answered = look()
+          for (const after of woke ? LOOKS_AGAIN_MS : []) {
+            const left = until - Date.now()
+            if (answered || left <= 0 || share.looks >= LOOKS) break
+            await pause(Math.min(after, left))
+            answered = look()
+          }
+          if (answered) return answered
+          // Out of time, or out of looks: with those spent it answers nothing, though its wait isn't up.
+          if (Date.now() >= until || share.looks >= LOOKS) return nothing
+          // It waits for a change in a channel it names that can make a task claimable, or for its wait to run out.
+          while (woken() === seen && Date.now() < until && !signal?.aborted) await pause(10)
+          if (signal?.aborted) return nothing
+          // A wait that ran out looks once more: a lease that ran out, or a grant, makes a task claimable with no event.
+          if (woken() === seen) return look() ?? nothing
+        }
+      })()
+    }
+    if (method === 'POST' && rest === '/tasks') {
+      // With a claim asked for, whether its token holds the task as this answers: a retry is told anew.
+      const told = <T extends { task: { id: string } }>(made: T) => (body.claim !== undefined ? { ...made, claimed: claimedBy(threadAt(made.task.id), body) } : made)
+      // A thread that's there, made a task as it is.
+      if (body.threadId !== undefined) {
+        return told(
+          once(actor, body.operationId, () => {
+            const thread = readableThread(actor, String(body.threadId))
+            need(actor, 'label', thread.channelId)
+            if (thread.task) throw new Refused(409, 'already_a_task', 'That thread is a task already.')
+            if (thread.messages[0]!.deletedAt !== undefined) throw new Refused(409, 'message_deleted', "That thread's first message was deleted.")
+            makeTask(thread, actor, checkedTask(actor, channelAt(thread.channelId).name, body, thread.id), body.operationId)
+            return answer(thread)
+          }),
+        )
+      }
+      // A post that landed under this client ID is answered as the task it is now, and claims nothing: one that's no task isn't one.
+      const again = repeat(actor, body.clientId)
+      if (again) {
+        const thread = threadAt(again.thread.id)
+        // A thread that isn't a task, or a reply, in a task's thread or not: for a caller that can't read it too.
+        if (!thread.task || again.message.sequence !== 1) throw new Refused(404, 'not_a_task', 'That client ID names a post that is no task.')
+        // To a caller that can't read its channel, its ID and nothing else: it can't have asked for a claim, since `label` brings `read`.
+        return mayRead(actor, thread.channelId) ? told(answer(thread)) : { task: { id: thread.id } }
+      }
+      let made = false
+      const first = once(actor, body.operationId, () => {
+        // What it can't be is refused before its channel or its first message is made.
+        const { thread } = startThread(actor, body, (channel) => checkedTask(actor, channel, body, null), (started, checked) => makeTask(started, actor, checked, body.operationId))
+        made = true
+        return answer(thread)
+      })
+      // Only the request that made the task answers it whole to a caller that can't read its channel: a retry of the
+      // operation answers its ID alone, as a replay by client ID does.
+      if (!made && !mayRead(actor, first.task.channelId)) return { task: { id: first.task.id } }
+      return told(first)
+    }
+    if (method === 'POST' && rest === '/tasks/batch') {
+      const key = `${principalId(actor.principal)}|${body.operationId}`
+      // What the request asks for, whichever attempt sends it: its body but the operation ID.
+      const { operationId: _attempt, ...asked } = body
+      const sent = JSON.stringify(asked)
+      // The operation again answers the tasks as the first call answered them, and another body under it is refused: the
+      // caller's key is part of what an operation stands for, so another key, or none where it had one, is another body.
+      // The same key under it is answered by the key.
+      const first = batches.get(key)
+      const named = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : null
+      if (first && (first.key !== named || (named === null && first.sent !== sent))) throw new Refused(409, 'operation_conflict', 'That operation made other tasks.')
+      // To a caller that can't read the channel, only the call that made them answers them whole.
+      if (first && named === null) return { tasks: mayRead(actor, first.channelId) ? first.tasks : first.tasks.map(({ id }) => ({ id })) }
+      const batch = makeBatch(actor, body)
+      // The key again, with the same request: the tasks it made, as they are now, and their IDs alone to a caller that can't read them.
+      if ('repeat' in batch) return { tasks: batch.repeat.threads.map((id) => (mayRead(actor, batch.repeat.channelId) ? taskOf(threadAt(id)) : { id })) }
+      const answered = { sent, key: named, channelId: batch.made[0]!.channelId, tasks: batch.made.map(taskOf) }
+      batches.set(key, answered)
+      shared.receipt(actor, body.operationId)
+      return { tasks: answered.tasks }
+    }
+    const worked = /^\/tasks\/([^/]+)\/(claim|renew|release|complete|fail|block|unblock|reopen|assign|needs|cancel)$/.exec(rest)
+    if (method !== 'POST' || !worked) return undefined
+    const verb = worked[2]!
+    let wrote = false
+    const answered = once(actor, body.operationId, () => {
+      wrote = true
+      // A change of needs is refused for its body's shape before anything about the task: up to 100 thread IDs, repeats among them.
+      if (verb === 'needs' && (!Array.isArray(body.needs) || body.needs.length > 100 || body.needs.some((id: unknown) => typeof id !== 'string' || !THREAD_ID.test(id)))) throw bad('needs is up to 100 thread IDs.')
+      const thread = taskThread(actor, decodeURIComponent(worked[1]!))
+      const { task } = thread
+      let from = task.state
+      const op = body.operationId
+      /** A claim whose lease ran out is over for whoever changes the task next: its expiry is written first, in the same write. */
+      const lapse = () => {
+        if (expire(thread)) from = task.state
+      }
+      if (verb === 'claim') {
+        const claim = { hash: hashOf(tokenOf(body.claimToken)), lease: leaseMs(body.leaseSeconds) }
+        need(actor, 'label', thread.channelId)
+        const lapsed = task.state === 'claimed' && task.claim!.until <= now()
+        if (task.state === 'waiting' && !done(task)) throw new Refused(409, 'task_waiting', 'The task waits for others.')
+        if (task.state === 'blocked') throw new Refused(409, 'task_blocked', 'The task is held for a person.')
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
+        if (task.for !== null && !assignedTo(task, actor)) throw new Refused(409, 'task_assigned', 'The task is assigned to another actor.')
+        if (task.state === 'claimed' && !lapsed) throw new Refused(409, 'task_claimed', 'Someone holds the task.', undefined, task.claim!.until)
+        // What it found to repair goes in the same write as the claim: a lapsed lease's expiry, or a readying that was cut off.
+        expire(thread)
+        ready(thread, actor, op)
+        hold(thread, actor, claim, op)
+      } else if (verb === 'renew') {
+        const lease = leaseMs(body.leaseSeconds)
+        fenced(thread, actor, body)
+        task.claim!.until = now() + lease
+        taskEvent(thread, 'task.renewed', actor, from, op)
+      } else if (verb === 'release') {
+        fenced(thread, actor, body)
+        Object.assign(task, { state: 'ready', claim: null })
+        taskEvent(thread, 'task.released', actor, from, op)
+      } else if (verb === 'complete') {
+        const result = note(body.result, 'result', false)
+        fenced(thread, actor, body)
+        Object.assign(task, { state: 'completed', claim: null, result, completed: { by: actor, at: now() } })
+        taskEvent(thread, 'task.completed', actor, from, op)
+        // The tasks that waited only for it: 15 in its own write, up to 50 more before it answers, and any left to
+        // whoever sees it marked. It answers 200 whether or not it got to every one.
+        task.marked = true
+        goOn(thread, cut ? READIED_WITH : READIED_WITH + GONE_OVER, op)
+        cut = false
+      } else if (verb === 'fail') {
+        const reason = note(body.reason, 'reason', true)
+        fenced(thread, actor, body)
+        Object.assign(task, { state: 'failed', claim: null, reason })
+        taskEvent(thread, 'task.failed', actor, from, op)
+      } else if (verb === 'block') {
+        const reason = note(body.reason, 'reason', true)
+        if (body.kind !== undefined && (typeof body.kind !== 'string' || !KIND.test(body.kind))) throw bad('kind is up to 64 lowercase letters, numbers, and _.-')
+        if (body.kind === 'edited') throw new Refused(400, 'invalid_request', 'edited is the kind of a hold the API places itself.')
+        if ((body.claimToken === undefined) !== (body.epoch === undefined)) throw new Refused(400, 'invalid_request', 'A claim is its claimToken and its epoch: send both, or neither.')
+        if (body.claimToken !== undefined) fenced(thread, actor, body)
+        else {
+          ownerOrManage(actor, thread)
+          lapse()
+          if (task.state === 'claimed') throw new Refused(409, 'task_claimed', 'Someone holds the task: only its claim holds it for a person.')
+          if (task.state === 'blocked') throw new Refused(409, 'task_blocked', 'The task is held already.')
+          if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
+        }
+        Object.assign(task, { state: 'blocked', claim: null, blocked: { kind: body.kind ?? null, reason } })
+        taskEvent(thread, 'task.blocked', actor, from, op)
+      } else if (verb === 'unblock') {
+        ownerOrManage(actor, thread)
+        // A finished task has no hold to lift, a failed one included.
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
+        lapse()
+        if (task.state === 'blocked') {
+          // One that needs others waits again, always: when they have all completed, its `task.ready` follows in the same
+          // write. One that needs none is ready in the unblock itself.
+          Object.assign(task, { state: task.needs.length > 0 ? 'waiting' : 'ready', blocked: null })
+          taskEvent(thread, 'task.unblocked', actor, from, op)
+          ready(thread, actor, op)
+        }
+      } else if (verb === 'reopen') {
+        ownerOrManage(actor, thread)
+        // A completed or canceled task stays finished; an open one is answered as it is.
+        if (finishedFor(task)) throw finishedTask(task)
+        lapse()
+        if (task.state === 'failed') {
+          Object.assign(task, { state: 'ready', reason: null })
+          taskEvent(thread, 'task.reopened', actor, from, op)
+        }
+      } else if (verb === 'assign') {
+        ownerOrManage(actor, thread)
+        const assigned: unknown = body.for
+        if (!(assigned === null || profileOf(task.owner, assigned))) throw new Refused(400, 'invalid_for', "A task is assigned to one of its owner's profiles.")
+        const to = assigned as string | null
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
+        lapse()
+        if (task.for !== to) {
+          task.for = to
+          taskEvent(thread, 'task.assigned', actor, from, op)
+        }
+      } else if (verb === 'needs') {
+        ownerOrManage(actor, thread)
+        if (finishedFor(task) || task.state === 'failed') throw finishedTask(task)
+        if (task.state === 'claimed' && task.claim!.until > now()) throw new Refused(409, 'task_claimed', 'Someone holds the task: what it needs changes once no one does.', undefined, task.claim!.until)
+        // The set as given, however often each task is named: 20 different tasks at most, each one the caller can wait for.
+        const named = body.needs as string[]
+        const set = [...new Set(named)]
+        if (set.length > 20) throw new Refused(400, 'invalid_needs', 'A task waits for 20 tasks at most.')
+        const needs = checkedNeeds(actor, set, thread.id)
+        // The same set changes nothing: not even a lapsed claim's expiry is written for it.
+        if (needs.length !== task.needs.length || needs.some((id) => !task.needs.includes(id))) {
+          // Another set names each task once.
+          if (set.length !== named.length) throw new Refused(400, 'invalid_needs', 'A task is named once among what another waits for.')
+          acyclic(thread.id, needs.filter((id) => !task.needs.includes(id)))
+          lapse()
+          // It waits for them from this write, and its `task.ready` follows in it when they have all completed: with
+          // none it's ready, and one held for a person stays held.
+          task.needs = needs
+          if (task.state !== 'blocked') task.state = needs.length > 0 ? 'waiting' : 'ready'
+          taskEvent(thread, 'task.needs_changed', actor, from, op)
+          ready(thread, actor, op)
+        }
+      } else {
+        const reason = note(body.reason, 'reason', true)
+        ownerOrManage(actor, thread)
+        if (finishedFor(task)) throw finishedTask(task)
+        lapse()
+        Object.assign(task, { state: 'canceled', claim: null, blocked: null, reason })
+        taskEvent(thread, 'task.canceled', actor, from, op)
+      }
+      return answer(thread)
+    })
+    // A retry of a completion answers what the first call did, and goes on with what it left unreadied.
+    const again = wrote || verb !== 'complete' ? undefined : threads.get(decodeURIComponent(worked[1]!))
+    if (again?.task?.marked) goOn(again, GONE_OVER, body.operationId)
+    return answered
+  }
+
+  /**
+   * `GET /tasks`: tasks oldest first. A page is the next 25 tasks in the states and the channel (or board) it reads,
+   * and every other filter applies after that, so a page can come back short.
+   */
+  function listTasks(url: URL, actor: Actor) {
+    const query = (name: string) => url.searchParams.get(name)
+    const wanted = query('state') ?? 'open'
+    const states: TaskState[] | null = wanted === 'all' ? null : wanted === 'open' ? ['waiting', 'ready', 'claimed', 'blocked'] : ['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled'].includes(wanted) ? [wanted as TaskState] : []
+    if (states?.length === 0) throw bad('state is open, all, or a state.')
+    if (query('channelId') !== null && query('channel') !== null) throw new Refused(400, 'invalid_request', 'Name a channel by its ID or its name, not both.')
+    const named = query('channel')
+    // Whoever reads the whole board lists it as it is. Anyone else lists only the channels it reads, so no page is
+    // shorter and no cursor placed for what it can't read.
+    const reads = (channel: { id: string }) => may(actor, 'read', channel.id)
+    const readsAll = channels.every(reads)
+    /** The channels the list reads: null for the whole board. */
+    let within: Set<string> | null = null
+    /** A tree a page is narrowed to after it's read, for a caller that reads the whole board. */
+    let tree: Set<string> | null = null
+    if (query('channelId') !== null) {
+      const channel = channels.find((c) => c.id === query('channelId'))
+      if (!channel || !reads(channel)) throw new Refused(404, 'channel_not_found')
+      within = new Set([channel.id])
+    } else if (named !== null && !named.endsWith('/')) {
+      const channel = channels.find((c) => c.name === named)
+      // A name no channel has lists nothing, and neither does one the caller can't read.
+      if (!channel || !reads(channel)) return { tasks: [], cursor: null }
+      within = new Set([channel.id])
+    } else if (readsAll) {
+      tree = named !== null ? new Set(channelsNamed(named).map((channel) => channel.id)) : null
+    } else {
+      const read = (named !== null ? channelsNamed(named) : channels).filter(reads)
+      if (read.length > 50) throw new Refused(400, 'channel_tree_too_large', 'Name a channel, or a smaller tree: this list would read more than 50 channels.')
+      within = new Set(read.map((channel) => channel.id))
+    }
+    // What's ready is stored ready, or claimed with a lease that ran out: both are read, and the live claim decides after.
+    const stored = states?.includes('ready') && !states.includes('claimed') ? [...states, 'claimed'] : states
+    // The tasks that wait for one are read from under it for a caller that reads the whole board: for anyone else, `needs` is one more filter after each page.
+    const needs = query('needs')
+    const inOrder = [...threads.values()]
+      .filter((t) => t.task && (within === null || within.has(t.channelId)) && (stored === null || stored.includes(t.task.state)) && (!readsAll || needs === null || t.task.needs.includes(needs)))
+      .sort(oldestFirst)
+    // `after` goes on after a task in creation order, in place of a cursor: a task the caller reads, which needn't be in the list.
+    const after = query('after')
+    if (after !== null && query('cursor') !== null) throw new Refused(400, 'invalid_request', 'Read on with after or with cursor, not both.')
+    const last = after === null ? undefined : threads.get(after)
+    if (after !== null && (!last?.task || !may(actor, 'read', last.channelId))) throw new Refused(400, 'invalid_request', 'after names a task you can read.')
+    const start = last ? inOrder.filter((t) => t.createdAt <= last.createdAt).length : 0
+    const { items, cursor } = page(inOrder, query('cursor') ?? String(start), 25)
+    // What it sees that no request wrote yet, best effort: the expiry of a lapsed claim, a completion on its page that
+    // hasn't readied everything that waited for it, and for the first waiting tasks on its page, their readying. A
+    // list that reads no waiting task readies none of its own.
+    let expired = 0
+    for (const thread of items) if (expired < REPAIRS && expire(thread)) expired++
+    let goneOver = GONE_OVER
+    for (const thread of items.filter((t) => t.task?.marked)) goneOver = goOn(thread, goneOver, undefined)
+    for (const thread of items.filter((t) => t.task?.state === 'waiting').slice(0, REPAIRS)) ready(thread, actor, undefined)
+    const labels = url.searchParams.getAll('label').map((label) => label.split('=', 2) as [string, string | undefined])
+    const wears = (t: Thread): Record<string, string> => ({ ...rootLabels(t), 'board.task': live(t.task!) })
+    const kept = items.filter(
+      (t) =>
+        (tree === null || tree.has(t.channelId)) &&
+        (states === null || states.includes(live(t.task!))) &&
+        labels.every(([key, value]) => Object.hasOwn(wears(t), key) && (value === undefined || wears(t)[key] === value)) &&
+        (query('owner') === null || t.task!.owner === query('owner')) &&
+        (query('for') === null || t.task!.for === query('for')) &&
+        (needs === null || t.task!.needs.includes(needs)),
+    )
+    return { tasks: kept.map(taskOf), cursor }
   }
 
   async function watchers(method: string, rest: string, actor: Actor, parsed: Record<string, any>, url: URL): Promise<unknown> {
@@ -580,7 +1553,7 @@ function fakeBoard(shared: Shared, boardId: string) {
           }
           const shown = free.map((m) => {
             const message = messageNamed((m.change as { messageId: string }).messageId)
-            return { id: m.id, watcher: m.watcher, threadId: m.threadId, lease: m.lease, attempt: m.attempts, event: { ...m.change, ...(message ? { currentMessage: show(message) } : {}) } }
+            return { id: m.id, watcher: m.watcher, threadId: m.threadId, lease: m.lease, attempt: m.attempts, event: { ...m.change, ...(message && shared.matchMessages ? { currentMessage: show(message) } : {}) } }
           })
           return { matches: shown }
         }
@@ -612,8 +1585,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     const invalid = () => new Refused(400, 'invalid_schedule')
     if (actor.principal.type === 'app') throw new Refused(403, 'principal_cannot_schedule')
     if ((body.channelId === undefined) === (body.threadId === undefined)) throw invalid()
-    if (body.labels !== undefined && body.threadId !== undefined) throw invalid()
-    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
     const at = Date.now()
     const time = (value: unknown) => Number.isInteger(value) && (value as number) > 0 && (value as number) <= at + 365 * 86_400_000
     if (!time(body.firstAt) || body.firstAt < at - 60_000) throw invalid()
@@ -675,19 +1647,23 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/schedules') return { schedule: showSchedule(schedule(actor, body)) }
     if (method === 'GET' && rest === '/schedules') {
       const query = (name: string) => url.searchParams.get(name) ?? undefined
+      // By its ID, a channel that isn't there lists nothing; by its name, it's a 404.
+      const named = query('channel') === undefined ? undefined : channelRead(url, actor)!.id
       const state = query('state')
       const createdBy = query('createdBy')
       const listed = [...schedules.values()].sort((a, b) => a.createdAt - b.createdAt)
-      // Filters apply within each page, so a page can come back short with a cursor to the rest.
-      const { items, cursor } = page(listed, url.searchParams.get('cursor'), 2)
-      const kept = items.filter(
-        (s) =>
-          (state === undefined || s.state === state) &&
-          (query('channelId') === undefined || s.channelId === query('channelId')) &&
-          (query('threadId') === undefined || s.threadId === query('threadId')) &&
-          (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy),
-      )
-      return { schedules: kept.map(showSchedule), cursor }
+      const matches = (s: Schedule) =>
+        (state === undefined || s.state === state) &&
+        (query('channelId') === undefined || s.channelId === query('channelId')) &&
+        (named === undefined || s.channelId === named) &&
+        (query('threadId') === undefined || s.threadId === query('threadId')) &&
+        (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy)
+      // It reads on past the schedules a filter leaves out until its page is full, up to a bound, so a page can still come back short with a cursor to the rest.
+      let at = Number(url.searchParams.get('cursor') ?? 0)
+      const bound = Math.min(listed.length, at + 6)
+      const kept: Schedule[] = []
+      for (; at < bound && kept.length < 2; at++) if (matches(listed[at]!)) kept.push(listed[at]!)
+      return { schedules: kept.map(showSchedule), cursor: at < listed.length ? String(at) : null }
     }
     if ((found = /^\/schedules\/([^/]+)\/cancel$/.exec(rest)) && method === 'POST') {
       const target = schedules.get(decodeURIComponent(found[1]!))
@@ -733,6 +1709,18 @@ function fakeBoard(shared: Shared, boardId: string) {
       const via = shared.externalImports ? {} : { via: { name: shared.directory.projects[principal.projectId] ?? null, environment: principal.environment }, platform: platformOf(owner, key) }
       const handle = shared.externalImports || shared.platformHandles ? body.author.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, body.author.handle, userIdOf(body.author.id))
       actors.set(author.id, { id: author.id, kind: 'external', handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), ...via, lastSeenAt: now() })
+      // The platform users a post's or an edit's text mentions, by the actor each is: one the board hasn't met is
+      // recorded as the author is, one it knows keeps its row, and one the text doesn't mention is left out.
+      if ((body.op === 'post' || body.op === 'edit') && body.mentioned !== undefined) {
+        if (!Array.isArray(body.mentioned) || body.mentioned.length > 50) throw new Refused(400, 'invalid_import')
+        for (const user of body.mentioned as { id: string; handle: string; name: string; avatar: string | null }[]) {
+          if (!String(user.id).startsWith(`${key}:`)) throw new Refused(403, 'foreign_author')
+          const id = shared.externalImports ? user.id : `${owner}+${user.id}`
+          if (!String(body.text).includes(`@[${id}]`) || actors.has(id)) continue
+          const named = shared.externalImports || shared.platformHandles ? user.handle : importedHandle(shared.directory.projects[principal.projectId] ?? principal.projectId, user.handle, userIdOf(user.id))
+          actors.set(id, { id, kind: 'external', handle: named, name: user.name, ...(user.avatar ? { avatar: user.avatar } : {}), ...via, lastSeenAt: now() })
+        }
+      }
       if (body.op === 'post') {
         const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined
         if (landed) return { message: landed }
@@ -796,11 +1784,13 @@ function fakeBoard(shared: Shared, boardId: string) {
         message.editedAt = now()
         message.changes++
         emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision, ...through }, author)
+        if (message.sequence === 1) rootEdited(thread, author)
       } else if (body.op === 'delete') {
         message.deletedAt = now()
         message.revision++
         message.changes++
         emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision, ...through }, author)
+        if (message.sequence === 1) rootDeleted(thread, author)
       } else if (body.op === 'react') {
         const reactors = message.reactions.get(body.emoji) ?? new Map()
         if (body.remove) {
@@ -997,9 +1987,28 @@ function fakeBoard(shared: Shared, boardId: string) {
     return undefined
   }
 
+  /** The reads that answer the actors they name with `with=actors`: threads, messages, and a channel's changes. */
+  const NAMING = /^\/(threads|messages|changes|messages\/[^/]+|threads\/[^/]+\/messages)$/
+  /** Everyone a read's answer names: who started each thread and wrote its messages, and who each change is by. */
+  const namedIn = (read: { threads?: any[]; thread?: any; messages?: any[]; message?: any; events?: any[] }): Actor[] => [
+    ...(read.threads ?? (read.thread ? [read.thread] : [])).flatMap((t) => [t.createdBy, ...[t.lastMessage, t.rootMessage, t.latestMessage].flatMap((m) => (m ? [m.createdBy] : []))]),
+    ...(read.messages ?? (read.message ? [read.message] : [])).map((m) => m.createdBy),
+    ...(read.events ?? []).flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]),
+  ]
   /** A request to this board, at `rest` under `/boards/:id`, from a caller who may use it. */
-  async function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor): Promise<unknown> {
+  async function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor, signal?: AbortSignal, version: 1 | 2 = 1): Promise<unknown> {
     let found: RegExpExecArray | null
+
+    if (url.searchParams.has('with')) {
+      // An API from before `with=actors` takes no `with`, as no route that names nobody does, and no other parameter it doesn't know.
+      if (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest)) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `with`.')
+      if (url.searchParams.get('with') !== 'actors') throw new Refused(400, 'bad_request')
+      const plain = new URL(url)
+      plain.searchParams.delete('with')
+      const read = (await route(method, rest, plain, body, actor, signal, version)) as Record<string, unknown>
+      // Each one once, as the actors route answers them by ID: one it has no view of is left out.
+      return { ...read, actors: [...new Set(namedIn(read).map(({ id }) => id))].flatMap((id) => actors.get(id) ?? []) }
+    }
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
@@ -1007,12 +2016,11 @@ function fakeBoard(shared: Shared, boardId: string) {
       const readable = channels.filter((c) => mayRead(actor, c.id))
       return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
     }
-    const makeChannel = (name: unknown) => {
-      if (typeof name !== 'string' || name.length > 80 || !CHANNEL.test(name)) throw new Refused(400, 'invalid_channel_name')
-      if (channels.some((c) => c.name === name)) throw new Refused(409, 'channel_name_taken')
-      const channel = { id: `chn_${randomUUID()}`, name }
-      channels.push(channel)
-      return channel
+    if (method === 'GET' && (found = /^\/channels\/([^/]+)$/.exec(rest))) {
+      // One channel by its ID, to a caller who may read it: to anyone else it isn't there.
+      const channel = channelAt(decodeURIComponent(found[1]!))
+      if (!mayRead(actor, channel.id)) throw new Refused(404, 'channel_not_found')
+      return { channel }
     }
     if (method === 'POST' && rest === '/channels') {
       tokenMayIn(actor, 'read', typeof body.name === 'string' ? body.name : '')
@@ -1020,17 +2028,48 @@ function fakeBoard(shared: Shared, boardId: string) {
     }
     const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
     if (granted !== undefined) return granted
+    // Version 2 has the task routes and nothing else; version 1 has everything else and none of them.
+    if (version === 2) {
+      const task = shared.tasks ? await taskRoute(method, rest, url, body, actor, signal) : undefined
+      if (task !== undefined) return task
+      throw new Refused(404, 'not_found', `${method} /v2${rest}`)
+    }
     if (method === 'GET' && rest === '/threads') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      channelAt(channelId)
+      // A channel's threads: it takes nothing of tasks, and refuses what it doesn't know.
+      const read = url.searchParams.has('task') ? null : channelRead(url, actor)
+      if (!read) throw new Refused(400, 'bad_request', 'List a channel\'s threads: channelId, and no task.')
+      const channelId = read.id
       const label = url.searchParams.get('label')
       let listed = [...threads.values()].filter((t) => t.channelId === channelId)
       if (label !== null) {
         const [key, value] = label.split('=', 2) as [string, string | undefined]
-        listed = listed.filter((t) => Object.hasOwn(t.messages[0]!.labels, key) && (value === undefined || t.messages[0]!.labels[key] === value))
+        // By a first message's labels: `board.task` is one of a task's, by its live claim, so a lease that ran out reads ready here.
+        const wears = (t: Thread): Record<string, string> => ({ ...rootLabels(t), ...(t.task ? { 'board.task': live(t.task) } : {}) })
+        listed = listed.filter((t) => Object.hasOwn(wears(t), key) && (value === undefined || wears(t)[key] === value))
         listed.sort((a, b) => a.createdAt - b.createdAt)
       } else listed.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-      const { items, cursor } = page(listed, url.searchParams.get('cursor'), 25)
+      // A cursor as the API makes one: base64url JSON whose scope names the channel's thread list.
+      const scope = `${teamId}#${boardId}#${channelId}#threads`
+      const sent = url.searchParams.get('cursor')
+      let from: string | null = null
+      if (sent !== null) {
+        const read = (() => {
+          try {
+            return JSON.parse(Buffer.from(sent, 'base64url').toString()) as { scope?: unknown; value?: unknown }
+          } catch {
+            return null
+          }
+        })()
+        if (read?.scope !== scope || typeof read.value !== 'string' || !/^\d+$/.test(read.value)) throw new Refused(400, 'invalid_cursor', 'Invalid cursor.')
+        from = read.value
+      }
+      // 25 a page, or `limit`, 1 to 100: an API from before it takes no `limit`, as it takes no other parameter it doesn't know.
+      const asked = url.searchParams.get('limit')
+      if (asked !== null && !shared.threadsLimit) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `limit`.')
+      const size = asked === null ? 25 : Number(asked)
+      if (!/^\d+$/.test(asked ?? '25') || size < 1 || size > 100) throw new Refused(400, 'bad_request', 'A page holds 1 to 100 threads.')
+      const { items, cursor: next } = page(listed, from, size)
+      const cursor = next === null ? null : Buffer.from(JSON.stringify({ scope, value: next })).toString('base64url')
       const include = url.searchParams.get('include')
       // An API from before `include=messages` takes no `include`, as it takes no other parameter it doesn't know.
       if (include !== null && !shared.inlineThreadMessages) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
@@ -1046,18 +2085,13 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
     }
     if (method === 'POST' && rest === '/threads') {
+      // A post is a post: what starts a thread as a task is the task routes' to take.
+      if (body.task !== undefined) throw new Refused(400, 'bad_request', 'A post takes no task.')
       const again = repeat(actor, body.clientId)
       if (again) return again
       return once(actor, body.operationId, () => {
-      // By `channel`, its name, it checks `post` there and makes the channel on its first post, as a board does; or by `channelId`.
-      if (body.channel !== undefined) tokenMayIn(actor, 'post', String(body.channel))
-      const channel = body.channel !== undefined ? (channels.find((c) => c.name === body.channel) ?? makeChannel(body.channel)) : channelAt(body.channelId)
-      tokenMay(actor, 'post', channel.id)
-      const createdAt = now()
-      const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
-      threads.set(thread.id, thread)
-      const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string>; attachments?: string[]; noSync?: boolean })
-      return { thread: showThread(thread), message: show(message) }
+        const { thread, message } = startThread(actor, body, () => null, () => {})
+        return { thread: showThread(thread), message: show(message) }
       })
     }
     if ((found = /^\/messages\/([^/]+)$/.exec(rest)) && method === 'GET') {
@@ -1066,7 +2100,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const thread = threads.get(`thr_${id[1]}`)
       const message = thread?.messages[Number(id[2]) - 1]
       if (!thread || !message) throw new Refused(404, 'message_not_found')
-      return { thread: showThread(thread), message: show(message) }
+      return { thread: showThread(thread), message: show(message), ...withChannel(url, actor, thread.channelId) }
     }
     if ((found = /^\/posts\/([^/]+)$/.exec(rest)) && method === 'GET') {
       const again = repeat(actor, decodeURIComponent(found[1]!))
@@ -1106,6 +2140,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
     }
     if (method === 'GET' && rest === '/actors') {
+      if (actor.narrowed && !shared.namesNarrowed) throw new Refused(403, 'forbidden', "You can't read this board.")
       const ids = url.searchParams.getAll('id')
       if (ids.length === 0) return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
       // An API from before actors by ID takes no `id`, as it takes no other parameter it doesn't know.
@@ -1114,8 +2149,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       return { actors: ids.flatMap((id) => actors.get(id) ?? []), cursor: null }
     }
     if (method === 'GET' && rest === '/messages') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      channelAt(channelId)
+      const channelId = (channelRead(url, actor) ?? channelAt('')).id
       const limit = Number(url.searchParams.get('limit') ?? 50)
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Refused(400, 'invalid_request')
       const head = feeds.get(channelId)?.length ?? 0
@@ -1128,8 +2162,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       return { messages: taken.map(show), cursor: cursorAt(channelId, more ? taken.at(-1)!.feedSequence : head) }
     }
     if (method === 'GET' && rest === '/changes') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      channelAt(channelId)
+      const channelId = (channelRead(url, actor) ?? channelAt('')).id
+      shared.feedReads++
       const feed = () => feeds.get(channelId) ?? []
       const cursor = url.searchParams.get('cursor')
       if (cursor !== null && url.searchParams.get('from') !== null) throw new Refused(400, 'invalid_cursor')
@@ -1146,7 +2180,10 @@ function fakeBoard(shared: Shared, boardId: string) {
         })
       return { events, cursor: cursorAt(channelId, from + events.length), caughtUp: from + events.length >= feed().length }
     }
-    if ((found = /^\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') return { thread: showThread(threadAt(found[1]!)) }
+    if ((found = /^\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') {
+      const thread = threadAt(found[1]!)
+      return { thread: showThread(thread), ...withChannel(url, actor, thread.channelId) }
+    }
     if ((found = /^\/threads\/([^/]+)\/messages$/.exec(rest))) {
       const thread = threadAt(found[1]!)
       if (method === 'GET') {
@@ -1165,12 +2202,13 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (method !== 'GET') tokenMay(actor, action === '/reactions' ? 'react' : action === '/labels' ? 'label' : 'post', thread.channelId)
       if (method === 'PATCH' && action === '') {
         if (!owns(actor, message.createdBy)) throw new Refused(403, 'message_not_owned')
-        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message', 'A message is 1 to 10000 characters.')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt !== undefined) throw new Refused(409, 'message_deleted')
         if (message.text !== body.text) {
           Object.assign(message, { text: body.text, editedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
           emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision }, actor)
+          if (message.sequence === 1) rootEdited(thread, actor)
         }
         return { message: show(message) }
       }
@@ -1180,6 +2218,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         if (message.deletedAt === undefined) {
           Object.assign(message, { text: '', attachments: undefined, deletedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
           emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, actor)
+          if (message.sequence === 1) rootDeleted(thread, actor)
         }
         return { message: show(message) }
       }
@@ -1205,9 +2244,11 @@ function fakeBoard(shared: Shared, boardId: string) {
         const set = (body.set ?? {}) as Record<string, string>
         const unset = (body.unset ?? []) as string[]
         if (unset.some((key) => Object.hasOwn(set, key))) throw new Refused(400, 'invalid_label')
-        // What the labels must be now, checked with the change: a value, or null for none.
+        if ([...Object.keys(set), ...unset].some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+        // What the labels must be now, checked with the change: a value, or null for none. A task's `board.task` reads as any label does.
+        const current = labelsOf(message)
         for (const [key, want] of Object.entries((body.if ?? {}) as Record<string, string | null>).sort(([a], [b]) => (a < b ? -1 : 1))) {
-          const now = Object.hasOwn(message.labels, key) ? message.labels[key] : undefined
+          const now = Object.hasOwn(current, key) ? current[key] : undefined
           if (now !== (want ?? undefined)) throw new Refused(409, 'label_conflict', want === null ? `${key} is set` : now === undefined ? `${key} isn't set` : `${key} isn't ${want}`)
         }
         const changes: Record<string, { from?: string; to?: string }> = {}
@@ -1232,7 +2273,17 @@ function fakeBoard(shared: Shared, boardId: string) {
     throw new Refused(404, 'not_found', `${method} ${rest}`)
   }
 
-  return { route, registrations, schedules, send, grants: access.grants, within: (actor: Actor, can: Record<string, string[]>) => access.within(whoOf(actor), can) }
+  return {
+    route,
+    registrations,
+    schedules,
+    send,
+    grants: access.grants,
+    within: (actor: Actor, can: Record<string, string[]>) => access.within(whoOf(actor), can),
+    cutNextCompletion: () => {
+      cut = true
+    },
+  }
 }
 
 /** A board the fake API keeps: who may use it, and what's on it. */
@@ -1370,6 +2421,8 @@ export function fakeMessageboard(
     boardId?: string | null
     /** False for an API from before it answered actors by their IDs: `GET /actors?id=` is 400. */
     actorsById?: boolean
+    /** False for an API that names its actors only to a caller that reads the whole board: `GET /actors` is 403 for one narrowed with `x-board-can`. */
+    namesNarrowed?: boolean
     accounts?: Accounts
     boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
     /** By user ID: u_jb is an owner and u_val a viewer unless it says, and anyone else a member. */
@@ -1384,6 +2437,18 @@ export function fakeMessageboard(
     notDefault?: boolean
     /** True for an API that lists threads with their first and newest messages (`include=messages`). Vercel's doesn't yet: `include` is 400 there. */
     inlineThreadMessages?: boolean
+    /** `false`: an API from before its thread list took `limit`, which is 400 there, and every page is 25 threads. Vercel's takes 1 to 100. */
+    threadsLimit?: boolean
+    /**
+     * True for an API that reads a channel by its name (`channel=` in place of `channelId` on a channel's threads, messages,
+     * changes, and schedules) and answers a message or a thread with its channel (`include=channel`). Vercel's doesn't yet:
+     * each is 400 there, as any parameter it doesn't know is.
+     */
+    channelNames?: boolean
+    /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
+    inlineActors?: boolean
+    /** False for an API that hands out matches without their message (`currentMessage`), as Vercel's does for a thread moved to a channel the registrant can't read. */
+    matchMessages?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
     tokens?: Record<string, string>
     /** An import's author is the platform user alone (`principal: { type: 'external' }`), as Vercel's API named them before platform profiles. */
@@ -1409,6 +2474,8 @@ export function fakeMessageboard(
      * to every registrant that syncs its key, another project's included, and `syncThread` lists every target of a thread.
      */
     unscopedSync?: boolean
+    /** `false`: an API that serves no task routes, as Vercel's did before its threads carried tasks. Each is its 404, as any route it doesn't have is. */
+    tasks?: boolean
   } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
@@ -1419,6 +2486,9 @@ export function fakeMessageboard(
   const stored = new Map<string, Uint8Array<ArrayBuffer>>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
+  /** When each operation was answered, by its caller: what a retry finds, for 8 days. */
+  const receipts = new Map<string, number>()
+  const receipt = (actor: Actor, operationId: unknown) => void (typeof operationId === 'string' && receipts.set(`${principalId(actor.principal)}|${operationId}`, Date.now()))
   const roles = options.roles ?? ROLES
   const directory = { members: { ...(options.members ?? MEMBERS) }, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES, apps: APPS }
   const shared: Shared = {
@@ -1426,14 +2496,23 @@ export function fakeMessageboard(
     accounts,
     directory,
     now,
+    receipt,
     stored,
     inlineThreadMessages: options.inlineThreadMessages ?? false,
+    channelNames: options.channelNames ?? false,
+    inlineActors: options.inlineActors ?? false,
+    threadsLimit: options.threadsLimit ?? true,
+    feedReads: 0,
+    matchMessages: options.matchMessages ?? true,
     externalImports: options.externalImports ?? false,
     actorsById: options.actorsById ?? true,
+    namesNarrowed: options.namesNarrowed ?? true,
     platformHandles: options.platformHandles ?? false,
     boardWideKeys: options.boardWideKeys ?? false,
     projectIdHandles: options.projectIdHandles ?? false,
     unscopedSync: options.unscopedSync ?? false,
+    tasks: options.tasks ?? true,
+    schemaOf: (id) => (BUILT_IN_SCHEMAS.find((row) => row.id === id) ?? schemas.kept.get(id))?.schema,
   }
 
   const schemas = fakeSchemas({ now, roles })
@@ -1466,14 +2545,30 @@ export function fakeMessageboard(
     if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
     const actor = actorOf(request, options.tokens, options.protocolProfile ?? false)
-    const path = url.pathname.replace(/^\/v1\/messageboard/, '')
+    const version = url.pathname.startsWith('/v2/') ? 2 : 1
+    const path = url.pathname.replace(/^\/v[12]\/messageboard/, '')
     const method = request.method
-    requests.push(`${method} ${path}`)
+    requests.push(`${method} ${version === 2 ? '/v2' : ''}${path}`)
+    // Version 2 is a board's task routes alone.
+    if (version === 2 && !/^\/boards\/[^/]+\/tasks(\/|$)/.test(path)) throw new Refused(404, 'not_found', `${method} /v2${path}`)
     // Completing an upload takes no body.
     const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
+    // A batch's request, as JSON, before anything of it is read: long texts are over it before they're over the count.
+    if (method === 'POST' && /\/tasks\/batch$/.test(path) && new TextEncoder().encode(JSON.stringify(body)).byteLength > BATCH_BODY_BYTES)
+      throw new Refused(413, 'entity_too_large', `A request's body is ${BATCH_BODY_BYTES.toLocaleString('en-US')} bytes at most.`)
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
     // Sync's routes take none either, but imports.
-    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path)) {
+      if (typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+      // Every write's operation ID is a UUIDv7, and its time is read: with no receipt to answer it, a write is refused
+      // unless that time is within the last 7 days and at most 5 minutes ahead. A hash laid out as one is almost never.
+      if (!UUID_V7.test(body.operationId)) throw new Refused(400, 'bad_request', 'operationId is a UUIDv7.')
+      const kept = receipts.get(`${principalId(actor.principal)}|${body.operationId}`)
+      const answered = kept !== undefined && Date.now() - kept <= RECEIPT_KEPT_DAYS * DAY_MS
+      const made = Number.parseInt(body.operationId.replaceAll('-', '').slice(0, 12), 16)
+      if (!answered && (made < Date.now() - OPERATION_MAX_AGE_DAYS * DAY_MS || made > Date.now() + OPERATION_MAX_SKEW_S * 1000))
+        throw new Refused(409, 'operation_expired_or_unknown', "That operation ID's time is not within the last 7 days.", undefined, undefined, { maxAgeDays: OPERATION_MAX_AGE_DAYS, maxClockSkewSeconds: OPERATION_MAX_SKEW_S })
+    }
     const me = () => {
       if (options.me === false) return { teamId, actor, view: viewOf(shared, actor) }
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
@@ -1516,6 +2611,7 @@ export function fakeMessageboard(
       const board = kept(`brd_${randomUUID()}`, body.name, new Set(actor.principal.type === 'project' ? [grantOf(actor.principal)] : []))
       others.push(board)
       ensured.set(`${principalId(actor.principal)}|${body.operationId}`, board)
+      receipt(actor, body.operationId)
       return { board: show(board), created: true }
     }
     const registry = schemas.route(method, path, body, actor)
@@ -1538,13 +2634,20 @@ export function fakeMessageboard(
       const said = me()
       return 'can' in said && said.can ? { ...said, can: board.data.within(actor, said.can) } : said
     }
-    return board.data.route(method, rest, url, body, actor)
+    return board.data.route(method, rest, url, body, actor, request.signal, version)
   }
 
-  const { registrations, schedules, send } = general.data
+  const { registrations, schedules, send, cutNextCompletion } = general.data
   return {
+    /**
+     * Ends the default board's next completion after its own write, as a request cut off there does: it readies the
+     * dependents that fit in that write (15), and the rest wait for the next task request that sees them.
+     */
+    cutNextCompletion,
     /** Every request it answered, as `METHOD /path`. */
     requests,
+    /** How many reads of a channel's feed it took, not counting any it refused for a parameter it doesn't know. */
+    feedReads: () => shared.feedReads,
     /** The default board's grants, by ID, as the API keeps them. */
     grants: general.data.grants,
     /** Every schema version the team registered, by ID, as the API keeps them. */
@@ -1577,7 +2680,8 @@ export function fakeMessageboard(
       try {
         return Response.json(await route(request))
       } catch (error) {
-        if (error instanceof Refused || error instanceof GrantRefused) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status })
+        if (error instanceof Refused || error instanceof GrantRefused)
+          return Response.json({ error: { code: error.code, message: error.message, ...(error instanceof Refused && error.reason !== undefined ? { reason: error.reason } : {}), ...(error instanceof Refused && error.until !== undefined ? { until: error.until } : {}), ...(error instanceof Refused ? error.more : {}) } }, { status: error.status })
         throw error
       }
     }) as typeof fetch,

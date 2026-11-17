@@ -297,7 +297,9 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
       platform: 'github',
       adapter: options.adapter,
       canStartThreads: false,
-      mention: (actor) => actor.id.startsWith('github:user:') ? `@${actor.handle}` : null,
+      // By their login, which an import keeps as their name. Their handle isn't it everywhere: a sync
+      // elsewhere's user goes by `<project>/<login>` on the board, which GitHub would read as a team.
+      mention: (actor) => actor.id.startsWith('github:user:') ? `@${actor.name}` : null,
       resolveChannel: (key) => Promise.resolve(key),
       // Inline review threads (`owner/repo:12:rc:345`) belong to their PR (`owner/repo:12`).
       groupThread: (thread) => thread.replace(/:rc:[^:]+$/, ''),

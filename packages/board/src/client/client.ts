@@ -26,7 +26,11 @@ import type {
   RegistrationView,
   ScheduleView,
   SchedulesQueryInput,
+  TaskClaim,
+  TasksPage,
+  TasksQueryInput,
   GrantInput,
+  GrantWriteOptions,
   GrantView,
   UpdateGrantInput,
   Explanation,
@@ -39,6 +43,7 @@ import type {
   TypingResult,
 } from '../api/routes.ts'
 import type { Actor } from '../contract/folds.ts'
+import type { Mentioned } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contract/files.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
@@ -62,13 +67,16 @@ export class BoardError extends Error {
   readonly status: number
   readonly hint: string | undefined
   readonly origin: ErrorOrigin
-  constructor(code: string, message: string, status: number, options: { hint?: string; origin?: ErrorOrigin } = {}) {
+  /** For a 429, how many seconds the board asked to wait before sending again (its `Retry-After`), when it said. */
+  readonly retryAfter: number | undefined
+  constructor(code: string, message: string, status: number, options: { hint?: string; origin?: ErrorOrigin; retryAfter?: number } = {}) {
     super(message)
     this.name = 'BoardError'
     this.code = code
     this.status = status
     this.hint = options.hint
     this.origin = options.origin ?? 'handle'
+    this.retryAfter = options.retryAfter
   }
 }
 
@@ -101,6 +109,12 @@ export type ClientOptions = {
    */
   storeFetch?: typeof fetch
 }
+
+/**
+ * What a write that took a text answers: what it made, and under `mentions`, what became of each
+ * `@handle` the text typed, when it typed any.
+ */
+export type Written<T> = T & { mentions?: Mentioned[] }
 
 export type PostOptions = {
   text: string
@@ -149,6 +163,54 @@ const scheduleBody = (input: ScheduleOptions) => {
   }
 }
 
+/**
+ * What makes a thread a task: the tasks it waits for (`needs`, by their IDs), the one actor of
+ * yours that claims it (`for`, `<your principal>+<profile>`), and `claim`, which claims it in the
+ * same write, for `lease` seconds.
+ */
+export type TaskOptions = {
+  needs?: string[]
+  for?: string | null
+  claim?: boolean
+  lease?: number
+}
+
+/** A new thread that's a task: its root's text, labels, `noSync`, `attachments`, and `id`, as a post takes them, and what makes it a task. */
+export type NewTaskOptions = TaskOptions & Pick<PostOptions, 'text' | 'labels' | 'noSync' | 'attachments' | 'id'>
+
+/**
+ * One task of several made together: its root's text, labels, `noSync`, and `attachments`, as a
+ * post takes them. `key` is a name for it among the others, and `needs` takes a task's ID, or
+ * `{ key }` for one made with it, before or after it. `for` is the one actor of yours that claims it.
+ */
+export type TaskInBatch = Required<Pick<PostOptions, 'text'>> &
+  Pick<PostOptions, 'labels' | 'noSync' | 'attachments'> & {
+    key?: string
+    needs?: (string | { key: string })[]
+    for?: string | null
+  }
+
+/**
+ * What a claim does, each fenced by the claim: once it's over (released, settled, held, taken over,
+ * or past its lease), they throw a 409 `claim_lost` and change nothing.
+ */
+export type HeldTask = {
+  /** Extends the lease from now, by `lease` seconds (the board's default without one). Answers the claim with its new `until`. */
+  renew(lease?: number): Promise<ClaimedTask>
+  /** Gives the task back: it's ready again. */
+  release(): Promise<MessageView>
+  complete(result?: string): Promise<MessageView>
+  fail(reason: string): Promise<MessageView>
+  /** Holds the task for a person, which ends the claim: `kind` says what for (`needs_input`, `awaiting_approval`). */
+  block(reason: string, opts?: { kind?: string }): Promise<MessageView>
+}
+
+/**
+ * A task you hold until `until`: its root as the claim left it, and the claim's `epoch` and
+ * `token`, which `held` takes to act on it from another process.
+ */
+export type ClaimedTask = HeldTask & TaskClaim & { task: MessageView }
+
 /** What `upload` takes: the bytes, and what to call them. */
 export type UploadInput = {
   data: Blob | Uint8Array<ArrayBuffer>
@@ -191,6 +253,11 @@ export type WaitOptions = {
   timeout?: string | number
   signal?: AbortSignal
 }
+
+/** How long one request for a ready task is held, in seconds, as one for the next event is. */
+const CLAIM_WAIT_S = 25
+/** How soon a claim that waits asks again, when the board answered without holding the request. */
+const CLAIM_AGAIN_MS = 1000
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }
 
@@ -237,6 +304,12 @@ function wireCan<T>(can: T): T {
 /** A principal to grant as the wire takes it: a project's environments, and every project's, are production when left out. */
 const withEnvironments = (principal: PrincipalInput): PrincipalInput =>
   (principal.kind === 'project' || principal.kind === 'all-projects') && principal.environments === undefined ? { ...principal, environments: ['production'] } : principal
+
+/** A grant as the wire takes it. */
+const wireGrant = (input: GrantInput) => ({ principals: input.principals.map(withEnvironments), can: wireCan(input.can) })
+
+/** What a grant write's body says to go ahead with a lockout: nothing, unless it was asked to. */
+const goAhead = ({ lockMeOut }: GrantWriteOptions): { lockMeOut?: true } => (lockMeOut ? { lockMeOut: true } : {})
 
 /**
  * The principal a private channel lets its creator in as, from what `/me` says it is: a person's
@@ -319,6 +392,90 @@ export function createBoardClient(options: ClientOptions) {
     return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
   }
 
+  /** One write to task `id`, which answers its root. */
+  const taskWrite = async (id: string, verb: string, body: object = {}) => (await call<{ task: MessageView }>('POST', `/tasks/${path(id)}/${verb}`, { body })).task
+
+  /** What a claim on task `id` does, with the `epoch` and `token` the claim answered. */
+  const held = (id: string, proof: { epoch: number; token: string }): HeldTask => {
+    const { epoch, token } = proof
+    return {
+      async renew(lease) {
+        const { task, until } = await call<{ task: MessageView; until: string }>('POST', `/tasks/${path(id)}/renew`, { body: { epoch, token, ...(lease !== undefined ? { lease } : {}) } })
+        return claimed(task, { epoch, token, until })
+      },
+      release: () => taskWrite(id, 'release', { epoch, token }),
+      complete: (result) => taskWrite(id, 'complete', { epoch, token, ...(result !== undefined ? { result } : {}) }),
+      fail: (reason) => taskWrite(id, 'fail', { epoch, token, reason }),
+      block: (reason, opts = {}) => taskWrite(id, 'block', { epoch, token, reason, ...opts }),
+    }
+  }
+
+  /** A claim as a handle answers it: the task, the claim, and what the claim does. */
+  const claimed = (task: MessageView, claim: TaskClaim): ClaimedTask => ({ task, ...claim, ...held(task.id, claim) })
+
+  /**
+   * Starts a thread in `target` as a task, or with `{ re }` makes the thread that message roots
+   * one, as it is. Starting one needs `post` there, and `label` for its labels; `{ re }` needs
+   * `label`. You own it. `claim` comes back when it was made with `claim: true`.
+   */
+  async function createTask(target: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask; mentions?: Mentioned[] }>
+  async function createTask(target: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask; mentions?: Mentioned[] }>
+  async function createTask(target: string | { re: string }, input: string | NewTaskOptions | TaskOptions = {}): Promise<{ task: MessageView; claim?: ClaimedTask; mentions?: Mentioned[] }> {
+    const where = typeof target === 'string' ? { channel: target } : { re: target.re }
+    // A new thread's root takes files as a post does: uploads, or their IDs.
+    const made = typeof input === 'string' ? { text: input } : 'attachments' in input && input.attachments?.length ? { ...input, attachments: input.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : input
+    const { task, claim, mentions } = await call<{ task: MessageView; claim?: TaskClaim; mentions?: Mentioned[] }>('POST', '/tasks', { body: { ...where, ...made } })
+    return { task, ...(claim ? { claim: claimed(task, claim) } : {}), ...(mentions ? { mentions } : {}) }
+  }
+
+  /**
+   * Starts a thread in `channel` for each of `tasks`, as tasks, in one write: all of them or none,
+   * and none shows before all have landed. It answers their roots in the order given. A task waits
+   * for the ones made with it by their `key`. With `id`, a retry answers the tasks the first call
+   * made. A board makes 100 at most, and throws a 400 `batch_too_large` for more, or for more than it
+   * holds in one write: `createTasksInChunks` makes a longer plan, in several.
+   */
+  async function createTasks(channel: string, tasks: TaskInBatch[], opts: { id?: string } = {}): Promise<MessageView[]> {
+    const sent = tasks.map((task) => (task.attachments?.length ? { ...task, attachments: task.attachments.map((file) => (typeof file === 'string' ? file : file.id)) } : task))
+    return (await call<{ tasks: MessageView[] }>('POST', '/tasks/batch', { body: { channel, tasks: sent, ...(opts.id !== undefined ? { id: opts.id } : {}) } })).tasks
+  }
+
+  /**
+   * Claims task `target`, or with `{ channel }` the oldest ready task in that channel (`work`) or
+   * subtree (`work/`) that has every label in `label`: one assigned to you first, then an
+   * unassigned one you own, or whose owner `from` names by ID (400 `invalid_from` for a handle,
+   * which several can share). It needs `label` where the task
+   * is. A task by ID that can't be claimed throws a 409 (`task_claimed`, `task_waiting`, ...); a
+   * channel with nothing ready answers null, after waiting up to `wait` seconds for one. `lease`
+   * is how long you hold it, in seconds, the board's default without one: a board says how short
+   * and how long one may be, and the claim's `until` says what it gave.
+   */
+  async function claimTask(target: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
+  async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
+  async function claimTask(
+    target: string | { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number },
+    opts: { lease?: number; signal?: AbortSignal } = {},
+  ): Promise<ClaimedTask | null> {
+    const signal = opts.signal ? { signal: opts.signal } : {}
+    if (typeof target === 'string') {
+      const { task, claim } = await call<{ task: MessageView; claim: TaskClaim }>('POST', `/tasks/${path(target)}/claim`, { body: opts.lease !== undefined ? { lease: opts.lease } : {}, ...signal })
+      return claimed(task, claim)
+    }
+    const { wait, ...ready } = target
+    const deadline = Date.now() + (wait ?? 0) * 1000
+    for (;;) {
+      const asked = Date.now()
+      // The board holds each request up to its own limit: it asks again until `wait` runs out.
+      const hold = Math.max(0, Math.min(CLAIM_WAIT_S, (deadline - asked) / 1000))
+      const answer = await call<{ task: MessageView; claim: TaskClaim } | { task: null }>('POST', '/tasks/claim', { body: { ...ready, ...(hold > 0 ? { wait: hold } : {}) }, ...signal })
+      if (answer.task) return claimed(answer.task, answer.claim)
+      if (Date.now() >= deadline || opts.signal?.aborted) return null
+      // A board that answered at once instead of holding isn't asked again right away.
+      const pause = Math.min(CLAIM_AGAIN_MS - (Date.now() - asked), deadline - Date.now())
+      if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause))
+    }
+  }
+
   return {
     url: base,
     /**
@@ -394,6 +551,15 @@ export function createBoardClient(options: ClientOptions) {
           { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
         )
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      // Taking back a grant it made, when the channel isn't to be its own after all. Where someone
+      // else's lock has landed, that's its last manage there, a lockout: it means it, and says so.
+      const takeBack = (id: string) => {
+        const revoke = (body: { lockMeOut?: true }) => call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body })
+        return revoke({}).catch((error: unknown) => {
+          if (error instanceof BoardError && error.code === 'grant_lockout') return revoke({ lockMeOut: true })
+          throw error
+        })
+      }
       // What reaches the path besides its own grants as it made them: one someone changed (adding
       // themselves to it, or opening the lock) lets them in as much as a grant of their own would.
       const others = (grants: GrantView[], mine: GrantView[]) =>
@@ -405,7 +571,7 @@ export function createBoardClient(options: ClientOptions) {
       // most one of them keeps a way in, and if each finds the other, neither does.
       const raced = others(await reaching(), [own.grant])
       if (raced.length > 0) {
-        await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
+        await takeBack(own.grant.id)
         throw granted(raced, [own.grant])
       }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
@@ -414,7 +580,7 @@ export function createBoardClient(options: ClientOptions) {
       // it isn't private, and both of its grants go, the lock first.
       const late = others(await reaching(), [own.grant, closed.grant])
       if (late.length > 0) {
-        for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
+        for (const id of [closed.grant.id, own.grant.id]) await takeBack(id)
         throw granted(late, [own.grant, closed.grant])
       }
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
@@ -427,24 +593,33 @@ export function createBoardClient(options: ClientOptions) {
     thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
     /** Your own post with the client ID you gave it, as posting it answered: 404 `post_not_found` when there's none. */
     posted: async (id: string) => (await call<{ message: MessageView }>('GET', `/posts/${path(id)}`)).message,
-    /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads. */
+    /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads; `before` takes a page's `older`. */
     threads: (query: Filters & Omit<ThreadsQueryInput, keyof FiltersInput> = {}) =>
       call<ThreadsPage>('GET', `/threads${queryString(query)}`),
 
-    async post(channel: string, input: string | PostOptions): Promise<MessageView> {
-      return (await call<{ message: MessageView }>('POST', '/messages', { body: { channel, ...messageBody(input) } })).message
+    /**
+     * Starts a thread. An `@handle` in the text that names exactly one actor you can see is stored as
+     * `@[actor-id]`, a mention of them; one that names none or several stays as typed, a mention of
+     * no one. `mentions` on what comes back says what became of each, when the text typed any.
+     */
+    async post(channel: string, input: string | PostOptions): Promise<Written<MessageView>> {
+      const { message, mentions } = await call<{ message: MessageView; mentions?: Mentioned[] }>('POST', '/messages', { body: { channel, ...messageBody(input) } })
+      return mentions ? { ...message, mentions } : message
     },
-    async reply(id: string, input: string | ReplyOptions): Promise<MessageView> {
-      return (await call<{ message: MessageView }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })).message
+    /** Replies in a thread. Its `@handle`s are settled as `post`'s are: of several who share one, it's the one who wrote in the thread. */
+    async reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>> {
+      const { message, mentions } = await call<{ message: MessageView; mentions?: Mentioned[] }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })
+      return mentions ? { ...message, mentions } : message
     },
     /**
      * Posts later, as you: a new thread when `target` is a channel, a reply when it's
      * `{ re }`, any message's ID in the thread. Each message it posts carries
      * `schedule: { id, n }`. Needs a board with a scheduler.
      */
-    async schedule(target: string | { re: string }, input: ScheduleOptions): Promise<ScheduleView> {
+    async schedule(target: string | { re: string }, input: ScheduleOptions): Promise<Written<ScheduleView>> {
       const where = typeof target === 'string' ? { channel: target } : { re: target.re }
-      return (await call<{ schedule: ScheduleView }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })).schedule
+      const { schedule, mentions } = await call<{ schedule: ScheduleView; mentions?: Mentioned[] }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })
+      return mentions ? { ...schedule, mentions } : schedule
     },
     /** Pending schedules (`all` for done and canceled too), oldest first. `re` is any message in a thread. */
     schedules: async (query: Omit<SchedulesQueryInput, 'all'> & { all?: boolean } = {}) =>
@@ -453,16 +628,60 @@ export function createBoardClient(options: ClientOptions) {
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
     /**
+     * Tasks: threads someone's agents are to do, with a state the board keeps. A task's ID is its
+     * root's, and its root's `task` says its state, whose it is, what it waits for, and who holds
+     * it. A board that keeps no tasks fails each of these with 501 `no_tasks`.
+     */
+    tasks: {
+      /**
+       * Tasks, oldest first, each as its thread's summary: open ones (`waiting`, `ready`, `claimed`,
+       * `blocked`) unless `state` says `all` or names one. `owner` and `for` take a handle or an ID,
+       * `needs` a task's ID, for the tasks that wait for it. `cursor`, as `after`, reads the next page.
+       */
+      list: (query: Omit<TasksQueryInput, 'label'> & { label?: Record<string, string> | string[] } = {}) => call<TasksPage>('GET', `/tasks${queryString(query)}`),
+      create: createTask,
+      createMany: createTasks,
+      claim: claimTask,
+      /** What a claim you hold does, from the `epoch` and `token` it answered: for a process that kept them, as `vb` does between commands. */
+      held,
+      /** Holds a task no one has claimed for a person: yours, or any with manage in its channel. A claimed one's hold is its claim's (`claim.block`). */
+      block: (id: string, reason: string, opts: { kind?: string } = {}) => taskWrite(id, 'block', { reason, ...opts }),
+      /** Lifts a hold: the task is ready again, or waiting while a task it needs hasn't completed. */
+      unblock: (id: string) => taskWrite(id, 'unblock'),
+      /** Makes a failed task ready again, in place: what waits for it still does. */
+      reopen: (id: string) => taskWrite(id, 'reopen'),
+      /** Assigns a task to one of its owner's actors (`<owner>+<profile>`), the only one that claims it then, or with null to anyone who may. */
+      assign: (id: string, actor: string | null) => taskWrite(id, 'assign', { for: actor }),
+      /**
+       * Replaces what a task waits for, by their IDs: it waits for those now, and is ready once they've all completed, or
+       * at once with none. For its owner, while no one holds it and it isn't finished. One that would make it wait for
+       * itself, through however many tasks, throws a 400 `invalid_needs`.
+       */
+      needs: (id: string, needs: string[]) => taskWrite(id, 'needs', { needs }),
+      /** Cancels a task that hasn't completed, ending any claim. What waits for it keeps waiting. */
+      cancel: (id: string, reason: string) => taskWrite(id, 'cancel', { reason }),
+    },
+    /**
      * A new grant: `principals` may do what `can` says, a map from channel pattern to permissions
      * (`[]` for none). The same principals again are another grant. At each channel, the most
      * specific pattern among the grants that name a caller decides, then the closest principal,
      * and grants tied there add up. Needs manage at each pattern `can` names.
+     *
+     * One you couldn't take back, since it takes your own manage at a pattern it names (closing
+     * `security/` to `everyone` closes it to you), is 409 `grant_lockout`: keep yourself in with
+     * `createGrants`, or pass `lockMeOut` to make it anyway. Every grant write takes it.
      */
-    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: { principals: input.principals.map(withEnvironments), can: wireCan(input.can) } }),
+    createGrant: (input: GrantInput, options: GrantWriteOptions = {}) => call<{ grant: GrantView }>('POST', '/grants', { body: { ...wireGrant(input), ...goAhead(options) } }),
+    /**
+     * Several grants in one write, all of them or none, judged together: each needs what
+     * `createGrant` does on the grants as they are, and what they leave you with is judged with
+     * all of them made. So a lock and the grant that keeps you in go together, in any order.
+     */
+    createGrants: (inputs: readonly GrantInput[], options: GrantWriteOptions = {}) => call<{ grants: GrantView[] }>('POST', '/grants/batch', { body: { grants: inputs.map(wireGrant), ...goAhead(options) } }),
     /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
-    updateGrant: (id: string, { add, remove, can }: UpdateGrantInput) =>
+    updateGrant: (id: string, { add, remove, can }: UpdateGrantInput, options: GrantWriteOptions = {}) =>
       call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, {
-        body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}) },
+        body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}), ...goAhead(options) },
       }),
     /**
      * Which grants decide `channel`, and what they give: for you, or with manage at `*`, for the
@@ -479,7 +698,7 @@ export function createBoardClient(options: ClientOptions) {
     /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
-    revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),
+    revokeGrant: (id: string, options: GrantWriteOptions = {}) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: goAhead(options) }),
     /** Every schema: the built-ins, then the board's own, by name and version. */
     schemas: async () => (await call<{ schemas: SchemaView[] }>('GET', '/schemas')).schemas,
     /** One schema version, by its ID: `sandbox@1`. */
@@ -529,7 +748,7 @@ export function createBoardClient(options: ClientOptions) {
      * changes, and it throws a 409 `revision_conflict`.
      */
     edit: (id: string, text: string, opts: { revision?: number } = {}) =>
-      call<{ ok: true }>('POST', `/messages/${path(id)}/edit`, { body: { text, ...opts } }),
+      call<{ ok: true; mentions?: Mentioned[] }>('POST', `/messages/${path(id)}/edit`, { body: { text, ...opts } }),
     delete: (id: string, opts: { revision?: number } = {}) => call<{ ok: true }>('POST', `/messages/${path(id)}/delete`, { body: { ...opts } }),
     /** `emoji` is a short name, `:name:`, or the character itself. */
     react: (id: string, emoji: string, opts: { remove?: boolean } = {}) =>
@@ -678,10 +897,13 @@ export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me,
 async function toError(response: Response): Promise<BoardError> {
   try {
     const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
+    // Retry-After in seconds, as a 429 says it: its date form isn't one a board sends.
+    const retryAfter = response.status === 429 ? /^\d{1,6}$/.exec(response.headers.get('retry-after') ?? '')?.[0] : undefined
     if (body.error?.message)
       return new BoardError(body.error.code ?? 'error', body.error.message, response.status, {
         ...(typeof body.error.hint === 'string' ? { hint: body.error.hint } : {}),
         origin: handleErrors.has(response) ? 'handle' : 'board',
+        ...(retryAfter !== undefined ? { retryAfter: Number(retryAfter) } : {}),
       })
   } catch {}
   return new BoardError('http_error', `The board answered ${`${response.status} ${response.statusText}`.trim()}.`, response.status)

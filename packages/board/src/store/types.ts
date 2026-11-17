@@ -31,6 +31,15 @@ export type MessageFilter = {
 /** By message ID: `after` takes the first `limit` after it; otherwise the last `limit`. */
 export type Page = { before?: number; after?: number; limit: number }
 
+/** Where a thread stands in activity order: its latest message's ID, then its root's. */
+export type ThreadPosition = { at: number; id: number }
+
+/**
+ * By latest activity: `after` takes the first `limit` threads active after that message; `before` the last
+ * `limit` before that position; otherwise the last `limit`.
+ */
+export type ThreadsPage = { before?: ThreadPosition; after?: number; limit: number }
+
 /** A thread as `/threads` lists it: its root, how many replies aren't deleted, and the latest. */
 export type ThreadSummary = { root: Message; replies: number; last: Message | null }
 
@@ -56,8 +65,16 @@ export interface MessageTables {
   /** A thread's root and every reply, deleted ones included, by ID. */
   thread(root: number): Promise<Message[]>
   messages(filter: MessageFilter, page: Page): Promise<{ messages: Message[]; position: number }>
-  /** Threads with a message that matches, by their latest reply. */
-  threads(filter: MessageFilter, page: Page): Promise<{ threads: ThreadSummary[]; position: number }>
+  /**
+   * Threads with a message that matches, by their latest reply. `older`, on a page read without `after`, is
+   * where the next older page starts, or null when no thread is older.
+   */
+  threads(filter: MessageFilter, page: ThreadsPage): Promise<{ threads: ThreadSummary[]; position: number; older?: ThreadPosition | null }>
+  /**
+   * Threads whose root matches, by the root's ID, so in the order they started: `after` takes the
+   * first `limit` after it; otherwise the last `limit`. What lists tasks, which are roots.
+   */
+  roots(filter: MessageFilter, page: Page): Promise<{ threads: ThreadSummary[]; position: number }>
   /** A thread's sync: its targets, and the platform thread it lives in on each. */
   syncOf(thread: string): Promise<SyncedThread | null>
   /** The board thread a platform thread belongs to. */

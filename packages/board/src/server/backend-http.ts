@@ -46,7 +46,11 @@ const describe = (error: unknown) => ((error instanceof Error ? error.message : 
 /** The SDK's error, as the board answers it: the remote's own status and code, or 502 when it never answered. */
 const rethrow = (error: unknown): never => {
   if (error instanceof BoardError)
-    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, { ...(error.hint !== undefined ? { hint: error.hint } : {}), origin: error.origin })
+    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, {
+      ...(error.hint !== undefined ? { hint: error.hint } : {}),
+      origin: error.origin,
+      ...(error.retryAfter !== undefined ? { retryAfter: error.retryAfter } : {}),
+    })
   if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
   throw new HttpError(502, 'unreachable', `the board didn't answer: ${describe(error)}`)
 }
@@ -228,9 +232,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     // board() serves no requests for a board that uses another's: only its own code calls here.
     if ('identity' in caller) throw new HttpError(404, 'not_found', `this board uses ${remote}, and answers nothing itself`)
     const client = clientOf(caller)
-    // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
-    // and a retry's lookup asks for the same.
-    if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
+    // A post board() gave an ID derived from a trigger, a task's new thread included: the remote
+    // takes it as this deployment's key, and a retry's lookup asks for the same.
+    if ((method === 'post' || method === 'posted' || method === 'createTask' || method === 'createTasks' || method === 'createdTasks') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
       input = { ...input, id: await ownKey(input.id).catch(rethrow) }
     const response = await call(client, method, input, signal)
     return method === 'attachment' ? attachmentOf(String(input.id), response) : response.json()
@@ -274,6 +278,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     routes: [],
     // The log is the board it uses'.
     keeps: false,
+    settlesMentions: true,
     async sandbox({ profile, can, token }: SandboxInput): Promise<SandboxReach> {
       const credential = environment ? await environment.sandbox(remote, token) : token === undefined ? withoutToken(remote) : { authorization: `Bearer ${token}` }
       return { url: remote, headers: { ...credential, 'x-board-profile': formatProfileHeader(profile), 'x-board-can': can }, routes: PROTOCOL_ROUTES }

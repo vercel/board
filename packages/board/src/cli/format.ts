@@ -1,7 +1,8 @@
-import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, ThreadSummaryView } from '../api/routes.ts'
+import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, TaskView, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
-import { displayText } from '../contract/bots.ts'
+import { byVercelBot, displayText } from '../contract/bots.ts'
+import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { findBlocks } from '../contract/blocks.ts'
 import { shownName, type Via } from '../contract/profiles.ts'
 import type { CheckResult, ConformanceReport } from '../conformance/index.ts'
@@ -17,6 +18,9 @@ export const terminalText = (text: string): string =>
     const code = char.charCodeAt(0)
     return code < 0x20 ? String.fromCharCode(0x2400 + code) : code === 0x7f ? '\u2421' : '\ufffd'
   })
+
+/** As `terminalText`, for what shows within one line: tab and newline show as their pictures too. */
+export const lineText = (text: string): string => terminalText(text).replace(/[\t\n]/g, (char) => String.fromCharCode(0x2400 + char.charCodeAt(0)))
 
 /** Who you are, as your messages show you: `claude via julian` with a profile, your name otherwise. */
 export const who = (me: Pick<Me, 'name' | 'via'>): string => shownName(me)
@@ -46,7 +50,8 @@ const indent = (text: string, prefix: string) =>
 
 function labels(message: MessageView): string {
   const entries = Object.entries(message.labels)
-  return entries.length ? `  [${entries.map(([k, v]) => `${k}=${v}`).join(' ')}]` : ''
+  // On the message's own line: a newline in a value (one written before values refused them) shows as its picture too.
+  return entries.length ? `  [${entries.map(([k, v]) => `${k}=${lineText(v)}`).join(' ')}]` : ''
 }
 
 /** How many people a reaction names before it counts the rest: `👀 ada, claude, codex +9`. */
@@ -68,6 +73,15 @@ export function reactionNames(messages: MessageView[]): string[] {
   return [...new Set(messages.flatMap((m) => Object.values(m.reactions).flatMap((actors) => actors.slice(0, REACTION_NAMES))))]
 }
 
+/** Each author's handle by ID, and those of `more`: who a mention shows as. */
+const handlesOf = (messages: MessageView[], more: Map<string, string> = new Map()) =>
+  new Map([...more, ...messages.flatMap((m) => (m.author ? [[m.by.actor, m.author.handle] as const] : []))])
+
+/** The actors a thread's texts mention by ID, for looking up the ones who didn't write in it. */
+export function mentionedIn(messages: MessageView[]): string[] {
+  return [...new Set(messages.flatMap((m) => (m.deleted ? [] : extractMentions(m.text).flatMap((token) => (token.kind === 'actor' && !isEmail(token.actor) ? [token.actor] : [])))))]
+}
+
 /** An actor's display name from `/actors`, the way a message's author shows: `claude via julian`. */
 export const actorName = (actor: { name: string; via?: Via | undefined }): string => shownName(actor)
 
@@ -75,10 +89,13 @@ export const actorName = (actor: { name: string; via?: Via | undefined }): strin
  * A message's text as a terminal shows it: a bot's in its readable form, and each block as one
  * line, its schema and its data, where its fence was. A message that is only a block is that line.
  */
-function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>): string {
-  const text = displayText(message.text, message.by.actor)
+function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks' | 'from' | 'author'>, handles: Map<string, string> = new Map()): string {
+  // A mention is stored as `@[actor-id]`: it reads as the handle of who it mentions, which is what to type for
+  // them, where they're known. `--json` has the ID.
+  const said = replaceMentions(message.text, (token) => (token.kind === 'actor' && handles.has(token.actor) ? `@${handles.get(token.actor)}` : null))
+  const text = displayText(said, byVercelBot(message, message.author))
   // Only what the board lists as blocks: a fence in a platform's text stays as it was written.
-  if (!message.blocks?.length || text !== message.text) return text
+  if (!message.blocks?.length || text !== said) return text
   let out = ''
   let at = 0
   for (const found of findBlocks(text)) {
@@ -106,22 +123,96 @@ function embed(link: NonNullable<MessageView['links']>[number], pad: string): st
 }
 
 /** One message as a block: header line, indented text, reactions. */
-export function formatMessage(message: MessageView, options: { reply?: boolean; names?: Map<string, string> } = {}) {
+export function formatMessage(message: MessageView, options: { reply?: boolean; names?: Map<string, string>; handles?: Map<string, string>; now?: number } = {}) {
   const pad = options.reply ? '    ' : '      '
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
   }${message.schedule ? ` · scheduled ${message.schedule.id}` : ''}${labels(message)}`
-  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message), pad)
+  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message, options.handles), pad)
+  const task = message.task ? [`${pad}task  ${taskState(message, message.task, options.names ?? new Map(), options.now ?? Date.now())}`] : []
   const files = (message.attachments ?? []).map((a) => `${pad}file ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))
   const reacted = reactions(message, options.names ?? new Map())
   const undelivered = Object.entries(message.undelivered ?? {}).map(([target, error]) => `${pad}✗ didn't reach ${target}: ${error}`)
-  return [head, body, ...files, ...links, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
+  return [head, body, ...task, ...files, ...links, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
+}
+
+/** The first line of what a task came to, or of why it's held or ended: the rest is in its thread. */
+const noteLine = (text: string, max = 60) => {
+  const [line = ''] = text.trim().split(/\r?\n/)
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
+/** The profile an actor ID names (`vercel:user:u_abc+fixer` is `fixer`), or the ID itself when it names none. */
+const profileOf = (actor: string) => (actor.includes('+') ? actor.slice(actor.lastIndexOf('+') + 1) : actor)
+
+/** How long a lease has left, as a duration flag would say it, to the minute from a minute up: `15m`, `45s`. */
+export function leaseLeft(until: string, now = Date.now()): string {
+  const ms = Date.parse(until) - now
+  if (ms <= 0) return '0s'
+  return span(ms < 60_000 ? Math.ceil(ms / 1000) * 1000 : Math.round(ms / 60_000) * 60_000)
+}
+
+/**
+ * A task's state as `read` says it under its root: who holds it and for how long, what it's held
+ * for or how it ended, then what it waits for, whom it's for, and whose it is when that isn't its
+ * root's author. `names` are the display names the reader knows, by actor ID.
+ */
+function taskState(message: MessageView, task: TaskView, names: Map<string, string>, now: number): string {
+  const named = (id: string) => names.get(id) ?? id
+  const parts: string[] = []
+  if (task.state === 'claimed' && task.claim) {
+    const left = Date.parse(task.claim.until) - now
+    parts.push(`claimed by ${named(task.claim.actor)}`, left > 0 ? `${leaseLeft(task.claim.until, now)} left` : 'its lease ran out')
+  } else if (task.state === 'blocked' && task.blocked) parts.push('blocked', ...(task.blocked.kind ? [task.blocked.kind] : []), noteLine(task.blocked.reason))
+  else if (task.state === 'completed') parts.push('completed', ...(task.result ? [noteLine(task.result)] : []))
+  else if (task.state === 'failed' || task.state === 'canceled') parts.push(task.state, ...(task.reason ? [noteLine(task.reason)] : []))
+  else parts.push(task.state)
+  if (task.needs.length) parts.push(`needs ${task.needs.map((id) => `#${id}`).join(' ')}`)
+  if (task.for !== null) parts.push(`for ${profileOf(task.for)}`)
+  if (task.owner !== message.by.principal) parts.push(`owner ${named(task.owner)}`)
+  return parts.join(' · ')
+}
+
+/** A claim as the CLI says it: the task, how long it's yours, and what it is. */
+export const claimLine = (task: MessageView, until: string, now = Date.now()): string => `#${task.id}  yours for ${leaseLeft(until, now)}  ${firstLine(task, 52)}`
+
+/**
+ * What a task's row says after its text: how it ended or what it's held for, in the `room` the row
+ * has left, or its own labels, whole, and what it waits for.
+ */
+function taskNote(message: MessageView, task: TaskView, room: number): string {
+  if (task.state === 'completed' && task.result) return noteLine(task.result, room)
+  if ((task.state === 'failed' || task.state === 'canceled') && task.reason) return noteLine(task.reason, room)
+  if (task.state === 'blocked' && task.blocked) return noteLine(task.blocked.reason, room)
+  // Its state has a column of its own, so the label that says it again is left out.
+  const own = Object.entries(message.labels).filter(([key]) => !key.startsWith('board.')).map(([key, value]) => `${key}=${lineText(value)}`).join(' ')
+  const needs = task.state === 'waiting' && task.needs.length ? `needs ${task.needs.map((id) => `#${id}`).join(' ')}` : ''
+  return [own, needs].filter(Boolean).join('  ')
+}
+
+/** The widest a task's state is (`completed`), and how wide its first line's column is at least and at most. */
+const STATE_WIDTH = 9
+const TASK_TEXT_MIN = 30
+const TASK_TEXT_MAX = 40
+/** The least a row leaves for how a task ended, however long its ID. */
+const TASK_NOTE_MIN = 20
+
+/**
+ * Tasks, one a row: its ID, its state, its first line, and what's notable about it. The state's
+ * column is as wide as any state, and the text's at least 30, so one list lines up with the next.
+ * What a person wrote about how it ended is cut to fit 80 columns: the rest is in its thread.
+ */
+export function formatTasks(tasks: ThreadSummaryView[]): string {
+  const rows = tasks.map(({ message }) => [`#${message.id}`, (message.task?.state ?? '').padEnd(STATE_WIDTH), firstLine(message, TASK_TEXT_MAX).padEnd(TASK_TEXT_MIN)])
+  const room = Math.max(TASK_NOTE_MIN, 80 - rows.reduce((widest, row) => Math.max(widest, row.join('  ').length), 0) - 2)
+  return table(rows.map((row, at) => [...row, tasks[at]!.message.task ? taskNote(tasks[at]!.message, tasks[at]!.message.task!, room) : '']))
 }
 
 /** Threads in order, each root followed by its replies. */
-export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map()): string {
+export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map(), mentioned: Map<string, string> = new Map()): string {
   const names = new Map([...known, ...messages.map((m) => [m.by.actor, authorName(m)] as const)])
+  const handles = handlesOf(messages, mentioned)
   const byRoot = new Map<string, MessageView[]>()
   const roots: MessageView[] = []
   const orphans: MessageView[] = []
@@ -132,30 +223,31 @@ export function formatThreads(messages: MessageView[], known: Map<string, string
   const rootIds = new Set(roots.map((r) => r.id))
   for (const [root, replies] of byRoot) if (!rootIds.has(root)) orphans.push(...replies)
   const blocks = roots.map((root) =>
-    [formatMessage(root, { names }), ...(byRoot.get(root.id) ?? []).map((r) => formatMessage(r, { reply: true, names }))].join('\n'),
+    [formatMessage(root, { names, handles }), ...(byRoot.get(root.id) ?? []).map((r) => formatMessage(r, { reply: true, names, handles }))].join('\n'),
   )
   for (const reply of orphans)
-    blocks.push(`(in thread #${reply.re})\n${formatMessage(reply, { reply: true, names })}`)
+    blocks.push(`(in thread #${reply.re})\n${formatMessage(reply, { reply: true, names, handles })}`)
   return blocks.join('\n\n')
 }
 
-/** A root's first line, cut to fit 80 columns under its header. */
-function firstLine(message: MessageView): string {
+/** A root's first line, cut to `max` characters: 74 fits 80 columns under its header. */
+function firstLine(message: MessageView, max = 74, handles?: Map<string, string>): string {
   if (message.deleted) return '(message removed)'
-  const text = shownText(message).trim()
+  const text = shownText(message, handles).trim()
   const files = message.attachments?.length ?? 0
   if (!text) return files ? `(${files} ${files === 1 ? 'file' : 'files'})` : '(no text)'
   const [line = '', ...rest] = text.split(/\r?\n/)
   const shown = rest.length ? `${line.trimEnd()} …` : line
-  return shown.length > 74 ? `${line.slice(0, 73)}…` : shown
+  return shown.length > max ? `${line.slice(0, max - 1)}…` : shown
 }
 
 /**
  * One block per thread, for `read <channel>`: the root's header and first line,
  * then how many replies it has and who wrote the latest, and when.
  */
-export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number } = {}): string {
+export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number; handles?: Map<string, string> } = {}): string {
   const now = options.now ?? Date.now()
+  const handles = handlesOf(threads.flatMap(({ message, last }) => (last ? [message, last] : [message])), options.handles)
   return threads
     .map(({ message, replies, last }) => {
       const where = options.channel ? `${message.channel}  ` : ''
@@ -168,7 +260,7 @@ export function formatThreadSummaries(threads: ThreadSummaryView[], options: { c
         .filter(([, actors]) => actors.length > 0)
         .map(([emoji, actors]) => `${displayEmoji(emoji)} ${actors.length}`)
         .join('   ')
-      return [head, `      ${firstLine(message)}`, ...(counted ? [`      ${counted}`] : []), `      ${activity}`].join('\n')
+      return [head, `      ${firstLine(message, 74, handles)}`, ...(counted ? [`      ${counted}`] : []), `      ${activity}`].join('\n')
     })
     .join('\n\n')
 }
@@ -294,7 +386,7 @@ export function formatSchedule(schedule: ScheduleView, options: { pad?: string; 
         : 'done'
   const sent = schedule.sent > 0 ? ` · ${schedule.sent} sent` : ''
   const files = schedule.attachments.length ? ` · ${schedule.attachments.length} ${schedule.attachments.length === 1 ? 'file' : 'files'}` : ''
-  const text = displayText(schedule.text, schedule.by.actor)
+  const text = displayText(schedule.text, byVercelBot(schedule, null))
   return [
     `${pad}${schedule.id}  ${where} · ${repeat}${stop} · ${when}${sent}${files} · by ${authorName(schedule)}`,
     indent(text || '(no text)', `${pad}    `),
@@ -330,8 +422,53 @@ export function formatEvent(event: BoardEventView): string {
     }
     case 'message.sync_failed':
       return `#${message.id}  ${where}  ✗ didn't reach ${event.payload.target}: ${event.payload.error}`
+    case 'task.created':
+    case 'task.assigned':
+    case 'task.needs_changed':
+    case 'task.ready':
+    case 'task.claimed':
+    case 'task.renewed':
+    case 'task.released':
+    case 'task.expired':
+    case 'task.completed':
+    case 'task.failed':
+    case 'task.blocked':
+    case 'task.unblocked':
+    case 'task.canceled':
+    case 'task.reopened':
+      return `#${message.id}  ${where}  task ${taskEvent(event)}`
     default:
       return `#${event.cursor}  ${event.type}`
+  }
+}
+
+/** What happened to a task, after `task`: `claimed by claude via ada`, `completed by claude via ada · tests pass`. */
+function taskEvent(event: Extract<BoardEventView, { type: `task.${string}` }>): string {
+  const by = event.actor ? ` by ${actorName(event.actor)}` : ''
+  const more = (...parts: (string | null | undefined)[]) => parts.filter((part): part is string => !!part).map((part) => ` · ${part}`).join('')
+  switch (event.type) {
+    case 'task.created':
+      return `created${by}${more(event.payload.needs.length ? `needs ${event.payload.needs.map((id) => `#${id}`).join(' ')}` : null, event.payload.for !== null ? `for ${profileOf(event.payload.for)}` : null)}`
+    case 'task.assigned':
+      return event.payload.for !== null ? `assigned to ${profileOf(event.payload.for)}${by}` : `unassigned${by}`
+    case 'task.needs_changed':
+      // What it waits for now, in place of what it waited for.
+      return `needs ${event.payload.needs.length ? event.payload.needs.map((id) => `#${id}`).join(' ') : 'nothing'}${by}`
+    case 'task.ready':
+      return 'ready'
+    case 'task.expired':
+      return 'lease ran out'
+    case 'task.completed':
+      return `completed${by}${more(event.payload.result === null ? null : noteLine(event.payload.result))}`
+    case 'task.failed':
+      return `failed${by}${more(noteLine(event.payload.reason))}`
+    case 'task.blocked':
+      return `blocked${by}${more(event.payload.kind, noteLine(event.payload.reason))}`
+    case 'task.canceled':
+      return `canceled${by}${more(noteLine(event.payload.reason))}`
+    default:
+      // Claimed, renewed, released, unblocked, reopened: what happened, and who did it.
+      return `${event.type.slice('task.'.length)}${by}`
   }
 }
 

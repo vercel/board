@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { Can } from '../src/access/index.ts'
-import { slack } from '../src/sync/slack.ts'
+import { slack, SlackProvider } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform } from './sync-fixtures.ts'
+import { VERCEL_BUILDING } from './vercel-fixtures.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { REGISTRY_SESSION } from '../src/contract/contract.ts'
 import { board } from '../src/server/index.ts'
@@ -390,10 +391,13 @@ describe('who an import is by', () => {
     const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
     const web = caller(team.fetch, await deploymentToken('web', 'prj_web', 'production'))
     for (const as of [support, web]) expect((await as('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
-    const post = (as: typeof support, text: string) => as('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', channel: 'firehose', text })
-    for (const [as, text] of [[support, 'one'], [support, 'two'], [web, 'three']] as const) expect((await post(as, text)).status).toBe(200)
+    const post = (as: typeof support, text: string, re?: string) =>
+      as('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', ...(re === undefined ? { channel: 'firehose' } : { re }), text })
+    // The inspector groups a thread's replies, never its roots: so a thread, and three replies in it.
+    const root = (await post(support, 'zero')).body.message as string
+    for (const [as, text] of [[support, 'one'], [support, 'two'], [web, 'three']] as const) expect((await post(as, text, root)).status).toBe(200)
     const julian = await julianOn(team.fetch)
-    const [one, two, three] = (await julian('GET', '/messages?channel=firehose')).body.messages as MessageView[]
+    const [, one, two, three] = (await julian('GET', '/messages?channel=firehose')).body.messages as MessageView[]
     expect([one!.by.actor, three!.by.actor]).toEqual(['vercel:project:prj_support:preview+slack-eu:user:U_MALTE', 'vercel:project:prj_web:production+slack-eu:user:U_MALTE'])
     // One sync's Malte twice runs on as one; the other's Malte, right after, starts anew.
     expect([continues(one, two!), continues(two, three!)]).toEqual([true, false])
@@ -450,6 +454,39 @@ describe('who an import is by', () => {
     expect([refused.status, refused.body.error.message]).toEqual([403, 'only the author can edit a message'])
     expect((await edit(malte)).status).toBe(200)
     expect((await read(await julianOn(team.fetch), 'firehose')).map((m) => m.text)).toEqual(['changed'])
+  })
+
+  it("shows Vercel's deployment comment a sync elsewhere imported from GitHub as its deployments, and a look-alike under another GitHub user as written", async () => {
+    const asked = vi.spyOn(SlackProvider.prototype, 'post')
+    try {
+      const s = fakePlatform('slack')
+      const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
+      await grant(team, 'prj_support', 'all')
+      const support = caller(team.fetch, await supportToken())
+      expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'github', platform: 'github' }] })).status).toBe(200)
+      const bot = { id: 'github:user:35613825', handle: 'vercel[bot]', name: 'vercel[bot]', avatar: null, isBot: true }
+      const lookAlike = { ...bot, id: 'github:user:999' }
+      const ids: string[] = []
+      for (const author of [bot, lookAlike]) {
+        const imported = await support('POST', '/sync/imports', { op: 'post', author, from: 'github', channel: 'firehose', text: VERCEL_BUILDING })
+        expect(imported.status).toBe(200)
+        ids.push(imported.body.message)
+      }
+      await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(2))
+      const [vercel, other] = asked.mock.calls.map(([, , body]) => body)
+      expect(vercel!.markdown).toContain('**▲ Vercel**\n- ⏳ **[acme-agents](https://vercel.com/acme/acme-agents)** · [Building]')
+      expect(vercel!.deployments).toMatchObject([{ project: 'acme-agents', status: 'Building' }])
+      expect(other!.markdown).toContain('| Project |')
+      expect(other).not.toHaveProperty('deployments')
+      const vbRead = await vbOn(team)
+      const [botsRead, othersRead] = [(await vbRead(['read', ids[0]!])).stdout, (await vbRead(['read', ids[1]!])).stdout]
+      expect(botsRead).toContain('▲ Vercel')
+      expect(botsRead).not.toContain('| Project |')
+      expect(othersRead).toContain('| Project |')
+      expect(othersRead).not.toContain('▲ Vercel')
+    } finally {
+      asked.mockRestore()
+    }
   })
 })
 
@@ -552,8 +589,10 @@ describe("an imported platform user's handle", () => {
     for (const text of ['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]', 'thanks @support', '@malte alone', '@supported'])
       await julian('POST', '/messages', { channel: 'dev', text })
     const texts = async (mentions: string) => ((await julian('GET', `/messages?channel=dev&mentions=${encodeURIComponent(mentions)}`)).body.messages as Read[]).map((m) => m.text)
-    expect(await texts('support/malte')).toEqual(['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]'])
-    expect(await texts('support')).toEqual(['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]', 'thanks @support'])
+    // A handle one actor has in full was stored as a mention of them: support's Malte, and support itself. `@malte` alone is no one's.
+    const mentioned = '@[vercel:project:prj_support:production+slack-eu:user:U_MALTE]'
+    expect(await texts('support/malte')).toEqual([`${mentioned} can you look?`, `cc ${mentioned}`])
+    expect(await texts('support')).toEqual([`${mentioned} can you look?`, `cc ${mentioned}`, 'thanks @[vercel:project:prj_support:production]'])
   })
 })
 
@@ -562,7 +601,7 @@ describe('mentions, as sync posts them', () => {
     team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', ...body }) }))
   const texts = async (as: ReturnType<typeof caller>, query: string) => ((await as('GET', `/messages?${query}`)).body.messages as Read[]).map((m) => m.text)
 
-  it("are text a sync granted one channel can't make fail, or mean its own user, anywhere else", async () => {
+  it("are no one a sync granted one channel imported, for a handle they only have under its name", async () => {
     const s = fakePlatform('slack')
     const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
     await grant(team, 'prj_support', { 'support/': 'all' })
@@ -573,9 +612,11 @@ describe('mentions, as sync posts them', () => {
     expect((await support('POST', '/sync/imports', { op: 'post', author: squatter, from: 'helpdesk', channel: 'support/x', text: 'hi' })).status).toBe(200)
     const julian = await julianOn(team.fetch)
     const posted = await julian('POST', '/messages', { channel: 'firehose', text: '@julian look' })
+    // No one has written as julian yet, and what support imported goes by support/julian: it's a candidate, never the one named.
     expect([posted.status, posted.body.message?.text]).toEqual([201, '@julian look'])
+    expect(posted.body.mentions).toEqual([{ written: '@julian', actor: null, candidates: [{ id: 'vercel:project:prj_support:production+helpdesk:user:U_X', handle: 'support/julian', name: 'Not Julian' }] }])
     expect(await texts(julian, 'mentions=me')).toEqual(['@julian look'])
-    // The board's own Slack has no julian, so it leaves the handle as written.
+    // So the board's own Slack is sent the handle as written.
     await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '**julian**: @julian look' })]))
   })
 

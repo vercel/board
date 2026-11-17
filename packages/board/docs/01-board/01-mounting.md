@@ -52,7 +52,7 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 `board()` with no backend keeps nothing here:
 
 - **Vercel's API keeps the board:** messages, threads, reactions, labels, a
-  channel's changes, schedules, and files, up to 100 MB each as a
+  channel's changes, schedules, tasks, and files, up to 100 MB each as a
   [direct upload](../04-reference/03-http.md#direct-uploads).
 - **Its watchers run here.** Vercel's API matches each event against their
   tails and wakes this route when one matches: see
@@ -62,15 +62,25 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   Vercel's API keeps sync's records: see [Sync](../02-sync/01-overview.md).
 - **It acts as this deployment, or as you.** In a Vercel deployment it sends
   the deployment's OIDC token and writes as its project,
-  `vercel:project:prj_x:production`. Elsewhere it sends `VERCEL_TOKEN`, or
-  your Vercel CLI login, and writes as you. `fetch` sends other credentials.
+  `vercel:project:prj_x:production`. Nothing replaces that token there. Elsewhere it
+  sends `BOARD_TOKEN`, or else your Vercel CLI login (`VERCEL_AUTH_TOKEN`, or
+  `vercel login`'s), and writes as whoever that is. It never sends
+  `VERCEL_TOKEN`, which people set for other reasons. `fetch` sends other credentials.
 - **Only a deployment's own credentials register watchers.** Anyone else's
   (yours, an app's) answer 403 `watchers_need_project`, and
   a board run with them runs its config's watchers in this process: see
   [How it runs](./06-watchers.md#how-it-runs).
+- **Vercel's API limits requests per caller:** a login, a token, or a
+  deployment gets a number of requests a minute, which its responses' `x-ratelimit-limit`
+  says, and every profile writing as it shares them. One call can be several
+  requests: a channel's read is about five, and a filtered or board-wide one
+  more. A request it puts off with 429 goes again after a second, doubling,
+  four times; one it still puts off fails with 429, and `Retry-After` on it
+  says how many seconds until the API's window resets. Its message names the
+  limit, and `vb` prints the wait.
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
-  a scheduled message, labels on a scheduled reply, and a post's `sync`
-  targets. A channel's message and thread counts are left out.
+  a scheduled message and a post's `sync` targets. A channel's message and
+  thread counts are left out.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out
@@ -86,14 +96,14 @@ backend:
 | Option | What it does |
 | --- | --- |
 | `backend` | `local()`, or your own. Default: your team's board in Vercel's API, the one `name` names, or in Node with `BOARD_URL` set, the board there, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
-| `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`. A board at `BOARD_URL` never gets it |
+| `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to the deployment's OIDC token, or else `BOARD_TOKEN`, then `VERCEL_AUTH_TOKEN` or your `vercel login`, never `VERCEL_TOKEN`. A board at `BOARD_URL` never gets it |
 | `name` | Which of the team's boards this is, by its name: `security`. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
 | `team` | Whose board this is: another team's, by its ID or slug, with `name` or without it for that team's default board. Default: the team the environment finds |
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [Callers of your own](#callers-of-your-own) |
 | `middleware` | Runs on every post and edit before it reaches the backend, whatever it came from. See [Middleware](./08-middleware.md) |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack('slack/acme', channels({…})) }`. See [Sync](../02-sync/01-overview.md) |
-| `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
+| `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise only on Vercel and in development (with a warning): a request's sender chooses its Host, so a self-hosted board in production without `url` verifies no tokens and answers 500 `no_board_url` |
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise: a request can only make it look deeper than it is (`/api/board/x/messages/1`), so the board keeps the shallowest it's seen |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |
 
@@ -242,7 +252,8 @@ await team.post('deploys', 'www@a1b2c3 is live')
 In Node it finds the team and credentials as the Vercel CLI and a deployment
 do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
 `.vercel/project.json`'s, unless `team` says another (`acme`). The
-credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
+credentials are the deployment's OIDC token, or else `BOARD_TOKEN`, then
+`VERCEL_AUTH_TOKEN` or your
 `vercel login`, or what `fetch` sends: a deployment writes as its project, and
 you as yourself. Its profile is the one `BOARD_PROFILE` names, or none;
 `team.as(null)` acts as yourself.

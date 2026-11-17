@@ -151,10 +151,11 @@ export function handFetch(send: typeof fetch | null) {
 
 /**
  * A request to Vercel's API as you: through the fetch the CLI that runs board's hands it with its
- * login, which adds its credentials, or with `login` as a Bearer token, through `send`.
+ * login, which adds its credentials, or with `login` as a Bearer token, through `send`. A token
+ * the run was passed goes as a Bearer token always: the app's fetch would add its own login's.
  */
 export function asYou(input: RequestInfo | URL, init: RequestInit, login: string, send: typeof fetch = fetch): Promise<Response> {
-  if (handedFetch && loginHanded()) return handedFetch(input, init)
+  if (passed === null && handedFetch && loginHanded()) return handedFetch(input, init)
   // In `init`, where the redirect guard looks for it to drop it across origins, with a `Request`'s own.
   const headers = new Headers(input instanceof Request ? input.headers : undefined)
   new Headers(init.headers).forEach((value, name) => headers.set(name, value))
@@ -162,15 +163,34 @@ export function asYou(input: RequestInfo | URL, init: RequestInit, login: string
   return send(input, { ...init, headers })
 }
 
-/** Whether the login is one a CLI handed over (`createApp`'s `login`, or `VERCEL_AUTH_TOKEN`). */
-export const loginHanded = () => handed !== null || !!process.env.VERCEL_AUTH_TOKEN
+/** The token someone passed the CLI that runs board's for this run (`vercel board --token`), while there is one. */
+let passed: string | null = null
+
+/** Where `vb whoami` says a passed token came from. */
+export const PASSED = 'the token you passed'
 
 /**
- * Your Vercel login: what the CLI that runs board's hands it, as `vercel board` does (its `login`,
- * or `VERCEL_AUTH_TOKEN` from its `--token`), or else what `vercel login` saved.
+ * Hands board the token someone passed the CLI that runs it, as `vercel board --token` does: the
+ * Vercel login for this run, ahead of everything the environment holds, a deployment's own token
+ * and `BOARD_TOKEN` included. Whoever passed it said who to be, which no variable does. Board
+ * sends it itself, as a Bearer token, never through a handed fetch. Null takes it back.
+ */
+export function handToken(token: string | null) {
+  passed = token
+}
+
+/** The token this run was passed, or null. */
+export const passedToken = () => passed
+
+/** Whether the login is one a CLI handed over (`createApp`'s `token` or `login`, or `VERCEL_AUTH_TOKEN`). */
+export const loginHanded = () => passed !== null || handed !== null || !!process.env.VERCEL_AUTH_TOKEN
+
+/**
+ * Your Vercel login: what the CLI that runs board's hands it, as `vercel board` does (the token
+ * it was passed, its `login`, or `VERCEL_AUTH_TOKEN`), or else what `vercel login` saved.
  */
 export const vercelLogin = () =>
-  handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
+  passed !== null ? Promise.resolve(passed) : handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
 
 /**
  * A handed login's token, which its tokens for boards are cached by: null for `vercel login`'s own. One
@@ -192,16 +212,13 @@ const apiLogin = async (handed: string | null) => handed ?? (await getVercelToke
 /**
  * A person's token: their Vercel CLI login mints a development token for the
  * project the board's host is a deployment of, exchanged so its audience is the
- * board's URL. Cached on disk for its 12-hour life.
+ * board's URL. Cached on disk for its 12-hour life. For a board whose discovery
+ * names a project: one that names none has no token for a login to mint.
  */
 async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
   const login = await handedToken()
   const cached = await readCache(audience, login)
   if (cached) return cached
-  if (!discovery.project_id)
-    throw new BoardError('no_project', `The board at ${audience} doesn't know its Vercel project, so there's no Vercel login token to mint for it.`, 0, {
-      hint: 'Pass a token it accepts in BOARD_TOKEN.',
-    })
 
   const authToken = await apiLogin(login)
   const project = await boardProject(audience, discovery, authToken)
@@ -310,9 +327,12 @@ export type NodeTransport = {
 
 /**
  * How a client reaches the board at `url` from Node: through Deployment Protection, with a token
- * from `token`, `BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the Vercel
- * runtime, or your Vercel CLI login, in that order. Who you are is the token's to say: the board
- * names you from what it verifies.
+ * from `token`, the login a CLI that runs board's was passed (`handToken`), `BOARD_TOKEN`, a local
+ * board's token file (`vb serve`), GitHub Actions, the Vercel runtime, or your Vercel CLI login,
+ * in that order. Who you are is the token's to say: the board
+ * names you from what it verifies. A board with no Vercel project has no token for your login to
+ * mint, so a request goes to it with none: what verifies its callers may know you another way, as
+ * a board behind `tailscale serve` does.
  */
 export function connect(
   url: string,
@@ -338,14 +358,31 @@ export function connect(
       throw error
     }))
 
-  let cached: Cached | null = null
+  /** A token to send, or null for a board there's none to mint for: its requests go without one. */
+  type Minted = { token: string | null; expiresAt: number }
+  let cached: Minted | null = null
   let source: string | null = null
   let person: Promise<Cached> | null = null
+  /** A token minted with your Vercel login, which `from` names. */
+  const asPerson = async (discovered: Discovery, from: string): Promise<Minted> => {
+    person ??= personToken(url, discovered).finally(() => {
+      person = null
+    })
+    const minted = await person
+    source = from
+    return minted
+  }
   // `source` says which of these it picked, for `vb whoami`.
-  const mint = async (): Promise<Cached> => {
+  const mint = async (): Promise<Minted> => {
     if (options.token !== undefined) {
       const token = typeof options.token === 'function' ? await options.token() : options.token
       return { token, expiresAt: expiry(token) }
+    }
+    // A token passed for this run is a Vercel login, never the board's: it mints one, ahead of what
+    // the environment holds. A board with no Vercel project has none for it to mint.
+    if (passed !== null) {
+      const discovered = await discover()
+      if (discovered.project_id) return asPerson(discovered, PASSED)
     }
     if (process.env.BOARD_TOKEN) {
       const token = process.env.BOARD_TOKEN
@@ -368,12 +405,9 @@ export function connect(
       source = 'Vercel OIDC'
       return { token, expiresAt: expiry(token) }
     }
-    person ??= personToken(url, discovered).finally(() => {
-      person = null
-    })
-    const minted = await person
-    source = 'vercel login'
-    return minted
+    // No project, no token a login could mint: the request goes as it is, for the board to say whose it is.
+    if (!discovered.project_id) return { token: null, expiresAt: Date.now() + 5 * 60_000 }
+    return asPerson(discovered, 'vercel login')
   }
   const token = async () => {
     // One handed over is asked again each time: a function returns a fresh one.
@@ -387,10 +421,21 @@ export function connect(
     const path = (href.startsWith(url) ? href.slice(url.length) : new URL(href).pathname).split('?')[0] || '/'
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
     // Discovery is public: it's what a token is minted from.
-    if (!(method === 'GET' && path === '/')) {
-      if (!headers.has('authorization')) headers.set('authorization', `Bearer ${await token()}`)
+    let bare = false
+    if (!(method === 'GET' && path === '/') && !headers.has('authorization')) {
+      const credential = await token()
+      if (credential !== null) headers.set('authorization', `Bearer ${credential}`)
+      else bare = true
     }
-    return doFetch(input, { ...init, headers })
+    const response = await doFetch(input, { ...init, headers })
+    // It went with no token, and the board took it for no one's.
+    if (bare && response.status === 401) {
+      await response.body?.cancel().catch(() => {})
+      throw new BoardError('no_project', `The board at ${url} has no Vercel project to mint you a token for, and doesn't know who you are without one.`, 0, {
+        hint: 'Pass a token it accepts in BOARD_TOKEN.',
+      })
+    }
+    return response
   }) as typeof fetch
 
   return { fetch: send, source: () => source }

@@ -9,8 +9,7 @@ import { caller, personToken, testBoard, BOARD_URL } from './harness.ts'
 // With `stall.on`, its board never answers, whatever the request's signal says, and `stall.seen` keeps those requests.
 // With `stall.bodies`, a file's download answers, and its bytes never come; with `stall.breaks`, its connection drops after one byte.
 type Stall = { on: boolean; seen: Request[]; bodies?: boolean; breaks?: boolean }
-async function handle(stall: Stall = { on: false, seen: [] }) {
-  const served = testBoard()
+async function handle(stall: Stall = { on: false, seen: [] }, served = testBoard()) {
   const token = await personToken('u_ada', BOARD_URL)
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -52,6 +51,15 @@ describe('vb()', () => {
     expect(await vb(team, ['rm', first], { refuse: ['delete'] })).toEqual({ code: 2, stdout: '', stderr: "error: delete isn't available here.\n" })
     // However its flags are grouped: -a and -n with its value, before the command.
     expect(await vb(team, ['-an', '1', 'delete', first], { refuse: ['delete'] })).toEqual({ code: 2, stdout: '', stderr: "error: delete isn't available here.\n" })
+    expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(false)
+    // Or an option one command reads its own way is put first: --claim takes a value until `tasks` is found
+    // and none after, so read that way `delete` would be the command. What was found is what runs, or nothing does.
+    const moved = await vb(team, ['--claim', 'delete', 'tasks', first], { refuse: ['delete'] })
+    expect(moved).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Put --claim after tasks\./) })
+    const posted = await vb(team, ['--claim', 'post', 'tasks', 'made it through'], { refuse: ['post'] })
+    expect(posted).toMatchObject({ code: 2, stdout: '' })
+    expect(JSON.parse((await vb(team, ['read', 'dev', '--text', 'made it through', '--json'])).stdout).threads).toEqual([])
+    expect((await vb(team, ['channels', '--json'])).stdout).not.toContain('"tasks"')
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(false)
     expect((await vb(team, ['rm', first])).code).toBe(0)
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).message.deleted).toBe(true)
@@ -176,7 +184,7 @@ describe('vb()', () => {
       readFile: async (path: string) => (path === '/work/shot.png' ? png : null),
       writeFile: async (path: string, data: Uint8Array) => void saved.set(path, data),
     }
-    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 2, stderr: "error: --attach and --text-file can't read files here: pass readFile in vb()'s options.\n" })
+    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 2, stderr: "error: --attach and --file can't read files here: pass readFile in vb()'s options.\n" })
     expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/missing.png'], files)).toMatchObject({ code: 2, stderr: "error: Can't attach /work/missing.png. There's no such file.\n" })
     const id = (await vb(team, ['post', 'dev', 'proof', '--attach', '/work/shot.png', '--no-sync'], files)).stdout.trim()
     const root = JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message
@@ -197,9 +205,115 @@ describe('vb()', () => {
     ])
     const piped = await vb(team, ['post', 'dev', '-', '--no-sync'], { stdin: 'from stdin\n' })
     expect(JSON.parse((await vb(team, ['read', piped.stdout.trim(), '--json'])).stdout).message.text).toBe('from stdin')
-    // --text-file reads through readFile too: the sandbox's files, not this machine's.
+    // --file reads through readFile too: the sandbox's files, not this machine's.
     const notes = { readFile: async (path: string) => (path === '/work/note.md' ? new TextEncoder().encode('from the sandbox\n') : null) }
-    const written = await vb(team, ['post', 'dev', '--text-file', '/work/note.md', '--no-sync'], notes)
+    const written = await vb(team, ['post', 'dev', '--file', '/work/note.md', '--no-sync'], notes)
     expect(JSON.parse((await vb(team, ['read', written.stdout.trim(), '--json'])).stdout).message.text).toBe('from the sandbox')
+  })
+
+  it('makes a plan of tasks from a file its readFile hands it, or from its stdin', async () => {
+    const team = await handle()
+    const plan = JSON.stringify([{ key: 'fix', text: 'fix the export', labels: { step: 'fix' } }, { text: 'review the fix', needs: [{ key: 'fix' }] }])
+    const files = { readFile: async (path: string) => (path === '/work/plan.json' ? new TextEncoder().encode(plan) : null) }
+    const made = await vb(team, ['tasks', 'create', 'work', '--file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)
+    expect(made).toMatchObject({ code: 0, stderr: '' })
+    const [fix, review] = made.stdout.split('\n').filter(Boolean).map((row) => /^#(\S+)/.exec(row)![1]!)
+    expect(made.stdout.replace(/ +/g, ' ')).toBe(`#${fix} ready fix the export step=fix\n#${review} waiting review the fix needs #${fix}\n`)
+    // The same key again is the same tasks, and a file that isn't there is said as any is.
+    expect((await vb(team, ['tasks', 'create', 'work', '--file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)).stdout).toBe(made.stdout)
+    expect(await vb(team, ['tasks', 'create', 'work', '--file', '/work/missing.json'], files)).toMatchObject({ code: 2, stderr: "error: Can't read /work/missing.json. There's no such file.\n" })
+    // From its stdin, as one document.
+    const piped = await vb(team, ['tasks', 'create', 'piped', '--file', '-', '--json'], { stdin: plan })
+    expect(piped).toMatchObject({ code: 0, stderr: '' })
+    expect(JSON.parse(piped.stdout).tasks.map((root: { text: string; channel: string; task: { state: string } }) => [root.text, root.channel, root.task.state])).toEqual([['fix the export', 'piped', 'ready'], ['review the fix', 'piped', 'waiting']])
+    expect(JSON.parse((await vb(team, ['tasks', '--state', 'all', '--json'])).stdout).tasks).toHaveLength(4)
+  })
+
+  it('works a task over several calls on one handle, which keeps its claim, and runs no command', async () => {
+    const served = testBoard()
+    const stall: Stall = { on: false, seen: [] }
+    const team = await handle(stall, served)
+    const id = (await vb(team, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--label', 'step=fix', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'work'])).toEqual({ code: 0, stdout: `#${id}  ready      fix CVE-123 in acme/web         step=fix\n`, stderr: '' })
+    const claimed = await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=fix', '--json'])
+    expect(claimed).toMatchObject({ code: 0, stderr: '' })
+    // The claim, for the program that called: its token stays with the handle that claimed.
+    const { claim, task } = JSON.parse(claimed.stdout) as { claim: Record<string, unknown>; task: { id: string } }
+    expect(task.id).toBe(id)
+    expect(Object.keys(claim).sort()).toEqual(['epoch', 'until'])
+    // Another handle on the same board, the same person's even, holds none.
+    const other = await handle(undefined, served)
+    expect(await vb(other, ['tasks', 'complete', id, 'not mine'])).toEqual({ code: 1, stdout: '', stderr: `error: You hold no claim on task #${id} as yourself.\n\n  Claim it:\n    vb tasks claim ${id}\n` })
+    expect(await vb(team, ['tasks', 'renew', id, '--json'])).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'complete', id, 'fixed in a1b2c3'])).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message.task).toMatchObject({ state: 'completed', result: 'fixed in a1b2c3' })
+    // Settled, the handle holds it no longer.
+    expect((await vb(team, ['tasks', 'release', id])).stderr).toMatch(/^error: You hold no claim on task/)
+
+    // A claim is its profile's on a handle too: taken with --as, it isn't the handle's own.
+    const reviewed = (await vb(team, ['tasks', 'create', 'work', 'review the fix', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'claim', reviewed, '--as', 'reviewer'])).toMatchObject({ code: 0, stderr: '' })
+    expect((await vb(team, ['tasks', 'complete', reviewed])).stderr).toBe(`error: You hold no claim on task #${reviewed} as yourself.\n\n  Claim it:\n    vb tasks claim ${reviewed}\n`)
+    expect(await vb(team, ['tasks', 'complete', reviewed, 'reviewed', '--as', 'Reviewer'])).toEqual({ code: 0, stdout: `completed ${reviewed}\n`, stderr: '' })
+
+    // What a task waits for is set through the handle too: the tasks named, or nothing.
+    const tagged = (await vb(team, ['tasks', 'create', 'work', 'tag the release', '--no-sync'])).stdout.trim()
+    const shipped = (await vb(team, ['tasks', 'create', 'work', 'ship it', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'needs', shipped, tagged])).toEqual({ code: 0, stdout: `${shipped} needs #${tagged}\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', shipped, '--json'])).stdout).message.task).toMatchObject({ state: 'waiting', needs: [tagged] })
+    expect(await vb(team, ['tasks', 'needs', shipped, '--none'])).toEqual({ code: 0, stdout: `${shipped} needs nothing\n`, stderr: '' })
+    expect(JSON.parse((await vb(team, ['read', shipped, '--json'])).stdout).message.task).toMatchObject({ state: 'ready', needs: [] })
+
+    // What the board holds of a task is its own to say, and the command says what it was doing with the board's words under it.
+    const held = (await vb(team, ['tasks', 'create', 'work', 'a long build', '--no-sync', '--claim'])).stdout.split('  ')[0]!.slice(1)
+    const over = async (args: string[], lines: string[]) => expect(await vb(team, args), args.slice(0, 2).join(' ')).toEqual({ code: 2, stdout: '', stderr: `${lines.join('\n')}\n` })
+    const note = 'x'.repeat(1001)
+    await over(['tasks', 'complete', held, note], [`error: Can't complete task #${held}.`, "  result: a task's result is at most 1,000 characters"])
+    await over(['tasks', 'fail', held, note], [`error: Can't fail task #${held}.`, "  reason: a task's reason is at most 1,000 characters"])
+    await over(['tasks', 'block', held, 'approve the deploy?', '--kind', 'k'.repeat(65)], [`error: Can't block task #${held}.`, '  kind: a kind is up to 64 lowercase letters, numbers, and _.-'])
+    await over(['tasks', 'cancel', held, note], [`error: Can't cancel task #${held}.`, "  reason: a task's reason is at most 1,000 characters"])
+    await over(['tasks', 'create', 'work', 'after them all', ...Array.from({ length: 21 }, (_, n) => ['--needs', String(9000 + n)]).flat()], ["error: Can't create a task in work.", '  needs: a task waits for at most 20 tasks'])
+    await over(['tasks', 'claim', '--ready', 'work', ...Array.from({ length: 33 }, (_, n) => ['--from', `vercel:user:u_${n}`]).flat()], ["error: Can't claim a task in work.", '  from: a claim takes tasks from at most 32 owners'])
+    await over(['tasks', 'needs', shipped, ...Array.from({ length: 21 }, (_, n) => String(9000 + n))], [`error: Can't change what task #${shipped} needs.`, '  needs: a task waits for at most 20 tasks'])
+    // A root's text is a message's: what to do with the long part, where a task takes it.
+    expect(await vb(team, ['tasks', 'create', 'work', 'x'.repeat(10_001)])).toEqual({
+      code: 1,
+      stdout: '',
+      stderr: "error: Can't create a task in work. A message's text is at most 10,000 characters.\n\n  Keep it short, and reply to the task with the long part in a file with --attach\n",
+    })
+    expect(await vb(team, ['tasks', 'complete', held, 'x'.repeat(1000)])).toEqual({ code: 0, stdout: `completed ${held}\n`, stderr: '' })
+
+    // It runs no command on the machine it's called from, and a wait holds every later call: only with a signal.
+    const next = (await vb(team, ['tasks', 'create', 'work', 'run the tests', '--no-sync'])).stdout.trim()
+    expect(await vb(team, ['tasks', 'run', next, '--', 'true'])).toEqual({ code: 2, stdout: '', stderr: "error: tasks run isn't available in-process: it runs a command on this machine.\n" })
+    expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
+    expect(await vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/pass a signal/) })
+    const controller = new AbortController()
+    const waiting = vb(team, ['tasks', 'claim', '--ready', 'work', '--label', 'step=never', '--wait', '1m'], { signal: controller.signal })
+    controller.abort()
+    expect(await waiting).toEqual({ code: 0, stdout: '', stderr: '' })
+
+    // A claim taken by a call with a signal is the handle's: later calls renew and settle it, with a signal or without.
+    const bounded = () => ({ signal: AbortSignal.timeout(30_000) })
+    expect(await vb(team, ['tasks', 'claim', next], bounded())).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'renew', next], bounded())).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(team, ['tasks', 'release', next])).toEqual({ code: 0, stdout: `released ${next}\n`, stderr: '' })
+
+    // Any other task command its signal stops says so, and one that writes says it may have landed: a list doesn't.
+    stall.on = true
+    const stoppedWhile = async (argv: string[]) => {
+      const stopping = new AbortController()
+      const running = vb(team, [...argv, '--json'], { signal: stopping.signal })
+      setTimeout(() => stopping.abort(), 20)
+      const ran = await running
+      return { code: ran.code, ...(JSON.parse(ran.stderr) as { reason: string; message: string; hint?: string }) }
+    }
+    expect(await stoppedWhile(['tasks', 'claim', next])).toMatchObject({ code: 130, reason: 'canceled', message: `Stopped before it could claim task #${next}.`, hint: expect.stringMatching(/may have happened/) })
+    expect(await stoppedWhile(['tasks', 'unblock', next])).toMatchObject({ code: 130, reason: 'canceled', hint: expect.stringMatching(/may have happened/) })
+    const listing = await stoppedWhile(['tasks', 'work'])
+    expect(listing).toMatchObject({ code: 130, reason: 'canceled', message: 'Stopped before it could list tasks in work.' })
+    expect(listing.hint).toBeUndefined()
+    stall.on = false
+    expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
   })
 })

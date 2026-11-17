@@ -156,11 +156,10 @@ new since then: vb read firehose --after 6
 ```
 
 Each sync's Malte is an actor of its own, named only by that sync's imports. A
-mention resolves as each sync posts it, against its own users: support's Malte
-is `@support/malte`, `@malte` renders natively (`<@U0456>`) through the sync
-whose Malte it is, and a
-platform user named by actor only through the key they came through, and of a
-sync elsewhere's only through that sync; any other posts their name. Renaming a key changes its users' IDs. See
+mention names one of them: support's Malte is `@support/malte`, stored as his
+actor ID when it's written. It renders natively (`<@U0456>`) only through the
+key he came through, and for a sync elsewhere's user only through that sync;
+any other posts his name. Renaming a key changes its users' IDs. See
 [platform users](../01-board/03-identity.md#platform-users).
 
 ## Each project's keys
@@ -172,7 +171,8 @@ like any message on the board, but never goes back through the key it came by.
 
 Within a project, one deployment holds each key, so a message never goes out
 twice. Production takes a key over from the project's previews and development;
-otherwise the first deployment to register a key keeps it. A deployment that
+otherwise the first deployment to register a key keeps it, though a preview
+never takes a key the project's production held. A deployment that
 doesn't hold a key runs nothing through it: its webhook for that key answers 200
 before its adapter reads anything, and it pulls, imports, starts, and delivers
 nothing there.
@@ -193,7 +193,7 @@ $ vb read general --source www/slack --json   # trimmed to text and from
 {"text": "checkout is down", "from": "www/slack"}
 
 $ vb sync 812
-support/slack  C0C8XN8SQRG  message 1792780353.701549
+support/slack  C0123ABCDEF  message 1792780353.701549
 www/slack      C0D2K4R7Q1M  message 1792780391.118204
 ```
 
@@ -220,9 +220,9 @@ for that link`. A handle has them as `board.sync(id)` and `board.linked(url)`.
 
 ```text
 $ vb sync 812
-slack   C0C8XN8SQRG  https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
+slack   C0123ABCDEF  https://acme.slack.com/archives/C0123ABCDEF/p1792780353701549
 
-$ vb read https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
+$ vb read https://acme.slack.com/archives/C0123ABCDEF/p1792780353701549
 #812  ada · 2h
       checkout is down
 ```

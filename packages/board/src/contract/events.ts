@@ -18,6 +18,9 @@ import {
   RemoteWatcherId,
   CAN_MAX,
   storable,
+  TASK_NEEDS_MAX,
+  TaskHoldKind,
+  TaskNote,
 } from './schemas.ts'
 import { ExternalEvent, ExternalTarget, Link, LINKS_PER_MESSAGE_MAX, Origin } from './external.ts'
 
@@ -26,6 +29,16 @@ const From = z.string().nullable()
 
 /** The thread key: the event ID of the thread's root. Lanes and sync state are keyed by it. */
 const ThreadKey = z.string().min(1).max(200).refine(storable, 'thread key has a NUL character or a lone surrogate')
+
+/** The task an event changes: its root's ID, and the root's thread key, which lanes go by. */
+const Task = { id: MessageId, thread: ThreadKey }
+/** The most events a new thread's own append carries after its post: `task.created`, `task.ready`, and `task.claimed`. */
+export const ALONG_MAX = 3
+
+/** Which claim of a task this is: 1 for its first, one more for each after. A write that names an older one changes nothing. */
+const Epoch = z.number().int().positive()
+/** When a claim's lease runs out, as an ISO time. */
+const Until = z.string().datetime()
 
 /** The board's one log. Every board fact is an event in session `board`. */
 export const boardEvents = {
@@ -55,6 +68,12 @@ export const boardEvents = {
        * from before channel access have none: everyone read everything then.
        */
       blind: z.literal(true).optional(),
+      /**
+       * (server) How many events right after it, in its own append, are about it: what made a new
+       * thread a task. A writer that can't read its channel gets those back with its post on a
+       * retry, and nothing written since. A post that came alone has none.
+       */
+      along: z.number().int().positive().max(ALONG_MAX).optional(),
       /**
        * (server) The principal of the sync elsewhere that imported it, whose copy `origin` names:
        * that sync's to act on. None for the board's own sync, or a write on the board.
@@ -128,6 +147,36 @@ export const boardEvents = {
       target: ExternalTarget,
       error: z.string().min(1).max(500),
     }),
+    /**
+     * The thread rooted at `id` is a task, and `by.principal` owns it. It waits while it has `needs`,
+     * until `task.ready` says they've all completed; with none, it's ready.
+     */
+    'task.created': z.object({ ...Task, needs: z.array(MessageId).max(TASK_NEEDS_MAX), for: ActorId.nullable(), by: Author }),
+    /** Only actor `for` claims it now, or with null, anyone who may. */
+    'task.assigned': z.object({ ...Task, for: ActorId.nullable(), by: Author }),
+    /**
+     * It waits for `needs` now, in place of what it waited for. As from `task.created`, it waits
+     * while it has any, until `task.ready` says they've all completed, and with none it's ready. One
+     * that's held stays held.
+     */
+    'task.needs_changed': z.object({ ...Task, needs: z.array(MessageId).max(TASK_NEEDS_MAX), by: Author }),
+    /** (server) Every task it needs has completed. */
+    'task.ready': z.object(Task),
+    /** (server) `by` holds it until `until`. `token` is the SHA-256 of the claim's secret, hex: no view shows it. */
+    'task.claimed': z.object({ ...Task, epoch: Epoch, until: Until, token: z.string().regex(/^[0-9a-f]{64}$/), by: Author }),
+    'task.renewed': z.object({ ...Task, epoch: Epoch, until: Until, by: Author }),
+    'task.released': z.object({ ...Task, epoch: Epoch, by: Author }),
+    /** (server) Its lease ran out. */
+    'task.expired': z.object({ ...Task, epoch: Epoch }),
+    'task.completed': z.object({ ...Task, epoch: Epoch, result: TaskNote.nullable(), by: Author }),
+    'task.failed': z.object({ ...Task, epoch: Epoch, reason: TaskNote, by: Author }),
+    /** Held for a person, which ends any claim. Kind `edited` is the board's: `by` edited its root, and isn't its owner. */
+    'task.blocked': z.object({ ...Task, kind: TaskHoldKind.nullable(), reason: TaskNote, by: Author }),
+    'task.unblocked': z.object({ ...Task, by: Author }),
+    /** Reason `deleted` when its root was. */
+    'task.canceled': z.object({ ...Task, reason: TaskNote, by: Author }),
+    /** A failed task is ready again. */
+    'task.reopened': z.object({ ...Task, by: Author }),
     'actor.seen': z.object({
       actor: ActorId,
       kind: SeenActorKind,

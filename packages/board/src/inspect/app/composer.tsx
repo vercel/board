@@ -1,9 +1,12 @@
-import { CloudOff, FileText, Paperclip, Tag, X } from 'lucide-react'
+import { Clock, CloudOff, FileText, ListTodo, Paperclip, Tag, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { fileSize } from '../../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX } from '../../contract/schemas.ts'
-import * as board from './board.ts'
-import { LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
+import type { ScheduleTiming } from '../../server/index.default.ts'
+import { toast } from './chrome.ts'
+import { profilesOf, type State } from './store.ts'
+import { actorFor, taskIds } from './task.tsx'
+import { fieldMenu, LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
+import { fileSize, laterFields, timingWords } from './words.ts'
 
 // Just Chat's composer: one outlined box, the textarea, a quiet toolbar.
 // Enter sends, Shift+Enter breaks a line, ⌘B / ⌘I / ⌘E format, lists continue,
@@ -37,7 +40,17 @@ function insert(el: HTMLTextAreaElement, start: number, end: number, text: strin
 
 const LIST_ITEM = /^(\s*)([-*]|\d+\.)\s(.*)$/
 
-export type Send = { text: string; noSync: boolean; channel: string; labels: Record<string, string>; files: File[] }
+export type Send = {
+  text: string
+  noSync: boolean
+  channel: string
+  labels: Record<string, string>
+  files: File[]
+  /** Set when the thread starts as a task: what it waits for, and the actor it's for. */
+  task?: { needs: string[]; for: string | null }
+  /** Set to post it later: when, and how often. */
+  later?: ScheduleTiming
+}
 
 export function Composer(props: {
   scope: string
@@ -46,11 +59,24 @@ export function Composer(props: {
   placeholder: string
   known: KnownLabels
   channels?: string[]
+  /** The channel it starts on, where it picks one. */
+  channel?: string
+  /** Where a new thread can start as a task: the page's state, for who you are and what's open; `always` for a view that only starts tasks. */
+  tasks?: { state: State; always?: boolean }
   onSend: (send: Send) => void
   onEditLast?: () => void
 }) {
   const [text, setText] = useState(() => readDraft(props.scope))
-  const [channel, setChannel] = useState('')
+  const [channel, setChannel] = useState(props.channel ?? '')
+  const [task, setTask] = useState(props.tasks?.always ?? false)
+  const [needs, setNeeds] = useState('')
+  // What a task waits for and who it's for: there when wanted, out of the way until then.
+  const [detail, setDetail] = useState(false)
+  const [later, setLater] = useState<ScheduleTiming | null>(null)
+  const [laterOpen, setLaterOpen] = useState(false)
+  const [assignee, setAssignee] = useState('')
+  const tasking = props.tasks
+  const asTask = tasking !== undefined && task
   const [noSync, setNoSync] = useState(false)
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [labelsOpen, setLabelsOpen] = useState(false)
@@ -62,12 +88,12 @@ export function Composer(props: {
   const attach = (added: File[]) => {
     const fitting = added.filter((file) => {
       if (file.size <= ATTACHMENT_BYTES_MAX) return true
-      board.toast(`${file.name} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
+      toast(`${file.name} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
       return false
     })
     setFiles((current) => {
       const next = [...current, ...fitting]
-      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) board.toast(`a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX} files`)
+      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) toast(`a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX} files`)
       return next.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)
     })
     area.current?.focus()
@@ -94,11 +120,25 @@ export function Composer(props: {
 
   const send = () => {
     if (!text.trim() && files.length === 0) return
-    if (props.channels && !target) return board.toast('pick a channel to post in')
-    props.onSend({ text: text.trim(), noSync, channel: target, labels, files })
+    if (props.channels && !target) return toast('pick a channel to post in')
+    const me = tasking?.state.me
+    props.onSend({
+      text: text.trim(),
+      noSync,
+      channel: target,
+      labels,
+      files,
+      ...(asTask && me ? { task: { needs: taskIds(needs), for: assignee.trim() ? actorFor(me.principal, assignee) : null } } : {}),
+      ...(later && !asTask ? { later } : {}),
+    })
+    setLater(null)
     change('')
     setLabels({})
     setFiles([])
+    setNeeds('')
+    setAssignee('')
+    setDetail(false)
+    setTask(props.tasks?.always ?? false)
   }
 
   const wrap = (el: HTMLTextAreaElement, marker: string) => {
@@ -169,6 +209,15 @@ export function Composer(props: {
             )}
             onEnter={() => area.current?.focus()}
           />
+        )}
+        {asTask && (detail || needs.trim() !== '' || assignee.trim() !== '') && (
+          <div className="composer-task">
+            <label className="suggest grow" title="the tasks this one waits for, by their IDs">
+              <span className="prefix">needs</span>
+              <input value={needs} onChange={(event) => setNeeds(event.target.value)} placeholder="task IDs it waits for" spellCheck={false} />
+            </label>
+            <Suggest className="grow" prefix="for" value={assignee} onChange={setAssignee} items={profilesOf(tasking.state, tasking.state.me?.principal ?? '')} placeholder="anyone, or one of your profiles" onEnter={() => area.current?.focus()} />
+          </div>
         )}
         {labelEntries.length > 0 && (
           <div className="chips composer-labels">
@@ -244,6 +293,7 @@ export function Composer(props: {
               </>
             }
             triggerTitle="labels for this message"
+            align="start"
             open={labelsOpen}
             onOpenChange={setLabelsOpen}
           >
@@ -269,12 +319,105 @@ export function Composer(props: {
             <CloudOff size={14} />
             {noSync && <span className="tool-label">board only</span>}
           </button>
+          {tasking && !tasking.always && (
+            <button
+              className={`tool${task ? ' on' : ''}`}
+              aria-pressed={task}
+              title={task ? 'starts as a task: a thread with a state, for agents to claim (click for a plain thread)' : 'start it as a task'}
+              onClick={() => {
+                setTask(!task)
+              }}
+            >
+              <ListTodo size={14} />
+              {task && <span className="tool-label">task</span>}
+            </button>
+          )}
+          {asTask && (
+            <button className={`tool${detail ? ' on' : ''}`} aria-pressed={detail} title="what it waits for, and who it's for" onClick={() => setDetail(!detail)}>
+              <span className="tool-label">needs, for</span>
+            </button>
+          )}
+          {!asTask && (
+            <Panel
+              title="send later"
+              trigger={
+                <>
+                  <Clock size={14} />
+                  {later && <span className="tool-label">{timingWords(later)}</span>}
+                </>
+              }
+              triggerClass={`tool${later ? ' on' : ''}`}
+              align="start"
+              open={laterOpen}
+              onOpenChange={setLaterOpen}
+            >
+              <Later
+                value={later}
+                onSet={(next) => {
+                  setLater(next)
+                  setLaterOpen(false)
+                  area.current?.focus()
+                }}
+              />
+            </Panel>
+          )}
           <span className="hint">enter to send · shift+enter for a new line</span>
           <button className="send" disabled={!canSend} onMouseDown={(event) => event.preventDefault()} onClick={send}>
-            send
+            {asTask ? 'start task' : later ? 'schedule' : 'send'}
           </button>
         </div>
       </div>
     </div>
+  )
+}
+
+/** When a message goes out: in a while or at a time, and again every so often. The board checks it. */
+function Later({ value, onSet }: { value: ScheduleTiming | null; onSet: (timing: ScheduleTiming | null) => void }) {
+  const start = laterFields(value)
+  const [after, setAfter] = useState(start.after)
+  const [at, setAt] = useState(start.at)
+  const [every, setEvery] = useState(start.every)
+  const [times, setTimes] = useState(start.times)
+  const set = () =>
+    onSet({
+      ...(after.trim() ? { in: after.trim() } : at ? { at: new Date(at).toISOString() } : {}),
+      ...(every.trim() ? { every: every.trim() } : {}),
+      ...(every.trim() && Number(times) > 0 ? { times: Number(times) } : {}),
+    })
+  const ready = after.trim() !== '' || at !== '' || every.trim() !== ''
+  return (
+    <form
+      className="ask"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (ready) set()
+      }}
+      {...fieldMenu}
+    >
+      <div className="label-add">
+        <Suggest className="grow" prefix="in" value={after} onChange={setAfter} items={['10m', '1h', '3h', '1d']} placeholder="2h" autoFocus onEnter={() => ready && set()} />
+        <span className="faint">or at</span>
+        <label className="suggest grow">
+          <input type="datetime-local" value={at} disabled={after.trim() !== ''} onChange={(event) => setAt(event.target.value)} />
+        </label>
+      </div>
+      <div className="label-add">
+        <Suggest className="grow" prefix="every" value={every} onChange={setEvery} items={['1h', '1d', '7d']} placeholder="never" onEnter={() => ready && set()} />
+        <label className="suggest grow" title="stop after this many sends">
+          <span className="prefix">times</span>
+          <input value={times} disabled={!every.trim()} onChange={(event) => setTimes(event.target.value.replace(/\D/g, ''))} placeholder="no limit" inputMode="numeric" />
+        </label>
+      </div>
+      <div className="label-add end">
+        {value && (
+          <button type="button" className="clear" onClick={() => onSet(null)}>
+            send now instead
+          </button>
+        )}
+        <button type="submit" className="send small" disabled={!ready}>
+          set
+        </button>
+      </div>
+    </form>
   )
 }

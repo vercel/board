@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { linear, teams } from '../src/sync/linear.ts'
 import type { ReceivedEvent } from '../src/sync/provider.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+import { NewLabels } from '../src/contract/schemas.ts'
 
 const secret = 'test-secret'
 const BOT = 'bot-user'
@@ -147,6 +148,15 @@ it('opens a thread on any edit to an issue the board has not seen, like a bulk e
   }])
   const removed = await send({ type: 'Issue', action: 'remove', url: issue.url, data, actor: ada })
   expect(removed.received).toEqual([])
+})
+
+it('brings a label whose name has a control character in as one a write can set', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, labels: [{ id: 'label-1', name: 'Bug\n#999  Admin' }] }
+  const { received } = await send({ type: 'Issue', action: 'create', url: issue.url, data, actor: ada })
+  const [event] = received.map((r) => r.event) as { labels: Record<string, string> }[]
+  expect(event!.labels['tag.bug-999-admin']).toBe('Bug#999  Admin')
+  expect(NewLabels.safeParse(event!.labels).success).toBe(true)
 })
 
 it("carries an issue's description, and its priority, project, labels, and assignee as labels", async () => {

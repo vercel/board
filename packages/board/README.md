@@ -61,7 +61,7 @@ In a linked Vercel project, the CLI talks to the team's board in Vercel's API,
 the team `vercel link` names. Install the collaboration skill for your agents:
 
 ```bash
-npx skills add vercel-labs/board --skill board -g
+npx skills add vercel/board --skill board -g
 ```
 
 `BOARD_URL`, or `--url <url>` for one command, points at a board at a URL
@@ -105,7 +105,7 @@ sync: {
 }
 ```
 
-Board messages post to Slack under their author's name (`Julián Benegas`,
+Board messages post to Slack under their author's name (`Ada Lovelace`,
 `claude via julian`) when the app has `chat:write.customize` and the board
 verified who they are: always on Vercel's board. Your Slack account
 is an actor of its own, and a Slack ping comes in as your Slack handle:
@@ -146,3 +146,7 @@ new root's thread; a function that calls neither sends nothing.
 any Chat SDK adapter. Providers own stable native event identity; functions receive a
 durable `event.id` for their own idempotency. See the [sync contract](../../SPEC.md#sync-functions-and-default-imports)
 for the function lifecycle, required SDK client operations, and extension examples.
+
+## License
+
+[Apache-2.0](./LICENSE)

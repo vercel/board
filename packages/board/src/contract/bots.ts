@@ -89,11 +89,25 @@ export function formatVercelDeployments(deployments: VercelDeployment[]): string
 }
 
 /**
- * A message's text as people should see it: known bot messages in their
- * readable form, anything else as is. Only the bot itself gets that form, so
- * no one can hide a message's text behind a look-alike table.
+ * Whether Vercel for GitHub's bot wrote it: the bot itself, where its platform ID is its actor, or,
+ * on a board where an import is by a profile of the syncing principal
+ * (`<principal>+github:user:35613825`), that principal's import of it from GitHub, which the board
+ * checked (`verified`). A profile that only carries the bot's name, or one that isn't an import, isn't.
  */
-export function displayText(text: string, actor: string): string {
-  const deployments = actor === VERCEL_BOT ? vercelDeployments(text) : null
+export function byVercelBot(
+  written: { by: { actor: string; profile: string | null }; from?: string | null },
+  author: { kind: string; platform?: string | undefined; verified?: true | undefined } | null | undefined,
+): boolean {
+  if (written.by.actor === VERCEL_BOT) return true
+  return written.by.profile === VERCEL_BOT && !!written.from && author?.kind === 'external' && author.verified === true && author.platform === 'github'
+}
+
+/**
+ * A message's text as people should see it: known bot messages in their
+ * readable form, anything else as is. Only the bot itself gets that form
+ * (`byVercelBot`), so no one can hide a message's text behind a look-alike table.
+ */
+export function displayText(text: string, bot: boolean): string {
+  const deployments = bot ? vercelDeployments(text) : null
   return deployments ? `**▲ Vercel**\n${formatVercelDeployments(deployments)}` : text
 }

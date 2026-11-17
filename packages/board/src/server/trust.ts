@@ -22,7 +22,7 @@ import {
 import type { Identity, Trust } from './backend.ts'
 import type { Decided } from './policy.ts'
 import { whileHeadMoves } from './writes.ts'
-import { badRequest, forbidden, notFound } from './errors.ts'
+import { badRequest, forbidden, HttpError, notFound } from './errors.ts'
 
 /** A grant as the fold keeps it: `event` is the index of the event that made it, null for the one the board starts with. */
 type GrantRow = { id: number; event: number | null; principals: GrantPrincipal[]; can: WrittenCan; by: string | null; at: number | null }
@@ -136,9 +136,14 @@ const storedGrant = (row: GrantRow): StoredGrant => ({ id: grantId(row.id), prin
  * repository's run with what it says of its workflow, branch (main unless it says), and event, or an issuer's token with
  * its claims. A board that verifies tokens itself looks no names up, so a name is a 400.
  */
-function principalNamed(query: Protocol['explain']['input'], team: string | null): Known {
+function principalNamed(query: Protocol['explain']['input'], team: string | null, logins: boolean): Known {
   if (query.user !== undefined) {
-    if (query.user.includes('@')) throw badRequest(`this board can't look up ${query.user}: it verifies tokens itself, so name the user by ID`)
+    if (query.user.includes('@')) {
+      if (!logins) throw badRequest(`this board can't look up ${query.user}: it verifies tokens itself, so name the user by ID`)
+      // Where people are their logins, one is the user's ID, as a grant keeps it.
+      const login = query.user.toLowerCase()
+      return { id: `vercel:user:${login}`, kind: 'person', handle: login }
+    }
     return { id: `vercel:user:${query.user}`, kind: 'person', handle: query.user }
   }
   if (query.project !== undefined) {
@@ -223,32 +228,75 @@ async function changerAccess({ principal }: Identity, grants: readonly StoredGra
   return { caller, own }
 }
 
+const NO_ACCESS = compileAccess([])
+
+/** What a grant write is judged by: the caller's access on the grants it appends to, and, where a lockout is judged, on the grants it'd leave. */
+type Standing = { caller: Access; own: Access; then?: { caller: Access; own: Access } }
+
 /**
- * A 403 unless `identity` may change grants so, on `before`, the grants the write appends to, and
- * `after`, as they'd be: `checkGrantChange`'s rule, which Vercel's API runs too. `changed` is a
- * grant made or widened, `revoked` one revoked, removed from, or updated, as it was. A refusal that
- * involves a stored grant names its patterns only to whoever may list the grants.
+ * What `identity`'s grant write is judged by on `before`, the grants it appends to: null for an
+ * owner no `x-board-can` narrows. With `left`, the grants as the write would leave them, a lockout
+ * is judged too: a caller that says `lockMeOut` passes none.
  */
+async function standingOf(identity: Identity, before: readonly StoredGrant[], accessIn: AccessIn, left?: readonly StoredGrant[]): Promise<Standing | null> {
+  const access = await changerAccess(identity, before, accessIn)
+  if (access === null || left === undefined) return access
+  const { principal } = identity
+  // An owner's access is its `x-board-can`, which no grant changes.
+  if (isOwner(principal)) return { ...access, then: access }
+  const [caller, own] = await Promise.all([accessIn(principal, left), accessIn(principal, withoutEveryone(left))])
+  return { ...access, then: { caller: caller ?? NO_ACCESS, own: own ?? NO_ACCESS } }
+}
+
+/** How a refusal names a grant write: `what` after "can't" (`revoke g5`), and `doing` as what would do something (`revoking g5`). */
+type Named = { what: string; doing: string }
+const THIS_GRANT: Named = { what: 'this grant', doing: 'this grant' }
+
+/**
+ * A refusal unless `standing` may change grants so, with `after` as they'd be:
+ * `checkGrantChange`'s rule, which Vercel's API runs too. `changed` is a grant made or widened,
+ * `revoked` one revoked, removed from, or updated, as it was. What the caller may not do is a 403;
+ * what it may, and couldn't take back, a 409 `grant_lockout`. A refusal that involves a stored
+ * grant names its patterns only to whoever may list the grants.
+ */
+function judge(
+  identity: Identity,
+  standing: Standing | null,
+  change: { changed?: { can: WrittenCan }; revoked?: { can: WrittenCan } },
+  after: readonly GrantShape[],
+  { what, doing }: Named = THIS_GRANT,
+) {
+  if (standing === null) return
+  const refused = checkGrantChange({ ...standing, after, ...change })
+  if (refused?.reason === 'reach') {
+    if (change.revoked && !lists(identity)) throw unreachable(what)
+    throw forbidden(`${change.revoked ? `this token can't ${what}: it` : what} reaches ${refused.pattern}, where you can't manage grants`)
+  }
+  if (refused?.reason === 'lockout') {
+    const where = change.revoked && !lists(identity) ? 'where it reaches' : `in ${refused.pattern}`
+    throw new HttpError(409, 'grant_lockout', `${doing} would leave you unable to manage grants ${where}`, {
+      hint: 'Name yourself with manage there, in a grant made before it or in the same write. Or send lockMeOut to go ahead: only someone who still manages grants there could change it then.',
+    })
+  }
+  if (refused) throw forbidden(`you can't let anyone in: everyone gets ${refused.permission} in ${refused.pattern}, which you can't`)
+}
+
+/** `judge`, for a write that asks once: on `before`, the grants it appends to, and for a lockout, on `left`. */
 async function mayGrant(
   identity: Identity,
   change: { changed?: { can: WrittenCan }; revoked?: { can: WrittenCan } },
   before: readonly StoredGrant[],
   after: readonly GrantShape[],
   accessIn: AccessIn,
-  what = 'this grant',
+  named: Named = THIS_GRANT,
+  left?: readonly StoredGrant[],
 ) {
-  const access = await changerAccess(identity, before, accessIn)
-  if (access === null) return
-  const refused = checkGrantChange({ ...access, after, ...change })
-  if (refused?.reason === 'reach') {
-    if (change.revoked && !lists(identity)) throw unreachable(what)
-    throw forbidden(`${change.revoked ? `this token can't ${what}: it` : what} reaches ${refused.pattern}, where you can't manage grants`)
-  }
-  if (refused) throw forbidden(`you can't let anyone in: everyone gets ${refused.permission} in ${refused.pattern}, which you can't`)
+  judge(identity, await standingOf(identity, before, accessIn, left), change, after, named)
 }
 
 /** An oidc principal: naming one makes the board fetch its issuer's keys, so it takes manage everywhere. */
 const namesIssuer = (principals: readonly GrantPrincipal[]) => principals.some((principal) => principal.kind === 'oidc')
+const ISSUER: Named = { what: 'naming an oidc issuer', doing: 'naming an oidc issuer' }
 
 /**
  * The event that makes `input`'s change to a grant in `state`, or why it can't: manage at its
@@ -256,7 +304,7 @@ const namesIssuer = (principals: readonly GrantPrincipal[]) => principals.some((
  * name an oidc issuer. A removal goes by who a principal is; an add joins one the grant names
  * already. `issuers` are the ones the board's rules trust.
  */
-async function updated(identity: Identity, state: AccessState, { id, add, remove, can }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn, team: string | null) {
+async function updated(identity: Identity, state: AccessState, { id, add, remove, can, lockMeOut }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn, team: string | null, logins: boolean) {
   const index = indexOf(id)
   const row = index === null ? undefined : state.grants[index]
   if (!row) {
@@ -265,19 +313,20 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
     throw notFound(`grant not found: ${id}`, 'grant_not_found')
   }
   const before = Object.values(state.grants).map(storedGrant)
+  const named: Named = { what: `update ${id}`, doing: `updating ${id}` }
   // Whom it names is only news to someone who may change it: reach first, before any removal is checked.
-  await mayGrant(identity, { revoked: row }, before, before.filter((other) => other.id !== storedGrant(row).id), accessIn, `update ${id}`)
+  await mayGrant(identity, { revoked: row }, before, before.filter((other) => other.id !== storedGrant(row).id), accessIn, named)
   const others = grantIssuers(Object.values(state.grants).filter((other) => other.id !== row.id).map(storedGrant))
   let principals = [...row.principals]
   for (const input of remove ?? []) {
-    const removal = checkPrincipal(input, [...issuers, ...others], true)
+    const removal = checkPrincipal(input, [...issuers, ...others], true, null, logins)
     const kept = principals.filter((principal) => !removes(removal, principal))
     if (kept.length === principals.length) throw badRequest(`${id} doesn't name that ${removal.kind} principal`, 'not_in_grant')
     principals = kept
   }
   for (const input of add ?? []) {
     // Checked against every issuer it would sit beside: its own grant's, and those it adds before it.
-    const added = checkPrincipal(input, [...issuers, ...others, ...grantIssuers([{ principals }])], false, team)
+    const added = checkPrincipal(input, [...issuers, ...others, ...grantIssuers([{ principals }])], false, team, logins)
     const at = principals.findIndex((principal) => joined(added, principal) !== null)
     if (at === -1) principals.push(added)
     else principals[at] = joined(added, principals[at]!)!
@@ -286,10 +335,10 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
   if (principals.length > 32) throw badRequest('a grant names at most 32 principals', 'invalid_grant')
   const next = can === undefined ? row.can : checkCan(can)
   // As it was, it's lifted, so it's judged by reach; adding principals or setting `can` widens it too.
-  const after = [...Object.values(state.grants).filter((other) => other.id !== row.id), { principals, can: next }]
+  const after = [...before.filter((other) => other.id !== storedGrant(row).id), { id: storedGrant(row).id, principals, can: next }]
   const widens = add !== undefined || can !== undefined
-  await mayGrant(identity, { revoked: row, ...(widens ? { changed: { can: next } } : {}) }, before, after, accessIn, `update ${id}`)
-  if (namesIssuer(principals.filter((principal) => !row.principals.includes(principal)))) await mayGrant(identity, { changed: { can: { '*': 'all' } } }, before, after, accessIn, 'naming an oidc issuer')
+  await mayGrant(identity, { revoked: row, ...(widens ? { changed: { can: next } } : {}) }, before, after, accessIn, named, lockMeOut ? undefined : after)
+  if (namesIssuer(principals.filter((principal) => !row.principals.includes(principal)))) await mayGrant(identity, { changed: { can: { '*': 'all' } } }, before, after, accessIn, ISSUER)
   return { type: 'grant.updated' as const, payload: { id: row.id, principals: principals as never, can: next as never, by: identity.actor.id } }
 }
 
@@ -306,7 +355,10 @@ export function createTrust(options: {
   explain: (principal: Known, channel: string) => Promise<Decided>
   /** The board's own Vercel team, where it's known: a project a grant names is kept on it, and one explain names is taken to be on it. */
   team: () => Promise<string | null>
+  /** Whether board()'s verifier names people by their logins: a grant then names a user by one. */
+  logins?: () => boolean
 }) {
+  const logins = () => options.logins?.() ?? false
   const accessIn: AccessIn = (principal, grants) => options.accessNow(principal, grants)
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
   const read = async () => (await session.state(accessReducer)).state
@@ -319,34 +371,57 @@ export function createTrust(options: {
     },
   }
 
+  /**
+   * Makes `bodies`' grants in one append, all or none, in the order given. Each is judged on the
+   * grants as they are when it lands (another write in between makes it look again), admission and
+   * a lockout with all of them made: so a lock and the grant that keeps its maker in pass
+   * together, whichever comes first.
+   */
+  async function create(identity: Identity, bodies: readonly Protocol['createGrants']['input']['grants'][number][], lockMeOut: boolean | undefined): Promise<GrantView[]> {
+    const team = await options.team()
+    const rows = await whileHeadMoves(async () => {
+      const { state, index } = await latest()
+      const before = Object.values(state.grants).map(storedGrant)
+      const made: StoredGrant[] = []
+      // Each against the issuers of the grants before it in the write too: two that name the same principals can't sit side by side.
+      for (const body of bodies) made.push({ id: grantId(state.nextGrant + made.length), ...checkGrant(body, grantIssuers([...before, ...made]), team, logins()) })
+      const after = [...before, ...made]
+      const standing = await standingOf(identity, before, accessIn, lockMeOut ? undefined : after)
+      made.forEach((grant, at) => {
+        const named: Named = made.length === 1 ? THIS_GRANT : { what: `grant ${at + 1} of ${made.length}`, doing: `grant ${at + 1} of ${made.length}` }
+        judge(identity, standing, { changed: grant }, after, named)
+        // No lockout to judge here: the grant it stands for isn't one the write makes.
+        if (namesIssuer(grant.principals)) judge(identity, standing && { caller: standing.caller, own: standing.own }, { changed: { can: { '*': 'all' } } }, after, ISSUER)
+      })
+      return session.append.ifLastIndex(index, ...made.map((grant) => ({ type: 'grant.created' as const, payload: { principals: grant.principals as never, can: grant.can as never, by: identity.actor.id } })))
+    })
+    const { grants } = await read()
+    return rows.map((row) => {
+      const made = Object.values(grants).find((grant) => grant.event === row.index)
+      if (!made) throw new Error('a grant was made but its log has no record of it')
+      return grantView(made)
+    })
+  }
+
   return {
     trust,
     async grants(identity: Identity): Promise<Protocol['grants']['output']> {
       mayList(identity, 'list grants')
       return { grants: Object.values((await read()).grants).sort((a, b) => a.id - b.id).map(grantView) }
     },
-    async createGrant(identity: Identity, body: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
-      // Checked against the grants as they are when it lands: another write in between makes it look again.
-      const team = await options.team()
-      const [row] = await whileHeadMoves(async () => {
-        const { state, index } = await latest()
-        const checked = checkGrant(body, grantIssuers(Object.values(state.grants).map(storedGrant)), team)
-        const before = Object.values(state.grants).map(storedGrant)
-        const after = [...before, checked]
-        await mayGrant(identity, { changed: checked }, before, after, accessIn)
-        if (namesIssuer(checked.principals)) await mayGrant(identity, { changed: { can: { '*': 'all' } } }, before, after, accessIn, 'naming an oidc issuer')
-        return session.append.ifLastIndex(index, { type: 'grant.created', payload: { principals: checked.principals as never, can: checked.can as never, by: identity.actor.id } })
-      })
-      const made = row && Object.values((await read()).grants).find((grant) => grant.event === row.index)
-      if (!made) throw new Error('a grant was made but its log has no record of it')
-      return { grant: grantView(made) }
+    async createGrant(identity: Identity, { lockMeOut, ...body }: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
+      const [grant] = await create(identity, [body], lockMeOut)
+      return { grant: grant! }
+    },
+    async createGrants(identity: Identity, { grants, lockMeOut }: Protocol['createGrants']['input']): Promise<Protocol['createGrants']['output']> {
+      return { grants: await create(identity, grants, lockMeOut) }
     },
     async updateGrant(identity: Identity, input: Protocol['updateGrant']['input']): Promise<Protocol['updateGrant']['output']> {
       // On the grant as it is when it lands: an add or a remove in between makes it look again, so none is lost.
       const team = await options.team()
       const id = await whileHeadMoves(async () => {
         const { state, index } = await latest()
-        const event = await updated(identity, state, input, [], accessIn, team)
+        const event = await updated(identity, state, input, [], accessIn, team, logins())
         await session.append.ifLastIndex(index, event)
         return event.payload.id
       })
@@ -359,7 +434,7 @@ export function createTrust(options: {
       // A local board has no apps, so nothing lets one in, whatever its grants name.
       if (query.app !== undefined) return { channel: query.channel, pattern: null, over: [], level: null, grants: [], capped: null, can: [] }
       const { id, kind, handle, facts, scope } = identity.principal
-      const principal: Known = named ? principalNamed(query, await options.team()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}) }
+      const principal: Known = named ? principalNamed(query, await options.team(), logins()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}) }
       const decided = await options.explain(principal, query.channel)
       const { grants } = await read()
       // A grant names whom else it lets in: only those who may list grants see which decided.
@@ -378,7 +453,7 @@ export function createTrust(options: {
         can: decided.permissions,
       }
     },
-    async revokeGrant(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeGrant']['output']> {
+    async revokeGrant(identity: Identity, { id, lockMeOut }: Protocol['revokeGrant']['input']): Promise<Protocol['revokeGrant']['output']> {
       return whileHeadMoves(async () => {
         const { state, index } = await latest()
         const at = indexOf(id)
@@ -389,7 +464,8 @@ export function createTrust(options: {
           return { revoked: false }
         }
         const before = Object.values(state.grants).map(storedGrant)
-        await mayGrant(identity, { revoked: row }, before, before.filter((other) => other.id !== storedGrant(row).id), accessIn, `revoke ${id}`)
+        const after = before.filter((other) => other.id !== storedGrant(row).id)
+        await mayGrant(identity, { revoked: row }, before, after, accessIn, { what: `revoke ${id}`, doing: `revoking ${id}` }, lockMeOut ? undefined : after)
         await session.append.ifLastIndex(index, { type: 'grant.deleted', payload: { id: row.id, by: identity.actor.id } })
         return { revoked: true }
       })

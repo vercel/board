@@ -144,6 +144,11 @@ export type BoardBinding = {
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
   /**
+   * Whether board()'s verifier names people by their logins (`ada@example.com`), as a board behind
+   * Tailscale does: a grant then names a user by one, which is that user's ID.
+   */
+  logins: boolean
+  /**
    * A handle through board(), as `caller`: what a backend writes for someone outside a request
    * goes through it, so board()'s middleware sees it, a schedule's send as its creator, say. A
    * verified caller's posts keep the IDs they're given.
@@ -181,6 +186,12 @@ export interface Backend extends ProtocolMethods {
    * board() screens a schedule's message once, when it's made. True when left out.
    */
   readonly sendsSchedulesHere?: boolean
+  /**
+   * Whether a board behind this backend settles a write's `@handle`s itself, as one at `BOARD_URL`
+   * does: board() then leaves a text as typed and passes on what that board answers of its mentions.
+   * False when left out, as for a backend that only stores, where board() settles them.
+   */
+  readonly settlesMentions?: boolean
   /**
    * Whether board()'s sync runs its entry `key` here: false for one another deployment holds, as vercel()'s
    * deployments of one project hold each of its keys once (production takes one from a preview). Sync takes webhooks,

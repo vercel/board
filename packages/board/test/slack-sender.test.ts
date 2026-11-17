@@ -15,7 +15,7 @@ const hostVerifier = (request: CallerRequest) =>
   PEOPLE[request.credential ?? ''] ?? Response.json({ error: { code: 'unauthorized', message: 'who are you?' } }, { status: 401 })
 
 const thread = 'C1:1700000000.000100'
-const as = { name: 'clever-lemur via vboard-factory', avatar: 'https://cdn.example.com/lemur.png' }
+const as = { name: 'clever-lemur via acme-agents', avatar: 'https://cdn.example.com/lemur.png' }
 const markdown = `**${as.name}**: on it`
 
 /** The real Slack adapter, kept off the network: board's own client is a fake, and so is the adapter's post. */
@@ -250,10 +250,10 @@ describe('what board copies to Slack', () => {
     const { team, s, posted } = mirrored(['chat:write', 'chat:write.customize'], false)
     // The factory's own deployments, as a grant on the project lets them in.
     await team.createGrant({ principals: [{ kind: 'project', project: 'prj_factory', environments: ['production'] }], can: { '*': ['read', 'post'] } })
-    const eve = caller(team.fetch, await deploymentToken('vboard-factory', 'prj_factory', 'production'), { 'x-board-profile': 'clever-lemur-1956;avatar="https://example.com/lemur.png"' })
+    const eve = caller(team.fetch, await deploymentToken('acme-agents', 'prj_factory', 'production'), { 'x-board-profile': 'clever-lemur-1956;avatar="https://example.com/lemur.png"' })
     expect((await eve('POST', '/messages', { channel: 'firehose', text: 'on it' })).status).toBe(201)
     await vi.waitFor(() => expect(posted).toHaveLength(1))
-    expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([['clever-lemur-1956 via vboard-factory', 'https://example.com/lemur.png', 'on it']])
+    expect(posted.map(({ username, icon_url, markdown_text }) => [username, icon_url, markdown_text])).toEqual([['clever-lemur-1956 via acme-agents', 'https://example.com/lemur.png', 'on it']])
     expect(s.channelPosts).toEqual([])
   })
 

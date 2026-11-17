@@ -175,6 +175,8 @@ const GRANT_PRINCIPALS_MAX = 32
 export const TEAM_ENVIRONMENTS: readonly string[] = ['production', 'preview', 'development']
 const PROJECT_ID = /^prj_[A-Za-z0-9]+$/
 const USER_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/
+/** A login that's a user's ID where the board's verifier names people by one: what a principal's ID can hold, so no `+`. */
+export const LOGIN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9][a-z0-9.-]{0,127}$/
 /** An app's client ID, as a board that verifies tokens itself takes it. */
 const APP_ID = USER_ID
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
@@ -230,15 +232,23 @@ export const workflowPath = (workflow: string) => (workflow.includes('/') ? work
  * project's `prj_…`, and a repository's `owner/name`, which it matches on the token's claims.
  * `removal`: one to take out of a grant, which names a project without its environments. `team`: the
  * board's own team, which a project it names is kept on, so it no longer matches once it's moved to
- * another; null where the board doesn't know it, and then a project is its ID on any team.
+ * another; null where the board doesn't know it, and then a project is its ID on any team. `logins`:
+ * the board's verifier names people by their logins, so a user's email is its ID, with nothing to look up.
  */
-export function checkPrincipal(input: PrincipalInput, trusted: readonly string[], removal = false, team: string | null = null): GrantPrincipal {
+export function checkPrincipal(input: PrincipalInput, trusted: readonly string[], removal = false, team: string | null = null, logins = false): GrantPrincipal {
   switch (input.kind) {
-    case 'user':
+    case 'user': {
       if (input.email !== undefined && input.userId !== undefined) throw invalidGrant('a user is its email or its userId, not both')
-      if (input.email !== undefined) throw invalidGrant(`this board can't look up ${input.email}: it verifies tokens itself, so name the user by ID, { kind: 'user', userId }`)
+      if (input.email !== undefined && !logins) throw invalidGrant(`this board can't look up ${input.email}: it verifies tokens itself, so name the user by ID, { kind: 'user', userId }`)
+      // Written either way, a login is the ID: people get it from what verified them, in lowercase.
+      const login = (input.email ?? (logins && input.userId?.includes('@') ? input.userId : undefined))?.toLowerCase()
+      if (login !== undefined) {
+        if (!LOGIN.test(login)) throw invalidGrant(`a user here is the login they're known by, like ada@example.com, got ${login}`)
+        return { kind: 'user', userId: login }
+      }
       if (input.userId === undefined || !USER_ID.test(input.userId)) throw invalidGrant("a user is its userId, letters, numbers, and ._-")
       return { kind: 'user', userId: input.userId }
+    }
     case 'project': {
       if (!PROJECT_ID.test(input.project)) throw invalidGrant(`this board can't look up the project ${input.project}: it verifies tokens itself, so name it by ID, prj_…`)
       if (removal) return { kind: 'project', projectId: input.project, environments: [] }
@@ -278,13 +288,13 @@ export function checkPrincipal(input: PrincipalInput, trusted: readonly string[]
 export const principalKey = (principal: GrantPrincipal) => JSON.stringify(principal)
 
 /** Principals checked, without repeats, and a `can` kept as written: what a board that verifies tokens itself stores of a grant. */
-export function checkGrant(body: { principals: readonly PrincipalInput[]; can: unknown }, trusted: readonly string[], team: string | null = null): { principals: GrantPrincipal[]; can: WrittenCan } {
+export function checkGrant(body: { principals: readonly PrincipalInput[]; can: unknown }, trusted: readonly string[], team: string | null = null, logins = false): { principals: GrantPrincipal[]; can: WrittenCan } {
   if (body.principals.length === 0) throw invalidGrant('a grant names at least one principal')
   if (body.principals.length > GRANT_PRINCIPALS_MAX) throw invalidGrant(`a grant names at most ${GRANT_PRINCIPALS_MAX} principals`)
   // Each against the issuers before it in the grant too: two that name the same principals can't sit side by side.
   const seen = [...trusted]
   const checked = body.principals.map((input) => {
-    const principal = checkPrincipal(input, seen, false, team)
+    const principal = checkPrincipal(input, seen, false, team, logins)
     if (principal.kind === 'oidc') seen.push(principal.issuer)
     return principal
   })
@@ -588,6 +598,14 @@ export type HostPrincipal = {
 
 /** What marks `oidcTokens()`, so board() can tell it makes no host's principals. */
 export const TOKENS = Symbol('board.oidcTokens')
+/**
+ * What marks a verifier whose people's user IDs are the logins they're known by (`ada@example.com`),
+ * as Tailscale's are: a grant on its board names a user by one, where any other board that verifies
+ * tokens itself has nothing to look an email up with.
+ */
+export const LOGINS = Symbol('board.logins')
+/** Whether `authenticate` names people by their logins. */
+export const namesByLogin = (authenticate: Authenticate) => LOGINS in authenticate
 /** The principals `oidcTokens()` made: board() takes them as they are, and checks the rest as a host's. */
 const verifiedTokens = new WeakSet<object>()
 

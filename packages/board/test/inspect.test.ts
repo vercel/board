@@ -1,4 +1,5 @@
-import { request } from 'node:http'
+import { createServer, request } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createBoardClient, type BoardClient } from '../src/client/client.ts'
 import { startInspector, type Inspector } from '../src/inspect/server.ts'
@@ -43,7 +44,7 @@ function exactly(path: string, headers: Record<string, string> = {}) {
 
 describe('inspect', () => {
   it('serves the page for every route, and its bundle', async () => {
-    for (const path of ['/', '/c/errors-www', '/inbox/slack']) {
+    for (const path of ['/', '/c/errors-www', '/tasks', '/settings/schemas/test-run@1', '/inbox/slack']) {
       const response = await fetch(`${inspector.url}${path}`)
       expect(response.status).toBe(200)
       expect(response.headers.get('content-security-policy')).toContain("script-src 'self'")
@@ -88,19 +89,49 @@ describe('inspect', () => {
   })
 
   it('acts as the profile the page picks, with the avatar it gives it', async () => {
+    // As a handle's `as(profile)` sends it: the board's own `x-board-profile`.
     const as = (profile: string, avatar?: string) =>
       createBoardClient({
         url: `${inspector.url}/board`,
         token: '',
-        headers: { 'x-inspect-token': token, origin: inspector.url, 'x-inspect-profile': profile, ...(avatar ? { 'x-inspect-avatar': avatar } : {}) },
+        headers: { 'x-inspect-token': token, origin: inspector.url },
+        profile: avatar ? { name: profile, avatar } : profile,
       })
     expect((await as('codex').me()).actor).toBe('vercel:user:u_julian+codex')
-    expect((await as('').me()).actor).toBe('vercel:user:u_julian') // yourself
+    expect((await page().me()).actor).toBe('vercel:user:u_julian') // yourself
     expect((await as('codex').post('ops', 'from codex')).by).toMatchObject({ actor: 'vercel:user:u_julian+codex', profile: 'codex' })
     const face = 'https://example.com/reviewer.png'
     expect(await as('reviewer', face).me()).toMatchObject({ actor: 'vercel:user:u_julian+reviewer', avatar: face })
     const posted = await as('reviewer', face).post('ops', 'from reviewer')
     expect((await page().thread(posted.id)).message.author).toMatchObject({ avatar: face })
+  })
+
+  it('starts the page as the profile inspect started as, and is yourself for a request that names none', async () => {
+    const url = `${server.origin}/api/board`
+    const face = 'https://example.com/claude.png?a=1&b="2"'
+    const asClaude = createBoardClient({ url, token: await personToken('u_julian', url), profile: { name: 'claude', avatar: face } })
+    const started = await startInspector({ client: asClaude, port: 0 })
+    try {
+      const html = await (await fetch(`${started.url}/`)).text()
+      const content = /<meta name="inspect-profile" content="([^"]*)">/.exec(html)![1]!
+      // What the page reads back from the attribute: the profile, avatar and all.
+      const unescaped = content.replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+      expect(JSON.parse(unescaped)).toEqual({ name: 'claude', avatar: face })
+      const key = /<meta name="inspect-token" content="([^"]+)">/.exec(html)![1]!
+      // The page's handle says who each request is: with no profile, yourself, whatever inspect started as.
+      const bare = createBoardClient({ url: `${started.url}/board`, token: '', headers: { 'x-inspect-token': key, origin: started.url } })
+      expect((await bare.me()).actor).toBe('vercel:user:u_julian')
+    } finally {
+      await started.close()
+    }
+    const plain = await (await fetch(`${inspector.url}/`)).text()
+    expect(plain).toContain('<meta name="inspect-profile" content="null">')
+  })
+
+  it('refuses a profile header that is not one, as the board would', async () => {
+    const response = await board('/me', { headers: { 'x-inspect-token': token, 'x-board-profile': '"unclosed' } })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: { code: 'invalid_profile' } })
   })
 
   it("passes the board's errors through", async () => {
@@ -128,6 +159,11 @@ describe('inspect', () => {
     expect(await exactly('/board/../me', { 'x-inspect-token': token })).toBe(200) // the page, not the board
     expect(await exactly('/board/%2F..%2Fsecret', { 'x-inspect-token': token })).toBe(400)
     expect(await exactly('/', { host: 'evil.example' })).toBe(421) // DNS rebinding
+    // A caller behind a proxy can send the inspector's own name: what a proxy forwarded isn't this machine's.
+    expect(await exactly('/', { 'x-forwarded-for': '203.0.113.7' })).toBe(421)
+    // A request target that's no URL is refused, and the inspector goes on answering.
+    expect(await exactly('//[')).toBe(400)
+    expect(await exactly('/')).toBe(200)
     expect(await exactly('/')).toBe(200)
   })
 })
@@ -170,5 +206,31 @@ describe('behind a proxy', () => {
 
   it('still refuses every other host', async () => {
     expect((await via('/', { headers: { host: 'evil.example' } })).status).toBe(421)
+  })
+
+  it("never takes a forwarded request for its own name, even one you allowed", async () => {
+    // A port that's free, to name before the inspector has it.
+    const free = await new Promise<number>((resolve) => {
+      const probe = createServer().listen(0, '127.0.0.1', () => {
+        const { port } = probe.address() as AddressInfo
+        probe.close(() => resolve(port))
+      })
+    })
+    const own = await startInspector({ client, port: free, hosts: [`127.0.0.1:${free}`] })
+    const ask = (headers: Record<string, string>) =>
+      new Promise<number>((resolve, reject) => {
+        const req = request({ hostname: '127.0.0.1', port: free, path: '/', headers }, (res) => {
+          res.resume()
+          resolve(res.statusCode ?? 0)
+        })
+        req.on('error', reject)
+        req.end()
+      })
+    try {
+      expect(await ask({})).toBe(200)
+      expect(await ask({ 'x-forwarded-host': `127.0.0.1:${free}` })).toBe(421)
+    } finally {
+      await own.close()
+    }
   })
 })

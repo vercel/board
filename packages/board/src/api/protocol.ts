@@ -1,16 +1,35 @@
 import type { z } from 'zod'
 import type { Actor } from '../contract/folds.ts'
+import type { Mentioned } from '../contract/mentions.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import type {
   AckBody,
   ActorView,
+  AssignTaskBody,
+  TaskNeedsBody,
+  BlockTaskBody,
+  CancelTaskBody,
   ChannelView,
+  ClaimReadyTaskBody,
+  ClaimTaskBody,
+  CompleteTaskBody,
+  CreateTaskBody,
+  CreateTasksBody,
+  CreatedTasksQuery,
+  FailTaskBody,
+  ReleaseTaskBody,
+  RenewTaskBody,
+  TaskClaim,
+  TasksPage,
+  TasksQuery,
   CreateChannelBody,
   Discovery,
   DeleteBody,
   EditBody,
   EventsPage,
+  CreateGrantsBody,
   GrantBody,
+  RevokeGrantBody,
   GrantView,
   UpdateGrantBody,
   ExplainQuery,
@@ -79,26 +98,65 @@ export type Protocol = {
   messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
   message: { input: Id; output: ThreadView }
-  post: { input: Input<typeof PostBody>; output: { message: MessageView } }
+  /** `mentions` says what became of each `@handle` the text typed, when it typed any: see `Mentioned`. A write that takes a text answers it the same way. */
+  post: { input: Input<typeof PostBody>; output: { message: MessageView; mentions?: Mentioned[] } }
   /** The caller's own post with client ID `id`, as it landed: 404 `post_not_found` when there's none. */
   posted: { input: Id; output: { message: MessageView } }
-  edit: { input: Id & Input<typeof EditBody>; output: { ok: true } }
+  edit: { input: Id & Input<typeof EditBody>; output: { ok: true; mentions?: Mentioned[] } }
   delete: { input: Id & Input<typeof DeleteBody>; output: { ok: true } }
   react: { input: Id & Input<typeof ReactBody>; output: { ok: true } }
   label: { input: Id & Input<typeof LabelBody>; output: { ok: true } }
-  schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView } }
+  schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; mentions?: Mentioned[] } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
+  /** Tasks, oldest first, each as its thread's summary. 501 `no_tasks` where the board keeps none, as every task method answers there. */
+  tasks: { input: Input<typeof TasksQuery>; output: TasksPage }
+  /** `task` is the task's root. `claim` comes with a task made with `claim`; a retry of one that landed gets the task without it. */
+  createTask: { input: Input<typeof CreateTaskBody>; output: { task: MessageView; claim?: TaskClaim; mentions?: Mentioned[] } }
+  /**
+   * `tasks` are the tasks' roots, in the body's order. 400 `invalid_needs` for a `key` two tasks go by, one no task has,
+   * or tasks that wait for each other; 400 `batch_too_large` for more than a board holds in one write. Nothing is made
+   * then, and a retry with the same `id` answers the tasks the first made.
+   */
+  createTasks: { input: Input<typeof CreateTasksBody>; output: { tasks: MessageView[]; mentions?: Mentioned[] } }
+  /**
+   * The caller's own batch made under `id`, its tasks' roots as they are now, in order: 404 `batch_not_found` when
+   * there's none. With `request`, 409 `duplicate_id` when the batch was made for another one.
+   */
+  createdTasks: { input: Id & Input<typeof CreatedTasksQuery>; output: { tasks: MessageView[] } }
+  /** The oldest ready task there, claimed, or `{ task: null }` when there's none, after waiting up to `wait` seconds. */
+  claimReadyTask: { input: Input<typeof ClaimReadyTaskBody>; output: { task: MessageView; claim: TaskClaim } | { task: null } }
+  /** 409 `task_claimed` while someone holds it, and of claims that race, for all but one. */
+  claimTask: { input: Id & Input<typeof ClaimTaskBody>; output: { task: MessageView; claim: TaskClaim } }
+  /** `until` is the lease's new end. */
+  renewTask: { input: Id & Input<typeof RenewTaskBody>; output: { task: MessageView; until: string } }
+  releaseTask: { input: Id & Input<typeof ReleaseTaskBody>; output: { task: MessageView } }
+  completeTask: { input: Id & Input<typeof CompleteTaskBody>; output: { task: MessageView } }
+  failTask: { input: Id & Input<typeof FailTaskBody>; output: { task: MessageView } }
+  blockTask: { input: Id & Input<typeof BlockTaskBody>; output: { task: MessageView } }
+  /** A task that isn't blocked is left as it is. */
+  unblockTask: { input: Id; output: { task: MessageView } }
+  /** A failed task is ready again; one that's open is left as it is. */
+  reopenTask: { input: Id; output: { task: MessageView } }
+  assignTask: { input: Id & Input<typeof AssignTaskBody>; output: { task: MessageView } }
+  /** 400 `invalid_needs` for a prerequisite that isn't one, or that would make the task wait for itself. The same set is left as it is. */
+  setTaskNeeds: { input: Id & Input<typeof TaskNeedsBody>; output: { task: MessageView } }
+  cancelTask: { input: Id & Input<typeof CancelTaskBody>; output: { task: MessageView } }
   /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }
-  /** A new grant, always: the same principals again are another. Needs `manage` at each pattern its `can` names. */
+  /**
+   * A new grant, always: the same principals again are another. Needs `manage` at each pattern its
+   * `can` names. One its caller couldn't take back is 409 `grant_lockout`, unless it says `lockMeOut`.
+   */
   createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView } }
+  /** Several grants in one write, all or none, in the order given: each needs what `createGrant` does, on the grants as they are, and a lockout is judged with all of them made. */
+  createGrants: { input: Input<typeof CreateGrantsBody>; output: { grants: GrantView[] } }
   /** Adds and removes principals, or replaces its `can`: needs what `checkGrantChange` says, for the grant as it was and as it'd be. 404 `grant_not_found`. */
   updateGrant: { input: Id & Input<typeof UpdateGrantBody>; output: { grant: GrantView } }
   /** Which grant decides `channel` for the caller, or with `manage` at `*` (or a team owner), the principal it names. */
   explain: { input: Input<typeof ExplainQuery>; output: Explanation }
   /** `revoked` is false when it was already gone. */
-  revokeGrant: { input: Id; output: { revoked: boolean } }
+  revokeGrant: { input: Id & Input<typeof RevokeGrantBody>; output: { revoked: boolean } }
   /** Every schema: the built-ins, then the board's own, by name and version. 501 `no_schemas` where the board keeps none. */
   schemas: { input: Nothing; output: { schemas: SchemaView[] } }
   /** One schema version, by `name@version`: 400 `invalid_schema_id` for anything else, 404 `schema_not_found` for one that isn't there. */

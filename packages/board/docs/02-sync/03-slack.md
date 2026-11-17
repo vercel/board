@@ -87,11 +87,16 @@ most once a minute, while the other channels sync.
 
 - **Messages, replies, edits, deletes, and reactions,** both ways. Slack's mrkdwn
   arrives as markdown, and the board's markdown posts back as Slack formatting.
-- **Mentions** go out as Slack's own. `<@U0456>` comes in as `@` and their
-  display name. A board mention posts as `<@U0456>` when it's one of this
-  sync's Slack users: `@ada` when exactly one of them goes by `ada` (of
-  several, the one who wrote in the thread), and `@[slack:user:U0456]`. Anyone
-  else's handle goes as written, and their actor ID as their name. A board
+- **Mentions** sync both ways by the user's ID. `<@U0456>` comes in as a
+  mention of that user, `@[slack:user:U0456]` under key `slack`, and the board
+  meets them, by their Slack name, handle, and picture, though they never
+  wrote: a reply on the board can mention them back. A board mention,
+  `@[actor-id]`, posts as `<@U0456>` when the
+  actor is one of this sync's Slack users, and as their name for anyone else.
+  A Slack user's ID is enough: `@[slack:user:U0456]` posts as `<@U0456>` for
+  someone the board hasn't met.
+  An `@handle` that was never settled is text, and goes as written: Slack is
+  sent `@vercel/board` as that, and pings no one for it. A board
   message can mention someone by email, `@[ada@acme.com]`, which Slack looks
   up as it posts (it needs `users:read.email`), and posts as `ada@acme.com`
   when it finds no one. See
@@ -112,9 +117,9 @@ On a local board, it's everyone a credential named, since their handle and
 name are always that credential's word: a principal a Vercel or other OIDC
 token, or [your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
 writing as itself or through an agent or import
-(`clever-lemur via vboard-factory`). The board's own code and its own sync's
+(`clever-lemur via acme-agents`). The board's own code and its own sync's
 platform users keep the label, as a file upload does. A person posting as
-themselves is just their name (`Julián Benegas` on Vercel's board, the handle
+themselves is just their name (`Ada Lovelace` on Vercel's board, the handle
 your verifier gives them, or a Vercel login's user ID). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
 or a platform user another sync speaks for (`Malte via support (preview)`). A
@@ -236,6 +241,9 @@ await team.readSource('slack', 'C0123ABC', { limit: 20 })
 await team.readSource('slack', 'C0123ABC:1727000000.123456')                       // a thread; a reply's ts reads its whole thread
 await team.readSource('slack', 'https://acme.slack.com/archives/C0123ABC/p1727000000123456')
 ```
+
+A message's text mentions a Slack user as an import does, `@[slack:user:U0456]`
+under the entry's key, so what you read is what to write to mention them.
 
 It reads only public channels the app is already in, and never joins one. Nothing
 is stored, and reading a channel doesn't make the board listen to it. A request

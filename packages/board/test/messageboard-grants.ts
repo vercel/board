@@ -282,6 +282,22 @@ export function fakeGrants(options: {
     if (isOwner(who)) return
     for (const pattern of patterns) if (!decide(who, pattern).can.includes('manage')) throw new GrantRefused(403, 'grant_forbidden', `${what} takes manage wherever the grant applies`)
   }
+  /**
+   * Makes `change`, and takes it back with a 409 when it leaves `who` without manage at one of
+   * `patterns`, where it had it: a change `who` couldn't undo. Nothing locks a team owner out, and
+   * `lockMeOut` says to go ahead.
+   */
+  function unlessLockedOut<T>(who: Who, patterns: Iterable<string>, lockMeOut: unknown, what: string, change: () => T): T {
+    const before = { grants: [...grants.values()].map((grant) => structuredClone(grant)), next }
+    const made = change()
+    if (isOwner(who) || lockMeOut === true) return made
+    const lost = [...patterns].find((pattern) => !decide(who, pattern).can.includes('manage') || !decide(who, pattern, true).can.includes('manage'))
+    if (lost === undefined) return made
+    grants.clear()
+    for (const grant of before.grants) grants.set(grant.id, grant)
+    next = before.next
+    throw new GrantRefused(409, 'grant_lockout', `${what} would leave you unable to manage grants in ${lost}`)
+  }
   function mayList(who: Who, what: string) {
     if (!lists(who)) throw new GrantRefused(403, 'grant_forbidden', `${what} takes manage at *`)
   }
@@ -366,7 +382,22 @@ export function fakeGrants(options: {
         const after = [...grants.values(), { id: '', principals, can, by, at: 0 }]
         mayGrant(who, patternsOf(can), after, 'granting')
         if (namesIssuer(principals)) mayGrant(who, ['*'], after, 'naming an oidc issuer')
-        return { grant: viewOf(add(principals, can, by)) }
+        return { grant: viewOf(unlessLockedOut(who, patternsOf(can), body.lockMeOut, 'this grant', () => add(principals, can, by))) }
+      }
+      if (method === 'POST' && rest === '/grants/batch') {
+        if (!Array.isArray(body.grants) || body.grants.length === 0 || body.grants.length > 16) throw invalid('a batch makes 1 to 16 grants')
+        const made: { principals: Stored[]; can: Can }[] = body.grants.map((input: Record<string, any>) => {
+          if (!Array.isArray(input.principals) || input.principals.length === 0) throw invalid('a grant names its principals')
+          return { principals: input.principals.map((principal: Record<string, any>) => resolve(principal)), can: checkCan(input.can) }
+        })
+        // Each by the grants as they are, and what everyone gets with all of them made: all, or none.
+        const after = [...grants.values(), ...made.map((grant) => ({ id: '', ...grant, by, at: 0 }))]
+        for (const grant of made) {
+          mayGrant(who, patternsOf(grant.can), after, 'granting')
+          if (namesIssuer(grant.principals)) mayGrant(who, ['*'], after, 'naming an oidc issuer')
+        }
+        const patterns = made.flatMap((grant) => patternsOf(grant.can))
+        return { grants: unlessLockedOut(who, patterns, body.lockMeOut, 'these grants', () => made.map((grant) => add(grant.principals, grant.can, by))).map(viewOf) }
       }
       if (method === 'GET' && rest === '/grants/explain') {
         const channel = url.searchParams.get('channel')
@@ -404,8 +435,8 @@ export function fakeGrants(options: {
           mayGrant(who, patternsOf(can), after, `updating ${grant.id}`)
           if (namesIssuer(principals.filter((principal) => !grant.principals.includes(principal)))) mayGrant(who, ['*'], after, 'naming an oidc issuer')
         }
-        Object.assign(grant, { principals, can, by, at: Date.now() })
-        return { grant: viewOf(grant) }
+        const touched = new Set([...patternsOf(grant.can), ...patternsOf(can)])
+        return { grant: viewOf(unlessLockedOut(who, touched, body.lockMeOut, `updating ${grant.id}`, () => Object.assign(grant, { principals, can, by, at: Date.now() }))) }
       }
       if ((found = /^\/grants\/([^/]+)\/revoke$/.exec(rest)) && method === 'POST') {
         const grant = grants.get(decodeURIComponent(found[1]!))
@@ -414,7 +445,7 @@ export function fakeGrants(options: {
           return { revoked: false }
         }
         mayManage(who, patternsOf(grant.can), `revoking ${grant.id}`)
-        grants.delete(grant.id)
+        unlessLockedOut(who, patternsOf(grant.can), body.lockMeOut, `revoking ${grant.id}`, () => grants.delete(grant.id))
         return { revoked: true }
       }
       return undefined

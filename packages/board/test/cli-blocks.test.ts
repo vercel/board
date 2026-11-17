@@ -10,14 +10,14 @@ const F = '```'
 
 describe('cli blocks', () => {
   it('posts JSON as a message that is only its block, from an argument, stdin, or a file, and reads it back as data', async () => {
-    expect((await vb(['schemas', 'create', 'sandbox@1', '--schema', SANDBOX])).stdout).toBe('created sandbox@1\n')
+    expect((await vb(['schemas', 'create', 'sandbox@1', '--data', SANDBOX])).stdout).toBe('created sandbox@1\n')
     const posted = await vb(['post', 'deploys', '--schema', 'sandbox@1', '{"id":"sbx-123","action":"started","config":{"vcpus":4}}'])
     expect(posted).toMatchObject({ code: 0, stderr: '' })
     const root = posted.stdout.trim()
     expect((await vb(['reply', root, '--schema', 'sandbox@1', '-'], {}, '{ "id": "sbx-123",\n  "action": "stopped" }\n')).code).toBe(0)
     const dir = await tmp('blocks-')
     await writeFile(join(dir, 'event.json'), '{"id":"sbx-124","action":"started"}\n')
-    expect((await vb(['reply', root, '--schema', 'sandbox@1', '--text-file', 'event.json'], {}, undefined, dir)).code).toBe(0)
+    expect((await vb(['reply', root, '--schema', 'sandbox@1', '--file', 'event.json'], {}, undefined, dir)).code).toBe(0)
 
     // A person reads each as one line of data, in full.
     const read = await vb(['read', root])
@@ -39,7 +39,7 @@ describe('cli blocks', () => {
   }, 60_000)
 
   it('shows a block among prose where its fence was, and edits a message into one', async () => {
-    expect((await vb(['schemas', 'create', 'sandbox@1', '--schema', SANDBOX])).code).toBe(0)
+    expect((await vb(['schemas', 'create', 'sandbox@1', '--data', SANDBOX])).code).toBe(0)
     const text = `sandbox sbx-200 started\n\n${F}json#sandbox@1\n{ "id": "sbx-200", "action": "started" }\n${F}\n\nmore soon`
     const root = (await vb(['post', 'deploys', '-'], {}, text)).stdout.trim()
     expect((await vb(['read', root])).stdout.split('\n').slice(1, 6)).toEqual(['      sandbox sbx-200 started', '      ', '      data sandbox@1 · {"id":"sbx-200","action":"started"}', '      ', '      more soon'])
@@ -50,7 +50,7 @@ describe('cli blocks', () => {
   }, 60_000)
 
   it("says which field doesn't match, and where to see what the schema holds", async () => {
-    expect((await vb(['schemas', 'create', 'sandbox@1', '--schema', SANDBOX])).code).toBe(0)
+    expect((await vb(['schemas', 'create', 'sandbox@1', '--data', SANDBOX])).code).toBe(0)
     const before = (await vb(['read', 'deploys', '--json'])).stdout
     const mismatch = await vb(['post', 'deploys', '--schema', 'sandbox@1', '{"id":"sbx-9","action":"boot"}'])
     expect(mismatch).toMatchObject({ code: 2, stdout: '' })
