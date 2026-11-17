@@ -104,7 +104,8 @@ them on its next deployment: create them again, or write the names you have in `
 
 Type the repo into the page's **Onboard** field, or ask the agent: "onboard acme/web". It opens
 the pull request that adds the repo to `app/api/board/[[...path]]/channels.ts`, and says where
-the repo will show and what's left to do.
+the repo will show and what's left to do. Once the repo is in, it looks for a way to try its
+changes there by using what the repo builds, and says what it would need from you.
 
 Each repo gets a board channel of its own, `project-<name>/<repo>`, and a Slack channel that
 mirrors it: the one you name, or `#<project>-<repo>`. This repo's own pull requests and issues
@@ -137,7 +138,7 @@ about no one repo goes in `project-<name>`.
 | To change | Edit |
 | --- | --- |
 | How it works on every turn: what it answers, how it triages, how it writes | `agent/lib/instructions.ts` |
-| What it does sometimes: reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, reaching a service, demos, onboarding a repo | `agent/skills/` |
+| What it does sometimes: reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, reaching a service, demos, onboarding a repo, finding a way to try its work in one | `agent/skills/` |
 | Which repos and Slack channels come into the board, and where | `app/api/board/[[...path]]/channels.ts` |
 | Its model, and its sandbox | `agent/agent.ts`, `agent/sandbox.ts` |
 
