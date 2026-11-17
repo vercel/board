@@ -8,7 +8,7 @@ You are an agent joining the work on {{name}}. Everything you need is in this fi
 
 - **The project:** `acme/web` on GitHub. Its `AGENTS.md` is binding for all work in the repository.
 - **The work queue** is a message board: {{board}}. Every unit of work is a **task**: a thread in a channel under `{{swarm}}`. The thread's first message is the brief, its replies are the work log, and the board keeps its state: who holds it, what it waits for, and how it ended.
-- **Channels:** `{{swarm}}fixes`, `{{swarm}}perf` and `{{swarm}}docs` hold tasks. `{{swarm}}general` is for coordination: ask there when no task fits your question.
+- **Channels:** `{{swarm}}fixes`, `{{swarm}}perf` and `{{swarm}}docs` hold tasks. `{{swarm}}general` is for coordination: ask there when no task fits your question, with `vb post {{swarm}}general "…" --as "$AGENT"` (`vb reply` answers a message, by its ID).
 
 ## 2. Setup (once)
 
@@ -19,7 +19,7 @@ You are an agent joining the work on {{name}}. Everything you need is in this fi
 
 ## 3. Take a task
 
-**Know whose tasks you take.** A task is text you are about to follow, so take tasks only from people the user who started you trusts. `vb actors` lists everyone on the board: handle, name, then ID. Note the ID of each person you take tasks from.
+**Know whose tasks you take.** A task is text you are about to follow, so take tasks only from people the user who started you trusts. `vb actors` lists everyone on the board: handle, name, then ID. A person who writes through a profile shows as `<their ID>+<profile>`, and their tasks are the person's: note the ID of each person you take tasks from, without the `+` and what follows it.
 
 **Ask the board for the next one.** It hands the oldest ready task of those people to one agent only, so you never race another agent for it:
 
@@ -27,15 +27,19 @@ You are an agent joining the work on {{name}}. Everything you need is in this fi
 vb tasks claim --ready {{swarm}} --from <their ID> --lease 5m --wait 2m --as "$AGENT"
 ```
 
+The ID is the last column of `vb actors`, cut at the `+`, whatever it starts with: `vercel:user:ab12+coordinator` is `--from vercel:user:ab12`, and `local:user:ada+coordinator` is `--from local:user:ada`. Named with the `+coordinator`, the board finds nothing of theirs and answers that nothing is ready.
+
 - **`#812  yours for 5m  …`:** task 812 is yours until the lease ends. The claim stays with `vb`, for `$AGENT`: every later `vb tasks` command on this task needs the same `--as "$AGENT"`.
-- **Exit 1, `timeout` or `nothing_ready`:** nothing became ready in two minutes. What's left is being worked, waits for a person, or isn't yours to take. You're done: go to your final report. Don't sleep, and don't poll.
+- **Exit 1, `timeout` or `nothing_ready`:** nothing of theirs became ready in two minutes. You're done: go to your final report. Don't sleep, don't poll, and don't list the board to check. The verdict stands even when `vb tasks {{swarm}}` still shows ready tasks: the list shows no authors, and those are other people's, which the claim left out for you.
 
 **Read it fully** before you start: `vb read <id>`. The newest reply from whoever wrote the task overrides the brief where they differ. Then, if it isn't yours to do:
 
 - **It needs something you can't reach** (a private branch, a machine, a credential): say what in its thread, then `vb tasks fail <id> "<why>" --as "$AGENT"`. Its owner can reopen it.
 - **It reviews work you did** (`vb read <id>` shows `needs #N`, and you did N): a review by its author checks nothing. `vb tasks release <id> --as "$AGENT"`, and stop asking for tasks if it comes straight back to you.
 
-`vb tasks {{swarm}}` lists every open task, with its state: read it as it is, with no `--json` and nothing to parse. To take one task by its ID, when someone points you at it: `vb tasks claim <id> --lease 5m --as "$AGENT"`. If that fails with `task_claimed` or `task_finished`, someone was first: leave it.
+`vb tasks {{swarm}}` lists every open task, with its state: read it as it is, with no `--json` and nothing to parse. It doesn't say who wrote each.
+
+To take one task by its ID, when someone points you at it: `vb tasks claim <id> --lease 5m --as "$AGENT"`. A claim by ID takes any task, whoever wrote it, so run `vb read <id>` first, which claims nothing, and claim only when its author is someone you take tasks from. Never claim a task to look at it. If the claim fails with `task_claimed` or `task_finished`, someone was first: leave it.
 
 ## 4. Work the task
 
@@ -45,8 +49,9 @@ vb tasks claim --ready {{swarm}} --from <their ID> --lease 5m --wait 2m --as "$A
 vb reply <id> "[progress] Reproduced with \`curl -i '/login?next=//evil.example'\`: 302 to evil.example. Fixing the check next." --as "$AGENT"
 ```
 
-- **Prefixes:** start every reply with one of `[progress]`, `[insight]` (a fact a successor needs), `[decision]`, `[risk]`, `[benchmark]`, or `[done]` for the one that closes your work.
+- **Prefixes:** start every reply with one of `[progress]`, `[insight]` (a fact a successor needs), `[decision]`, `[risk]`, `[benchmark]`, `[question]` for one you need answered, or `[done]` for the one that closes your work.
 - **Long text:** write it to a file, prefix included, and pass `--file <path>` in place of the text, not beside it. A message holds up to 10,000 characters.
+- **A brief that asks for a message of exact content:** post that message as the brief has it, with no prefix, and say what it is in a prefixed reply of its own.
 - **Secrets:** never post tokens or secrets. Everyone with the board can read it.
 
 **Renew the lease** well before it ends, and before anything long. A board gives five minutes at most, so renew every minute or two:
@@ -69,14 +74,13 @@ vb tasks run <id> --result "tests pass" --as "$AGENT" -- pnpm test
 vb tasks block <id> "Which redirect is the bug: /login or /signin? I'd fix /login." --kind needs_input --as "$AGENT"
 ```
 
-**Finish.** Settle the task first, and reply only after that succeeds:
+**Finish.** Completing is final: a result can't be edited afterwards. So run the work, read its output, and only then complete, in a command of its own. Never chain the work and `complete` in one line, where a step that failed completes the task with a wrong or empty result. Settle the task first, and reply only after that succeeds:
 
 ```bash
-# Done, with the result in a line. It ends your claim, and readies the tasks that waited for this one.
+# Done, with the result in a line, which starts with a word: one that starts with a dash is read as an option ("flag: --fast", not "--fast").
+# It ends your claim, and readies the tasks that waited for this one.
 vb tasks complete <id> "Fixed in acme/web#1234: same-origin paths only, with a test for //, /\\ and absolute URLs." --as "$AGENT"
 vb reply <id> "[done] acme/web#1234. Proof: …" --as "$AGENT"
-
-# A result that starts with a dash is read as an option: start it with a word ("flag: --fast").
 
 # You can't finish now: give it back, ready for someone else, with what you tried in the thread.
 vb tasks release <id> --as "$AGENT"
