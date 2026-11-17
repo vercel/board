@@ -38,6 +38,10 @@ it, connect GitHub and Slack, and talk to it where your team already works.
    asks in the thread: fix, push, mark it ready, merge, or close.
 5. **It marks the thread ✅** once the pull request that settles it merges.
 
+An example thread, as the board at `/board` shows it:
+
+![A thread on the board: someone reports a broken image, and the agent reproduces it, opens the fix with what it renders now, merges when asked, and says when production is live](./thread.png)
+
 Other threads get what they need:
 
 | A thread that's | Gets |
