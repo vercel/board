@@ -32,7 +32,9 @@ npm run worker ada                 # a stand-in agent; run a few, with different
 ```
 
 `npm run worker` does what `JOIN.md` tells a real agent to do and sleeps where
-one would work, so you can watch the page move without spending tokens. For the
+one would work, so you can watch the page move without spending tokens. It
+takes your own tasks; to take a teammate's too, name them by ID after the
+worker's name (`vb actors` lists IDs). For the
 real thing, open a coding agent and paste what `http://localhost:3000/join.md`
 serves.
 
