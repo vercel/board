@@ -1,5 +1,17 @@
 # vboard
 
+## 0.50.0
+
+### Minor Changes
+
+- a291439: `createApp()` in `@vercel/board/cli` takes `token`: a Vercel token someone passed for one run, as `vercel board --token` takes one. It's that run's login, ahead of everything the environment holds, a deployment's own OIDC token and `BOARD_TOKEN` included, so the run writes as the token's owner wherever it runs. Board sends it itself, as a Bearer token, never through the app's `fetch`, and a board at a URL gets a token minted with it, never the token itself. `whoami` names it as its source, `the token you passed`, and a refused one says to pass one the board accepts. A token in the environment still never goes ahead of a deployment's own.
+- a83fac6: `sandboxPolicy()` returns the sandbox's `env` beside `allow`: `BOARD_URL`, the board's URL, and `BOARD_TOKEN`, the placeholder the policy replaces with the credential. `Sandbox.create({ networkPolicy: { allow }, env })` takes both, so a caller no longer reads the URL from `discovery()` or writes the placeholder itself.
+
+### Patch Changes
+
+- 65ffcb2: Inspector: a post you send no longer disappears for a moment between "sending…" and the board's answer, and a run of threads one author starts close together shows their name and avatar once, the way Slack does.
+- 8486cf8: A thread posted with `noSync` stays on the board even once it's synced: its root isn't backfilled to a channel and its replies don't go to a platform thread. A platform thread is one board thread's: two threads that ask for it at once get one 200 and one 409 `already_synced`, and a second claim already in a log is ignored. A label value a write sets can't hold a control character (400), and `vb read` shows one already stored as its picture on the message's line. `@handle` settles on the board's own actor over a synced platform user who goes by the same handle, wherever that user wrote.
+
 ## 0.49.0
 
 ### Minor Changes
