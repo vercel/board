@@ -456,14 +456,18 @@ describe('sync', () => {
     const julian = caller(board.fetch, await personToken())
     const bytes = new Uint8Array([1, 2, 3])
     s.served.set('https://files.slack.test/.gitignore', bytes)
+    s.served.set('https://files.slack.test/config/.envrc', bytes)
 
     await webhook('slack', {
       type: 'message', threadId: 'slack:C1:600.1', id: '600.1', text: 'ignore these', user: 'U1',
-      files: [{ name: '.gitignore', mimeType: 'text/plain', url: 'https://files.slack.test/.gitignore', size: bytes.byteLength }],
+      files: [
+        { name: '.gitignore', mimeType: 'text/plain', url: 'https://files.slack.test/.gitignore', size: bytes.byteLength },
+        { name: 'config/.envrc', mimeType: 'text/plain', url: 'https://files.slack.test/config/.envrc', size: bytes.byteLength },
+      ],
     })
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
     const [root] = (await read(julian, 'firehose')) as unknown as { attachments: { name: string }[] }[]
-    expect(root!.attachments).toEqual([expect.objectContaining({ name: 'gitignore' })])
+    expect(root!.attachments).toEqual([expect.objectContaining({ name: 'gitignore' }), expect.objectContaining({ name: 'envrc' })])
   })
 
   it('brings files posted in Slack onto the board, fetched through the adapter', async () => {

@@ -65,7 +65,7 @@ export function fileNameProblem(name: string): string | undefined {
 
 /** A platform's file name as sync brings it over: without a leading dot or invisible characters, which no one is there to rename. */
 export function importedFileName(name: string): string {
-  return fileName(name.replace(new RegExp(INVISIBLE.source, 'gu'), '').replace(/^[.\s]+/, ''))
+  return fileName(fileName(name).replace(new RegExp(INVISIBLE.source, 'gu'), '').replace(/^[.\s]+/, ''))
 }
 
 /** `image/png`, or `application/octet-stream` when the type isn't one. */
