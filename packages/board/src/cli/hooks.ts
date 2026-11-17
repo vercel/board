@@ -32,7 +32,8 @@ type Config = { version?: number; hooks?: Record<string, Entries>; permissions?:
   unknown
 >
 
-const ours = (entry: { command?: string }) => / hook stop --agent /.test(entry.command ?? '')
+/** A command an install wrote: `<vb> hook stop --agent <one of AGENTS>`, with whatever flags followed. Another tool's `hook stop` isn't ours. */
+const ours = (entry: { command?: string }) => / hook stop --agent (?:claude|codex|cursor|pi)(?:\s|$)/.test(entry.command ?? '')
 
 function readConfig(path: string): Config {
   try {
@@ -83,7 +84,9 @@ export function installedHook(agent: HookAgent): string | null {
   if (spec.shape === 'extension') {
     try {
       const line = PI_COMMAND.exec(readFileSync(spec.file(), 'utf8'))
-      return line ? (JSON.parse(line[1]!) as string) : null
+      const command = line ? (JSON.parse(line[1]!) as string) : null
+      // Someone else's extension at this path, with a COMMAND of its own, isn't ours to remove.
+      return command !== null && ours({ command }) ? command : null
     } catch {
       return null
     }
