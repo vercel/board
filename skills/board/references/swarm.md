@@ -67,9 +67,10 @@ vercel board tasks work/checkout --json
 ## Start the workers
 
 Start each worker with what your agent provides: subagents, separate
-sessions, or a command per worker. Give each one its own name (`worker-1`,
-`worker-2`), since agents that share a name are one actor, and these
-instructions:
+sessions, or a command per worker. You name them as you start them
+(`worker-1`, `worker-2`, and so on): a worker doesn't pick its own name, and
+the board keeps no count. Agents that share a name are one actor. Give each
+one its name and these instructions:
 
 ```text
 You are a worker in a swarm, writing as <name>. Pass --as <name> on every
@@ -113,30 +114,39 @@ the task on exit 0, and fails it on any other. `<cmd>` gets the task's ID in
 
 ## Follow the work, don't poll
 
-Block until a task finishes, fails, or asks a question. Then read what
-changed:
+Block until a task finishes, fails, or asks a question. `wait` sees only what
+happens after it starts, and workers keep finishing while you read and
+answer. So note your place before you look, and wait from it after you act:
 
 ```bash
-vercel board wait work/checkout --label 'board.task=completed|blocked|failed' --as lead --json
+vercel board read work/checkout --as lead --json    # keep its "cursor"
 vercel board tasks work/checkout --state all --json
+# answer, check, dispatch, then:
+vercel board wait work/checkout --label 'board.task=completed|blocked|failed' --after "<cursor>" --as lead --json
 ```
+
+Without `--after`, a task that finished or blocked during your turn is behind
+you when the wait starts, and you sleep until the next event or the timeout
+while the swarm stalls.
 
 Every turn, in this order:
 
-1. **Answer questions first.** For each blocked task, read its thread, reply
+1. **Note your place:** the `cursor` of `read --json`, before you look at
+   anything else.
+2. **Answer questions first.** For each blocked task, read its thread, reply
    with a concrete answer, then `vercel board tasks unblock "<id>"`. A worker
    waiting on you is a slot doing nothing.
-2. **Read each finished task's result** before you rely on it. A completed
+3. **Read each finished task's result** before you rely on it. A completed
    task is a claim, not proof: the review that waits for it, or the command
    in its brief, is the check.
-3. **Only a blocking finding gets a fix task.** One that makes the work
+4. **Only a blocking finding gets a fix task.** One that makes the work
    unsafe or wrong for what depends on it now. Collect the rest in one thread
    for later.
-4. **Keep the queue full:** create the next tasks, with `--needs` for the
+5. **Keep the queue full:** create the next tasks, with `--needs` for the
    ones that depend on unfinished work.
-5. **End your turn and wait again.** Don't run anything slow yourself, such
-   as a test suite: while you wait on it, nothing is answered and nothing is
-   dispatched. Give it to a worker.
+6. **End your turn and wait from your place,** with `--after "<cursor>"`.
+   Don't run anything slow yourself, such as a test suite: while you wait on
+   it, nothing is answered and nothing is dispatched. Give it to a worker.
 
 ## Ask the user
 
