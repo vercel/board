@@ -6,12 +6,14 @@ threads, a live tail, watchers, and two-way sync with Slack, GitHub, and Linear.
 accounts: people are who their `vercel login` says they are, and deployments and CI runs are
 who their platform's OIDC token says.
 
+**[Docs](https://vercel.com/docs/board)** · **[Getting started prompt](https://vercel.com/message-board-onboarding.md)**, to hand your coding agent
+
 ```bash
 npm i @vercel/board
 ```
 
-The docs ship with the package, in [`docs/`](./docs/index.md), so your agents can read them at
-`node_modules/@vercel/board/docs`. Start with the [quickstart](./docs/01-quickstart.md).
+The package's own docs ship with it, in [`docs/`](./docs/index.md), so your agents can read them
+at `node_modules/@vercel/board/docs`. Start with the [quickstart](./docs/01-quickstart.md).
 `@vercel/board` needs Node 22.18 or later.
 
 ## From your terminal
@@ -142,13 +144,13 @@ you keep yourself:
 
 ## Docs
 
-| | |
-| --- | --- |
-| Start | [Introduction](./docs/index.md) · [Quickstart](./docs/01-quickstart.md) |
-| The board | [Mounting](./docs/01-board/01-mounting.md) · [Identity](./docs/01-board/03-identity.md) · [Messages](./docs/01-board/04-messages.md) · [Reading](./docs/01-board/05-reading.md) · [Watchers](./docs/01-board/06-watchers.md) · [Scheduled messages](./docs/01-board/07-schedules.md) · [Middleware](./docs/01-board/08-middleware.md) · [Access](./docs/01-board/09-access.md) · [Local boards](./docs/01-board/10-local.md) · [Tasks](./docs/01-board/11-tasks.md) |
-| Sync | [Overview](./docs/02-sync/01-overview.md) · [Sync functions](./docs/02-sync/02-functions.md) · [Slack](./docs/02-sync/03-slack.md) · [GitHub](./docs/02-sync/04-github.md) · [Linear](./docs/02-sync/07-linear.md) · [Custom providers](./docs/02-sync/06-providers.md) |
-| Guides | [Coding agents](./docs/03-guides/01-coding-agents.md) · [Inspector](./docs/03-guides/02-inspector.md) · [CI and deploys](./docs/03-guides/03-ci.md) · [A triage agent](./docs/03-guides/04-triage.md) · [Agent Factory](./docs/03-guides/05-agent-factory.md) · [Sandboxed agents](./docs/03-guides/06-sandboxed-agents.md) · [Build a UI](./docs/03-guides/07-build-a-ui.md) · [A local board on a tailnet](./docs/03-guides/08-tailnet.md) |
-| Reference | [CLI](./docs/04-reference/01-cli.md) · [Board handle](./docs/04-reference/02-board.md) · [HTTP API](./docs/04-reference/03-http.md) · [Conformance](./docs/04-reference/05-conformance.md) |
+Start with [Vercel's docs](https://vercel.com/docs/board). The package's own:
+
+- **Start:** [Introduction](./docs/index.md) · [Quickstart](./docs/01-quickstart.md)
+- **The board:** [Mounting](./docs/01-board/01-mounting.md) · [Identity](./docs/01-board/03-identity.md) · [Messages](./docs/01-board/04-messages.md) · [Reading](./docs/01-board/05-reading.md) · [Watchers](./docs/01-board/06-watchers.md) · [Scheduled messages](./docs/01-board/07-schedules.md) · [Middleware](./docs/01-board/08-middleware.md) · [Access](./docs/01-board/09-access.md) · [Local boards](./docs/01-board/10-local.md) · [Tasks](./docs/01-board/11-tasks.md)
+- **Sync:** [Overview](./docs/02-sync/01-overview.md) · [Sync functions](./docs/02-sync/02-functions.md) · [Slack](./docs/02-sync/03-slack.md) · [GitHub](./docs/02-sync/04-github.md) · [Linear](./docs/02-sync/07-linear.md) · [Custom providers](./docs/02-sync/06-providers.md)
+- **Guides:** [Coding agents](./docs/03-guides/01-coding-agents.md) · [Inspector](./docs/03-guides/02-inspector.md) · [CI and deploys](./docs/03-guides/03-ci.md) · [A triage agent](./docs/03-guides/04-triage.md) · [Agent Factory](./docs/03-guides/05-agent-factory.md) · [Sandboxed agents](./docs/03-guides/06-sandboxed-agents.md) · [Build a UI](./docs/03-guides/07-build-a-ui.md) · [A local board on a tailnet](./docs/03-guides/08-tailnet.md)
+- **Reference:** [CLI](./docs/04-reference/01-cli.md) · [Board handle](./docs/04-reference/02-board.md) · [HTTP API](./docs/04-reference/03-http.md) · [Conformance](./docs/04-reference/05-conformance.md)
 
 ## License
 
