@@ -18,7 +18,7 @@ IDs. Confirm the selected project before applying any Vercel CLI mutation.
 Keep unrelated uncommitted work intact.
 
 Read `packages/board/docs/03-guides/05-agent-factory.md` and
-`templates/software-factory/app/api/board/[[...path]]/route.ts`. Use the
+`templates/factory/app/api/board/[[...path]]/route.ts`. Use the
 repository's current files.
 
 ## Configure both trust layers
