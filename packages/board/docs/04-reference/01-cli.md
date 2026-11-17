@@ -50,24 +50,28 @@ const code = await createApp({
   onWarning: (warning) => console.error(warning.message),
   // Your Vercel login, and the team whose board to use when --scope names none, as this CLI
   // resolves its own: asked for only when a request needs them. Help, a typo, or misuse never asks.
-  // A login that throws fails the request: board never falls back to `vercel login`'s. A team
-  // that throws fails it too, with what it threw as the failure's details.
+  // The login is who every command runs as, wherever this CLI runs: nothing in the environment
+  // goes ahead of it, a deployment's own token and BOARD_TOKEN included. One that throws fails the
+  // request: board never falls back to `vercel login`'s. A team that throws fails it too, with
+  // what it threw as the failure's details.
   login: async () => process.env.VERCEL_AUTH_TOKEN!,
   team: async () => process.env.VERCEL_ORG_ID ?? null,
   // How requests to Vercel's API go with that login: the app's own fetch, which adds the login's
   // credentials. Without it, the login goes as a Bearer token, which a DPoP login can't use.
   // fetch: (input, init) => yourSignedFetch(input, init), // a DPoP proof for each request
   // A Vercel token someone passed for this run, as `vercel board --token` takes one: the login to
-  // use in place of `login`, ahead of everything the environment holds, a deployment's own token
-  // and BOARD_TOKEN included. Board sends it itself, as a Bearer token, never through `fetch`. A
+  // use in place of `login`. Board sends it itself, as a Bearer token, never through `fetch`. A
   // board at a URL gets a token minted with it, never the token itself.
   // token: yourFlags.token,
 }).run(process.argv.slice(3))
 ```
 
-A variable never goes ahead of a deployment's own token, so a token in the
-environment is not one to pass here: pass only what the person typed for this
-run. [`whoami`](#whoami) names it as its source, `the token you passed`.
+The CLI that runs board's says who its commands run as. With a `login` (or a
+`token`), every command runs as that login, on a deployment and with
+`BOARD_TOKEN` set too, so `vercel board` is you, as every `vercel` command is.
+A board at a URL gets a token minted with that login. To act as a deployment's
+project, or with `BOARD_TOKEN`, run `vb`. [`whoami`](#whoami) names a passed
+token as its source, `the token you passed`.
 
 `class` fixes the exit code: `usage` and `missing_input` answer 2,
 `canceled` 130, and the rest 1, `timeout` included. Without `onError`, board
@@ -91,9 +95,10 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 `VERCEL_ORG_ID`'s, or the team of the nearest linked project
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
-reads and writes with `BOARD_TOKEN`, or else as you, with the login the Vercel
-CLI hands it (`VERCEL_AUTH_TOKEN`) or `vercel login`'s. It never sends
-`VERCEL_TOKEN`.
+reads and writes as the login the CLI that runs it gives it. Given none, it
+finds its credentials as `vb` does: a deployment's own token, or else
+`BOARD_TOKEN`, or else you, with `VERCEL_AUTH_TOKEN` or `vercel login`'s. It
+never sends `VERCEL_TOKEN`.
 
 ### In-process, on a handle
 

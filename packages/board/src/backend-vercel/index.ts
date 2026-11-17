@@ -1,32 +1,34 @@
 // Your team's board in Vercel's API, internal: board()'s default backend, and the CLI's. In Node, it finds credentials the way
 // a deployment and the Vercel CLI do: the deployment's OIDC token, or else `BOARD_TOKEN` or your login. Never
 // `VERCEL_TOKEN`, a name people set for other reasons, and nothing in the environment replaces a deployment's
-// own token: only a token someone passed the CLI for this run goes ahead of it.
+// own token: only the login of an app that runs board's CLI goes ahead of it, since the app says who its commands run as.
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
-import { asYou, environmentProfile, loginHanded, PASSED, passedToken, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
+import { appLogin, asYou, environmentProfile, loginHanded, PASSED, passedToken, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
 
-/** On Vercel, or with its OIDC token pulled (`vercel env pull`): a deployment acts as its project. */
-const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_TOKEN
+/**
+ * Whether this deployment's own token is what goes: on Vercel, or with its OIDC token pulled
+ * (`vercel env pull`), a deployment acts as its project. Never under an app that runs board's CLI
+ * with a login of its own: that login goes.
+ */
+const asDeployment = () => !appLogin() && (process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_TOKEN)
 
-/** Off a deployment, a credential Vercel's API takes, set for board: what a sandbox or CI passes. */
-const boardToken = () => (deployed() ? null : process.env.BOARD_TOKEN || null)
+/** Off a deployment, a credential Vercel's API takes, set for board: what a sandbox or CI passes. Not ahead of an app's login either. */
+const boardToken = () => (appLogin() || asDeployment() ? null : process.env.BOARD_TOKEN || null)
 
-/** Whether what goes is a Vercel login: a token passed for this run, or with no deployment's token and no `BOARD_TOKEN`, yours. */
-const asLogin = () => passedToken() !== null || (!deployed() && !boardToken())
+/** Whether what goes is a Vercel login: an app's, or with no deployment's token and no `BOARD_TOKEN`, yours. */
+const asLogin = () => !asDeployment() && !boardToken()
 
 /**
- * A token Vercel's API takes: the one this run was passed (`vercel board --token`), or else this
- * deployment's OIDC token, or else `BOARD_TOKEN`, or your Vercel login, the one the CLI that runs
- * board's hands it (`vercel board`'s, or `VERCEL_AUTH_TOKEN`) or your `vercel login`.
+ * A token Vercel's API takes: the login of the app that runs board's CLI, when it gave one (the
+ * token it was passed, as `vercel board --token`, or else its own), or else this deployment's OIDC
+ * token, or else `BOARD_TOKEN`, or your Vercel login: `VERCEL_AUTH_TOKEN`, or your `vercel login`.
  */
 async function token(): Promise<string> {
-  const passed = passedToken()
-  if (passed !== null) return passed
-  if (deployed()) return getVercelOidcToken()
+  if (asDeployment()) return getVercelOidcToken()
   const set = boardToken()
   if (set) return set
   // With no login to send, that's what it says, as `http()`'s does, not that the API didn't answer.
@@ -38,7 +40,7 @@ async function token(): Promise<string> {
 /** Where `token` comes from, in words: what `vb whoami` says. */
 export function credentialSource(): string {
   if (passedToken() !== null) return PASSED
-  if (deployed()) return 'Vercel OIDC'
+  if (asDeployment()) return 'Vercel OIDC'
   if (boardToken()) return 'BOARD_TOKEN'
   return loginHanded() ? 'the Vercel CLI' : 'vercel login'
 }
@@ -56,8 +58,9 @@ export function handTeam(resolve: (() => Promise<string | null>) | null) {
 
 /**
  * The team: the one a CLI that runs board's hands it, `VERCEL_ORG_ID`, the one the deployment's OIDC
- * token names, or the linked project's (the nearest `.vercel/project.json`). A handed one that
- * throws fails the request with what it threw: the app's own words, not an internal error.
+ * token names when that token is what goes, or the linked project's (the nearest
+ * `.vercel/project.json`). A handed one that throws fails the request with what it threw: the
+ * app's own words, not an internal error.
  */
 async function team(): Promise<string | null> {
   if (handed) {
@@ -68,7 +71,7 @@ async function team(): Promise<string | null> {
     }
   }
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
-  if (deployed()) {
+  if (asDeployment()) {
     try {
       const owner = decodeJwt(await getVercelOidcToken()).owner_id
       if (typeof owner === 'string') return owner

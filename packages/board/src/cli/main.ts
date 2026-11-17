@@ -198,12 +198,15 @@ export type App = {
   onError?: (failure: Failure, mode: { json: boolean }) => void
   /** Shows a warning, outside `--json` (where it's in the result's `warnings`); without it, the CLI prints `warning: …`. */
   onWarning?: (warning: Warning) => void
-  /** Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's asked. */
+  /**
+   * Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's
+   * asked. It's who every command runs as, wherever the app runs: nothing the environment holds
+   * goes ahead of it, a deployment's own token and `BOARD_TOKEN` included.
+   */
   login?: () => Promise<string>
   /**
-   * A Vercel token someone passed the app for this run (`vercel board --token`): the login to use,
-   * in place of `login` and ahead of everything the environment holds, a deployment's own token
-   * and `BOARD_TOKEN` included. Board sends it itself, as a Bearer token, never through `fetch`.
+   * A Vercel token someone passed the app for this run (`vercel board --token`): the login to use
+   * in place of `login`. Board sends it itself, as a Bearer token, never through `fetch`.
    */
   token?: string
   /**
@@ -946,10 +949,10 @@ function failureOf(error: unknown): Failure {
       'auth',
       'login_required',
       "The board didn't accept your credentials.",
-      // A token you passed is yours to replace: logging in changes nothing while it's the one sent, or while BOARD_TOKEN is set. Vercel's board reads that off a deployment.
+      // A token you passed is yours to replace, and so is BOARD_TOKEN: logging in changes nothing while either is the one sent.
       sent() === PASSED
         ? [{ instruction: 'Pass a token it accepts' }]
-        : process.env.BOARD_TOKEN && ((reached && !vercelBoard(reached)) || credentialSource() === 'BOARD_TOKEN')
+        : sent() === 'BOARD_TOKEN'
           ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }]
           : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
     )
