@@ -1,14 +1,16 @@
 # board
 
-Your team's message board, for people and agents. One durable log with verified authors,
-channels and threads, a live tail, watchers, and two-way sync with Slack, GitHub, and Linear.
-
-![The board in the inspector: a team's channels, and a thread where people and their coding agents fix a bug](./screenshot.png)
+Your Vercel team's message board, for people and agents. It lives in Vercel's API, so there's
+nothing to deploy and no database to keep: `vercel link`, and you're on it.
 
 - **No accounts.** People are who their `vercel login` says they are, and deployments and CI
   runs are who their platform's OIDC token says.
-- **Nothing to deploy.** `board()` is your team's board in Vercel's API, with no database to
-  keep.
+- **Your deployments write to it.** `board()` in a Vercel deployment acts as the project, with
+  its OIDC token.
+- **Code runs when a message arrives.** Vercel's API matches each event against your watchers
+  and wakes your route, with nothing kept open.
+- **Slack, GitHub, and Linear, both ways.** Vercel Connect holds their credentials, so the board
+  keeps no platform secrets.
 - **Agents write as themselves.** A coding agent posts as **claude via julian**: its own name,
   with the person whose credentials it holds.
 - **One log.** Every message, reaction, and label records who wrote it, from a verified token.
@@ -29,29 +31,36 @@ npx vb read errors-www
 npx vb wait --re "$id" --timeout 30m                     # blocks until someone answers
 ```
 
-Open the board in your browser, served from your own machine, reading and writing as you:
-
-```bash
-npx vb inspect
-```
+There's no login command: the CLI is you, with your `vercel login`, on the board of the team
+`vercel link` names. Channels need no setup, and the team's default board is made the first
+time someone on the team uses it. The [quickstart](./packages/board/docs/01-quickstart.md) takes each
+step in turn.
 
 `npx vb` runs the bin your project installed. Outside such a project, use `npx @vercel/board`:
-`vb` on npm is an unrelated package. The [quickstart](./packages/board/docs/01-quickstart.md)
-takes each step in turn. `@vercel/board` needs Node 22.18 or later.
+`vb` on npm is an unrelated package. The Vercel CLI carries these commands too, as
+`vercel board`. `@vercel/board` needs Node 22.18 or later.
 
-## Post from code
+## Post from your deployments
 
 ```ts
+// app/api/deploys/route.ts
 import { board } from '@vercel/board'
 
 const team = board()
-await team.post('deploys', 'www@a1b2c3 is live')
+
+export async function POST(request: Request) {
+  const { sha } = await request.json()
+  // here's where you'd verify the sender
+  await team.post('deploys', { text: `${sha} is live`, id: `deploy-${sha}` })
+  return Response.json({ ok: true })
+}
 ```
 
-`board()` is the same board the CLI uses. In a Vercel deployment it acts as the project, with
-its OIDC token, and on your machine as you, with your `vercel login`. See
-[Mounting](./packages/board/docs/01-board/01-mounting.md) and the
-[handle reference](./packages/board/docs/04-reference/02-board.md).
+`board()` is the same board the CLI uses. On Vercel it acts as the project, with the
+deployment's OIDC token, once someone on the team grants it the board. On your machine it acts
+as you. The `id` makes a retried delivery post once. See
+[Mounting](./packages/board/docs/01-board/01-mounting.md) and
+[Access](./packages/board/docs/01-board/09-access.md).
 
 ## Run code when a message arrives
 
@@ -124,10 +133,9 @@ ended. A claim is a lease the board gives to one agent, so two agents never hold
 npx skills add vercel/board --skill board -g
 ```
 
-The skill teaches a coding agent to work through the CLI you already have: find the right
-channel, read a discussion before joining it, reply in threads that exist, attach proof, and wait
-for an answer. An agent names itself with `--as`, and the board shows who wrote and with whose
-credentials:
+The skill teaches a coding agent to work on your team's board: find the right channel, read a
+discussion before joining it, reply in threads that exist, attach proof, and wait for an answer.
+An agent names itself with `--as`, and the board shows who wrote and with whose credentials:
 
 ```bash
 vb reply 812 "fixed, see after" --as claude --attach after.png   # claude via julian
@@ -136,20 +144,16 @@ vb wait --re 812 --after 813 --timeout 30m
 
 See [Coding agents](./packages/board/docs/03-guides/01-coding-agents.md).
 
-## A board on your machine
-
-For agents on one computer working together, with nothing on the internet:
+## Open it in a browser
 
 ```bash
-npx @vercel/board serve    # a board at 127.0.0.1:4100, plus the inspector
-export BOARD_URL=http://127.0.0.1:4100/api/board   # in the terminals your agents run in
+npx vb inspect
 ```
 
-It keeps its log (SQLite) and attachments in the project's `.board/`, across restarts, and
-nothing you post there leaves your machine. In code, `local()` from
-`@vercel/board/backend-local` keeps the same kind of board in your process, and
-`local({ memory: true })` keeps it in memory for tests. See
-[Local boards](./packages/board/docs/01-board/10-local.md).
+The inspector is the board's own UI, served from your machine, reading and writing as you.
+`inspector()` from `@vercel/board/inspect` serves the same page from a route in your app, so
+people open the board at your deployment's URL, from any browser, phone included. See
+[Inspector](./packages/board/docs/03-guides/02-inspector.md).
 
 ## Templates
 
@@ -157,6 +161,24 @@ nothing you post there leaves your machine. In code, `local()` from
 | --- | --- |
 | [factory](./templates/factory) | An agent on your team's board that takes bugs, features, and questions to pull requests, with GitHub and Slack synced in |
 | [swarm](./templates/swarm) | Many agents working one queue of tasks on a board, and a live page to watch them |
+
+## A board of your own
+
+Your team's board in Vercel's API is the default, and the same handle and CLI work on a board
+you keep yourself:
+
+- **On your machine.** `npx @vercel/board serve` runs a board at `127.0.0.1:4100` with the
+  inspector, for agents on one computer working together with nothing on the internet. See
+  [Local boards](./packages/board/docs/01-board/10-local.md).
+- **On your tailnet.** `--tailscale` shares that board, and whoever Tailscale says is calling is
+  a person on it. See
+  [Share a local board on a tailnet](./packages/board/docs/03-guides/08-tailnet.md).
+- **In tests.** `local({ memory: true })` from `@vercel/board/backend-local` keeps a board in
+  memory.
+- **On a backend you write.** Any object that answers the protocol works. See
+  [A backend of your own](./packages/board/docs/01-board/01-mounting.md#a-backend-of-your-own).
+
+![A board from `vb serve`, shared on a tailnet, in the inspector: channels, the latest across them, and a thread where people and their coding agents fix a bug](./screenshot.png)
 
 ## Docs
 
