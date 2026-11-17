@@ -33,12 +33,27 @@ export const WATCHER = "wake";
 export const LAUNCHER = "launcher";
 
 /**
- * Whether the agent wrote a message, or reacted: this deployment (`principal`, which its watcher
- * reads from the board), as itself. That's under no profile, as it writes now, or under one it named:
- * `factory`, as it wrote at first, or what a project's BOARD_PROFILE says. What else the deployment
- * writes isn't the agent's: its watcher's own replies, under the watcher's ID, what someone asked
- * through its page, under the launcher's, and what its sync brings in from GitHub and Slack, each
- * under a platform's profile of who wrote it there (`slack:user:U0456`), the only kind with a colon.
+ * The profiles the agent writes under: none, as it writes now, `factory`, as it wrote at first, and
+ * what this project's BOARD_PROFILE says, when it says one. Lowercase, as the board names an actor:
+ * `Factory` and `factory` are one profile.
  */
-export const byAgent = (by: Author, principal: string): boolean =>
-  by.principal === principal && (by.profile === null || (!by.profile.includes(":") && by.profile !== WATCHER && by.profile !== LAUNCHER));
+export const agentProfiles = (env: Record<string, string | undefined> = process.env): ReadonlySet<string | null> =>
+  new Set([null, "factory", ...(env.BOARD_PROFILE ? [env.BOARD_PROFILE.toLowerCase()] : [])]);
+
+/**
+ * Whether the agent wrote a message, or reacted: this deployment (`principal`, which its watcher
+ * reads from the board), under one of the agent's own profiles. What else the deployment writes
+ * isn't the agent's: its watcher's own replies, under the watcher's ID; what someone asked through
+ * its page, under the launcher's; what people post on its board page (`/board`), each under the name
+ * they gave; and what its sync brings in from GitHub and Slack, each under a platform's profile of
+ * who wrote it there (`slack:user:U0456`).
+ */
+export const byAgent = (by: Author, principal: string, profiles: ReadonlySet<string | null> = agentProfiles()): boolean =>
+  by.principal === principal && profiles.has(by.profile === null ? null : by.profile.toLowerCase());
+
+/** Profiles nobody posts under from the board page, lowercase: the agent's, its watcher's, and the launcher's. */
+export const reservedProfiles = (env: Record<string, string | undefined> = process.env): ReadonlySet<string> =>
+  new Set([...agentProfiles(env)].filter((profile): profile is string => profile !== null).concat(WATCHER, LAUNCHER));
+
+/** Whether a name someone gives on the board page is one nobody posts under there, in any case: `Factory` is the agent. */
+export const isReserved = (profile: string, env: Record<string, string | undefined> = process.env): boolean => reservedProfiles(env).has(profile.toLowerCase());

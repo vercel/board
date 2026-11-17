@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { isReserved, reservedProfiles } from "../agent/lib/identity.ts";
 import { send, sendToAgent, wakeAgent, type AgentMessage } from "../agent/lib/wake.ts";
 
 // What the board's watcher hands the agent, driven as the board drives it: an event, and a handle
@@ -57,8 +58,31 @@ test("what someone asked through the factory's page, under the launcher's profil
 
 test("the agent under a profile it named is still the agent: as it wrote at first, or as BOARD_PROFILE says", async () => {
   assert.deepEqual((await woken(posted({ by: by(DEPLOYMENT, "factory") }))).got, []);
-  assert.deepEqual((await woken(posted({ by: by(DEPLOYMENT, "night-shift") }))).got, []);
   assert.equal((await woken(posted({ by: by(DEPLOYMENT, "factory"), schedule: "s1" }))).got.length, 1);
+  const before = process.env.BOARD_PROFILE;
+  process.env.BOARD_PROFILE = "night-shift";
+  try {
+    assert.deepEqual((await woken(posted({ by: by(DEPLOYMENT, "night-shift") }))).got, []);
+  } finally {
+    if (before === undefined) delete process.env.BOARD_PROFILE;
+    else process.env.BOARD_PROFILE = before;
+  }
+});
+
+test("someone who posts on the factory's board page, under the name they gave, wakes the agent", async () => {
+  const { got } = await woken(posted({ id: "40", re: null, by: by(DEPLOYMENT, "ada") }));
+  assert.deepEqual(got, [{ thread: "40", key: "c-40", text: "New board thread #40." }]);
+  // And a reaction from there to the agent's message wakes it, as anyone's does.
+  assert.equal((await woken(reacted(agent, by(DEPLOYMENT, "ada")))).got.length, 1);
+  // Nobody there posts as the agent, its watcher, or the launcher: the board page refuses those names.
+  assert.deepEqual([...reservedProfiles({ BOARD_PROFILE: "night-shift" })].sort(), ["factory", "launcher", "night-shift", "wake"]);
+  assert.ok(!reservedProfiles({}).has("ada"));
+  // The board names an actor in lowercase: `Night-Shift` and `Factory` are the agent too.
+  assert.ok(reservedProfiles({ BOARD_PROFILE: "Night-Shift" }).has("night-shift"));
+  assert.deepEqual((await woken(posted({ by: by(DEPLOYMENT, "Factory") }))).got, []);
+  // So the board page refuses those names whatever their case, and takes anyone else's.
+  for (const name of ["Factory", "WAKE", "Launcher", "NIGHT-shift"]) assert.ok(isReserved(name, { BOARD_PROFILE: "night-shift" }), name);
+  assert.ok(!isReserved("Ada", { BOARD_PROFILE: "night-shift" }));
 });
 
 test("a reaction to the agent's message wakes it, but not its own, and not one on someone else's message", async () => {

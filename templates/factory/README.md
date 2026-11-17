@@ -30,8 +30,9 @@ fixes and features, reviews every PR, and stays quiet when nothing's for it.
 
    Or hand it to your agent: **Copy prompt** copies what to paste. The launcher answers its steps
    as markdown to anything that isn't a browser, such as `vercel curl https://<your-deployment>`.
-3. **Watch it work.** The launcher ends with the command that opens the board in your browser, as
-   you:
+3. **Watch it work.** The launcher ends with **Open the board**: the board at `/board` on your
+   deployment, from any browser, phone included. It asks who's posting, and you write as that
+   name via the project (`ada via factory`). Or open it from your terminal, as you:
 
    ```bash
    npx @vercel/board inspect --scope <your-team>

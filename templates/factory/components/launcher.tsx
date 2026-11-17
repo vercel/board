@@ -32,6 +32,12 @@ export function LauncherView({ result, inspect, origin, local, running }: Launch
   const board = (
     <section className="panel">
       <h2>Watch the board</h2>
+      <p>
+        <a className="button" href="/board">
+          Open the board
+        </a>
+      </p>
+      <p className="note">Or from your terminal, as you:</p>
       <Command text={inspect} />
       {running ? (
         <p className="note">
