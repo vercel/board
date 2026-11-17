@@ -1499,6 +1499,42 @@ describe('sync', () => {
     )
   })
 
+  it('looks up the first 10 emails a message names on Slack, and posts the rest as written', async () => {
+    const lookupByEmail = vi.fn(async ({ email }: { email: string }) => ({ user: { id: `U_${email.split('@')[0]!.toUpperCase()}`, name: email } }))
+    const conversations = { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }
+    const { board, s } = setup({ slackClient: { conversations, users: { info: async () => ({}), lookupByEmail } } })
+    const julian = caller(board.fetch, await personToken(), {})
+    const emails = Array.from({ length: 12 }, (_, i) => `p${i}@acme.com`)
+    // One named twice is one lookup.
+    await julian('POST', '/messages', { channel: 'firehose', text: `cc ${[...emails, emails[0]].map((email) => `@[${email}]`).join(' ')}` })
+    await vi.waitFor(() => expect(s.channelPosts.some((p) => p.channelId === 'slack:C1')).toBe(true))
+    expect(lookupByEmail.mock.calls.map(([{ email }]) => email)).toEqual(emails.slice(0, 10))
+    const sent = JSON.parse(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).markdown as string
+    expect(sent).toContain('cc <@U_P0> <@U_P1>')
+    expect(sent).toContain('<@U_P9> p10@acme.com p11@acme.com <@U_P0>')
+  })
+
+  it('takes a Slack edit back to earlier text as a new edit, and the same edit sent twice as one', async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), {})
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:900.1', id: '900.1', text: 'ship at 3', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const edit = (text: string, minute: number) => webhook('slack', { type: 'edit', threadId: 'slack:C1:900.1', id: '900.1', text, user: 'U1', editedAt: `2026-11-17T10:0${minute}:00.000Z` })
+    const shown = async () => (await read(julian, 'firehose'))[0]!.text
+    await edit('ship at 4', 1)
+    await vi.waitFor(async () => expect(await shown()).toBe('ship at 4'))
+    await edit('ship at 5', 2)
+    await vi.waitFor(async () => expect(await shown()).toBe('ship at 5'))
+    await edit('ship at 4', 3)
+    await vi.waitFor(async () => expect(await shown()).toBe('ship at 4'))
+    // Slack retrying the first edit is that edit again: it doesn't undo what came after.
+    await edit('ship at 5', 2)
+    await edit('ship at 6', 4)
+    await vi.waitFor(async () => expect(await shown()).toBe('ship at 6'))
+    const events = (await julian('GET', '/events?channel=firehose&after=0')).body.events as { type: string }[]
+    expect(events.filter((event) => event.type === 'message.edited')).toHaveLength(4)
+  })
+
   it("matches --mentions ada@vercel.com by the email its text names, and never asks Slack who that is", async () => {
     const lookupByEmail = vi.fn(async () => ({ user: { id: 'U_ADA', name: 'ada', profile: { display_name: 'ada', real_name: 'Ada Lovelace' } } }))
     const conversations = { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }
