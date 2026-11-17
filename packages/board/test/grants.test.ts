@@ -493,6 +493,34 @@ describe('grants', () => {
     }
   })
 
+  it("fetches an issuer's discovery once for tokens that arrive together, and again after it failed", async () => {
+    const ISS = 'https://idp-once.acme.dev'
+    const DISCOVERY = `${ISS}/.well-known/openid-configuration`
+    const { person, as } = await setUp()
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['read'] } })
+    const call = await as(oidcToken({}, ISS))
+    let discoveries = 0
+    let up = false
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL): Promise<Response> => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url === DISCOVERY) {
+        discoveries++
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return up ? Response.json({ issuer: ISS, jwks_uri: `${ISS}/jwks` }) : new Response('down', { status: 503 })
+      }
+      return url === `${ISS}/jwks` ? Response.json(testKeys) : new Response('not found', { status: 404 })
+    })
+    try {
+      const together = await Promise.all(Array.from({ length: 5 }, async () => (await call('GET', '/me')).status))
+      expect([together, discoveries]).toEqual([[401, 401, 401, 401, 401], 1])
+      up = true
+      expect((await call('GET', '/me')).status).toBe(200)
+      expect(discoveries).toBe(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("refuses names it can't look up, and principals that name more than they say", async () => {
     const { person } = await setUp()
     const refused = async (principal: unknown, can: unknown = { '*': ['read'] }) => {
