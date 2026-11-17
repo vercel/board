@@ -1538,14 +1538,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
-  /** What a read narrows its messages by beside what the API can: who `--by` names, and where `--source` does. */
-  /** Whether a message's text mentions who a read asks about. */
-  type Mentioned = (text: string) => boolean
+  /**
+   * Whether a message's text mentions who a read asks about, and `ahead`, to name together everyone a batch of texts
+   * mentions by ID before any is checked, so a page's mentions cost one request for actors.
+   */
+  type Mentioned = { (text: string): Promise<boolean>; ahead(texts: Iterable<string>): void }
   /**
    * What `--mentions` matches, in a message's text, as on any board: `me` is the caller's handle and
    * actor ID, as the API names them. Anyone else is the name as written and what's under it: a
-   * person's agents (`@julian/claude`), a project's imports. The API keeps no mentions, so this reads
-   * them from the text of each message a read covers.
+   * person's agents (`@julian/claude`), a project's imports. A mention board() settled to an actor's
+   * ID (`@[vercel:user:u_jb+claude]`) matches by that actor's handle, as the API names them, asked
+   * for by ID; one the API doesn't name matches by its ID alone. The API keeps no mentions, so this
+   * reads them from the text of each message a read covers.
    */
   async function mentionsOf(who: Who, value: string | undefined): Promise<Mentioned | undefined> {
     if (value === undefined) return undefined
@@ -1558,7 +1562,32 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       terms = [mentionTerm(value)]
       prefixes = [value.includes(':') ? `${value}+` : `${mentionTerm(value)}/`]
     }
-    return (text) => mentionTerms(text).some((term) => terms.includes(term) || prefixes.some((prefix) => term.startsWith(prefix)))
+    const named = (term: string) => terms.includes(term) || prefixes.some((prefix) => term.startsWith(prefix))
+    // `me` names the caller's own ID, which is what a mention of them settles to.
+    const ids = (text: string) => (value === 'me' ? [] : mentionTerms(text).filter((term) => principalFrom(term) !== null))
+    // Only someone the API names: a handle made up from an ID (an agent by its profile alone) names no one.
+    const handleOf = async (id: string): Promise<string | null> => {
+      const { profile } = actorParts(id)
+      const actor: ApiActor = { id, principal: principalFrom(id)!, ...(profile !== null ? { profile: { name: profile } } : {}) }
+      try {
+        const own = namesById ? await byId(who, id) : null
+        if (!(own === null ? await listed(who, id) : own)) return null
+        return (await nameOf(who, actor)).handle
+      } catch {
+        return null
+      }
+    }
+    const mentioned = async (text: string) => {
+      const found = mentionTerms(text)
+      if (found.some(named)) return true
+      const handles = await Promise.all(ids(text).map(handleOf))
+      return handles.some((handle) => handle !== null && named(mentionTerm(handle)))
+    }
+    return Object.assign(mentioned, {
+      ahead: (texts: Iterable<string>) => {
+        if (namesById) for (const text of texts) for (const id of ids(text)) void byId(who, id)
+      },
+    })
   }
 
   type Narrow = { by?: By | undefined; source?: Source | undefined; mentions?: Mentioned | undefined }
@@ -1576,7 +1605,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (filters.re !== undefined && filters.re !== message.id && filters.re !== idAt(thread.id, 1)) return false
     if (narrow.by && !narrow.by(message.createdBy)) return false
     // A filter `narrowOf` wasn't given (a watcher's, which the API matches) matches nothing here.
-    if (filters.mentions !== undefined && !narrow.mentions?.(message.text)) return false
+    if (filters.mentions !== undefined && !(await narrow.mentions?.(message.text))) return false
     if (filters.from !== undefined && !(await narrow.source?.(message))) return false
     if (filters.text !== undefined && !message.text.toLowerCase().includes(filters.text.toLowerCase())) return false
     for (const [key, values] of filters.label ?? []) {
@@ -1846,10 +1875,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
     }
     const narrow = await narrowOf(who, filters)
+    const read: { thread: ApiThread; channel: ApiChannel; all: ApiMessage[] }[] = []
+    for (const { thread, channel } of threads) read.push({ thread, channel, all: whole(thread) ?? (await threadMessages(who, thread.id, signal)) })
+    narrow.mentions?.ahead(read.flatMap(({ all }) => all.map((message) => message.text)))
     let newest = 0
     const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
-    for (const { thread, channel } of threads) {
-      const all = whole(thread) ?? (await threadMessages(who, thread.id, signal))
+    for (const { thread, channel, all } of read) {
       const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
       for (const message of all) {
         newest = Math.max(newest, message.createdAt)
@@ -1987,6 +2018,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
     const events: BoardEventView[] = []
     naming(who, merged.flatMap(({ change }) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
+    narrow.mentions?.ahead(merged.flatMap(({ change }) => (change.currentMessage ? [change.currentMessage.text] : [])))
     // Where the read started stays with every position it hands out: a feed that hasn't caught up to it yet reads on from one.
     const start = { ...(position.past !== undefined ? { past: position.past } : {}), ...(position.floor !== undefined ? { floor: position.floor } : {}) }
     for (const { change, i, page } of merged) {
@@ -2059,6 +2091,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (query.after === undefined) {
       // Without a cursor, the newest: a filtered read looks among the channel's latest page.
       const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { ...inChannel(channel), limit: String(narrowed ? PAGE_MAX : Math.min(limit, PAGE_MAX)) }, signal })
+      narrow.mentions?.ahead(page.messages.map((message) => message.text))
       for (const message of page.messages) if (await keep(message)) kept.push(message)
       return { messages: kept.slice(-limit), cursor: page.cursor }
     }
@@ -2066,6 +2099,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     for (let pages = 0; pages < SCAN_PAGES && kept.length < limit; pages++) {
       const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { ...inChannel(channel), after: cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
       cursor = page.cursor
+      narrow.mentions?.ahead(page.messages.map((message) => message.text))
       for (const message of page.messages) if (await keep(message)) kept.push(message)
       if (page.messages.length === 0) break
     }
@@ -2088,6 +2122,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       cursor = page.cursor
       const events: BoardEventView[] = []
       naming(who, page.events.flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
+      narrow.mentions?.ahead(page.events.flatMap((change) => (change.currentMessage ? [change.currentMessage.text] : [])))
       for (const change of page.events) {
         const message = change.currentMessage
         const found = message && change.threadId ? { message, thread: query.label?.length ? await thread(change.threadId) : ({ id: change.threadId } as ApiThread) } : null

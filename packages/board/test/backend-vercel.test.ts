@@ -503,6 +503,50 @@ describe('vercel()', () => {
     expect((await waiting).events.map((event) => event.message?.text)).toEqual([`@${me.handle} this one`])
   }, 15_000)
 
+  it('finds a mention board() settled to an actor ID by the handle it was written as, naming the mentioned in one request', async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
+    const julian = handleOn(api)
+    // Two actors who wrote somewhere else, so nothing a read of dev answers names them.
+    await julian.as('claude').post('other', { text: 'hi' })
+    await handleOn(api, 'user:u_ada').post('other', { text: 'hi' })
+    const val = handleOn(api, 'user:u_val')
+    const asking = await val.post('dev', { text: '@julian/claude can you look?' })
+    await val.post('dev', { text: 'and @ada, can you?' })
+    await val.post('dev', { text: '@nobody-here, anyone?' })
+    await val.post('dev', { text: '@[vercel:user:u_zed+claude] are you there?' })
+    // What's stored is the ID each handle settled to.
+    expect(asking.text).toBe('@[vercel:user:u_jb+claude] can you look?')
+    const inner = as(api, 'user:u_val')
+    const asked: string[][] = []
+    const lists: number[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actors')) (url.searchParams.has('id') ? asked.push(url.searchParams.getAll('id').sort()) : lists.push(1))
+      return inner(input, init)
+    }) as typeof globalThis.fetch
+    /** A read in a process of its own, as each `vb read --mentions` is. */
+    const fresh = () => board({ backend: vercel({ team: 'team_test', api: API, fetch }) })
+    const texts = (messages: { text: string }[]) => messages.map((message) => message.text)
+    // By the handle as written, by the person it's under, and by its ID: the same message.
+    expect(texts((await fresh().threads({ channel: 'dev', mentions: 'julian/claude' })).threads.map((thread) => thread.message))).toEqual([asking.text])
+    expect(asked).toEqual([['vercel:user:u_ada', 'vercel:user:u_jb+claude', 'vercel:user:u_zed+claude']])
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'julian' })).messages)).toEqual([asking.text])
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'vercel:user:u_jb+claude' })).messages)).toEqual([asking.text])
+    expect(texts((await fresh().threads({ mentions: 'ada' })).threads.map((thread) => thread.message))).toEqual(['and @[vercel:user:u_ada], can you?'])
+    // A handle that settled to no one is still matched as written.
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'nobody-here' })).messages)).toEqual(['@nobody-here, anyone?'])
+    // An ID the API names no one by isn't found by a handle made up from it.
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'claude' })).messages)).toEqual([])
+    // A wait for a mention wakes on one settled to an ID.
+    const waiting = fresh().poll({ channel: 'dev', mentions: 'julian/claude', wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await val.post('dev', { text: '@ada not this one' })
+    await val.post('dev', { text: '@julian/claude this one' })
+    expect((await waiting).events.map((event) => event.message?.text)).toEqual(['@[vercel:user:u_jb+claude] this one'])
+    // Never the whole list: the mentioned are asked for by ID.
+    expect(lists).toEqual([])
+  }, 15_000)
+
   it('filters a channel by what its messages say without reading the threads its list brought whole', async () => {
     const found = async (inlineThreadMessages: boolean) => {
       const api = fakeMessageboard({ inlineThreadMessages })
