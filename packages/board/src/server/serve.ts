@@ -326,9 +326,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   const middleware = options.middleware ?? []
 
   /** What a request says about who it is, none of it verified yet: its bearer token, its claims, and the board's URL. */
-  function requestOf(request: Request, audience: string): CallerRequest {
+  function requestOf(request: Request, at: string): CallerRequest {
     const header = request.headers.get('authorization') ?? ''
     const credential = header.match(/^Bearer\s+(.+)$/i)?.[1] ?? null
+    // Only a token is checked against the audience: a request without one (a cookie, no one) needs no URL to be sure of.
+    const audience = credential === null ? (options.url?.replace(/\/+$/, '') ?? at) : audienceOf(at)
     return { credential, claims: claimsOf(request.headers), audience, headers: request.headers }
   }
 
@@ -1149,7 +1151,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       // The mount, as requests show it. Every request reaches the handler under it, so one can only make it
       // look deeper (`/api/board/x/messages/1`): a mount replaces the one learned only when it's above it.
       if (!injected && !match.root && (state.learned === null || state.learned.startsWith(`${match.base}/`))) state.learned = match.base
-      const boardUrl = () => audienceOf(`${url.origin}${match.base}`.replace(/\/+$/, ''))
+      const at = `${url.origin}${match.base}`.replace(/\/+$/, '')
 
       if (target.kind === 'board' && target.name === 'webhook') {
         // A platform can't send a credential the board verifies: its adapter verifies the request.
@@ -1170,11 +1172,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       // Everything else is for a caller: this deployment's own code, or a request, which a board that
       // uses another board's doesn't serve. Nothing runs for one before that.
       if (!injected && !policy.open) throw servesOnly()
-      if (!injected && target.kind === 'protocol' && target.name === 'discovery') return json(await discovery(request, boardUrl(), request.signal))
+      if (!injected && target.kind === 'protocol' && target.name === 'discovery') return json(await discovery(request, audienceOf(at), request.signal))
       if (target.kind === 'protocol' && typeof (backend[target.name] as unknown) !== 'function') throw notFound(`no route: ${request.method} ${url.pathname}`)
       // A sync callback's client does everything but its own writes as sync.
       const own = injected && 'platform' in injected ? engine!.caller : injected
-      const asked = own ? null : requestOf(request, boardUrl())
+      const asked = own ? null : requestOf(request, at)
       const caller: Caller = own ?? (await callerOf(asked!))
       if (target.kind === 'board') return await serve(target.name, caller, request, url, match.params)
 

@@ -576,6 +576,22 @@ describe('its URL', () => {
     }
   })
 
+  it('lets a request with no token through to who verifies it in production without url, since there is no audience to check', async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      // A host whose page signs people in with a cookie of its own.
+      const cookied = mount({ authenticate: ({ headers }) => (headers.get('cookie') === 'session=ada' ? { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } : null) })
+      const me = await cookied.fetch(new Request('https://board.example/api/board/me', { headers: { cookie: 'session=ada' } }))
+      expect(me.status).toBe(200)
+      expect(await me.json()).toMatchObject({ principal: 'vercel:user:u_ada' })
+      // No one at all is no one: refused as any board refuses them, not for want of a URL.
+      expect((await selfHosted().board.fetch(new Request('https://board.example/api/board/me'))).status).toBe(401)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('takes its URL from requests on Vercel, which routes only its own domains to it', async () => {
     vi.stubEnv('VERCEL', '1')
     vi.stubEnv('NODE_ENV', 'production')
