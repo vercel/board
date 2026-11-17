@@ -30,12 +30,12 @@ vb tasks claim --ready {{swarm}} --from <their ID> --lease 5m --wait 2m --as "$A
 The ID is the last column of `vb actors`, cut at the `+`, whatever it starts with: `vercel:user:ab12+coordinator` is `--from vercel:user:ab12`, and `local:user:ada+coordinator` is `--from local:user:ada`. Named with the `+coordinator`, the board finds nothing of theirs and answers that nothing is ready.
 
 - **`#812  yours for 5m  …`:** task 812 is yours until the lease ends. The claim stays with `vb`, for `$AGENT`: every later `vb tasks` command on this task needs the same `--as "$AGENT"`.
-- **Exit 1, `timeout` or `nothing_ready`:** nothing of theirs became ready in two minutes. You're done: go to your final report. Don't sleep, don't poll, and don't list the board to check. The verdict stands even when `vb tasks {{swarm}}` still shows ready tasks: the list shows no authors, and those are other people's, which the claim left out for you.
+- **`error: Nothing was ready in {{swarm}} within 2m.`, and exit 1:** nothing of theirs became ready in two minutes. You're done: go to your final report. Don't sleep, don't poll, and don't list the board to check. The verdict stands even when `vb tasks {{swarm}}` still shows ready tasks: the list shows no authors, and those are other people's, which the claim left out for you.
 
 **Read it fully** before you start: `vb read <id>`. The newest reply from whoever wrote the task overrides the brief where they differ. Then, if it isn't yours to do:
 
 - **It needs something you can't reach** (a private branch, a machine, a credential): say what in its thread, then `vb tasks fail <id> "<why>" --as "$AGENT"`. Its owner can reopen it.
-- **It reviews work you did** (`vb read <id>` shows `needs #N`, and you did N): a review by its author checks nothing. `vb tasks release <id> --as "$AGENT"`, and stop asking for tasks if it comes straight back to you.
+- **It reviews work you did** (`vb read <id>` shows `needs #N`, and you did N): a review by its author checks nothing. Give it back with `vb tasks release <id> --as "$AGENT"`, and don't ask the board for the next task again: the review is still the oldest ready one, so the board hands it straight back. Take your next task by its ID instead, as below, from `vb tasks {{swarm}} --state ready`. When the review is the only ready task of theirs, you're done.
 
 `vb tasks {{swarm}}` lists every open task, with its state: read it as it is, with no `--json` and nothing to parse. It doesn't say who wrote each.
 
