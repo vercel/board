@@ -1,5 +1,13 @@
 # vboard
 
+## 0.50.2
+
+### Patch Changes
+
+- 3395a76: `vb hooks uninstall` removes only what an earlier `vb hooks install` wrote: another tool's `hook stop --agent` command, or someone else's Pi extension at `extensions/board.ts`, stays.
+- a96510b: `--mentions @handle` on Vercel's board finds the messages that mention that handle: board() stores a mention as the actor's ID (`@[vercel:user:…+claude]`), and the filter compared the handle as typed, so `vb read`, `vb wait`, `vb tail`, `messages()`, `threads()` and `events()` found none of them. A mention by ID now matches by the handle the API names that actor by, and what's under it (`--mentions julian` finds `@julian/claude`); the mentioned are asked for by ID, one request a page, where a read's own answer doesn't name them already.
+- 11e6111: Sync takes an edit back to a message's earlier text as a new edit where the platform says when it was edited, looks up at most 10 `@[email]` mentions per message on a platform (the rest post as written), and tells two platform messages apart when a thread's ID has a `|` in it.
+
 ## 0.50.1
 
 ### Patch Changes
