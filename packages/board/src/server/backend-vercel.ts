@@ -357,6 +357,11 @@ const WHO_AGAIN_MS = 10_000
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
+/** The reads the API answers with an `ETag` and, sent it back unchanged, a 304: a board's channels, one channel, and its actors. */
+const TAGGED = /^\/boards\/[^/]+\/(channels(\/[^/]+)?|actors)$/
+/** How many of their answers are kept. */
+const TAGGED_MAX = 200
+
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
 
 /** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
@@ -693,6 +698,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** What the API said of an error beside its code: a lost claim's `reason`. */
   const reasons = new WeakMap<HttpError, string>()
+  /** The last answer to a read of channels or actors with its `ETag`, by its URL and who asked: sent back, a 304 says it holds. The newest few. */
+  const tagged = new Map<string, { etag: string; text: string }>()
 
   /**
    * One request to the API, as `who`. Its errors are the API's own, with its status and code. One the
@@ -711,6 +718,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       else for (const one of value) url.searchParams.append(name, one)
     }
     const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile), ...(who.can !== undefined ? { 'x-board-can': who.can } : {}) }
+    // The API tags what this caller gets, after its channel access filtered it: the credential is this backend's, so the rest of who asks is in its headers.
+    const tag = method === 'GET' && TAGGED.test(path) ? JSON.stringify([url.href, headers]) : null
+    const kept = tag === null ? undefined : tagged.get(tag)
+    if (kept) headers['if-none-match'] = kept.etag
     // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
     const started = Date.now()
@@ -728,12 +739,26 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
         throw new HttpError(502, 'unreachable', `Vercel's API didn't answer: ${error instanceof Error ? error.message : String(error)}`)
       }
+      if (response.status === 304 && kept) {
+        await response.body?.cancel()
+        tagged.delete(tag!)
+        tagged.set(tag!, kept)
+        return JSON.parse(kept.text) as T
+      }
       const text = await response.text()
       let body: unknown
       try {
         body = text ? JSON.parse(text) : undefined
       } catch {}
-      if (response.ok) return body as T
+      if (response.ok) {
+        if (tag !== null) {
+          const etag = response.headers.get('etag')
+          tagged.delete(tag)
+          if (etag && text) tagged.set(tag, { etag, text })
+          if (tagged.size > TAGGED_MAX) tagged.delete(tagged.keys().next().value!)
+        }
+        return body as T
+      }
       if (attempt < RETRIES && !init.signal?.aborted && (response.status === 429 || (response.status === 503 && repeatable))) {
         await pause(retryWait(attempt, response.headers.get('retry-after')), init.signal)
         init.signal?.throwIfAborted()
@@ -767,16 +792,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
-  /** Every page of a list, in order. */
+  /** Every page of a list, in order. A cursor the API says expired (410 `cursor_expired`) starts the list again, once. */
   async function all<T>(who: Who, path: string, key: string, query: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<T[]> {
-    const out: T[] = []
-    let cursor: string | undefined
-    do {
-      const page = await api<Record<string, unknown> & { cursor: string | null }>(who, 'GET', path, { query: { ...query, cursor }, ...(signal ? { signal } : {}) })
-      out.push(...(page[key] as T[]))
-      cursor = page.cursor ?? undefined
-    } while (cursor)
-    return out
+    for (let again = false; ; again = true) {
+      const out: T[] = []
+      let cursor: string | undefined
+      try {
+        do {
+          const page = await api<Record<string, unknown> & { cursor: string | null }>(who, 'GET', path, { query: { ...query, cursor }, ...(signal ? { signal } : {}) })
+          out.push(...(page[key] as T[]))
+          cursor = page.cursor ?? undefined
+        } while (cursor)
+        return out
+      } catch (error) {
+        if (again || cursor === undefined || !(error instanceof HttpError && error.status === 410 && error.code === 'cursor_expired')) throw error
+      }
+    }
   }
 
   /**
@@ -785,9 +816,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * not to (`ensure: false`) and is told there's none it can see. Names are unique across the
    * team's boards, the ones you can't see included.
    */
-  async function boardNamed(who: Who, name: string): Promise<string> {
+  async function boardNamed(who: Who, given: string): Promise<string> {
+    // The API counts a name's characters once it trims and NFC-normalizes it.
+    const name = given.trim().normalize('NFC')
     if (!/^[^/]{1,64}$/.test(name))
-      throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(name)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
+      throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(given)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
     // One answer holds the board with the name, whatever its case. Names are unique from now on; of
     // the few older boards that share one, the API lists the oldest first, and that's the one.
     const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
@@ -2064,10 +2097,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     let cursor = query.after
     for (let pages = 0; pages < SCAN_PAGES && kept.length < limit; pages++) {
-      const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { ...inChannel(channel), after: cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
+      const page = await reading<{ messages: ApiMessage[]; cursor: string; caughtUp?: boolean }>(who, path, { query: { ...inChannel(channel), cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
       cursor = page.cursor
       for (const message of page.messages) if (await keep(message)) kept.push(message)
-      if (page.messages.length === 0) break
+      if (page.messages.length === 0 || page.caughtUp) break
     }
     return { messages: kept, cursor }
   }
@@ -2574,7 +2607,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (code === 'not_a_task') return notFound(message, 'not_a_task')
     if (code === 'message_deleted') return badRequest(message, 'message_deleted')
     // What a board's own schema would have refused, and an assignee that isn't its owner's, are a board's `invalid_request`.
-    if (code === 'bad_request' || code === 'invalid_for') return badRequest(message)
+    if (code === 'invalid_request' || code === 'invalid_for') return badRequest(message)
     if (code === 'invalid_needs' || code === 'reserved_label') return badRequest(message, code)
     if (code === 'task_not_owned') return new HttpError(403, code, message)
     if (code === 'claim_lost') {
@@ -2994,7 +3027,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async upload(caller, { data, name, type }) {
       const who = whoOf(caller)
-      if (data.byteLength === 0) throw new HttpError(400, 'bad_request', 'the file is empty')
+      if (data.byteLength === 0) throw new HttpError(400, 'invalid_request', 'the file is empty')
       // This deployment's own code (sync's imports among it) holds the bytes already, with no request to fit under.
       if (data.byteLength > IMPORT_BYTES_MAX) throw new HttpError(413, 'too_large', `attachments are at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB`)
       // A copy on its own ArrayBuffer, which digest and fetch take.

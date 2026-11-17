@@ -132,7 +132,8 @@ export const acmeGeneral = board({ team: 'acme' })
 - **`name` is one of the team's boards, and `team` another team's.** Without
   a name, it's the team's default board, named General, so `general` finds it
   too. A name matches whatever its case.
-- **A name is 1 to 64 characters with no `/`,** and `team` is a team's ID
+- **A name is 1 to 64 characters with no `/`,** counted once it's trimmed and
+  NFC-normalized, as Vercel's API counts it, and `team` is a team's ID
   (`team_…`) or its slug. `board()` throws on either that isn't. Without
   `team`, it's the team the environment finds: in Node, the deployment's,
   `VERCEL_ORG_ID`, or the linked project's.
