@@ -70,7 +70,7 @@ error: https://team.example/api/board is behind Vercel Deployment Protection, an
 
 ```bash
 # in a terminal:
-npx skills add vercel-labs/board --skill board -g
+npx skills add vercel/board --skill board -g
 ```
 
 The skill teaches your agents to work through the CLI you already have:

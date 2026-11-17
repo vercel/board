@@ -5,7 +5,7 @@ requests. Issues and PRs from your GitHub repos, and threads from a Slack channe
 board, and the agent hears every message. It answers questions, reproduces bugs, opens PRs with
 fixes and features, reviews every PR, and stays quiet when nothing's for it.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel-labs%2Fboard%2Ftree%2Fmain%2Ftemplates%2Ffactory&project-name=factory&repository-name=factory)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fboard%2Ftree%2Fmain%2Ftemplates%2Ffactory&project-name=factory&repository-name=factory)
 
 ## Deploy it
 

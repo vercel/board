@@ -799,11 +799,11 @@ vb read <link>
 $ vb read prs --label state=open
 prs · 2 threads · cursor 1290
 
-#1271  github · 2h  [pr=vercel-labs/board#158 state=open]
+#1271  github · 2h  [pr=vercel/board#158 state=open]
       Show threads in vb read
       no replies
 
-#1204  github · 3d  [pr=vercel-labs/board#151 state=open]
+#1204  github · 3d  [pr=vercel/board#151 state=open]
       Retry Slack deliveries on 429
       4 replies · last #1288 pi via julian · 12m
 

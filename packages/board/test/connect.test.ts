@@ -51,7 +51,7 @@ describe('a Vercel Connect connector as the adapter', () => {
   }, 30_000)
 
   it("builds GitHub's adapter with the bot's user ID", async () => {
-    const provider = github({ adapter: 'github/acme', botUserId: 338721338 }, repos({ 'vercel-labs/board': 'prs' }))
+    const provider = github({ adapter: 'github/acme', botUserId: 338721338 }, repos({ 'vercel/board': 'prs' }))
     const adapter = (provider as unknown as { transport: { adapter: { name: string; botUserId?: string | number } } }).transport.adapter
     expect(adapter.name).toBe('github')
     expect(String(adapter.botUserId)).toBe('338721338')
@@ -59,7 +59,7 @@ describe('a Vercel Connect connector as the adapter', () => {
 
   it("finds the app's bot user ID itself, from GraphQL's viewer, when botUserId isn't set", async () => {
     type Detecting = { botUserId?: string; logger: unknown; initialize(chat: unknown): Promise<void>; defaultOctokit: unknown }
-    const provider = github('github/acme', repos({ 'vercel-labs/board': 'prs' }))
+    const provider = github('github/acme', repos({ 'vercel/board': 'prs' }))
     const adapter = (provider as unknown as { transport: { adapter: Detecting } }).transport.adapter
     expect(adapter.botUserId).toBeUndefined()
     // An installation token can't call REST's /user, but GraphQL's viewer answers with the bot.

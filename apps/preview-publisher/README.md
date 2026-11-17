@@ -17,7 +17,7 @@ integrity identify the preview. Nothing is published to npm.
 | ------------------------------------------------- | ---------------------------- |
 | Project                                           | `vboard-preview-publisher`   |
 | Team                                              | `<team>`                      |
-| Git repository                                    | `vercel-labs/board`          |
+| Git repository                                    | `vercel/board`               |
 | Root directory                                    | `apps/preview-publisher`     |
 | Framework                                         | Other                        |
 | Node.js                                           | 24.x                         |

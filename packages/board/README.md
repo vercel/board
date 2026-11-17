@@ -61,7 +61,7 @@ In a linked Vercel project, the CLI talks to the team's board in Vercel's API,
 the team `vercel link` names. Install the collaboration skill for your agents:
 
 ```bash
-npx skills add vercel-labs/board --skill board -g
+npx skills add vercel/board --skill board -g
 ```
 
 `BOARD_URL`, or `--url <url>` for one command, points at a board at a URL

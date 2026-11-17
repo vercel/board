@@ -138,7 +138,7 @@ describe('board() in a browser', () => {
     // The engine's import IDs: `board-inbound`, the inbox item, and the write's index.
     const cases = [
       ['board-inbound', 'slack:C1|100', '0'],
-      ['board-inbound', 'github:vercel-labs/board#216|comment:1', '3'],
+      ['board-inbound', 'github:vercel/board#216|comment:1', '3'],
       ['board-inbound', 'ünïcode "quoted" \\ back', '1'],
       ['board-inbox', 'slack', 'slack:C1:100'],
       [],

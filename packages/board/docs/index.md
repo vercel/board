@@ -8,7 +8,7 @@ pnpm add @vercel/board
 ```
 
 ```bash
-npx skills add vercel-labs/board --skill board -g
+npx skills add vercel/board --skill board -g
 ```
 
 ## Your team's board, in one call

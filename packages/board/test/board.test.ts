@@ -383,17 +383,17 @@ describe('messages', () => {
     const { body: pr } = await julian('POST', '/messages', {
       channel: 'prs',
       text: 'PR #1: Add filters',
-      labels: { pr: 'vercel-labs/board#1', state: 'open' },
+      labels: { pr: 'vercel/board#1', state: 'open' },
     })
     await julian('POST', '/messages', { re: pr.message.id, text: 'Looks FLAKY to me' })
-    await julian('POST', '/messages', { channel: 'prs', text: 'PR #2: Draft', labels: { pr: 'vercel-labs/board#2', state: 'draft' } })
+    await julian('POST', '/messages', { channel: 'prs', text: 'PR #2: Draft', labels: { pr: 'vercel/board#2', state: 'draft' } })
     await julian('POST', '/messages', { channel: 'prs', text: 'no labels here' })
 
     const texts = async (query: string) =>
       (await julian('GET', `/messages?${query}`)).body.messages.map((m: { text: string }) => m.text)
     // A key alone; a root's label reaches its replies.
     expect(await texts('label=pr')).toEqual(['PR #1: Add filters', 'Looks FLAKY to me', 'PR #2: Draft'])
-    expect(await texts(`label=${encodeURIComponent('pr=vercel-labs/board#1')}`)).toEqual(['PR #1: Add filters', 'Looks FLAKY to me'])
+    expect(await texts(`label=${encodeURIComponent('pr=vercel/board#1')}`)).toEqual(['PR #1: Add filters', 'Looks FLAKY to me'])
     expect(await texts(`label=${encodeURIComponent('state=open|draft')}&text=pr%20%23`)).toEqual(['PR #1: Add filters', 'PR #2: Draft'])
     expect(await texts('label=pr&text=flaky')).toEqual(['Looks FLAKY to me'])
     expect(await texts('from=board&text=no%20labels')).toEqual(['no labels here'])
