@@ -59,7 +59,7 @@ import type { SchemaDefinition } from '../contract/data-schemas.ts'
 import { checkValue } from '../contract/data-values.ts'
 import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
-import type { Board, BoardContext } from './board.ts'
+import { hostTrusted, type Board, type BoardContext } from './board.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { claimsOf, KNOWN_AGENTS, viaOf } from './actors.ts'
 import { importedHandle, userIdOf } from '../contract/profiles.ts'
@@ -335,6 +335,23 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   /** A request's caller, verified: who it is, and what `access` lets it do now. */
   async function callerOf(request: CallerRequest): Promise<VerifiedCaller> {
     return { identity: await policy.identify(request), origin: { via: { kind: 'api' } } }
+  }
+
+  let warned = false
+  /**
+   * The URL a token's audience must be: `url`, or the one `at` reaches where something checks a request's
+   * Host first. Anywhere else its sender chooses it, so a production board without `url` verifies no tokens.
+   */
+  function audienceOf(at: string): string {
+    if (options.url) return options.url.replace(/\/+$/, '')
+    if (hostTrusted(options)) return at
+    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'production')
+      throw new HttpError(500, 'no_board_url', "this board has no URL to check a token's audience against, and outside Vercel a request's Host is its sender's to choose", {
+        hint: "Pass board({ url: 'https://<host>/api/board' }), the URL people reach it at.",
+      })
+    if (!warned) console.warn(`[board] no url: verifying tokens for ${at}, the host requests name. Pass board({ url }) before this serves in production.`)
+    warned = true
+    return at
   }
 
   /**
@@ -1132,7 +1149,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       // The mount, as requests show it. Every request reaches the handler under it, so one can only make it
       // look deeper (`/api/board/x/messages/1`): a mount replaces the one learned only when it's above it.
       if (!injected && !match.root && (state.learned === null || state.learned.startsWith(`${match.base}/`))) state.learned = match.base
-      const boardUrl = (options.url ?? `${url.origin}${match.base}`).replace(/\/+$/, '')
+      const boardUrl = () => audienceOf(`${url.origin}${match.base}`.replace(/\/+$/, ''))
 
       if (target.kind === 'board' && target.name === 'webhook') {
         // A platform can't send a credential the board verifies: its adapter verifies the request.
@@ -1153,11 +1170,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       // Everything else is for a caller: this deployment's own code, or a request, which a board that
       // uses another board's doesn't serve. Nothing runs for one before that.
       if (!injected && !policy.open) throw servesOnly()
-      if (!injected && target.kind === 'protocol' && target.name === 'discovery') return json(await discovery(request, boardUrl, request.signal))
+      if (!injected && target.kind === 'protocol' && target.name === 'discovery') return json(await discovery(request, boardUrl(), request.signal))
       if (target.kind === 'protocol' && typeof (backend[target.name] as unknown) !== 'function') throw notFound(`no route: ${request.method} ${url.pathname}`)
       // A sync callback's client does everything but its own writes as sync.
       const own = injected && 'platform' in injected ? engine!.caller : injected
-      const asked = own ? null : requestOf(request, boardUrl)
+      const asked = own ? null : requestOf(request, boardUrl())
       const caller: Caller = own ?? (await callerOf(asked!))
       if (target.kind === 'board') return await serve(target.name, caller, request, url, match.params)
 

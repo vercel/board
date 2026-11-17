@@ -8,9 +8,12 @@ import {
   BOARD_URL,
   caller,
   deploymentToken,
+  mount,
   personToken,
   PROJECT_ID,
+  testAuth,
   testBoard,
+  testLocal,
   workflowToken,
 } from './harness.ts'
 
@@ -546,6 +549,55 @@ describe('its URL', () => {
       expect((await at('/api/board/elsewhere/deeper/messages/1')).status).toBe(401)
       expect(board.url).toBe('https://board-abc.vercel.app/api/board')
     } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  // A board mounted in a server of your own, behind a proxy that passes any Host on.
+  const selfHosted = () => {
+    const board = mount({ auth: { ...testAuth, local: testLocal } })
+    const at = async (host: string, path = '/me') =>
+      board.fetch(new Request(`https://${host}/api/board${path}`, { headers: { authorization: `Bearer ${await personToken('u_julian', `https://${host}/api/board`)}` } }))
+    return { board, at }
+  }
+
+  it("verifies no token in production without url, since a request's sender names its Host", async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const { board, at } = selfHosted()
+      const me = await at('attacker.example')
+      expect(me.status).toBe(500)
+      expect(await me.json()).toMatchObject({ error: { code: 'no_board_url', hint: expect.stringContaining('board({ url:') } })
+      // Nor does discovery tell a client which audience to mint for.
+      expect((await board.fetch(new Request('https://attacker.example/api/board'))).status).toBe(500)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('takes its URL from requests on Vercel, which routes only its own domains to it', async () => {
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      expect((await selfHosted().at('board-abc.vercel.app')).status).toBe(200)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('takes its URL from requests in development, and says once to set url', async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('NODE_ENV', 'development')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { at } = selfHosted()
+      expect((await at('localhost:3000')).status).toBe(200)
+      expect((await at('localhost:3000')).status).toBe(200)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]![0])).toContain('board({ url })')
+    } finally {
+      warn.mockRestore()
       vi.unstubAllEnvs()
     }
   })

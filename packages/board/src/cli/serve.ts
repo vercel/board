@@ -9,6 +9,7 @@ import { localTokenFile } from '../client/node.ts'
 import { local } from '../server/local.ts'
 import { oidcTokens } from '../server/tokens.ts'
 import { board } from '../server/index.ts'
+import { hostCheckedBy } from '../server/board.ts'
 import { tailscale, tailscaleLogin } from './tailscale.ts'
 
 export const DEFAULT_SERVE_PORT = 4100
@@ -122,7 +123,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   origin = `http://127.0.0.1:${port}`
   const url = `${origin}${MOUNT}`
   const tokens = oidcTokens({ local: { issuer: ISSUER, jwks } })
-  const team = board({
+  const team = board(hostCheckedBy({
     // Its timers live in this process, which runs as long as the board does.
     backend,
     // At a host Tailscale serves it on, a request's URL is that host's, since `originOf` allowed it.
@@ -132,7 +133,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     // knows no URL of its own: its `url` is the in-process one, and `sandboxPolicy()` has none to
     // give. It only serves requests here: hand it nothing that needs either.
     basePath: MOUNT,
-  })
+  }))
   try {
     // Opened now, so a directory it can't write says so before it serves.
     await team.channels()

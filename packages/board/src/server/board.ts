@@ -52,7 +52,12 @@ export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
    * deployment `sync` in those channels.
    */
   sync?: Record<string, SyncProvider>
-  /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
+  /**
+   * The board's public URL, which every token's audience must equal. Inferred from requests
+   * otherwise only on Vercel, which routes a request to a deployment only for its own domains, and
+   * in development: elsewhere a request's sender chooses its Host, so a production board without
+   * one verifies no tokens.
+   */
   url?: string
   /** The mount path, e.g. `/api/board`. Inferred from requests otherwise: the shallowest one they show. */
   basePath?: string
@@ -155,6 +160,18 @@ export type BoardContext = {
   /** The handle, acting as `caller`: a watcher's, the middleware's, or a schedule's creator's. */
   handleOf(caller: Caller, trigger: string | null): Board
 }
+
+const hostChecked = new WeakSet<BoardOptions>()
+
+/** `options`, for a board behind a server that lets a request name only hosts it allows, as `vb serve` does. */
+export function hostCheckedBy<T extends BoardOptions>(options: T): T {
+  hostChecked.add(options)
+  return options
+}
+
+/** Whether a board without `url` can take it from a request's Host: on Vercel, or behind a server that checks Host. */
+export const hostTrusted = (options: BoardOptions): boolean =>
+  hostChecked.has(options) || (typeof process !== 'undefined' && process.env.VERCEL === '1')
 
 /** A handle's own, with every request it makes ended by a signal: what `vb()` runs a command on. Global, so another copy of board finds it. */
 const STOPPED_BY = Symbol.for('@vercel/board/stopped-by')
