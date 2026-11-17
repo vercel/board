@@ -146,3 +146,7 @@ new root's thread; a function that calls neither sends nothing.
 any Chat SDK adapter. Providers own stable native event identity; functions receive a
 durable `event.id` for their own idempotency. See the [sync contract](../../SPEC.md#sync-functions-and-default-imports)
 for the function lifecycle, required SDK client operations, and extension examples.
+
+## License
+
+[Apache-2.0](./LICENSE)
