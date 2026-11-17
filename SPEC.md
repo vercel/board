@@ -2446,7 +2446,7 @@ import { github, repos } from '@vercel/board/sync-github'
 const team = board({
   backend: local(),                                       // Vercel's board doesn't run sync yet
   sync: {
-    slack: slack('slack/basehub', channels({              // a Vercel Connect connector (see Adapters)
+    slack: slack('slack/acme', channels({              // a Vercel Connect connector (see Adapters)
       '#errors-www': 'errors-www',
       '#firehose-www': 'firehose-www',
       '#prs': 'prs',
@@ -2458,7 +2458,7 @@ const team = board({
       },
     })),
     acme: slack('slack/acme', channels({ '#support': 'acme-support' })), // a second Slack workspace
-    github: github('github/basehub', repos({
+    github: github('github/acme', repos({
       'acme/web': { pulls: mirror('prs'), issues: 'issues' },
       'acme/docs': async (sync) => {
         if (sync.direction === 'in') await sync.import('prs', { labels: { area: 'docs' } })
@@ -2607,8 +2607,8 @@ every event.
 ```ts
 import { github, repos, GitHubPayload } from '@vercel/board/sync-github'
 
-// board({ sync: { github: basehub } })
-export const basehub = github('github/basehub', repos({
+// board({ sync: { github: acme } })
+export const acme = github('github/acme', repos({
   'vercel-labs/board': async (sync) => {
     if (sync.direction !== 'in') return
     const channel = sync.event.subject.type === 'pull_request' ? 'prs' : 'issues'
@@ -2888,8 +2888,8 @@ the AI SDK's `model` takes a string or a provider:
 
 ```ts
 // Vercel Connect: no platform secrets anywhere, and nothing else to install or wire
-adapter: 'slack/basehub',
-adapter: 'github/basehub',
+adapter: 'slack/acme',
+adapter: 'github/acme',
 
 // plain Chat SDK: an app you created, secrets in env
 adapter: createSlackAdapter({
@@ -2957,8 +2957,8 @@ entry and deployment, in one of two ways.
 path) or from the CLI:
 
 ```bash
-vercel connect create slack --name basehub-slack --triggers
-vercel connect attach slack/basehub-slack --project www --triggers --trigger-path /api/board/webhooks/slack
+vercel connect create slack --name acme-slack --triggers
+vercel connect attach slack/acme-slack --project www --triggers --trigger-path /api/board/webhooks/slack
 ```
 
 A destination targets production, a preview branch, or a custom environment.
@@ -3140,7 +3140,7 @@ Vercel's board, which names its accounts and projects itself. On a local board
 it's everyone a credential the board checked named (an OIDC token it trusts,
 or a host's verifier), never the board's own code, since a
 handle and a name are always that credential's word. An agent or an import
-shows that principal after `via` (`clever-lemur via vboard-factory` from the
+shows that principal after `via` (`clever-lemur via acme-agents` from the
 project's OIDC token), and its profile name is the principal's to choose; a
 person, deployment, or workflow writing as itself shows its own name (a
 deployment's environment in it, `support (preview)`). The board's own sync's
@@ -3148,9 +3148,9 @@ platform users keep the label. It's what the actor's last write said
 (`verified` on its `actor.seen`), not the `host` mark that stays. Their actor views say `verified: true`. Anyone
 else's messages post as the app with the label, which no one mistakes for a
 Slack user's. "via" names the principal: a person posting as
-themselves is just their name (`Julián Benegas`), and anything written on a
+themselves is just their name (`Ada Lovelace`), and anything written on a
 principal's behalf is `<name> via <principal>` (`clever-lemur via
-vboard-factory`, `Malte via support (preview)`). A message imported through
+acme-agents`, `Malte via support (preview)`). A message imported through
 another sync key keeps its ` (<platform>)` suffix (`Malte via support (preview)
 (slack)`). Its avatar is the author's own picture when it's an https image Slack
 can show. A name longer than Slack's 80 characters is cut before its

@@ -8,7 +8,7 @@ import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harn
 const ROOT = '1791389583.493629'
 const REPLY = '1791393976.415219'
 const AGENT = '1791393999.000001'
-const PERMALINK = `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}?thread_ts=${ROOT}&cid=CKIT`
+const PERMALINK = `https://acme.slack.com/archives/CKIT/p${REPLY.replace('.', '')}?thread_ts=${ROOT}&cid=CKIT`
 
 type Channel = { id: string; name: string; is_member: boolean; is_private?: boolean; is_ext_shared?: boolean }
 const CHANNELS: Record<string, Channel> = {
@@ -23,7 +23,7 @@ async function setup(options: { join: boolean } = { join: false }) {
   const history = vi.fn(async ({ limit }: { channel: string; limit: number }) => ({
     messages: [
       { ts: '1791399999.000002', user: 'U_JB', text: 'latest' },
-      { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 2, thread_ts: ROOT, files: [{ name: 'map.png', permalink: 'https://vercel.slack.com/files/map' }] },
+      { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 2, thread_ts: ROOT, files: [{ name: 'map.png', permalink: 'https://acme.slack.com/files/map' }] },
     ].slice(0, limit),
     has_more: limit < 2,
   }))
@@ -34,7 +34,7 @@ async function setup(options: { join: boolean } = { join: false }) {
         messages: [
           { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 2, thread_ts: ROOT },
           { ts: REPLY, bot_profile: { name: 'pi' }, text: 'nice', thread_ts: ROOT },
-          { ts: AGENT, bot_profile: { name: 'board' }, username: 'clever-lemur via vboard-factory', text: 'on it', thread_ts: ROOT },
+          { ts: AGENT, bot_profile: { name: 'board' }, username: 'clever-lemur via acme-agents', text: 'on it', thread_ts: ROOT },
         ],
         has_more: false,
       })
@@ -78,7 +78,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     expect(body).toEqual({
       channel: 'CKIT', name: 'project-vercel-kit', thread: null,
       messages: [
-        { id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada Lovelace', text: 'kit maps slack users to vercel ids', createdAt: new Date(Number(ROOT) * 1000).toISOString(), replies: 2, files: [{ name: 'map.png', url: 'https://vercel.slack.com/files/map' }] },
+        { id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada Lovelace', text: 'kit maps slack users to vercel ids', createdAt: new Date(Number(ROOT) * 1000).toISOString(), replies: 2, files: [{ name: 'map.png', url: 'https://acme.slack.com/files/map' }] },
         { id: '1791399999.000002', thread: 'CKIT:1791399999.000002', author: 'Julian', text: 'latest', createdAt: new Date(1791399999.000002 * 1000).toISOString(), replies: 0, files: [] },
       ],
       more: false,
@@ -96,14 +96,14 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     const { body } = await read(julian, PERMALINK)
     expect(replies).toHaveBeenCalledWith({ channel: 'CKIT', ts: ROOT, limit: 50 })
     expect(body.thread).toBe(ROOT)
-    expect(body.messages.map((m: { author: string; text: string }) => `${m.author}: ${m.text}`)).toEqual(['Ada Lovelace: kit maps slack users to vercel ids', 'pi: nice', 'clever-lemur via vboard-factory: on it'])
+    expect(body.messages.map((m: { author: string; text: string }) => `${m.author}: ${m.text}`)).toEqual(['Ada Lovelace: kit maps slack users to vercel ids', 'pi: nice', 'clever-lemur via acme-agents: on it'])
     expect((await read(julian, `CKIT:${ROOT}`)).body.thread).toBe(ROOT)
   })
 
   it("reads the whole thread from a reply's ts, or a reply permalink without thread_ts", async () => {
     const { board, replies } = await setup()
     const julian = caller(board.fetch, await personToken())
-    for (const target of [`CKIT:${REPLY}`, `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}`]) {
+    for (const target of [`CKIT:${REPLY}`, `https://acme.slack.com/archives/CKIT/p${REPLY.replace('.', '')}`]) {
       const { body } = await read(julian, target)
       expect(body.thread).toBe(ROOT)
       expect(body.messages.map((m: { id: string }) => m.id)).toEqual([ROOT, REPLY, AGENT])
@@ -212,7 +212,7 @@ describe('joining a channel to read it (vb sources <key> join)', () => {
     expect(join).toHaveBeenCalledWith({ channel: 'COUT' })
     expect((await read(julian, 'COUT')).status).toBe(200)
     expect(history).toHaveBeenLastCalledWith({ channel: 'COUT', limit: 50 })
-    expect((await joinChannel(julian, `https://vercel.slack.com/archives/COUT/p${ROOT.replace('.', '')}`)).body).toEqual({ channel: 'COUT', name: 'elsewhere', joined: false })
+    expect((await joinChannel(julian, `https://acme.slack.com/archives/COUT/p${ROOT.replace('.', '')}`)).body).toEqual({ channel: 'COUT', name: 'elsewhere', joined: false })
     expect(join).toHaveBeenCalledTimes(1)
   })
 

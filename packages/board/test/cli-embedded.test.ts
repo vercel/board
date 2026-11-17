@@ -612,7 +612,7 @@ describe('the embedded CLI', () => {
       const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
       fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
       const owner = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
-      expect(owner).toMatchObject({ code: 0, stdout: expect.stringMatching(/^Julián Benegas \(vercel:user:u_jb\)\n/) })
+      expect(owner).toMatchObject({ code: 0, stdout: expect.stringMatching(/^Ada Lovelace \(vercel:user:u_jb\)\n/) })
       expect(owner.stdout).not.toMatch(/^(can|token) /m)
       vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
       const viewer = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))

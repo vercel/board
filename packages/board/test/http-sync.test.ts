@@ -474,8 +474,8 @@ describe('who an import is by', () => {
       }
       await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(2))
       const [vercel, other] = asked.mock.calls.map(([, , body]) => body)
-      expect(vercel!.markdown).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
-      expect(vercel!.deployments).toMatchObject([{ project: 'vboard-factory', status: 'Building' }])
+      expect(vercel!.markdown).toContain('**▲ Vercel**\n- ⏳ **[acme-agents](https://vercel.com/acme/acme-agents)** · [Building]')
+      expect(vercel!.deployments).toMatchObject([{ project: 'acme-agents', status: 'Building' }])
       expect(other!.markdown).toContain('| Project |')
       expect(other).not.toHaveProperty('deployments')
       const vbRead = await vbOn(team)

@@ -357,7 +357,7 @@ describe('messages', () => {
     const ada = caller(fetch, await personToken('ada'), {})
     await julian('POST', '/messages', { channel: 'docs', text: 'hi' })
     await claude('POST', '/messages', { channel: 'docs', text: 'hi' })
-    for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]', 'ask @[Julian@vercel.com]', 'run `@julian`', '@juliana hi'])
+    for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]', 'ask @[Grace@acme.com]', 'run `@julian`', '@juliana hi'])
       await ada('POST', '/messages', { channel: 'docs', text })
 
     const texts = async (as: typeof julian, mentions: string) =>
@@ -368,7 +368,7 @@ describe('messages', () => {
     expect(await texts(ada, 'julian')).toEqual([byHandle, agentByHandle, 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]'])
     expect(await texts(ada, 'vercel:user:julian')).toEqual(await texts(ada, 'julian'))
     expect(await texts(ada, 'julian/claude')).toEqual([agentByHandle, 'cc @[vercel:user:julian+claude]'])
-    expect(await texts(ada, 'julian@vercel.com')).toEqual(['ask @[Julian@vercel.com]'])
+    expect(await texts(ada, 'grace@acme.com')).toEqual(['ask @[Grace@acme.com]'])
     // Me is my handle and my ID.
     expect(await texts(julian, 'me')).toEqual([byHandle, 'cc @[vercel:user:julian]'])
     expect(await texts(claude, 'me')).toEqual([agentByHandle, 'cc @[vercel:user:julian+claude]'])

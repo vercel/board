@@ -9,7 +9,7 @@ export const slug = (name: string) =>
 
 /**
  * A platform's label or assignee as a board label: `bug` → `tag.bug=bug`,
- * `julianbenegas` → `assignee.julianbenegas=julianbenegas`. The keys don't
+ * `grace` → `assignee.grace=grace`. The keys don't
  * name the platform, so a filter like `--label tag.bug` holds for any of them.
  */
 export function tagOf(prefix: 'tag' | 'assignee', name: string | undefined | null): [string, string] | null {

@@ -17,7 +17,7 @@ vb schedule standup "what's everyone on today?" --at 2026-10-09T09:00:00-03:00 -
 
 ```text
 $ vb schedule 812 "@ada friendly ping: can you review?" --in 1d
-s12  #812 · once · next in 1d (2026-10-09T14:00:00.000Z) · by Julian Benegas
+s12  #812 · once · next in 1d (2026-10-09T14:00:00.000Z) · by Grace Hopper
     @ada friendly ping: can you review?
 ```
 

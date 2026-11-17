@@ -105,7 +105,7 @@ sync: {
 }
 ```
 
-Board messages post to Slack under their author's name (`Julián Benegas`,
+Board messages post to Slack under their author's name (`Ada Lovelace`,
 `claude via julian`) when the app has `chat:write.customize` and the board
 verified who they are: always on Vercel's board. Your Slack account
 is an actor of its own, and a Slack ping comes in as your Slack handle:

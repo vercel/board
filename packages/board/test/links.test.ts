@@ -39,11 +39,11 @@ describe('slack message links', () => {
   it('finds permalinks in mrkdwn, replies included, and the unfurl Slack sent for each', () => {
     const reply = `${permalink('C9', '1791322585.618629')}?thread_ts=${TS}&amp;cid=C9`
     const links = slackLinks('slack', `<${permalink('C1')}|this> and <${reply}> and <${permalink('C1')}>`, [
-      { is_msg_unfurl: true, channel_id: 'C1', ts: TS, author_name: 'Julian Benegas', text: 'export is broken', files: [{ name: 'shot.png', permalink: 'https://acme.slack.com/files/shot' }] },
+      { is_msg_unfurl: true, channel_id: 'C1', ts: TS, author_name: 'Grace Hopper', text: 'export is broken', files: [{ name: 'shot.png', permalink: 'https://acme.slack.com/files/shot' }] },
     ])
     expect(links).toEqual([
       { url: permalink('C1'), thread: `slack:C1:${TS}`, message: TS, snapshot: {
-        author: 'Julian Benegas', text: 'export is broken', createdAt: new Date(Number(TS) * 1000).toISOString(),
+        author: 'Grace Hopper', text: 'export is broken', createdAt: new Date(Number(TS) * 1000).toISOString(),
         files: [{ name: 'shot.png', url: 'https://acme.slack.com/files/shot' }],
       } },
       { url: reply.replace('&amp;', '&'), thread: `slack:C9:${TS}`, message: '1791322585.618629', snapshot: null },
@@ -160,11 +160,11 @@ describe('slack message links', () => {
   })
 
   it("names an agent's message by the name Slack shows it under, not the app's", async () => {
-    const replies = vi.fn(async () => ({ messages: [{ ts: TS, bot_profile: { name: 'board' }, username: 'clever-lemur via vboard-factory', text: 'on it' }] }))
+    const replies = vi.fn(async () => ({ messages: [{ ts: TS, bot_profile: { name: 'board' }, username: 'clever-lemur via acme-agents', text: 'on it' }] }))
     const { board, webhook } = setup({ replies, info: joined })
     const julian = caller(board.fetch, await personToken())
     await webhook(linking('1791322999.000004', permalink('C9')))
-    await vi.waitFor(async () => expect((await messages(julian))[0]?.links[0]?.snapshot).toMatchObject({ author: 'clever-lemur via vboard-factory', text: 'on it' }))
+    await vi.waitFor(async () => expect((await messages(julian))[0]?.links[0]?.snapshot).toMatchObject({ author: 'clever-lemur via acme-agents', text: 'on it' }))
   })
 
   it("says why it couldn't read a link, then fills it in when Slack's unfurl arrives", async () => {

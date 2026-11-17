@@ -9,7 +9,7 @@ const repository = { id: 1, name: 'board', full_name: 'vercel-labs/board', owner
 const vercel = { id: 35613825, login: 'vercel[bot]', type: 'Bot' }
 
 function setup() {
-  const adapter = createGitHubAdapter({ token: 'ghp_test', webhookSecret: secret, userName: 'vboard-factory[bot]', botUserId: 1 })
+  const adapter = createGitHubAdapter({ token: 'ghp_test', webhookSecret: secret, userName: 'acme-agents[bot]', botUserId: 1 })
   const provider = github({ adapter }, repos({ 'vercel-labs/board': 'dev' }))
   return async (event: string, payload: unknown) => {
     const body = JSON.stringify(payload)
@@ -52,7 +52,7 @@ it('syncs a deleted PR comment', async () => {
 
 it('syncs an edited inline review comment into its review thread', async () => {
   const send = setup()
-  const review = { ...comment('nit: rename', '2026-10-07T19:53:10Z'), id: 88, path: 'src/index.ts', line: 3, user: { id: 42, login: 'julianbenegas', type: 'User' } }
+  const review = { ...comment('nit: rename', '2026-10-07T19:53:10Z'), id: 88, path: 'src/index.ts', line: 3, user: { id: 42, login: 'grace', type: 'User' } }
   const edited = await send('pull_request_review_comment', {
     action: 'edited', comment: review, pull_request: { number: 100 }, repository, sender: review.user,
   })
@@ -61,7 +61,7 @@ it('syncs an edited inline review comment into its review thread', async () => {
 
 it("ignores edits to the board's own comments, which it already has", async () => {
   const send = setup()
-  const own = { ...comment('from the board', '2026-10-07T19:53:10Z'), user: { id: 1, login: 'vboard-factory[bot]', type: 'Bot' } }
+  const own = { ...comment('from the board', '2026-10-07T19:53:10Z'), user: { id: 1, login: 'acme-agents[bot]', type: 'Bot' } }
   expect(await send('issue_comment', { action: 'edited', comment: own, issue, repository, sender: own.user })).toEqual([])
   const theirs = { ...own, user: vercel }
   const [edited] = await send('issue_comment', { action: 'edited', comment: theirs, issue, repository, sender: vercel })

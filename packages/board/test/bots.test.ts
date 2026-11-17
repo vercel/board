@@ -10,18 +10,18 @@ describe('known bot messages', () => {
   it('reads the deployments out of a Vercel for GitHub comment', () => {
     expect(vercelDeployments(VERCEL_BUILDING)).toEqual([
       {
-        project: 'vboard-factory',
-        projectUrl: 'https://vercel.com/vercel-internal-playground/vboard-factory',
+        project: 'acme-agents',
+        projectUrl: 'https://vercel.com/acme/acme-agents',
         status: 'Building',
-        deploymentUrl: 'https://vercel.com/vercel-internal-playground/vboard-factory/7ZEaNBTETQjaUF4Bd1VCxbM8rR3n',
-        previewUrl: 'https://vboard-factory-git-pi-224.playground-vercel.tools',
+        deploymentUrl: 'https://vercel.com/acme/acme-agents/7ZEaNBTETQjaUF4Bd1VCxbM8rR3n',
+        previewUrl: 'https://acme-agents-git-pi-224.acme.dev',
         updated: 'Oct 6, 2026 8:30pm UTC',
         updatedAt: '2026-10-06T20:30:32.400Z',
         skipped: false,
       },
     ])
     const [built, skipped] = vercelDeployments(VERCEL_WITH_SKIPPED)!
-    expect(built).toMatchObject({ project: 'vboard-factory', status: 'Building', skipped: false })
+    expect(built).toMatchObject({ project: 'acme-agents', status: 'Building', skipped: false })
     expect(skipped).toMatchObject({ project: 'vboard', status: 'Ignored', previewUrl: null, skipped: true, updated: 'Oct 6, 2026 5:25pm UTC', updatedAt: '2026-10-06T17:25:54.038Z' })
     // A time Vercel wrote only in words, or one that isn't a time, is no time.
     expect(vercelDeployments(VERCEL_BUILDING.replace(/<relative-time[^>]*>([^<]*)<\/relative-time>/, '$1'))![0]).toMatchObject({ updated: 'Oct 6, 2026 8:30pm UTC', updatedAt: null })
@@ -33,12 +33,12 @@ describe('known bot messages', () => {
     expect(text).toBe(
       [
         '**▲ Vercel**',
-        '- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building](https://vercel.com/vercel-internal-playground/vboard-factory/AKYQCQiM4Vf5Zp1AAcH6nQDYUC4n) · [Preview](https://vboard-factory-git-changeset-release-main.playground-vercel.tools) · Oct 6, 2026 5:25pm UTC',
-        '- ⚪ **[vboard](https://vercel.com/basehub/vboard)** · [Ignored](https://vercel.com/basehub/vboard/Go3sKM9tee9TraPTMa71Haa1uZzj) (skipped) · Oct 6, 2026 5:25pm UTC',
+        '- ⏳ **[acme-agents](https://vercel.com/acme/acme-agents)** · [Building](https://vercel.com/acme/acme-agents/AKYQCQiM4Vf5Zp1AAcH6nQDYUC4n) · [Preview](https://acme-agents-git-changeset-release-main.acme.dev) · Oct 6, 2026 5:25pm UTC',
+        '- ⚪ **[vboard](https://vercel.com/acme/vboard)** · [Ignored](https://vercel.com/acme/vboard/Go3sKM9tee9TraPTMa71Haa1uZzj) (skipped) · Oct 6, 2026 5:25pm UTC',
       ].join('\n'),
     )
-    expect(displayText(VERCEL_BUILDING.replace(/building/gi, 'Ready'))).toContain('- ✅ **[vboard-factory]')
-    expect(displayText(VERCEL_BUILDING.replace(/building/gi, 'Error'))).toContain('- ❌ **[vboard-factory]')
+    expect(displayText(VERCEL_BUILDING.replace(/building/gi, 'Ready'))).toContain('- ✅ **[acme-agents]')
+    expect(displayText(VERCEL_BUILDING.replace(/building/gi, 'Error'))).toContain('- ❌ **[acme-agents]')
   })
 
   it('leaves every other message alone, even one that quotes a Vercel table', () => {
@@ -49,7 +49,7 @@ describe('known bot messages', () => {
 
   it('only reads Vercel comments that Vercel wrote', () => {
     expect(display(VERCEL_BUILDING, false)).toBe(VERCEL_BUILDING)
-    expect(display(VERCEL_BUILDING, true)).toContain('- ⏳ **[vboard-factory]')
+    expect(display(VERCEL_BUILDING, true)).toContain('- ⏳ **[acme-agents]')
   })
 
   it("takes a sync's checked import of the bot from GitHub for the bot, and nothing that only looks like it", () => {
@@ -70,8 +70,8 @@ describe('known bot messages', () => {
     expect(displayText(VERCEL_WITH_SKIPPED.replace(/\n/g, '\r\n'))).toBe(
       [
         '**▲ Vercel**',
-        '- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building](https://vercel.com/vercel-internal-playground/vboard-factory/AKYQCQiM4Vf5Zp1AAcH6nQDYUC4n) · [Preview](https://vboard-factory-git-changeset-release-main.playground-vercel.tools) · Oct 6, 2026 5:25pm UTC',
-        '- ⚪ **[vboard](https://vercel.com/basehub/vboard)** · [Ignored](https://vercel.com/basehub/vboard/Go3sKM9tee9TraPTMa71Haa1uZzj) (skipped) · Oct 6, 2026 5:25pm UTC',
+        '- ⏳ **[acme-agents](https://vercel.com/acme/acme-agents)** · [Building](https://vercel.com/acme/acme-agents/AKYQCQiM4Vf5Zp1AAcH6nQDYUC4n) · [Preview](https://acme-agents-git-changeset-release-main.acme.dev) · Oct 6, 2026 5:25pm UTC',
+        '- ⚪ **[vboard](https://vercel.com/acme/vboard)** · [Ignored](https://vercel.com/acme/vboard/Go3sKM9tee9TraPTMa71Haa1uZzj) (skipped) · Oct 6, 2026 5:25pm UTC',
       ].join('\n'),
     )
   })
@@ -83,7 +83,7 @@ describe('known bot messages', () => {
       author: { kind: 'external', handle: 'vercel[bot]', name: 'vercel[bot]', avatar: null },
     } as unknown as MessageView
     const out = formatMessage(message)
-    expect(out).toContain('⏳ **[vboard-factory]')
+    expect(out).toContain('⏳ **[acme-agents]')
     expect(out).not.toContain('[vc]:')
     expect(out).not.toContain('<relative-time')
   })

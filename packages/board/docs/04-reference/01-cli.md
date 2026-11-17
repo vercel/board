@@ -387,7 +387,7 @@ react, label, and sync everywhere:
 
 ```text
 $ vb whoami --scope test
-Julián Benegas (vercel:user:u_jb)
+Ada Lovelace (vercel:user:u_jb)
 board   https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test
 source  the Vercel CLI
 can     *  read
@@ -1184,7 +1184,7 @@ prints `not synced anywhere`.
 
 ```text
 $ vb sync 812
-slack   C0C8XN8SQRG     https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
+slack   C0123ABCDEF     https://acme.slack.com/archives/C0123ABCDEF/p1792780353701549
 github  acme/web:4021   https://github.com/acme/web/pull/4021#issuecomment-3301
 ```
 

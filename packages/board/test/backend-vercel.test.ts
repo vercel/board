@@ -271,7 +271,7 @@ describe('vercel()', () => {
     const { id } = await julian.post('dev', { text: 'hi' })
     await julian.as('claude').reply(id, { text: 'hello' })
     const { message, replies } = await julian.thread(id)
-    expect(message.author).toMatchObject({ kind: 'person', handle: 'julian', name: 'Julián Benegas' })
+    expect(message.author).toMatchObject({ kind: 'person', handle: 'julian', name: 'Ada Lovelace' })
     expect(replies[0]!.author).toMatchObject({ kind: 'agent', handle: 'julian/claude', name: 'claude' })
     // Someone who first writes after the names were read is named too.
     await handleOn(api, 'user:u_ada').reply(id, { text: 'me too' })
@@ -322,7 +322,7 @@ describe('vercel()', () => {
     const julian = board({ backend: vercel({ team: 'team_test', api: API, fetch: flaky }) })
     const { id } = await julian.post('dev', { text: 'hi' })
     expect(failing).toBe(false)
-    expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'julian', name: 'Julián Benegas' })
+    expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'julian', name: 'Ada Lovelace' })
     // Someone new, several times: each of their messages, read side by side, is named.
     const ada = handleOn(api, 'user:u_ada')
     for (const text of ['one', 'two', 'three']) await ada.post('dev', { text })
@@ -331,18 +331,18 @@ describe('vercel()', () => {
   })
 
   it('shows a renamed person by their new name once they write again and a few minutes pass', async () => {
-    const accounts = { u_jb: { username: 'julian', name: 'Julián Benegas' } }
+    const accounts = { u_jb: { username: 'julian', name: 'Ada Lovelace' } }
     const api = fakeMessageboard({ accounts })
     const julian = handleOn(api)
     const { id } = await julian.post('dev', { text: 'hi' })
     expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'julian' })
     // The API records the new name when they next write.
-    accounts.u_jb = { username: 'jules', name: 'Jules Benegas' }
+    accounts.u_jb = { username: 'jules', name: 'Jules Verne' }
     await julian.reply(id, { text: 'renamed' })
     const clock = vi.spyOn(Date, 'now')
     try {
       clock.mockReturnValue(Date.now() + 6 * 60_000)
-      expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'jules', name: 'Jules Benegas' })
+      expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'jules', name: 'Jules Verne' })
     } finally {
       clock.mockRestore()
     }
@@ -2304,7 +2304,7 @@ describe('vercel()', () => {
     await julian.post('general', { text: 'not yours', labels: { owner: 'vercel:project:prj_pong:preview+slack:user:U_ADA' } })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await vi.waitFor(() =>
-      expect(s.channelPosts.map((post) => JSON.parse(post.text).markdown).sort()).toEqual(['**Julián Benegas**: not yours', 'yours · <@U_ADA>']),
+      expect(s.channelPosts.map((post) => JSON.parse(post.text).markdown).sort()).toEqual(['**Ada Lovelace**: not yours', 'yours · <@U_ADA>']),
     )
   })
 
@@ -2334,7 +2334,7 @@ describe('vercel()', () => {
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await handleOn(api).post('general', { text: 'the deploy is red' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
-    await vi.waitFor(() => expect(posted.map(({ username, markdown_text }) => [username, markdown_text])).toEqual([['Julián Benegas', 'the deploy is red']]))
+    await vi.waitFor(() => expect(posted.map(({ username, markdown_text }) => [username, markdown_text])).toEqual([['Ada Lovelace', 'the deploy is red']]))
   })
 
   it("mentions a GitHub user a project's sync imported by their login, not by the handle the board gives them", async () => {
@@ -2359,7 +2359,7 @@ describe('vercel()', () => {
     expect(opened!.author).toMatchObject({ id: 'vercel:project:prj_pong:production+github:user:42', handle: 'pong/ada' })
     await julian.reply(opened!.id, `over to @[${opened!.by.actor}]`)
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
-    await vi.waitFor(() => expect(hub.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**Julián Benegas**: over to @ada']))
+    await vi.waitFor(() => expect(hub.posts.map((post) => JSON.parse(post.text).markdown)).toEqual(['**Ada Lovelace**: over to @ada']))
   })
 
   it("delivers a mention natively through the sync whose user it names, and by name through any other: two syncs' Maltes, and an email its Slack knows", async () => {
@@ -2387,8 +2387,8 @@ describe('vercel()', () => {
     await web.fetch(new Request(`${WEB_URL}/wake`, { method: 'POST' }))
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
-      ['**Julián Benegas**: @malte have a look, <@U_M1> and malte, cc <@U_ADA> and <@U_M1>'],
-      ['**Julián Benegas**: @malte have a look, malte and <@U_M2>, cc ada@vercel.com and @[slack:user:U_M1]'],
+      ['**Ada Lovelace**: @malte have a look, <@U_M1> and malte, cc <@U_ADA> and <@U_M1>'],
+      ['**Ada Lovelace**: @malte have a look, malte and <@U_M2>, cc ada@vercel.com and @[slack:user:U_M1]'],
     ]))
   })
 
@@ -2756,7 +2756,7 @@ describe("each project's sync keys on Vercel's API", () => {
     const julian = handleOn(api)
     const root = await julian.post('general', { text: 'checkout is down' })
     await Promise.all([support.wake(), www.wake()])
-    await vi.waitFor(() => expect([markdown(supportSlack.channelPosts), markdown(wwwSlack.channelPosts)]).toEqual([['**Julián Benegas**: checkout is down'], ['**Julián Benegas**: checkout is down']]))
+    await vi.waitFor(() => expect([markdown(supportSlack.channelPosts), markdown(wwwSlack.channelPosts)]).toEqual([['**Ada Lovelace**: checkout is down'], ['**Ada Lovelace**: checkout is down']]))
     // Ada answers in www's Slack thread: www imports it, and support's Slack gets it.
     const webhook = await www.webhook('slack', { threadId: `slack:C_WWW:${wwwSlack.channelPosts[0]!.id}`, id: '500', text: 'on it', user: 'U_ADA', name: 'Ada' })
     expect(webhook.status).toBe(200)
@@ -2860,7 +2860,7 @@ describe("each project's sync keys on Vercel's API", () => {
     expect(read).not.toHaveBeenCalled()
     await handleOn(api).post('general', { text: 'deploy failed' })
     await Promise.all([production.wake(), preview.wake()])
-    await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Julián Benegas**: deploy failed']))
+    await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Ada Lovelace**: deploy failed']))
     await vi.waitFor(() => expect(ran).toEqual(['deploy failed']))
     // It registers again once its last registration is old: still not its key, and nothing more to say.
     const now = Date.now.bind(Date)
@@ -2962,10 +2962,10 @@ describe("each project's sync keys on Vercel's API", () => {
     const julian = handleOn(api)
     const root = await julian.post('general', { text: 'deploy failed' })
     await production.wake()
-    await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Julián Benegas**: deploy failed']))
+    await vi.waitFor(() => expect(markdown(productionSlack.channelPosts)).toEqual(['**Ada Lovelace**: deploy failed']))
     await julian.reply(root.id, { text: 'rolled back' })
     await Promise.all([production.wake(), preview.wake()])
-    await vi.waitFor(() => expect(markdown(productionSlack.posts)).toEqual(['**Julián Benegas**: rolled back']))
+    await vi.waitFor(() => expect(markdown(productionSlack.posts)).toEqual(['**Ada Lovelace**: rolled back']))
     await preview.wake()
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect([previewSlack.channelPosts, previewSlack.posts]).toEqual([[], []])
@@ -3017,7 +3017,7 @@ describe("each project's sync keys on Vercel's API", () => {
     await vi.waitFor(async () => expect((await julian.messages({ channel: 'general' })).messages.map((message) => message.text)).toEqual(['from slack']))
     const root = await julian.post('general', { text: 'deploy failed' })
     await production.wake()
-    await vi.waitFor(() => expect(markdown(s.channelPosts)).toEqual(['**Julián Benegas**: deploy failed']))
+    await vi.waitFor(() => expect(markdown(s.channelPosts)).toEqual(['**Ada Lovelace**: deploy failed']))
     // Its targets name no project: each is the reader's own.
     expect((await julian.sync(root.id)).targets.map(({ key, target }) => [key, target])).toEqual([['slack', 'slack:C_SUP']])
   })

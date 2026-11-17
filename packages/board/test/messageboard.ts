@@ -148,7 +148,7 @@ class Refused extends Error {
 
 /** Vercel accounts the fake knows, by user ID: how the API names a person (their username, then their name). */
 const ACCOUNTS: Record<string, { username: string; name: string }> = {
-  u_jb: { username: 'julian', name: 'Julián Benegas' },
+  u_jb: { username: 'julian', name: 'Ada Lovelace' },
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 

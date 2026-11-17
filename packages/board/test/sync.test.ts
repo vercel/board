@@ -315,7 +315,7 @@ describe('sync', () => {
       {
         action: 'opened',
         repository: { full_name: 'vercel-labs/board' },
-        sender: { login: 'julianbenegas', id: 42 },
+        sender: { login: 'grace', id: 42 },
         pull_request: { number: 7, title: 'Fix login', html_url: 'https://github.com/vercel-labs/board/pull/7', draft: false, merged: false },
       },
       { 'x-github-event': 'pull_request', 'x-github-delivery': 'att1' },
@@ -804,7 +804,7 @@ describe('sync', () => {
     const pr = (action: string, extra: Record<string, unknown> = {}) => ({
       action,
       repository: { full_name: 'vercel-labs/board' },
-      sender: { login: 'julianbenegas', id: 42 },
+      sender: { login: 'grace', id: 42 },
       pull_request: { number: 7, title: 'Add sync', html_url: 'https://github.com/vercel-labs/board/pull/7', draft: false, merged: false, ...extra },
     })
     const event = (body: unknown, delivery: string) =>
@@ -822,9 +822,9 @@ describe('sync', () => {
     await vi.waitFor(async () => {
       const thread = (await julian('GET', `/messages/${root!.id}`)).body
       expect(thread.message.labels.state).toBe('merged')
-      expect(thread.replies.map((m: { text: string }) => m.text)).toEqual(['merged by julianbenegas'])
+      expect(thread.replies.map((m: { text: string }) => m.text)).toEqual(['merged by grace'])
     })
-    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('merged by julianbenegas')]))
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('merged by grace')]))
     expect(g.posts).toHaveLength(0) // GitHub's own reply never goes back to GitHub
   })
 
@@ -837,14 +837,14 @@ describe('sync', () => {
       {
         action: 'opened',
         repository: { full_name: 'vercel-labs/board' },
-        sender: { login: 'julianbenegas', id: 42, avatar_url: avatar },
+        sender: { login: 'grace', id: 42, avatar_url: avatar },
         pull_request: { number: 8, title: 'Avatars', html_url: 'https://github.com/vercel-labs/board/pull/8', draft: false, merged: false },
       },
       { 'x-github-event': 'pull_request', 'x-github-delivery': 'a1' },
     )
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
     // Chat SDK's GitHub messages carry no avatar.
-    await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:8', id: 'c1', text: 'nice', user: '42', name: 'julianbenegas' })
+    await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:8', id: 'c1', text: 'nice', user: '42', name: 'grace' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
 
     const { body } = await julian('GET', '/actors')
@@ -858,7 +858,7 @@ describe('sync', () => {
     const { board, s, g, webhook } = setup({ githubClient: { rest: { pulls: { get } } } })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { id: 42, login: 'julianbenegas' }
+    const sender = { id: 42, login: 'grace' }
     const pr = { number: 38, title: 'Fix imports', html_url: 'https://github.com/vercel-labs/board/pull/38' }
     await webhook('github', { action: 'opened', repository, sender, pull_request: { ...pr, draft: true } }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'draft-opened' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
@@ -882,7 +882,7 @@ describe('sync', () => {
     const { board, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { id: 42, login: 'julianbenegas' }
+    const sender = { id: 42, login: 'grace' }
     const pr = { number: 39, title: 'Spike', html_url: 'https://github.com/vercel-labs/board/pull/39', draft: true }
     const send = (action: string, extra = {}) =>
       webhook('github', { action, repository, sender, pull_request: { ...pr, ...extra } }, { 'x-github-event': 'pull_request', 'x-github-delivery': `draft-${action}` })
@@ -902,7 +902,7 @@ describe('sync', () => {
     const julian = caller(board.fetch, await personToken())
     const item = { number: 42, title: 'Old title', html_url: `https://github.com/vercel-labs/board/pull/42`, draft: false, merged: false }
     const send = (action: string, extra: Record<string, unknown>, delivery: string) =>
-      webhook('github', { action, repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' }, ...extra }, { 'x-github-event': event, 'x-github-delivery': delivery })
+      webhook('github', { action, repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'grace' }, ...extra }, { 'x-github-event': event, 'x-github-delivery': delivery })
     await send('opened', { [key]: item }, 'retitle-opened')
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     const [root] = await read(julian, 'prs')
@@ -920,7 +920,7 @@ describe('sync', () => {
     const { board, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { id: 42, login: 'julianbenegas' }
+    const sender = { id: 42, login: 'grace' }
     const pr = (number: number, title: string) => ({ number, title, html_url: `https://github.com/vercel-labs/board/pull/${number}`, draft: false, merged: false })
     await webhook('github', { action: 'opened', repository, sender, pull_request: pr(1, 'First') }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'joined-opened' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
@@ -947,7 +947,7 @@ describe('sync', () => {
     })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { id: 42, login: 'julianbenegas' }
+    const sender = { id: 42, login: 'grace' }
     const pr = (title: string) => ({ number: 44, title, html_url: 'https://github.com/vercel-labs/board/pull/44', draft: false, merged: false })
     await webhook('github', { action: 'opened', repository, sender, pull_request: pr('Old') }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'override-opened' })
     await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.text).toBe('[pr] PR #44: Old\nhttps://github.com/vercel-labs/board/pull/44'))
@@ -968,7 +968,7 @@ describe('sync', () => {
     Object.assign(g.adapter, { botUserId: '1', emojiToGitHubReaction: (emoji: string) => ({ rocket: 'rocket', eyes: 'eyes' })[emoji] ?? '+1' })
     const julian = caller(board.fetch, await personToken(), {})
     const item = { number: 41, title: 'Ship it', html_url: 'https://github.com/vercel-labs/board/pull/41' }
-    await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' }, [key]: item },
+    await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'grace' }, [key]: item },
       { 'x-github-event': event, 'x-github-delivery': `react-${key}` })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
     const [root] = await read(julian, 'prs')
@@ -994,13 +994,13 @@ describe('sync', () => {
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
     const pr = { number: 39, title: 'Deploy me', html_url: 'https://github.com/vercel-labs/board/pull/39' }
-    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'vc-opened' })
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'grace' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'vc-opened' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
     await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:39', id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
     await vi.waitFor(() => expect(s.posts).toHaveLength(1))
     expect((await read(julian, 'prs'))[1]!.text).toMatch(/^\[vc\]: #/) // the board keeps what Vercel wrote
     const posted = JSON.parse(s.posts[0]!.text).markdown as string
-    expect(posted).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
+    expect(posted).toContain('**▲ Vercel**\n- ⏳ **[acme-agents](https://vercel.com/acme/acme-agents)** · [Building]')
     expect(posted).not.toContain('[vc]:')
     expect(posted).not.toContain('| Project |')
   })
@@ -1020,7 +1020,7 @@ describe('sync', () => {
     Object.assign(s.adapter, { decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }) })
     const julian = caller(board.fetch, await personToken())
     const pr = { number: 43, title: 'Deploy me', html_url: 'https://github.com/vercel-labs/board/pull/43' }
-    await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'table-opened' })
+    await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'grace' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'table-opened' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
     const thread = 'github:vercel-labs/board:43'
     await webhook('github', { type: 'message', threadId: thread, id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
@@ -1030,9 +1030,9 @@ describe('sync', () => {
     const rich = (...elements: unknown[]) => ({ type: 'rich_text', elements: [{ type: 'rich_text_section', elements }] })
     const link = (label: string, url: string) => ({ type: 'link', text: label, url })
     const row = (emoji: string, status: string) => [
-      rich(link('vboard-factory', 'https://vercel.com/vercel-internal-playground/vboard-factory')),
-      rich({ type: 'emoji', name: emoji }, { type: 'text', text: ' ' }, link(status, 'https://vercel.com/vercel-internal-playground/vboard-factory/7ZEaNBTETQjaUF4Bd1VCxbM8rR3n')),
-      rich(link('Preview', 'https://vboard-factory-git-pi-224.playground-vercel.tools')),
+      rich(link('acme-agents', 'https://vercel.com/acme/acme-agents')),
+      rich({ type: 'emoji', name: emoji }, { type: 'text', text: ' ' }, link(status, 'https://vercel.com/acme/acme-agents/7ZEaNBTETQjaUF4Bd1VCxbM8rR3n')),
+      rich(link('Preview', 'https://acme-agents-git-pi-224.acme.dev')),
       // Vercel's `2026-10-06T20:30:32.400Z`, in seconds, which Slack shows as how long ago.
       rich({ type: 'date', timestamp: Date.UTC(2026, 9, 6, 20, 30, 32) / 1000, format: '{ago}', fallback: 'Oct 6, 2026 8:30pm UTC' }),
     ]
@@ -1059,7 +1059,7 @@ describe('sync', () => {
       const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
       const julian = caller(board.fetch, await personToken())
       const pr = { number: 44, title: 'Deploy me', html_url: 'https://github.com/vercel-labs/board/pull/44' }
-      await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'handed-opened' })
+      await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'grace' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'handed-opened' })
       await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
       await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:44', id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
       await vi.waitFor(() => expect(s.posts).toHaveLength(1))
@@ -1067,7 +1067,7 @@ describe('sync', () => {
       await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
       const bodies = asked.mock.calls.map(([, , body]) => body)
       const vercels = bodies.find((body) => body.markdown.includes('▲ Vercel'))!
-      expect(vercels.deployments).toMatchObject([{ project: 'vboard-factory', status: 'Building' }])
+      expect(vercels.deployments).toMatchObject([{ project: 'acme-agents', status: 'Building' }])
       // A person's copy of the same text is their text, as written.
       const lookAlike = bodies.find((body) => body.markdown.includes('[vc]: #'))!
       expect(lookAlike).not.toHaveProperty('deployments')
@@ -1082,7 +1082,7 @@ describe('sync', () => {
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
     const pr = { number: 41, title: 'Deploy me', html_url: 'https://github.com/vercel-labs/board/pull/41' }
-    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'long-opened' })
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'grace' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'long-opened' })
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
     const thread = 'github:vercel-labs/board:41'
     await webhook('github', { type: 'message', threadId: thread, id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
@@ -1138,7 +1138,7 @@ describe('sync', () => {
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
     const pr = { number: 40, title: 'Review me', html_url: 'https://github.com/vercel-labs/board/pull/40' }
-    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'rv-opened' })
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'grace' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'rv-opened' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:40:rc:9', id: 'rc1', text: 'Fixed in abc123', user: '43', raw: { path: 'src/a.ts', line: 3 } })
     await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:40', id: 'c1', text: 'Ready for another look', user: '43' })
@@ -1167,7 +1167,7 @@ describe('sync', () => {
     })
     const julian = caller(board.fetch, await personToken())
     const pr = (action: string, merged = false) => ({
-      action, repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' },
+      action, repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'grace' },
       pull_request: { number: 44, title: 'Stale', html_url: 'https://github.com/vercel-labs/board/pull/44', draft: false, merged },
     })
     const send = (action: string, delivery: string, merged = false) =>
@@ -1178,10 +1178,10 @@ describe('sync', () => {
     await send('closed', 'q-closed')
     await vi.waitFor(() => expect(s.edits.map((e) => e.text)).toEqual([expect.stringContaining('[closed] PR #44')]))
     const [, closed] = await read(julian, 'prs')
-    expect(closed).toMatchObject({ text: 'closed by julianbenegas', noSync: true })
+    expect(closed).toMatchObject({ text: 'closed by grace', noSync: true })
 
     await send('reopened', 'q-reopened')
-    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('reopened by julianbenegas')]))
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('reopened by grace')]))
     expect(s.posts.map((p) => p.text).join('\n')).not.toContain('closed by')
   })
 
@@ -1195,7 +1195,7 @@ describe('sync', () => {
     const avatar = 'https://avatars.githubusercontent.com/u/42?v=4'
     const get = vi.fn(async () => ({ data: {
       number: 50, title: 'Root first', html_url: url, state, draft, merged,
-      user: { id: 42, login: 'julianbenegas', avatar_url: avatar },
+      user: { id: 42, login: 'grace', avatar_url: avatar },
       labels: [{ name: 'bug' }], assignees: [{ login: 'ada' }],
     } }))
     const { board, s, g, webhook } = setup({ githubClient: { rest: { pulls: { get }, issues: { get } } } })
@@ -1221,7 +1221,7 @@ describe('sync', () => {
     expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
     expect(g.posts).toHaveLength(0)
 
-    await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' },
+    await webhook('github', { action: 'opened', repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'grace' },
       [issue ? 'issue' : 'pull_request']: { number: 50, title: 'Root first', html_url: url, draft, labels: [{ name: 'bug' }], assignees: [{ login: 'ada' }] },
     }, { 'x-github-event': issue ? 'issues' : 'pull_request', 'x-github-delivery': 'late-opened' })
     await webhook('github', { ...payload, id: 'c2', text: 'Ready' })
@@ -1233,7 +1233,7 @@ describe('sync', () => {
 
   it('retries a failed GitHub root lookup without posting the comment as a root', async () => {
     const get = vi.fn().mockRejectedValueOnce(new Error('GitHub unavailable')).mockResolvedValue({ data: {
-      number: 51, title: 'Try again', html_url: 'https://github.com/vercel-labs/board/pull/51', state: 'open', user: { id: 42, login: 'julianbenegas' },
+      number: 51, title: 'Try again', html_url: 'https://github.com/vercel-labs/board/pull/51', state: 'open', user: { id: 42, login: 'grace' },
     } })
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
@@ -1273,7 +1273,7 @@ describe('sync', () => {
     const { board, webhook } = setup({ github: repos({ 'vercel-labs/board': { pulls: mirror('prs'), issues: mirror('issues') } }) })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { login: 'julianbenegas', id: 42 }
+    const sender = { login: 'grace', id: 42 }
     await webhook(
       'github',
       { action: 'opened', repository, sender, pull_request: { number: 9, title: 'A PR', html_url: 'https://github.com/x/pull/9', draft: false, merged: false } },
@@ -1297,7 +1297,7 @@ describe('sync', () => {
     const { board, webhook } = setup({ github: repos({ 'vercel-labs/board': { pulls: mirror('prs'), issues: mirror('issues') } }) })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { login: 'julianbenegas', id: 42 }
+    const sender = { login: 'grace', id: 42 }
     let delivery = 0
     const send = (name: string, body: Record<string, unknown>) =>
       webhook('github', { repository, sender, ...body }, { 'x-github-event': name, 'x-github-delivery': `t${++delivery}` })
@@ -1312,7 +1312,7 @@ describe('sync', () => {
       labels: labels.map((name) => ({ name })),
       assignees: assignees.map((login) => ({ login })),
     })
-    await send('issues', { action: 'opened', issue: issue(['bug', 'Good First Issue', '🐛'], ['julianbenegas']) })
+    await send('issues', { action: 'opened', issue: issue(['bug', 'Good First Issue', '🐛'], ['grace']) })
     await vi.waitFor(async () => expect(await read(julian, 'issues')).toHaveLength(1))
     const labelsOf = async () => (await read(julian, 'issues'))[0]!.labels
     expect(await labelsOf()).toEqual({
@@ -1320,22 +1320,22 @@ describe('sync', () => {
       state: 'open',
       'tag.bug': 'bug',
       'tag.good-first-issue': 'Good First Issue',
-      'assignee.julianbenegas': 'julianbenegas',
+      'assignee.grace': 'grace',
     })
 
     // GitHub follows an issue opened with labels by a `labeled` for each: nothing changes, so nothing's written.
     const all = ['bug', 'Good First Issue', '🐛']
-    await send('issues', { action: 'labeled', issue: issue(all, ['julianbenegas']), label: { name: 'bug' } })
-    await send('issues', { action: 'labeled', issue: issue([...all, 'priority: high'], ['julianbenegas']), label: { name: 'priority: high' } })
+    await send('issues', { action: 'labeled', issue: issue(all, ['grace']), label: { name: 'bug' } })
+    await send('issues', { action: 'labeled', issue: issue([...all, 'priority: high'], ['grace']), label: { name: 'priority: high' } })
     await vi.waitFor(async () => expect((await labelsOf())['tag.priority-high']).toBe('priority: high'))
     expect(await labelEvents()).toHaveLength(1)
 
-    await send('issues', { action: 'unlabeled', issue: issue(['Good First Issue', 'priority: high'], ['julianbenegas']), label: { name: 'bug' } })
-    await send('issues', { action: 'unassigned', issue: issue(['Good First Issue', 'priority: high']), assignee: { login: 'julianbenegas' } })
+    await send('issues', { action: 'unlabeled', issue: issue(['Good First Issue', 'priority: high'], ['grace']), label: { name: 'bug' } })
+    await send('issues', { action: 'unassigned', issue: issue(['Good First Issue', 'priority: high']), assignee: { login: 'grace' } })
     await vi.waitFor(async () => {
       const labels = await labelsOf()
       expect(labels).not.toHaveProperty('tag.bug')
-      expect(labels).not.toHaveProperty('assignee.julianbenegas')
+      expect(labels).not.toHaveProperty('assignee.grace')
     })
     expect((await read(julian, 'issues')).filter((m) => m.re !== null)).toHaveLength(0) // label changes post no replies
 
@@ -1371,7 +1371,7 @@ describe('sync', () => {
     const { board, webhook } = setup({ github: repos({ 'vercel-labs/board': mirror('prs') }) })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { login: 'julianbenegas', id: 42 }
+    const sender = { login: 'grace', id: 42 }
     let delivery = 0
     const send = (body: Record<string, unknown>) =>
       webhook('github', { repository, sender, ...body }, { 'x-github-event': 'pull_request', 'x-github-delivery': `h${++delivery}` })
@@ -1399,29 +1399,29 @@ describe('sync', () => {
     const { board, webhook } = setup({ github: repos({ 'vercel-labs/board': { pulls: mirror('prs'), issues: mirror('issues') } }) })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'vercel-labs/board' }
-    const sender = { login: 'julianbenegas', id: 42 }
+    const sender = { login: 'grace', id: 42 }
     let delivery = 0
     const send = (body: Record<string, unknown>) =>
       webhook('github', { repository, sender, ...body }, { 'x-github-event': 'issues', 'x-github-delivery': `m${++delivery}` })
     const base = { number: 12, title: 'Trimmed', html_url: 'https://github.com/x/issues/12' }
     const labelsOf = async () => (await read(julian, 'issues'))[0]!.labels
 
-    await send({ action: 'opened', issue: { ...base, labels: [{ name: 'bug' }], assignees: [{ login: 'julianbenegas' }] } })
-    await vi.waitFor(async () => expect((await labelsOf())['assignee.julianbenegas']).toBe('julianbenegas'))
+    await send({ action: 'opened', issue: { ...base, labels: [{ name: 'bug' }], assignees: [{ login: 'grace' }] } })
+    await vi.waitFor(async () => expect((await labelsOf())['assignee.grace']).toBe('grace'))
 
     // No `assignees`: the labels reconcile, the assignees stay.
     await send({ action: 'labeled', issue: { ...base, labels: [{ name: 'bug' }, { name: 'p1' }] }, label: { name: 'p1' } })
     await vi.waitFor(async () => expect((await labelsOf())['tag.p1']).toBe('p1'))
-    expect(await labelsOf()).toMatchObject({ 'tag.bug': 'bug', 'assignee.julianbenegas': 'julianbenegas' })
+    expect(await labelsOf()).toMatchObject({ 'tag.bug': 'bug', 'assignee.grace': 'grace' })
 
     // No `labels`: the assignees reconcile, the labels stay.
-    await send({ action: 'unassigned', issue: { ...base, assignees: [] }, assignee: { login: 'julianbenegas' } })
-    await vi.waitFor(async () => expect(await labelsOf()).not.toHaveProperty('assignee.julianbenegas'))
+    await send({ action: 'unassigned', issue: { ...base, assignees: [] }, assignee: { login: 'grace' } })
+    await vi.waitFor(async () => expect(await labelsOf()).not.toHaveProperty('assignee.grace'))
     expect(await labelsOf()).toMatchObject({ 'tag.bug': 'bug', 'tag.p1': 'p1' })
   })
 
   it("keeps GitHub's markdown and avatars, and posts markdown to platforms", async () => {
-    const get = vi.fn(async () => ({ data: { number: 3, title: 'Deploy previews', html_url: 'https://github.com/vercel-labs/board/pull/3', state: 'open', user: { id: 42, login: 'julianbenegas' } } }))
+    const get = vi.fn(async () => ({ data: { number: 3, title: 'Deploy previews', html_url: 'https://github.com/vercel-labs/board/pull/3', state: 'open', user: { id: 42, login: 'grace' } } }))
     const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get } } } })
     const julian = caller(board.fetch, await personToken(), {})
     const table = '| Project | Status |\n| --- | --- |\n| www | Ready |'

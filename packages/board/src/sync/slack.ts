@@ -870,7 +870,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   }
 
   /**
-   * A message goes out under its author's name (`Julián Benegas`, `clever-lemur via vboard-factory`,
+   * A message goes out under its author's name (`Ada Lovelace`, `clever-lemur via acme-agents`,
    * `Malte via support (slack)`), and their picture when it has one Slack can show, instead of the
    * app's, with the text's `**name**: ` label dropped. Without `chat:write.customize` it posts as
    * the app, label and all.

@@ -43,7 +43,7 @@ describe('local auth', () => {
   })
 
   it('turns OS usernames into handles', () => {
-    expect(localHandle('Julian Benegas')).toBe('julian-benegas')
+    expect(localHandle('Grace Hopper')).toBe('grace-hopper')
     expect(localHandle('DOMAIN\\jb')).toBe('domain-jb')
     expect(localHandle('_')).toBe('me')
   })

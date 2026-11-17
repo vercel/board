@@ -3,6 +3,15 @@
   "version": "0.50.0",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vercel/board.git",
+    "directory": "packages/board"
+  },
+  "homepage": "https://github.com/vercel/board#readme",
+  "bugs": {
+    "url": "https://github.com/vercel/board/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -139,5 +148,8 @@
     "chat": {
       "optional": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

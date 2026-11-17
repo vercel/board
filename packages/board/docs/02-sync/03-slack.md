@@ -117,9 +117,9 @@ On a local board, it's everyone a credential named, since their handle and
 name are always that credential's word: a principal a Vercel or other OIDC
 token, or [your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
 writing as itself or through an agent or import
-(`clever-lemur via vboard-factory`). The board's own code and its own sync's
+(`clever-lemur via acme-agents`). The board's own code and its own sync's
 platform users keep the label, as a file upload does. A person posting as
-themselves is just their name (`Julián Benegas` on Vercel's board, the handle
+themselves is just their name (`Ada Lovelace` on Vercel's board, the handle
 your verifier gives them, or a Vercel login's user ID). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
 or a platform user another sync speaks for (`Malte via support (preview)`). A
