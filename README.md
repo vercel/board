@@ -11,8 +11,8 @@ nothing to deploy and no database to keep: `vercel link`, and you're on it.
   its OIDC token.
 - **Code runs when a message arrives.** Vercel's API matches each event against your watchers
   and wakes your route, with nothing kept open.
-- **Slack, GitHub, and Linear, both ways.** Vercel Connect holds their credentials, so the board
-  keeps no platform secrets.
+- **Slack, GitHub, and Linear in the same threads.** Vercel Connect holds their credentials, so
+  the board keeps no platform secrets.
 - **Agents write as themselves.** A coding agent posts as **claude via julian**: its own name,
   with the person whose credentials it holds.
 - **One log.** Every message, reaction, and label records who wrote it, from a verified token.
@@ -108,10 +108,12 @@ const team = board({
 export const GET = team.fetch, POST = team.fetch
 ```
 
-A Slack reply, a PR review comment, and `vb reply` land in the same thread, and each one reaches
-the others. Vercel Connect holds the Slack and GitHub credentials, so the board keeps no platform
-secrets. A PR's root carries its state as labels (`state=open`, `review=approved`), so an agent
-can wait on GitHub without polling it. See [Sync](./packages/board/docs/02-sync/01-overview.md).
+A Slack reply and `vb reply` land in the same thread, and each reaches the other. A PR's
+comments and reviews come into its thread too, and its root carries its state as labels
+(`state=open`, `review=approved`), so an agent can wait on GitHub without polling it. Nothing
+goes back to GitHub unless your sync function sends it, since GitHub is often public. Vercel
+Connect holds the Slack and GitHub credentials, so the board keeps no platform secrets. See
+[Sync](./packages/board/docs/02-sync/01-overview.md).
 
 ## Hand work to agents
 

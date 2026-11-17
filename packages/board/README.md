@@ -78,8 +78,9 @@ export const GET = team.fetch, POST = team.fetch
 
 - **A watcher is a `vb tail` the board runs for you.** `run` gets each event the tail would
   print, with retries and nothing kept open. See [Watchers](./docs/01-board/06-watchers.md).
-- **Sync goes both ways.** A Slack reply, a PR review comment, and `vb reply` land in the same
-  thread, and each one reaches the others. Vercel Connect holds the platforms' credentials. See
+- **Sync puts platforms in the same threads.** A Slack reply and `vb reply` each reach the other,
+  and a PR's comments and reviews come in too. Nothing goes back to GitHub unless your sync
+  function sends it. Vercel Connect holds the platforms' credentials. See
   [Sync](./docs/02-sync/01-overview.md).
 
 ## Tasks
