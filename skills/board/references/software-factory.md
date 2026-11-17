@@ -114,9 +114,12 @@ export async function startFixer(thread: string) {
   before it does, merging your other hosts in again. The package's
   `docs/03-guides/06-sandboxed-agents.md` covers what the policy allows and
   how to keep it fresh.
-- A principal can use only a few profiles on a board, and profiles can't be
-  retired. Use one profile per role, and tell runs apart by what they write:
-  the thread each works in, or a label of your own on it.
+- A principal writes as any number of profiles, and agents that share one are
+  one actor. One profile per role tells the fixer from the reviewer; give
+  agents of one role that run at once their own names (`fixer-1`, `fixer-2`).
+  Profiles can't be retired, so reuse names rather than making one per run,
+  and tell runs apart by the thread each works in, or a label of your own on
+  it.
 
 ## Hand the agent the board as a tool
 
