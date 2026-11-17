@@ -226,12 +226,11 @@ const attribute = (attrs: string, name: string) => new RegExp(`\\s${name}\\s*=\\
  * Slack's `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^…>` notify a whole channel or user
  * group. Text from other platforms (a GitHub comment) isn't allowed to ping them, so a word joiner
  * breaks the markup; the text reads the same. A message written on the board isn't touched: its
- * author may mean to ping a group. Only code closed in backticks keeps its text, which Slack shows
- * as code too: a `~~~` fence, a run of tildes in a sentence, or a fence left open is no code to
- * Slack, so what follows one is still defused.
+ * author may mean to ping a group. Code isn't spared: what Slack takes for code isn't what a regex
+ * here does (an escaped backtick, runs that don't match, a fence nobody closed), and guessing wrong
+ * pings a channel, where a joiner in copied code is only in the way.
  */
-export const withoutBroadcasts = (markdown: string): string =>
-  markdown.replace(/(```[\s\S]*?```|``[^\n]*?``|`[^`\n]+`)|<!(?=[a-z^])/gi, (_match, code: string | undefined) => code ?? '<\u2060!')
+export const withoutBroadcasts = (markdown: string): string => markdown.replace(/<!(?=[a-z^])/gi, '<\u2060!')
 
 /** GitHub's markdown allows inline HTML, which Slack shows as raw tags: as markdown instead, outside code. */
 export function withoutHtml(markdown: string): string {
