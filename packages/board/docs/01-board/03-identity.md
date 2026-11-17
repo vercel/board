@@ -285,8 +285,9 @@ warning: @nobody names no one here: it stays text, and mentions no one.
 - **A handle is settled when you write.** `@ada` and `@julian/claude` name
   whoever has that handle in full, among the actors you can see. When that's
   exactly one, the board stores `@[their-id]` in its place, and the answer
-  says who. Of several, it's the one who wrote in the thread, if exactly one
-  did.
+  says who. Of several, one on the board wins over platform users (a synced
+  user's handle is their display name, theirs to set); else it's the one who
+  wrote in the thread, if exactly one did.
 - **A handle that names no one stays text.** No one has it, several do, or
   someone has it only under a name (`@malte` isn't `support/malte`): it's kept
   as typed, a mention of no one, and the answer says so, with who it could

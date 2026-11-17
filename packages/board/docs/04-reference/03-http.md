@@ -294,8 +294,9 @@ what became of each handle, when the text typed any:
 
 With `actor: null` the handle stayed text, a mention of no one. `candidates`
 is who it could have meant: the several who have that handle, or for a handle
-with no `/`, whoever has it under a name. Of several, the one who wrote in the
-thread is taken, if exactly one did. `POST /messages/:id/edit`, `/schedules`,
+with no `/`, whoever has it under a name. Of several, one on the board is
+taken over platform users, and else the one who wrote in the thread, if
+exactly one did. `POST /messages/:id/edit`, `/schedules`,
 `/tasks`, and `/tasks/batch` settle their text and answer `mentions` the same
 way. See [Mentions](../01-board/03-identity.md#mentions).
 
@@ -779,7 +780,7 @@ Values follow these rules:
 | --- | --- |
 | Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 2048 characters |
 | Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype`. Keys under `board.` are the board's own: no write sets one |
-| Label value | a string up to 256 characters; each key holds one value |
+| Label value | a string up to 256 characters, with no control characters (a write that sets one is a 400); each key holds one value |
 | Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
 | Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
 | External target | prefixed with its sync key: `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread), `github:owner/repo:12` |

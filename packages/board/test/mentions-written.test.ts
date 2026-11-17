@@ -81,6 +81,21 @@ describe('a mention, when it is written', () => {
     expect(reply.body.message.text).toBe('@[vercel:user:u_ada], the deploy key is in the vault')
   })
 
+  it('takes the platform user who wrote in the thread, of several who share a handle and no one on the board has', async () => {
+    const board = testBoard({ authenticate: hostVerifier })
+    const users = ['U_EVE', 'U_EVE2'].map((id) => ({ actor: `slack:user:${id}`, principal: `slack:user:${id}`, profile: null }))
+    for (const user of users) await board.session.append({ type: 'actor.seen', payload: { actor: user.actor, kind: 'external', handle: 'eve', name: 'Eve', avatar: null, platform: 'slack' } })
+    const [posted] = await board.session.append({
+      type: 'message.posted',
+      payload: { channel: 'dev', text: 'mine', re: null, replyTo: null, thread: 'eve2-thread', labels: {}, noSync: false, by: users[1]!, origin: null, from: 'slack' },
+    })
+    const julian = caller(board.fetch, 'pt_julian')
+    const fresh = await julian('POST', '/messages', { channel: 'dev', text: '@eve?' })
+    expect(fresh.body.mentions[0]).toMatchObject({ written: '@eve', actor: null })
+    const reply = await julian('POST', '/messages', { re: String(posted!.index), text: '@eve?' })
+    expect(reply.body.message.text).toBe('@[slack:user:U_EVE2]?')
+  })
+
   it('still names a platform user by a handle only they have', async () => {
     const board = testBoard({ authenticate: hostVerifier })
     await board.session.append({ type: 'actor.seen', payload: { actor: 'slack:user:U_EVE', kind: 'external', handle: 'eve', name: 'Eve', avatar: null, platform: 'slack' } })

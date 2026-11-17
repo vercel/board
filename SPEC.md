@@ -1150,8 +1150,9 @@ through the sync that speaks for them, under the key it imported them through.
   - **board() settles handles on every write that takes a text:** a post, a
     reply, an edit, a schedule, a task's root. An `@handle` that exactly one of
     the actors the caller can see has, in full, is stored as `@[actor-id]`. Of
-    several who have it, it's the one who wrote in the thread, if exactly one
-    did. Otherwise it stays as typed, a mention of no one: no one has it,
+    several who have it, one on the board wins over platform users, whose
+    handle is the display name their platform shows; else it's the one who
+    wrote in the thread, if exactly one did. Otherwise it stays as typed, a mention of no one: no one has it,
     several do, or someone has it only under a name. `@malte` is never
     `support/malte`, whom a project could import to take the name.
   - **The write's answer says what became of each handle** (`mentions`):
@@ -1274,7 +1275,8 @@ through the sync that speaks for them, under the key it imported them through.
 - **Emoji are stored as normalized short names** (`eyes`, `white_check_mark`),
   using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
-  strings (up to 256 characters). They are intended for triage state such as
+  strings (up to 256 characters) with no control characters: a write that sets
+  one with a newline, a tab, or an escape is a 400. They are intended for triage state such as
   `status=planned` and `dup-of=640`. Keys under `board.` are the board's own:
   it writes them (a task's state is `board.task`), and nobody else does (see
   [Tasks](#tasks)).

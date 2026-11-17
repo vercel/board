@@ -2239,6 +2239,14 @@ describe('a thread that stays on the board, and a platform thread one board thre
     for (const id of roots) expect((await julian('GET', `/messages/${id}/sync`)).body.targets.length).toBe(id === winner ? 1 : 0)
   })
 
+  it('lets only one of two posts that start with a Slack thread at once take it', async () => {
+    const { board } = setup()
+    const julian = caller(board.fetch, await personToken(), {})
+    const tries = await Promise.all(['one', 'two'].map((text) => julian('POST', '/messages', { channel: 'incidents', text, sync: ['slack:C9:900.1'] })))
+    expect(tries.map((tried) => tried.status).sort()).toEqual([201, 409])
+    expect(tries.find((tried) => tried.status === 409)!.body.error.code).toBe('already_synced')
+  })
+
   it('keeps a Slack thread with the board thread that took it first, whatever a later claim in the log says', async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), {})

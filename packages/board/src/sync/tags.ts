@@ -14,5 +14,6 @@ export const slug = (name: string) =>
  */
 export function tagOf(prefix: 'tag' | 'assignee', name: string | undefined | null): [string, string] | null {
   const key = name ? slug(name) : ''
-  return key ? [`${prefix}.${key}`.slice(0, 64), name!.slice(0, 256)] : null
+  // A label value a write sets has no control character, so a name with one still comes in, without it.
+  return key ? [`${prefix}.${key}`.slice(0, 64), name!.replace(/\p{Cc}/gu, '').slice(0, 256)] : null
 }

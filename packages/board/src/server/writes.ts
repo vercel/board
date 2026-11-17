@@ -546,8 +546,9 @@ const readerFor = (ctx: WriteContext, access: Access, message: Message): Promise
  * Refuses an external thread another board thread is synced with: taking it
  * over would send its replies away from that thread, to a caller who may not
  * read it. A reader of that thread's channel learns which thread it is. It
- * reads the tables once they've applied the whole log, so a sync just made
- * counts.
+ * reads the tables as they are: it runs inside an append's look, whose
+ * `appendFrom` has them apply the log first, and whose append lands only if
+ * nothing, another claim included, landed since.
  */
 async function unclaimed(ctx: WriteContext, target: SyncTarget, thread: string, access: Access) {
   if (target.kind !== 'thread') return
