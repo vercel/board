@@ -1053,7 +1053,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     /** Actors a list read again for them didn't have: it isn't read again for them. */
     unlisted: Set<string>
     /** Each actor asked for by ID, and when: one the API didn't have is asked for again after `NAMES_FRESH_MS`, as one it had is. */
-    asked: Map<string, { at: number; view: Promise<ApiActorView | undefined | null> }>
+    asked: Map<string, { at: number; view: Promise<ApiActorView | undefined | null>; failing?: Promise<ApiActorView | undefined | null> }>
     /** The request for actors by ID that hasn't gone out yet: everyone named before this turn's promises settle shares it. */
     asking: { ids: string[]; views: Promise<Map<string, ApiActorView> | null> } | null
     /** What a fresh read of the actors still didn't name: it isn't read again for them until names are read anyway. */
@@ -1201,13 +1201,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * An actor as the API names them, asked for by ID with everyone else named in the same turn: the
    * authors on a page cost one request however many actors the board has. Undefined for one the API
-   * doesn't have or a read that failed, which isn't kept; null when the API doesn't answer by ID.
+   * doesn't have or a read that failed, which isn't kept; null when the API doesn't answer by ID. `strict` rejects
+   * where the read failed, for a caller that must tell that from an actor the API doesn't have.
    */
-  function byId(who: Who, id: string): Promise<ApiActorView | undefined | null> {
+  function byId(who: Who, id: string, strict = false): Promise<ApiActorView | undefined | null> {
     const names = namesOf(who)
     const { asked } = names
     const kept = asked.get(id)
-    if (kept && Date.now() - kept.at <= NAMES_FRESH_MS) return kept.view
+    if (kept && Date.now() - kept.at <= NAMES_FRESH_MS) return (strict && kept.failing) || kept.view
     let batch = names.asking
     if (!batch || batch.ids.length >= NAMED_AT_ONCE) {
       const ids: string[] = []
@@ -1221,16 +1222,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       batch = names.asking = next
     }
     batch.ids.push(id)
-    const view: Promise<ApiActorView | undefined | null> = batch.views.then(
-      (views) => (views === null ? null : views.get(id)),
-      () => {
-        if (asked.get(id)?.view === view) asked.delete(id)
-        return undefined
-      },
-    )
+    const failing = batch.views.then((views) => (views === null ? null : views.get(id)))
+    const view: Promise<ApiActorView | undefined | null> = failing.catch(() => {
+      if (asked.get(id)?.view === view) asked.delete(id)
+      return undefined
+    })
     if (asked.size >= 10_000) asked.clear()
-    asked.set(id, { at: Date.now(), view })
-    return view
+    asked.set(id, { at: Date.now(), view, failing })
+    return strict ? failing : view
   }
   /**
    * The name of the project `actor` is of, one of its deployments or their agents: as its own actor names it,
@@ -1563,19 +1562,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       prefixes = [value.includes(':') ? `${value}+` : `${mentionTerm(value)}/`]
     }
     const named = (term: string) => terms.includes(term) || prefixes.some((prefix) => term.startsWith(prefix))
-    // `me` names the caller's own ID, which is what a mention of them settles to.
-    const ids = (text: string) => (value === 'me' ? [] : mentionTerms(text).filter((term) => principalFrom(term) !== null))
-    // Only someone the API names: a handle made up from an ID (an agent by its profile alone) names no one.
+    // `me` names the caller's own ID, which is what a mention of them settles to; an ID names no handle.
+    const ids = (text: string) => (value === 'me' || value.includes(':') ? [] : mentionTerms(text).filter((term) => principalFrom(term) !== null))
+    /**
+     * The handle an ID goes by as the actors list shows it, which is what a `@handle` settles from: the API's own
+     * (`pong/claude`), a deployment by its project's name. None for an ID the API names no one by: a handle made up
+     * from it (an agent by its profile alone) would name another's. A read of the actors that fails fails this, so
+     * a wait reads the same change again rather than going on past a mention it couldn't check.
+     */
     const handleOf = async (id: string): Promise<string | null> => {
-      const { profile } = actorParts(id)
-      const actor: ApiActor = { id, principal: principalFrom(id)!, ...(profile !== null ? { profile: { name: profile } } : {}) }
-      try {
-        const own = namesById ? await byId(who, id) : null
-        if (!(own === null ? await listed(who, id) : own)) return null
-        return (await nameOf(who, actor)).handle
-      } catch {
-        return null
-      }
+      const view = namesById ? await byId(who, id, true) : null
+      const found = view === null ? await listed(who, id) : view
+      return found ? shownHandle(id, found, projectNamesOf([[id, found]])) : null
     }
     const mentioned = async (text: string) => {
       const found = mentionTerms(text)
