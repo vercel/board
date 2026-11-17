@@ -2503,7 +2503,8 @@ config's to avoid.
 **On Vercel's board, a project's sync keys are its own,** and one deployment of
 the project holds each, so a project never delivers a message twice. Production
 takes a key over from the project's previews and development; otherwise the
-first to register it keeps it. Registering never fails over a key:
+first to register it keeps it, though a preview never takes a key the
+project's production held. Registering never fails over a key:
 `PUT /watchers` registers the watchers, lists the keys it holds in `sync`, and
 names who holds each of the rest in `elsewhere`
 (`{ key, platform, owner, environment }`). A deployment runs sync only through
