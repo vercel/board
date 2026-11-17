@@ -17,11 +17,9 @@ Factory environment, and workflows to enable. Use immutable `prj_…` and `team_
 IDs. Confirm the selected project before applying any Vercel CLI mutation.
 Keep unrelated uncommitted work intact.
 
-For `vercel-labs/board`, read `packages/board/docs/03-guides/05-agent-factory.md`
-and `apps/software-factory/app/api/board/[[...path]]/route.ts`. For
-`vercel-labs/agent-factory`, read `apps/factory/automation-reference.md` and
-`apps/factory/lib/automations/workflow-board.ts`. These paths are relative to their own checkout;
-use the repository's current files rather than assuming both are available.
+Read `packages/board/docs/03-guides/05-agent-factory.md` and
+`templates/software-factory/app/api/board/[[...path]]/route.ts`. Use the
+repository's current files.
 
 ## Configure both trust layers
 
@@ -83,7 +81,7 @@ across runs within the same Factory project and state namespace. The
 Factory derives channel names from project, environment/generation, repository
 and space. Keep these bindings outside agent-controlled input and reauthorize
 before every call. Do not map `factory/...` channels to Slack/GitHub or broad
-Pi watchers; existing software-factory automation stays on `dev`. Contributions
+watchers; existing software-factory automation stays on `dev`. Contributions
 also use `noSync: true`.
 
 Identical space names in different repositories remain separate. Cross-repository

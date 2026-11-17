@@ -5,12 +5,6 @@ packages:
 allowBuilds:
   esbuild: false
 minimumReleaseAgeExclude:
-  - '@ai-sdk/gateway@4.0.106'
-  - '@ai-sdk/provider-utils@5.0.56'
-  - '@ai-sdk/provider@4.0.24'
-  - ai@7.0.130
-  - experimental-a2@0.24.0
-  - eve@0.84.1
   - '@vercel/board@0.32.0'
   - '@vercel/board@0.49.0'
 
