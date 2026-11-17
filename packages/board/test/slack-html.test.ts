@@ -116,4 +116,9 @@ describe('Slack broadcasts from other platforms', () => {
     expect(withoutBroadcasts('<!-- c --> a <! b')).toBe('<!-- c --> a <! b')
     expect(withoutBroadcasts('```\n<!here>\n```')).toBe('```\n<!here>\n```')
   })
+
+  it("defuse what only looks like code: tildes, and a fence nobody closed", () => {
+    for (const text of ['prefix ~~~ <!channel>', '~~~\n<!channel>\n~~~', '```\n<!channel>', 'a ` b <!channel>', '`a` <!channel> `b`'])
+      expect([text, withoutBroadcasts(text)]).toEqual([text, text.replace('<!', '<\u2060!')])
+  })
 })
