@@ -15,6 +15,8 @@ export type RunnerConfig = {
   channel: string;
   /** This agent's profile on the board: `worker-3`. */
   worker: string;
+  /** The actor that owns the tasks, by ID: a claim takes another owner's tasks only when it names them. */
+  owner: string;
   /** The checkout, and the commit every task starts from. */
   repo: string;
   base: string;
@@ -38,36 +40,18 @@ export type RunnerConfig = {
   deadline: number;
 };
 
-/**
- * A task's state, as labels on its thread's root. Every change is a compare-and-set on them, so two
- * agents never hold one task: a claim lands only while the task is `ready`, and everything a
- * claimant writes after it lands only while its `task.claim` is still the token it set.
- */
-export const LABEL = {
-  /** ready, claimed, blocked, completed, failed, or canceled. */
-  state: "task.state",
-  /** The agent that holds it, or held it last: `worker-3`. */
-  owner: "task.owner",
-  /** The claim's token: what fences the claimant's writes. */
-  claim: "task.claim",
-  /** When the claim runs out, as an ISO time. A claimed task past it has stalled, and anyone may take it over. */
-  lease: "task.lease",
-  /** How it ended, or what it's held for, in a line. The thread has the rest. */
-  note: "task.note",
-  /** What a held task is held for: `needs_input`, or `error`. */
-  kind: "task.kind",
-  cost: "cost",
-  tokens: "tokens",
-} as const;
+/** The labels an agent leaves on a task's root: what the task has cost so far, across every try. */
+export const LABEL = { cost: "cost", tokens: "tokens" } as const;
 
-export const STATES = ["ready", "claimed", "blocked", "completed", "failed", "canceled"] as const;
+/** The states the board keeps a task in. */
+export const STATES = ["waiting", "ready", "claimed", "blocked", "completed", "failed", "canceled"] as const;
 export type State = (typeof STATES)[number];
 
-/** How long a claim holds without a renewal. A crashed agent keeps a task this long at most. */
-export const LEASE_MS = 8 * 60_000;
+/** A result or a reason holds 1,000 characters on a board: one is cut to fit. */
+export const brief = (text: string) => text.trim().slice(0, 900);
 
-/** A label's value holds 256 characters: a note is cut to fit, on one line. */
-export const note = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 240);
+/** A path as one shell word, whatever is in it: `app/(dashboard)/page.tsx` stays one file. */
+export const quoted = (path: string) => `'${path.replaceAll("'", `'\\''`)}'`;
 
 /** Where the runner and its config are in a sandbox, and where the checkout is. */
 export const SANDBOX = {

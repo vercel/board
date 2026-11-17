@@ -35,8 +35,9 @@ repository's examples, 12 tasks, 3 agents, checked with `node --check`. It costs
 
 1. **The checkout.** One sandbox clones the repository, runs your setup command, and lists the
    files. It's stopped and kept, so every agent starts from a copy of the same checkout.
-2. **The tasks.** Each group of files is a thread in a channel of the campaign's own
-   (`migrate/<campaign>`). Its state is in its labels: `ready`, `claimed`, `blocked`, `completed`.
+2. **The tasks.** Each group of files is a task in a channel of the campaign's own
+   (`migrate/<campaign>`): a thread whose state the board keeps, `ready`, `claimed`, `blocked`, or
+   `completed`. `vb tasks migrate/<campaign>` lists them.
 3. **The agents.** Each sandbox runs one loop (`sandbox/runner.ts`): claim the oldest ready task,
    give a fresh agent that one task, run the verify command, have the reviewer read the diff, and
    deliver it. A failed verify or a review that asks for changes goes back to the agent. After the
@@ -49,19 +50,20 @@ repository's examples, 12 tasks, 3 agents, checked with `node --check`. It costs
 The loop is code. A model decides only what to change in a file: it doesn't pick tasks, decide when
 it's done, or deliver its own work.
 
-Two agents never hold one task. A claim is a write that lands only while the task is `ready`, and
-everything an agent writes after it lands only while its claim is still the one on the task
-(`lib/queue.ts`). An agent that stalls loses its task when its lease runs out, and can't settle it
-afterwards.
+Two agents never hold one task. A claim is a lease the board gives to one agent and fences: of
+claims that race, one lands, and an agent that stalls past its lease can't settle a task another
+has taken. Each agent renews its lease while it works (`sandbox/runner.ts`).
 
 ## Nothing secret in a sandbox
 
 An agent runs the repository's own code, so its sandbox holds no credential. Each sandbox's network
 policy adds them to its requests on the way out (`lib/sandboxes.ts`):
 
-- **The board**, as that agent's profile (`worker-3`), held to the campaigns' channels.
+- **The board**, as that agent's profile (`worker-3`), held to its own campaign's tasks. It can
+  read the campaigns' threads and change none of them.
 - **AI Gateway**, for the models.
-- **GitHub**, when the deployment has a `GITHUB_TOKEN`.
+- **GitHub**, when the campaign opens pull requests or pushes a branch, and then the deployment's
+  `GITHUB_TOKEN` goes only on requests for the campaign's own repository.
 
 Every other host is blocked. The token in a policy lives under two hours, so a running campaign's
 policies are made again every few minutes.
@@ -94,9 +96,11 @@ team, so nothing you try shows up where your team works. Open it with
 pnpm campaign                    # the sample, from the terminal, with no page
 pnpm campaign my-campaign.json   # a config of your own: the form's fields, as JSON
 pnpm show <campaign> [task-id]   # a campaign as the board has it, and one task's thread and patch
+pnpm answer <campaign> <task-id> "<note>"   # answer a held task: it's ready again
 
 pnpm typecheck
-pnpm test                        # the queue and the campaign's rules, on a board in memory
+pnpm test                        # the campaign's rules, on a board in memory
+pnpm check:tasks                 # what a campaign relies on from the board's tasks, on your real board
 ```
 
 ## Make it yours
@@ -120,7 +124,7 @@ pnpm test                        # the queue and the campaign's rules, on a boar
 | `app/api/live` | The page's feed: a snapshot after every change on the board |
 | `app/api/tick` | What the cron calls: every running campaign is reconciled |
 | `lib/campaign.ts` | A campaign as the board has it: its thread, its tasks, what they've spent |
-| `lib/queue.ts` | The queue: a task's state as labels, and every change a compare-and-set |
+| `lib/queue.ts` | The queue, on the board's tasks: making them, listing them, and what a person does to one |
 | `lib/run.ts` | The launch, and `reconcile`, which makes the sandboxes match what the board says |
 | `lib/sandboxes.ts` | The base image, a campaign's checkout, its workers, and their network policies |
 | `sandbox/runner.ts` | What runs in each sandbox: the loop, the agents, verify, review, delivery |
@@ -132,9 +136,8 @@ cron, a page someone has open, or `pnpm campaign`.
 ## Limits
 
 - **16 agents.** Vercel's board gives one project 20 agent profiles, and each agent is one.
-- **Tasks are labels.** `@vercel/board` has `tasks`, with claims and holds the board keeps itself.
-  This template uses labels, which every board has. `lib/queue.ts` and the runner's `claim` are the
-  two places to change to move to `tasks`.
+- **A claim holds five minutes.** That's the most Vercel's board gives, so an agent renews its
+  claim every 80 seconds. One that dies loses its task within five minutes, and another takes it.
 - **A launch runs in one function.** Cloning, setup, and listing files happen after the form's
   response, in the same invocation. A setup command that takes longer than the function may run
   doesn't fit: do less in it, or start the campaign with `pnpm campaign`.

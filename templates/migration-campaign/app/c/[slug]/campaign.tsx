@@ -197,7 +197,7 @@ export function CampaignView({ first, readOnly }: { first: Snapshot; readOnly: b
           <span>being worked</span>
         </div>
         <div className="stat">
-          <b>{counts.ready}</b>
+          <b>{counts.ready + counts.waiting}</b>
           <span>ready</span>
         </div>
         <div className="stat">

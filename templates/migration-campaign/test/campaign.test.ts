@@ -7,11 +7,11 @@ import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
 import { tasksChannel, workerName } from "../lib/board.ts";
 import { campaign, snapshot } from "../lib/campaign.ts";
-import { block, cancel, claimNext, complete, renew, unblock } from "../lib/queue.ts";
+import { cancel, claimNext, unblock } from "../lib/queue.ts";
 import { DEFAULTS, parseConfig, plan, type Config } from "../lib/config.ts";
 import { begin, change, launch, reconcile, scale, type Sandboxes } from "../lib/run.ts";
 import { RUNTIME } from "../lib/sandboxes.ts";
-import { blocked, verdict } from "../sandbox/shared.ts";
+import { blocked, quoted, verdict } from "../sandbox/shared.ts";
 
 const fresh = (): Board => makeBoard({ backend: local({ memory: true }) });
 
@@ -61,8 +61,11 @@ async function started(count: number, over: Partial<Config> = {}) {
   return { board, boxes, calls, up, slug: made.slug };
 }
 
-/** Claims the next task as an agent would. */
-const claimAs = (board: Board, slug: string, n: number) => claimNext(board.as(workerName(n)), tasksChannel(slug), workerName(n));
+/** Claims the next task as an agent would: as its profile, naming the tasks' owner. */
+async function claimAs(board: Board, slug: string, n: number) {
+  const { prepared } = (await campaign(slug, board))!;
+  return claimNext(board.as(workerName(n)), tasksChannel(slug), prepared!.owner);
+}
 
 test("a config keeps its numbers in range and says what's missing", () => {
   assert.deepEqual(parseConfig({}), { problem: "Name the repository to migrate." });
@@ -116,46 +119,41 @@ test("a launch that lists no files fails, says why, and leaves no sandbox", asyn
   assert.deepEqual(calls.started, []);
 });
 
-test("of many agents claiming at once, each task goes to one, and a lost claim can't settle it", async () => {
+test("of many agents claiming at once, each task goes to one, oldest first", async () => {
   const { board, slug } = await started(2);
   const claims = await Promise.all([1, 2, 3, 4, 5].map((n) => claimAs(board, slug, n)));
   const won = claims.filter((claim) => claim !== null);
   assert.equal(won.length, 2);
-  assert.notEqual(won[0]!.id, won[1]!.id);
+  assert.notEqual(won[0]!.task.id, won[1]!.task.id);
   assert.equal(await claimAs(board, slug, 6), null);
-  // A claim someone else took over: its holder can't renew it or settle the task.
-  const stale = { id: won[0]!.id, token: "not-the-claim" };
-  assert.equal(await renew(board, stale), false);
-  assert.equal(await complete(board, stale, "done"), false);
   const now = (await snapshot(slug, board))!;
   assert.equal(now.counts.claimed, 2);
-  assert.equal(now.tasks.filter((task) => /^worker-\d$/.test(task.holder ?? "")).length, 2);
+  assert.deepEqual(now.tasks.map((task) => task.holder).sort(), [...new Set(now.tasks.map((task) => task.holder))].sort(), "each task has a holder of its own");
+  assert.ok(now.tasks.every((task) => /^worker-\d$/.test(task.holder ?? "")));
 });
 
-test("a task whose claim ran out is taken over, and a canceled one is nobody's", async () => {
+test("a canceled task is nobody's: the agent that held it can't settle it", async () => {
   const { board, slug } = await started(2);
   const first = (await claimAs(board, slug, 1))!;
   const second = (await claimAs(board, slug, 2))!;
-  // worker-1 stalls: its lease is in the past, and the next agent to look takes the task over.
-  await board.label(first.id, { set: { "task.lease": new Date(Date.now() - 1_000).toISOString() } });
-  assert.equal((await snapshot(slug, board))!.counts.ready, 1, "a claim past its lease reads as ready");
-  const taken = (await claimAs(board, slug, 3))!;
-  assert.equal(taken.id, first.id);
-  assert.equal(await complete(board, first, "late"), false, "the agent that stalled can't settle it");
-  assert.equal(await complete(board, taken, "done"), true);
-  // A canceled task ends its claim: the agent that held it settles nothing.
-  await cancel(board, second.id, "not worth it");
-  assert.equal(await complete(board, second, "done anyway"), false);
+  await first.complete("done");
+  await cancel(board, second.task.id, "not worth it");
+  await assert.rejects(second.complete("done anyway"), (error: { code?: string }) => error.code === "claim_lost" || error.code === "task_finished");
   const now = (await snapshot(slug, board))!;
   assert.deepEqual([now.counts.completed, now.counts.canceled, now.counts.claimed], [1, 1, 0]);
   assert.equal(now.tasks.find((task) => task.state === "canceled")?.result, "not worth it");
 });
 
+test("a path is one shell word in the verify command, whatever is in it", () => {
+  assert.equal(quoted("app/(dashboard)/page.tsx"), "'app/(dashboard)/page.tsx'");
+  assert.equal(quoted("it's.js"), `'it'\\''s.js'`);
+});
+
 test("what agents spend is the campaign's cost, and a campaign over its budget stops and tears down", async () => {
   const { board, boxes, calls, slug } = await started(3, { budgetUsd: 1 });
   const claim = (await claimAs(board, slug, 1))!;
-  await board.as(workerName(1)).label(claim.id, { set: { cost: "1.2500", tokens: "90000" } });
-  assert.equal(await complete(board, claim, "The patch is attached."), true);
+  await board.as(workerName(1)).label(claim.task.id, { set: { cost: "1.2500", tokens: "90000" } });
+  await claim.complete("The patch is attached.");
   await reconcile(slug, board, boxes, { force: true });
   const now = (await snapshot(slug, board))!;
   assert.equal(now.cost, 1.25);
@@ -168,8 +166,8 @@ test("a campaign is done when every task has ended, and held tasks keep it open 
   const { board, boxes, calls, up, slug } = await started(2, { agents: 2 });
   const first = (await claimAs(board, slug, 1))!;
   const second = (await claimAs(board, slug, 2))!;
-  await complete(board, first, "done");
-  await block(board, second, "Still not right after 3 tries.");
+  await first.complete("done");
+  await second.block("Still not right after 3 tries.", { kind: "needs_input" });
   up.clear(); // its agents found nothing to claim, and exited
   calls.started.length = 0;
   await reconcile(slug, board, boxes, { force: true });
@@ -180,11 +178,11 @@ test("a campaign is done when every task has ended, and held tasks keep it open 
   assert.deepEqual(calls.started, [], "nothing to claim, so no agent is started");
 
   // A person answers: the task is ready again, and one agent comes back for it.
-  assert.equal(await unblock(board, second.id), true);
-  assert.equal(await unblock(board, second.id), false, "a task that isn't held stays as it is");
+  assert.equal(await unblock(board, second.task.id), true);
+  assert.equal(await unblock(board, second.task.id), false, "a task that isn't held stays as it is");
   await reconcile(slug, board, boxes, { force: true });
   assert.deepEqual(calls.started, [1]);
-  await complete(board, (await claimAs(board, slug, 1))!, "done");
+  await (await claimAs(board, slug, 1))!.complete("done");
   await reconcile(slug, board, boxes, { force: true });
   now = (await snapshot(slug, board))!;
   assert.equal(now.campaign.phase, "done");

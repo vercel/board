@@ -2,13 +2,13 @@ import { BoardError, type Board, type MessageView, type ThreadSummaryView } from
 import { LABEL, PHASES, STATES, taskFiles, type Phase, type State } from "../sandbox/shared.ts";
 import { ROOT, tasksChannel, team } from "./board.ts";
 import { campaignText, readConfig, taskText, type Config } from "./config.ts";
-import { createTasks, inState } from "./queue.ts";
+import { allTasks as listTasks, createTasks } from "./queue.ts";
 
 export { STATES, type State };
 
 // A campaign on the board. Its thread, in ROOT, carries its config as text and its phase as a
-// label. Its tasks are threads in a channel of its own under ROOT, each with its state in its
-// root's labels (lib/queue.ts): who holds it, how it ended, what it's held for. Nothing about a
+// label. Its tasks are threads in a channel of its own under ROOT, each a task the board keeps the
+// state of (lib/queue.ts): who holds it, how it ended, what it's held for. Nothing about a
 // campaign is kept anywhere else, so the page, the agents, and `vb` all read the same thing.
 
 /** What the launch learned about the checkout, kept as a reply in the campaign's thread for the app to read back. */
@@ -17,6 +17,8 @@ export type Prepared = {
   base: string;
   /** The branch it was on: what pull requests target. */
   baseBranch: string;
+  /** The actor that owns the tasks, by ID. */
+  owner: string;
   /** Epoch ms the campaign runs until. */
   deadline: number;
   files: number;
@@ -116,27 +118,26 @@ function toCampaign(message: MessageView, replies: MessageView[] = []): Campaign
   };
 }
 
+/** A profile's name from an actor's ID: `worker-3` from `vercel:project:…+worker-3`, or from a local board's `board:client:worker-3`. */
+const profile = (actor: string) => actor.split(/[+:]/).pop() || actor;
+
 function toTask({ message, replies, last }: ThreadSummaryView): Task[] {
-  const labels = message.labels;
-  const state = labels[LABEL.state] as State | undefined;
-  // A label anyone can write: one this page doesn't know isn't a task.
-  if (!state || !STATES.includes(state)) return [];
-  const until = labels[LABEL.lease] ?? null;
+  const task = message.task;
+  if (!task) return [];
   // A claim past its lease is over, whatever the state still says: the task is anyone's to take.
-  const held = state === "claimed" && until !== null && Date.parse(until) > Date.now();
-  const text = labels[LABEL.note] ?? null;
+  const held = task.claim && Date.parse(task.claim.until) > Date.now() ? task.claim : null;
   return [
     {
       id: message.id,
       title: message.text.split("\n", 1)[0] || "(no title)",
       files: taskFiles(message.text).length,
-      state: state === "claimed" && !held ? "ready" : state,
-      holder: held ? (labels[LABEL.owner] ?? null) : null,
-      until: held ? until : null,
-      held: state === "blocked" ? { kind: labels[LABEL.kind] ?? null, reason: text ?? "Held." } : null,
-      result: state === "blocked" ? null : text,
-      cost: Number(labels[LABEL.cost]) || 0,
-      tokens: Number(labels[LABEL.tokens]) || 0,
+      state: task.state === "claimed" && !held ? "ready" : task.state,
+      holder: held ? profile(held.actor) : null,
+      until: held?.until ?? null,
+      held: task.state === "blocked" ? { kind: task.blocked?.kind ?? null, reason: task.blocked?.reason ?? "Held." } : null,
+      result: task.result ?? task.reason ?? null,
+      cost: Number(message.labels[LABEL.cost]) || 0,
+      tokens: Number(message.labels[LABEL.tokens]) || 0,
       replies,
       last: last ? line(last) : null,
       updatedAt: last?.createdAt ?? message.createdAt,
@@ -179,8 +180,8 @@ export const say = (board: Board, id: string, text: string) => board.reply(id, t
 export const savePrepared = (board: Board, id: string, prepared: Prepared, text: string) =>
   board.reply(id, `${text}\n\n\`\`\`json state\n${JSON.stringify(prepared)}\n\`\`\``).then(() => undefined);
 
-/** Posts the campaign's tasks, one per group of files, ready to claim. The same slug again posts none twice. */
-export const addTasks = (board: Board, slug: string, groups: string[][]): Promise<number> =>
+/** Makes the campaign's tasks, one per group of files, ready to claim. The same slug again makes none twice. */
+export const addTasks = (board: Board, slug: string, groups: string[][]): Promise<{ owner: string; made: number }> =>
   createTasks(board, tasksChannel(slug), `plan-${slug}`, groups.map(taskText));
 
 /** Every campaign on the board, newest first. */
@@ -200,20 +201,11 @@ export async function campaign(slug: string, board: Board = team()): Promise<Cam
   return toCampaign(message, replies);
 }
 
-/** The most tasks a snapshot reads in one state: a campaign makes 2,000 at most. */
+/** The most tasks a snapshot reads: a campaign makes 2,000 at most. */
 const READ_MAX = 2_000;
 
-/**
- * Every task of a campaign, oldest first: one read per state, since a board indexes a label with
- * one value, and a filter with several makes Vercel's board page through every thread.
- */
-async function allTasks(board: Board, slug: string): Promise<Task[]> {
-  const byState = await Promise.all(STATES.map((state) => inState(board, tasksChannel(slug), state, READ_MAX)));
-  return byState
-    .flat()
-    .sort((a, b) => a.message.createdAt.localeCompare(b.message.createdAt))
-    .flatMap(toTask);
-}
+/** Every task of a campaign, oldest first: one list, a page at a time, so a task that changes state mid-read is still in it once. */
+const allTasks = async (board: Board, slug: string): Promise<Task[]> => (await listTasks(board, tasksChannel(slug), READ_MAX)).flatMap(toTask);
 
 /**
  * A campaign as it is now: its thread, every task, and what they've spent. Nothing is kept between
@@ -221,7 +213,8 @@ async function allTasks(board: Board, slug: string): Promise<Task[]> {
  */
 export async function snapshot(slug: string, board: Board = team()): Promise<Snapshot | null> {
   // The position first: a change that lands between the reads is in the next snapshot rather than in neither.
-  const { cursor } = await board.messages({ channel: `${ROOT}/`, limit: 1 });
+  // One channel's read, whatever the number of campaigns: its cursor is the board's position all the same.
+  const { cursor } = await board.messages({ channel: ROOT, limit: 1 });
   const { threads } = await board.threads({ channel: ROOT, label: { campaign: slug }, limit: 5 });
   const root = threads.find(({ message }) => message.labels.campaign === slug)?.message;
   if (!root) return null;

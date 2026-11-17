@@ -1,6 +1,6 @@
 {
   "name": "migration-campaign",
-  "version": "0.48.1",
+  "version": "0.49.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.23.0",
@@ -11,10 +11,12 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "campaign": "node --env-file-if-exists=.env.local scripts/run.ts",
-    "show": "node --env-file-if-exists=.env.local scripts/show.ts"
+    "show": "node --env-file-if-exists=.env.local scripts/show.ts",
+    "answer": "node --env-file-if-exists=.env.local scripts/answer.ts",
+    "check:tasks": "node --env-file-if-exists=.env.local scripts/check-tasks.ts"
   },
   "dependencies": {
-    "@vercel/board": "0.48.1",
+    "@vercel/board": "0.49.0",
     "@vercel/oidc": "^3.8.9",
     "@vercel/sandbox": "^4.0.0",
     "geist": "^1.7.2",

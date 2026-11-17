@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { Sandbox, type NetworkPolicy } from "@vercel/sandbox";
 import { SANDBOX, type RunnerConfig } from "../sandbox/shared.ts";
-import { ROOT, team, workerName } from "./board.ts";
-import { cloneUrl, type Config } from "./config.ts";
+import { ROOT, tasksChannel, team, workerName } from "./board.ts";
+import { cloneUrl, githubRepo, type Config } from "./config.ts";
 
 // The sandboxes a campaign runs in. Three kinds, each forked from the one before:
 //
@@ -19,7 +19,7 @@ import { cloneUrl, type Config } from "./config.ts";
 // only for the hosts the policy names, and can't read them.
 
 /** What the base installs, pinned: the runner is written against these. Kept in step with package.json by a test. */
-export const RUNTIME = { "@earendil-works/pi-coding-agent": "1.5.2", "@vercel/board": "0.48.1" } as const;
+export const RUNTIME = { "@earendil-works/pi-coding-agent": "1.5.2", "@vercel/board": "0.49.0" } as const;
 const IMAGE = "vercel/sandbox/node:24";
 const TAG = "migration-campaign";
 
@@ -45,13 +45,19 @@ async function must(sandbox: Sandbox, what: string, cmd: string, args: string[],
 /** The token this deployment is, for the board and for AI Gateway. On your machine, the one `vercel env pull` wrote. */
 const oidc = () => getVercelOidcToken();
 
-/** GitHub, with the token this deployment was given (GITHUB_TOKEN), or without one for a public repository. */
-function github(): Allow {
+/**
+ * GitHub, for one repository. The deployment's token (GITHUB_TOKEN) goes only on requests for that
+ * repository: its git URLs, and its own part of the API. Code a campaign runs is the repository's
+ * own, so it can reach GitHub, and with this it can use the token for nothing but the repository
+ * it came from. Without a token, or for a repository that isn't on GitHub, requests go as they are.
+ */
+function github(repo: string | null): Allow {
   const token = process.env.GITHUB_TOKEN;
-  if (!token) return { "github.com": [], "api.github.com": [], "codeload.github.com": [] };
+  if (!token || !repo) return { "github.com": [], "api.github.com": [], "codeload.github.com": [] };
+  const path = repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
-    "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${token}` } }] }],
-    "github.com": [{ transform: [{ headers: { authorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}` } }] }],
+    "api.github.com": [{ match: { path: { regex: `^/repos/${path}(/.*)?$` } }, transform: [{ headers: { authorization: `Bearer ${token}` } }] }],
+    "github.com": [{ match: { path: { regex: `^/${path}(\\.git)?(/.*)?$` } }, transform: [{ headers: { authorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}` } }] }],
     "codeload.github.com": [],
   };
 }
@@ -135,7 +141,7 @@ function forkSource(slug: string, config: Config, base: string) {
     persistent: true,
     timeout: 40 * 60_000,
     resources: { vcpus: config.vcpus },
-    networkPolicy: { allow: { ...github(), "*": [] } },
+    networkPolicy: { allow: { ...github(githubRepo(config.repo)), "*": [] } },
     tags: { app: TAG, campaign: slug, role: "source" },
   });
 }
@@ -164,22 +170,28 @@ export const campaignBranch = (slug: string) => `campaign/${slug}`;
  * blocked. It holds this deployment's OIDC token as it is now, which lives under two hours, so a
  * running campaign's policies are made again every few minutes (`refresh`).
  */
-async function workerPolicy(n: number): Promise<{ policy: NetworkPolicy; boardUrl: string }> {
+async function workerPolicy(n: number, scope: Scope): Promise<{ policy: NetworkPolicy; boardUrl: string }> {
   const token = await oidc();
   const worker = team().as(workerName(n));
-  const [{ allow }, { url }] = await Promise.all([worker.sandboxPolicy({ token, can: { [`${ROOT}/`]: ["read", "post", "react", "label"] } }), team().discovery()]);
+  // Its own campaign's tasks to work, and the campaigns' threads only to read: it can't touch another campaign's tasks, or any campaign's phase.
+  const can = `${ROOT}=read;${tasksChannel(scope.slug)}=read,post,react,label`;
+  const [{ allow }, { url }] = await Promise.all([worker.sandboxPolicy({ token, can }), team().discovery()]);
   const gateway = process.env.AI_GATEWAY_API_KEY ?? token;
   const policy = {
     allow: {
       ...(allow as Allow),
       "ai-gateway.vercel.sh": [{ transform: [{ headers: { "x-api-key": gateway, authorization: `Bearer ${gateway}` } }] }],
-      ...github(),
+      // GitHub only where the campaign pushes: an agent that delivers patches has no use for it.
+      ...(scope.push ? github(scope.repo) : {}),
       // A patch goes to the board as a file, which Vercel's API takes on a link it signs for its own bucket.
       ...(new URL(url).host === "api.vercel.com" ? { "vercel-messageboard-attachments.s3.us-west-1.amazonaws.com": [] } : {}),
     },
   } as NetworkPolicy;
   return { policy, boardUrl: url };
 }
+
+/** What a worker's policy is for: its campaign, and the one repository it may push to, if it pushes. */
+export type Scope = { slug: string; repo: string | null; push: boolean };
 
 /** An unsigned token with the real one's claims a client reads (its expiry, its team) and no signature: `vb` wants one to send, and the policy replaces it. */
 function standIn(token: string): string {
@@ -200,7 +212,7 @@ async function boardEnv(url: string, worker: string): Promise<Record<string, str
 
 /** Starts agent `n` of a campaign in a sandbox of its own, forked from the campaign's checkout. */
 export async function startWorker(slug: string, n: number, runner: RunnerConfig, opts: { vcpus: number; timeoutMs: number }): Promise<string> {
-  const { policy, boardUrl } = await workerPolicy(n);
+  const { policy, boardUrl } = await workerPolicy(n, { slug, repo: runner.github, push: runner.delivery !== "patch" });
   const env = await boardEnv(boardUrl, runner.worker);
   const sandbox = await Sandbox.fork({
     sourceSandbox: sourceName(slug),
@@ -268,10 +280,10 @@ export async function workers(slug: string): Promise<{ name: string; n: number }
 }
 
 /** Hands each running worker a new policy, before the token in its last one runs out. */
-export async function refresh(up: { name: string; n: number }[]): Promise<void> {
+export async function refresh(up: { name: string; n: number }[], scope: Scope): Promise<void> {
   await Promise.allSettled(
     up.map(async ({ name, n }) => {
-      const [{ policy }, sandbox] = await Promise.all([workerPolicy(n), Sandbox.get({ name })]);
+      const [{ policy }, sandbox] = await Promise.all([workerPolicy(n, scope), Sandbox.get({ name })]);
       await sandbox.update({ networkPolicy: policy });
     }),
   );

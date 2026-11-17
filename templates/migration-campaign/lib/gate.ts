@@ -5,9 +5,13 @@
 /** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
 export const isLocal = (env: NodeJS.ProcessEnv = process.env) => !env.VERCEL_ENV || env.VERCEL_ENV === "development";
 
-/** Whether a request with no credentials is turned away at `host`: what Vercel Authentication does to everyone outside the team. */
+/**
+ * Whether a request with no credentials is turned away at `host`: what Vercel Authentication does
+ * to everyone outside the team. It asks for a static file, never a page: a page runs this check,
+ * and one that asked for itself would ask again without end on a deployment anyone can open.
+ */
 export async function closed(host: string, request: typeof fetch = fetch): Promise<boolean> {
-  const status = await request(`https://${host}/`, { redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(10_000) }).then(
+  const status = await request(`https://${host}/icon.svg`, { redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(10_000) }).then(
     (response) => response.status,
     () => 0,
   );

@@ -36,12 +36,12 @@ export async function launch(campaign: Campaign, board: Board = team(), boxes: S
     const checkout = await boxes.prepare(slug, config, base, tell);
     const { tasks, left } = plan(checkout.discovered, config.batch, config.maxTasks);
     if (tasks.length === 0) throw new Error(`\`${config.discover}\` listed no files in ${config.repo}.`);
-    const made = await addTasks(board, slug, tasks);
+    const { owner, made } = await addTasks(board, slug, tasks);
     const files = tasks.reduce((sum, group) => sum + group.length, 0);
     await savePrepared(
       board,
       id,
-      { base: checkout.base, baseBranch: checkout.baseBranch, deadline: Date.now() + config.minutes * 60_000, files, tasks: made },
+      { base: checkout.base, baseBranch: checkout.baseBranch, owner, deadline: Date.now() + config.minutes * 60_000, files, tasks: made },
       `${made} ${made === 1 ? "task" : "tasks"} for ${files} ${files === 1 ? "file" : "files"}, from ${checkout.baseBranch}@${checkout.base.slice(0, 7)}.${left ? ` ${left} more files didn't fit in ${config.maxTasks} tasks, and were left out.` : ""}`,
     );
     // Someone may have stopped it while it was preparing: then it stays stopped.
@@ -68,6 +68,7 @@ async function runnerConfig(campaign: Campaign, n: number): Promise<RunnerConfig
     title: config.title,
     channel: tasksChannel(slug),
     worker: workerName(n),
+    owner: prepared!.owner,
     repo: "/vercel/sandbox/repo",
     base: prepared!.base,
     instructions: config.instructions,
@@ -107,7 +108,7 @@ async function turn(board: Board, id: string, last: string | undefined, force: b
 /** Why a running campaign is over, or null while it isn't. */
 function ending(now: Snapshot): { phase: "done" | "stopped"; why: string } | null {
   const { campaign, counts, cost } = now;
-  const open = counts.ready + counts.claimed;
+  const open = counts.waiting + counts.ready + counts.claimed;
   if (open === 0 && counts.blocked === 0) return { phase: "done", why: `Done: ${counts.completed} completed, ${counts.failed + counts.canceled} given up on, for $${cost.toFixed(2)}.` };
   if (cost >= campaign.config.budgetUsd) return { phase: "stopped", why: `Stopped at its budget: $${cost.toFixed(2)} of $${campaign.config.budgetUsd}.` };
   if (campaign.prepared && Date.now() >= campaign.prepared.deadline) return { phase: "stopped", why: `Stopped at its time limit of ${campaign.config.minutes} minutes.` };
@@ -154,7 +155,7 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
   const extra = up.filter(({ n }) => n > campaign.agents).map(({ name }) => name);
   if (extra.length) await boxes.stop(extra);
   const kept = up.filter(({ n }) => n <= campaign.agents);
-  await boxes.refresh(kept);
+  await boxes.refresh(kept, { slug, repo: githubRepo(campaign.config.repo), push: campaign.config.delivery !== "patch" });
   const taken = new Set(kept.map(({ n }) => n));
   const missing: number[] = [];
   for (let n = 1; n <= campaign.agents && taken.size + missing.length < want; n++) if (!taken.has(n)) missing.push(n);

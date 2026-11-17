@@ -3,16 +3,10 @@
 // campaign's verify command, have a second model read the diff, deliver it, and settle the task.
 // A model only ever decides what to change in a file.
 //
-// A task's state is its thread's labels, and every step here is a compare-and-set on them
-// (`vb label --if`), the same steps lib/queue.ts takes from the app: a claim lands only on a ready
-// task, and everything after it lands only while the claim's token is still this agent's.
-//
-// The board is reached through `vb`, with nothing to authenticate with: the sandbox's network
-// policy adds the credential and this agent's profile on the way out, and the same for AI Gateway
-// and GitHub.
+// A task is the board's: `vb tasks claim` holds one for a lease the board fences, so two agents
+// never hold one task, and one that stalls past its lease can't settle a task another has taken.
 
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -31,15 +25,17 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { blocked, costOf, LABEL, LEASE_MS, note, SANDBOX, taskFiles, verdict, type RunnerConfig } from "./shared.ts";
+import { blocked, brief, costOf, LABEL, quoted, SANDBOX, taskFiles, verdict, type RunnerConfig } from "./shared.ts";
 
 const config = JSON.parse(await readFile(process.env.RUNNER_CONFIG ?? SANDBOX.config, "utf8")) as RunnerConfig;
 const HOME = join(SANDBOX.dir, "home");
 const VB = join(SANDBOX.dir, "node_modules", ".bin", "vb");
 const exec = promisify(execFile);
 
+/** How long a claim holds without a renewal. Vercel's board gives five minutes at most. */
+const LEASE = "5m";
 /** A claim is renewed this often: several times within its lease, so one failed renewal doesn't lose the task. */
-const RENEW_MS = 2 * 60_000;
+const RENEW_MS = 80_000;
 /** A verify command that runs longer than this has hung. */
 const VERIFY_MS = 10 * 60_000;
 /** One agent turn: long enough for a real change, short enough that a stuck one ends. */
@@ -72,7 +68,11 @@ async function vb<T = unknown>(...args: string[]): Promise<T> {
 
 type Message = { id: string; text: string; labels: Record<string, string>; by?: { actor?: string }; author?: { handle?: string; kind?: string } };
 
-const reply = (id: string, text: string, attach: string[] = []) => vb(...["reply", id, text.slice(0, 9_000), ...attach.flatMap((file) => ["--attach", file])]).catch((error) => log({ type: "error", message: message(error) }));
+/** A reply in a task's thread, with files. It throws when the board refuses it: a patch that didn't reach the board wasn't delivered. */
+const post = (id: string, text: string, attach: string[] = []) => vb(...["reply", id, text.slice(0, 9_000), ...attach.flatMap((file) => ["--attach", file])]);
+
+/** A note in a task's thread that the task doesn't depend on: one that fails is logged, and the work goes on. */
+const reply = (id: string, text: string) => post(id, text).catch((error) => log({ type: "error", message: message(error) }));
 
 /** The campaign's phase, from its thread's root. Agents work only while it says `running`. */
 const phase = async () => (await vb<{ message: Message }>("read", config.campaign)).message.labels.phase;
@@ -222,7 +222,7 @@ Answer with a first line that is exactly APPROVE or CHANGES. After CHANGES, say 
 
 /** The campaign's verify command for a task's files. */
 function command(files: string[]) {
-  return config.verify.replaceAll("{files}", files.join(" "));
+  return config.verify.replaceAll("{files}", files.map(quoted).join(" "));
 }
 
 /** Runs the verify command. Null when it passed, or the end of what it printed. */
@@ -307,7 +307,7 @@ async function work(task: Message, stop: AbortSignal, spend: Spend): Promise<Out
     // Staged, so new files count, and listed by name: what the change touched since the campaign's base.
     await git("add", "-A");
     const changed = (await git("diff", "--cached", "--name-only", config.base)).split("\n").filter(Boolean);
-    if (changed.length === 0) return { state: "completed", result: `No change needed. ${summary}`.slice(0, 900) };
+    if (changed.length === 0) return { state: "completed", result: brief(`No change needed. ${summary}`) };
 
     // What sends the agent back: a failed verify first, since a reviewer shouldn't read a change that doesn't run.
     let back: string | null = null;
@@ -329,83 +329,18 @@ async function work(task: Message, stop: AbortSignal, spend: Spend): Promise<Out
       const outside = changed.filter((file) => !files.includes(file));
       const delivered = await deliver(task, title, summary);
       const also = outside.length ? `\n\nAlso changed, outside the task's files: ${outside.join(", ")}` : "";
-      await reply(task.id, `${summary}\n\n${delivered.line}${also}`, delivered.attach);
-      return { state: "completed", result: `${delivered.line} ${summary}`.slice(0, 900) };
+      await post(task.id, `${summary}\n\n${delivered.line}${also}`, delivered.attach);
+      return { state: "completed", result: brief(`${delivered.line} ${summary}`) };
     }
     if (round >= config.rounds) return { state: "blocked", reason: `Still not right after ${round + 1} ${round ? "tries" : "try"}. The thread has what failed.`, kind: "needs_input" };
     summary = await worker.ask(back, stop);
   }
 }
 
-// ─── the queue ──────────────────────────────────────────────────────────────
-
-type Held = { task: Message; token: string };
-
-const lease = () => new Date(Date.now() + LEASE_MS).toISOString();
-const conflict = (error: unknown) => (error as Failure).reason === "label_conflict";
-
-/** Claims a task: a ready one, or with `stalled`, one whose claim ran out and is still that claim. Null: another agent was first. */
-async function claim(task: Message, stalled?: string): Promise<Held | null> {
-  const token = randomUUID();
-  try {
-    await vb(
-      "label",
-      task.id,
-      `${LABEL.state}=claimed`,
-      `${LABEL.owner}=${config.worker}`,
-      `${LABEL.claim}=${token}`,
-      `${LABEL.lease}=${lease()}`,
-      "--unset",
-      LABEL.note,
-      "--unset",
-      LABEL.kind,
-      "--if",
-      stalled ? `${LABEL.claim}=${stalled}` : `${LABEL.state}=ready`,
-    );
-    return { task, token };
-  } catch (error) {
-    if (conflict(error)) return null;
-    throw error;
-  }
-}
-
-const listed = async (state: string, limit: number) => (await vb<{ threads: { message: Message }[] }>("read", config.channel, "--label", `${LABEL.state}=${state}`, "--limit", String(limit))).threads;
-
-/** The oldest task this agent can take: a ready one first, then one another agent stalled on. Null when there's none right now. */
-async function claimNext(): Promise<Held | null> {
-  for (const { message } of await listed("ready", 20)) {
-    const held = await claim(message);
-    if (held) return held;
-  }
-  const now = new Date().toISOString();
-  for (const { message } of await listed("claimed", 50)) {
-    const [until, token] = [message.labels[LABEL.lease], message.labels[LABEL.claim]];
-    if (!until || !token || until > now) continue;
-    const held = await claim(message, token);
-    if (held) return held;
-  }
-  return null;
-}
-
-/** Ends this agent's claim with the task's new state, and what the task cost. False: the claim was lost, and the state stays as someone else left it. */
-async function settle(held: Held, outcome: Outcome, spend: Spend): Promise<boolean> {
-  const spent = [`${LABEL.cost}=${spend.cost.toFixed(4)}`, `${LABEL.tokens}=${spend.tokens}`];
-  const end =
-    outcome.state === "completed"
-      ? [`${LABEL.state}=completed`, `${LABEL.note}=${note(outcome.result)}`, "--unset", LABEL.kind]
-      : [`${LABEL.state}=blocked`, `${LABEL.note}=${note(outcome.reason)}`, `${LABEL.kind}=${outcome.kind}`];
-  try {
-    await vb("label", held.task.id, ...end, ...spent, "--unset", LABEL.claim, "--unset", LABEL.lease, "--if", `${LABEL.claim}=${held.token}`);
-    return true;
-  } catch (error) {
-    if (!conflict(error)) throw error;
-    // The task is someone else's now, but the money was spent: it still counts toward the campaign's budget.
-    await vb("label", held.task.id, ...spent).catch(() => {});
-    return false;
-  }
-}
-
 // ─── the loop ───────────────────────────────────────────────────────────────
+
+/** Whether a failed `vb tasks` write says the claim is over: its lease ran out, or the task was released, held, or canceled. */
+const claimOver = (error: unknown) => ["claim_lost", "claim_not_held", "task_finished"].includes((error as Failure).reason ?? "");
 
 await writeFile(SANDBOX.pid, String(process.pid));
 log({ type: "up", model: config.model, review: config.reviewModel });
@@ -413,49 +348,52 @@ let errors = 0;
 let idle = 0;
 while (Date.now() < config.deadline) {
   if ((await phase().catch(() => "running")) !== "running") break;
-  let held: Held | null = null;
+  let task: Message;
   try {
-    held = await claimNext();
+    // The oldest ready task of the campaign's, or none within the wait. The owner is named: a claim takes another owner's tasks only then.
+    ({ task } = await vb<{ task: Message }>("tasks", "claim", "--ready", config.channel, "--from", config.owner, "--wait", "45s", "--lease", LEASE));
   } catch (error) {
+    const reason = (error as Failure).reason;
+    if (reason === "timeout" || reason === "nothing_ready") {
+      // Nothing to claim for a few minutes: the queue is done, or what's left waits for a person. The app starts agents again when there's work.
+      if (++idle >= 4) break;
+      continue;
+    }
     log({ type: "error", message: message(error) });
     if (++errors >= 5) break;
     await new Promise((resolve) => setTimeout(resolve, 5_000));
     continue;
   }
-  if (!held) {
-    // Nothing to claim for a few minutes: the queue is done, or what's left waits for a person. The app starts agents again when there's work.
-    if (++idle >= 4) break;
-    await vb("wait", config.channel, "--label", `${LABEL.state}=ready`, "--timeout", "45s").catch(() => {});
-    continue;
-  }
   idle = 0;
-  const { task, token } = held;
   log({ type: "claimed", task: task.id, title: task.text.split("\n", 1)[0] });
 
   // The claim is renewed while the agent works. Once it's lost, someone else holds the task: stop, and settle nothing.
   const lost = new AbortController();
   const renewing = setInterval(() => {
-    vb("label", task.id, `${LABEL.lease}=${lease()}`, "--if", `${LABEL.claim}=${token}`).catch((error: unknown) => {
-      if (conflict(error)) lost.abort();
+    vb("tasks", "renew", task.id, "--lease", LEASE).catch((error: unknown) => {
+      if (claimOver(error)) lost.abort();
     });
   }, RENEW_MS);
-  const spend: Spend = { tokens: 0, cost: 0 };
+  // What the task cost before this try counts too: a task that was held and tried again has spent both.
+  const spend: Spend = { tokens: Number(task.labels[LABEL.tokens]) || 0, cost: Number(task.labels[LABEL.cost]) || 0 };
   let outcome: Outcome;
   try {
     outcome = await work(task, lost.signal, spend);
     errors = 0;
   } catch (error) {
-    outcome = { state: "blocked", reason: message(error).slice(0, 800), kind: "error" };
+    outcome = { state: "blocked", reason: brief(message(error)), kind: "error" };
     errors++;
   } finally {
     clearInterval(renewing);
   }
+  // What it cost goes on the task whatever became of it: the campaign's spend is the sum of these.
+  await vb("label", task.id, `${LABEL.cost}=${spend.cost.toFixed(4)}`, `${LABEL.tokens}=${spend.tokens}`).catch((error) => log({ type: "error", message: message(error) }));
   try {
-    if (outcome.state === "blocked") await reply(task.id, `Held for a person: ${outcome.reason}`);
-    const settled = await settle(held, outcome, spend);
-    log({ type: settled ? outcome.state : "lost", task: task.id, cost: spend.cost });
+    if (outcome.state === "completed") await vb("tasks", "complete", task.id, outcome.result);
+    else await vb("tasks", "block", task.id, brief(outcome.reason), "--kind", outcome.kind);
+    log({ type: outcome.state, task: task.id, cost: spend.cost });
   } catch (error) {
-    log({ type: "error", message: message(error) });
+    log({ type: claimOver(error) ? "lost" : "error", task: task.id, message: message(error) });
   }
   // A model or a sandbox that keeps failing would hold every task it touches: this agent stops instead.
   if (errors >= 3) break;

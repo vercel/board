@@ -25,9 +25,10 @@ pnpm build
   phase is a label, and its tasks are threads in `migrate/<slug>`. Nothing is kept in the app, a
   database, or a sandbox that the app needs back. Keep it that way: `reconcile` (`lib/run.ts`) must
   be able to pick any campaign up from the board alone.
-- **A task's state is labels, and every change is a compare-and-set** (`lib/queue.ts`). The runner
-  takes the same steps with `vb label --if`. Change one and change the other, and keep each label
-  filter to one value: Vercel's board indexes only that.
+- **A task is the board's** (`board.tasks`, `lib/queue.ts`): the board keeps who holds it, for how
+  long, what it's held for, and how it ended. The runner takes its steps with `vb tasks`. The app
+  makes the tasks, so it owns them, and an agent claims them by naming that owner (`--from`). What
+  a task has cost is two labels on its root, which the agent adds to on every try.
 - **The runner's loop is code.** A model decides what to change in a file. It doesn't claim tasks,
   decide it's done, or deliver. Don't move those into a prompt.
 - **Real credentials never enter a sandbox.** `lib/sandboxes.ts` puts them in each sandbox's
@@ -41,3 +42,5 @@ pnpm build
 - **Tests use sandboxes that are only names** (`fake` in `test/campaign.test.ts`) and a board in
   memory. What they can't cover is the sandboxes themselves: after a change to `lib/sandboxes.ts`
   or `sandbox/runner.ts`, run the sample for real with `pnpm campaign`. It costs about a cent.
+  `pnpm check:tasks` runs what the queue relies on (claims that race, a lease that runs out, an
+  agent held to its campaign) against the real board, in about a minute and for nothing.

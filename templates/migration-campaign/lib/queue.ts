@@ -1,116 +1,59 @@
-import { randomUUID } from "node:crypto";
-import { BoardError, type Board, type ThreadSummaryView } from "@vercel/board";
-import { LABEL, LEASE_MS, note, type State } from "../sandbox/shared.ts";
+import { BoardError, createTasksInChunks, type Board, type ClaimedTask, type ThreadSummaryView } from "@vercel/board";
 
-// A campaign's work queue: a thread's root is a task, its replies are the work log, and the root's
-// labels hold the state. Every claim, and every write after it, is a compare-and-set on those
-// labels, so two agents never hold one task. The agents in the sandboxes take the same steps with
-// `vb label --if` (sandbox/runner.ts); this is the app's side, and what the tests and the demo use.
+// A campaign's work queue, on the board's own tasks. A task is a thread whose state the board
+// keeps: who may work it, who holds it and until when, what it's held for, and how it ended. A
+// claim is a lease the board fences, so two agents never hold one task, and an agent that stalls
+// past its lease can't settle a task another has taken.
 //
-// It's the one place that knows a task is labels. A board whose `tasks` are available where you run
-// could keep the state itself: swap this file and the runner's claim, and nothing else changes.
+// The agents in the sandboxes take the same steps with `vb tasks` (sandbox/runner.ts). This is the
+// app's side: making a campaign's tasks, reading them, and what a person does to one from the page.
 
-const lease = () => new Date(Date.now() + LEASE_MS).toISOString();
-
-/** True when the board refused the write because a label wasn't what `if` said. */
-const lost = (error: unknown) => error instanceof BoardError && error.code === "label_conflict";
-
-/** Runs a compare-and-set. False when it lost: someone changed the task first, and nothing was written. */
-async function cas(write: Promise<unknown>): Promise<boolean> {
-  try {
-    await write;
-    return true;
-  } catch (error) {
-    if (lost(error)) return false;
-    throw error;
-  }
-}
-
-/** How many tasks are posted at once: enough to be quick, few enough that the board doesn't throttle a launch. */
-const POSTING = 6;
+/** How long a claim holds without a renewal, in seconds. Vercel's board gives five minutes at most. */
+export const LEASE_S = 300;
 
 /**
- * Posts the campaign's tasks, ready, in the order given. Each has a key of its own, so a launch
- * that's tried again posts none twice.
+ * Makes the campaign's tasks, ready, in as many writes as the board needs. The same `key` again
+ * makes none and answers the ones that are there. `owner` is whoever made them, by ID: an agent
+ * claims another owner's tasks only when it names them.
  */
-export async function createTasks(board: Board, channel: string, key: string, texts: string[]): Promise<number> {
-  for (let at = 0; at < texts.length; at += POSTING) {
-    await Promise.all(texts.slice(at, at + POSTING).map((text, offset) => board.post(channel, { text, labels: { [LABEL.state]: "ready" }, id: `${key}-${at + offset}` })));
-  }
-  return texts.length;
-}
-
-export type Claim = { id: string; token: string };
-
-/** Claims a task for `owner`: a ready one, or with `stalled`, a claimed one whose token is still the stalled claim's. Null: someone was first. */
-export async function claim(board: Board, id: string, owner: string, stalled?: string): Promise<Claim | null> {
-  const token = randomUUID();
-  const won = await cas(
-    board.label(id, {
-      set: { [LABEL.state]: "claimed", [LABEL.owner]: owner, [LABEL.claim]: token, [LABEL.lease]: lease() },
-      unset: [LABEL.note, LABEL.kind],
-      if: stalled ? { [LABEL.claim]: stalled } : { [LABEL.state]: "ready" },
-    }),
+export async function createTasks(board: Board, channel: string, key: string, texts: string[]): Promise<{ owner: string; made: number }> {
+  const made = await createTasksInChunks(
+    board,
+    channel,
+    texts.map((text) => ({ text })),
+    { id: key },
   );
-  return won ? { id, token } : null;
+  return { owner: made[0]!.task!.owner, made: made.length };
 }
 
-/**
- * Claims the oldest task `owner` can take in a channel: a ready one first, then one whose claim
- * ran out. Null when there's nothing to take right now.
- */
-export async function claimNext(board: Board, channel: string, owner: string): Promise<(Claim & { text: string }) | null> {
-  const ready = await board.threads({ channel, label: { [LABEL.state]: "ready" }, limit: 20 });
-  // The board lists by latest activity, newest last: the oldest first is the order a queue works in.
-  for (const { message } of ready.threads) {
-    const held = await claim(board, message.id, owner);
-    if (held) return { ...held, text: message.text };
-  }
-  const claimed = await board.threads({ channel, label: { [LABEL.state]: "claimed" }, limit: 50 });
-  const now = new Date().toISOString();
-  for (const { message } of claimed.threads) {
-    const stale = message.labels[LABEL.lease];
-    const token = message.labels[LABEL.claim];
-    if (!token || !stale || stale > now) continue;
-    const held = await claim(board, message.id, owner, token);
-    if (held) return { ...held, text: message.text };
-  }
-  return null;
+/** Claims the oldest ready task in a channel, as an agent would: `owner` names whose tasks it takes. Null when nothing is ready. */
+export const claimNext = (board: Board, channel: string, owner: string): Promise<ClaimedTask | null> => board.tasks.claim({ channel, from: [owner], lease: LEASE_S });
+
+/** Lifts a hold: the task is ready again. False when it wasn't held. */
+export async function unblock(board: Board, id: string): Promise<boolean> {
+  const held = (await board.thread(id)).message.task?.state === "blocked";
+  if (held) await board.tasks.unblock(id);
+  return held;
 }
 
-/** Extends the lease. False: the claim is someone else's now, so stop working on the task. */
-export const renew = (board: Board, held: Claim) => cas(board.label(held.id, { set: { [LABEL.lease]: lease() }, if: { [LABEL.claim]: held.token } }));
+/** Calls a task off: an agent that holds it loses its claim, and settles nothing. */
+export const cancel = (board: Board, id: string, why: string) => board.tasks.cancel(id, why.slice(0, 900)).then(() => undefined);
 
-/** Ends a claim as `completed`, with how it went in a line. False: the claim was lost, and nothing changed. */
-export const complete = (board: Board, held: Claim, result: string) =>
-  cas(board.label(held.id, { set: { [LABEL.state]: "completed", [LABEL.note]: note(result) }, unset: [LABEL.claim, LABEL.lease, LABEL.kind], if: { [LABEL.claim]: held.token } }));
+const PAGE = 200;
 
-/** Ends a claim by holding the task for a person, with why. False: the claim was lost. */
-export const block = (board: Board, held: Claim, reason: string, kind = "needs_input") =>
-  cas(board.label(held.id, { set: { [LABEL.state]: "blocked", [LABEL.note]: note(reason), [LABEL.kind]: kind }, unset: [LABEL.claim, LABEL.lease], if: { [LABEL.claim]: held.token } }));
-
-/** Lifts a hold: the task is ready again. It holds no claim, so it fences on the state. False: it wasn't held. */
-export const unblock = (board: Board, id: string) =>
-  cas(board.label(id, { set: { [LABEL.state]: "ready" }, unset: [LABEL.owner, LABEL.note, LABEL.kind], if: { [LABEL.state]: "blocked" } }));
-
-/** Calls a task off, whatever state it's in: an agent that holds it loses its claim, and settles nothing. */
-export const cancel = (board: Board, id: string, why: string) => board.label(id, { set: { [LABEL.state]: "canceled", [LABEL.note]: note(why) }, unset: [LABEL.claim, LABEL.lease, LABEL.kind] });
-
-const PAGE = 500;
-
-/** Every task of a channel in one state, a page at a time, up to `max`. */
-export async function inState(board: Board, channel: string, state: State, max: number): Promise<ThreadSummaryView[]> {
+/** Every task of a channel, oldest first, a page at a time, up to `max`. */
+export async function allTasks(board: Board, channel: string, max: number): Promise<ThreadSummaryView[]> {
   const found: ThreadSummaryView[] = [];
-  let before: string | undefined;
+  let after: string | undefined;
   while (found.length < max) {
     // Before its first task, a campaign's channel isn't there: Vercel's board answers 404 for it, and a local one an empty list.
-    const page = await board.threads({ channel, label: { [LABEL.state]: state }, limit: PAGE, ...(before ? { before } : {}) }).catch((error: unknown) => {
-      if (error instanceof BoardError && error.status === 404) return { threads: [], older: null };
+    const page = await board.tasks.list({ channel, state: "all", limit: PAGE, ...(after ? { after } : {}) }).catch((error: unknown) => {
+      if (error instanceof BoardError && error.status === 404) return { tasks: [], cursor: "" };
       throw error;
     });
-    found.push(...page.threads);
-    if (!page.older || page.threads.length === 0) break;
-    before = page.older;
+    found.push(...page.tasks);
+    if (page.tasks.length < PAGE || !page.cursor || page.cursor === after) break;
+    after = page.cursor;
   }
   return found;
 }
