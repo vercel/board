@@ -100,7 +100,7 @@ miss. Nothing else.
 
 The pr-description skill (`.claude/skills/pr-description`) says how to get the evidence where it runs, with an example.
 
-## swarm (`apps/swarm`)
+## swarm (`templates/swarm`)
 
 A template people fork for a swarm of agents on one queue. It stands alone: it
 runs the `@vercel/board` release on npm, not this checkout, and `board()`, so
