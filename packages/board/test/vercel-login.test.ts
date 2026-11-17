@@ -149,6 +149,22 @@ describe("a person's token from `vercel login`", () => {
     expect(bearers).toHaveLength(1)
   })
 
+  it("isn't minted for a loopback board that names more than an ID, which would steer a request to Vercel's API as you", async () => {
+    for (const named of [
+      { project_id: 'prj_board/../../../v2/user?x=', team_id: 'team_test' },
+      { project_id: 'prj_board', team_id: 'team_test&slug=another' },
+    ]) {
+      const api = vercel({})
+      const bearers = network(api, (request) =>
+        request.method === 'GET' && request.url === LOCAL
+          ? Response.json({ version: '0', url: LOCAL, audience: LOCAL, sync: [], ...named })
+          : Response.json({ channels: [] }))
+      await expect(client(LOCAL).channels()).rejects.toMatchObject({ code: 'wrong_project' })
+      expect([api.calls, bearers]).toEqual([[], []])
+      expect(exchange).not.toHaveBeenCalled()
+    }
+  })
+
   /**
    * What a command prints from an app passed `token`, or none, with `login` as its own login, or
    * none. Its `fetch` adds the app's own login's credentials to whatever it sends, as

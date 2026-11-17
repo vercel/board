@@ -56,6 +56,8 @@ export function vercelProjectFile(cwd = process.cwd()): string | null {
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
 const PROJECT_ID = /^prj_[A-Za-z0-9]{1,64}$/
+/** A team's ID, or a personal account's, which owns a project too. */
+const OWNER_ID = /^(?:team_)?[A-Za-z0-9]{1,64}$/
 // An origin and a plain path, nothing a shell reads as anything else: `$(…)` and `;` can't be in one.
 const URL_SHAPE = /^https?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~%/-]{0,2000})?$/
 
@@ -269,7 +271,15 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
  */
 async function boardProject(url: string, discovery: Discovery, authToken: string | null): Promise<{ id: string; team: string | null }> {
   const { host, hostname } = new URL(url)
-  if (LOOPBACK.has(hostname)) return { id: discovery.project_id!, team: discovery.team_id }
+  if (LOOPBACK.has(hostname)) {
+    // A board on this machine names its own project: Vercel has no host to check it against. What it
+    // names goes into a request to Vercel's API as you, so it's taken only when it's an ID and nothing more.
+    const id = shown(discovery.project_id, PROJECT_ID)
+    const team = discovery.team_id == null ? null : shown(discovery.team_id, OWNER_ID)
+    if (!id || team === undefined)
+      throw new BoardError('wrong_project', `The board at ${url} names a project or team that isn't a Vercel ID, so no token is minted for it.`, 0)
+    return { id, team }
+  }
   const api: VercelApi = authToken
     ? async (method, path) => {
         const response = await asYou(`https://api.vercel.com${path}`, { method }, authToken)

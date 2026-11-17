@@ -2,6 +2,7 @@ import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTPayload, type JWTVeri
 import {
   GITHUB_ISSUER,
   issuerName,
+  subName,
   markVerified,
   privateHost,
   TOKENS,
@@ -125,7 +126,7 @@ function createVerifier(options: {
 
     if (isOidc) {
       if (typeof claims.sub !== 'string' || claims.sub === '') throw unauthorized(`token from ${iss} without sub`)
-      return { id: `oidc:${issuerName(iss)}:${claims.sub}`, kind: 'workflow', handle: claims.sub.slice(0, 128), expiresAt, facts }
+      return { id: `oidc:${issuerName(iss)}:${subName(claims.sub)}`, kind: 'workflow', handle: claims.sub.slice(0, 128), expiresAt, facts }
     }
     if (isGitHub)
       return { id: `github:repo:${String(claims.repository_id)}`, kind: 'workflow', handle: String(claims.repository), expiresAt, facts }

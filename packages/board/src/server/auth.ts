@@ -112,6 +112,13 @@ export const issuerName = (iss: string) => {
   return `${url.host}${url.pathname.replace(/\/+$/, '')}`.replace(/[%:]/g, (char) => (char === '%' ? '%25' : '%3A'))
 }
 
+/**
+ * A token's `sub` as a principal names it. A `+` starts a profile in an actor's ID (`<principal>+claude`)
+ * and a `]` or a space ends a mention of one (`@[actor-id]`), so they're percent-encoded, and `%`
+ * with them: `build+pi` is one workflow, never `build`'s profile `pi`.
+ */
+export const subName = (sub: string) => sub.replace(/[%+\]\s]/g, (char) => encodeURIComponent(char))
+
 /** OIDC issuers to trust, checked: two that name the same principals can't both be. */
 export function trustedIssuers(issuers: readonly string[]): Set<string> {
   const named = new Map<string, string>()

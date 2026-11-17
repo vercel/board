@@ -122,7 +122,7 @@ A **principal** is who holds the credential. It's a readable string:
 | `tailscale:user:ada@example.com` | a person on a `vb serve` board [behind Tailscale](../03-guides/08-tailnet.md), by their login |
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
-| `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
+| `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub`, with a `+`, `]`, `%`, or space in it percent-encoded |
 | `slack:user:U0456`, `github:user:583231` | a platform user the board's own [sync](../02-sync/01-overview.md) checked, under the sync key they came through |
 | `board:watch:triage`, `board:client`, `board:client:deploys` | a [local board](./10-local.md)'s own [watchers](./06-watchers.md) and [handle](./01-mounting.md#the-handle), with `as()`'s profile |
 
