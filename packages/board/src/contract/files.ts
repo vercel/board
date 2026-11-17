@@ -47,10 +47,25 @@ export function typeOf(name: string): string {
   return (dot > 0 && TYPES[name.slice(dot).toLowerCase()]) || 'application/octet-stream'
 }
 
-/** `shot.png`, as the board stores a name: no paths, no control or invisible formatting characters, and no leading dot, so a download can't land as a dotfile or show a disguised extension. */
+/** `shot.png`, as the board stores a name: no paths, no control characters. */
 export function fileName(name: string | null): string {
-  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '').trim().replace(/^[.\s]+/, '')
+  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
   return base.slice(0, 255) || 'file'
+}
+
+/** Characters a name can't hold: invisible formatting (bidi overrides, zero-width), and line and paragraph separators. */
+const INVISIBLE = /[\p{Cf}\u2028\u2029]/u
+
+/** Why a stored name can't be `name`, which `fileName` gave: a dotfile, or one that shows other than it reads. */
+export function fileNameProblem(name: string): string | undefined {
+  if (name.startsWith('.')) return `attachment names can't start with a dot: ${JSON.stringify(name)}`
+  if (INVISIBLE.test(name)) return `attachment names can't hold invisible formatting characters: ${JSON.stringify(name)}`
+  return undefined
+}
+
+/** A platform's file name as sync brings it over: without a leading dot or invisible characters, which no one is there to rename. */
+export function importedFileName(name: string): string {
+  return fileName(name.replace(new RegExp(INVISIBLE.source, 'gu'), '').replace(/^[.\s]+/, ''))
 }
 
 /** `image/png`, or `application/octet-stream` when the type isn't one. */

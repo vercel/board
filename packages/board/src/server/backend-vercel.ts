@@ -10,7 +10,8 @@ import { actorParts, importedHandle, platformProfile, underPrincipal, type Via }
 import { VERSION } from '../version.ts'
 import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
-import { fileName, mediaType } from '../contract/files.ts'
+import { mediaType } from '../contract/files.ts'
+import { uploadName } from './file-names.ts'
 import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
@@ -2994,7 +2995,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const bytes = new Uint8Array(data)
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
       const started = await api<{ attachment: ApiAttachment; upload: { url: string; method: 'PUT'; headers: Record<string, string> } }>(who, 'POST', await onBoard(who, '/attachments'), {
-        body: { operationId: operationId(), name: fileName(name), type: mediaType(type), size: data.byteLength, sha256: btoa(String.fromCharCode(...digest)) },
+        body: { operationId: operationId(), name: uploadName(name), type: mediaType(type), size: data.byteLength, sha256: btoa(String.fromCharCode(...digest)) },
       })
       // A presigned URL: plain fetch, so this deployment's credentials never reach the bucket.
       const put = await filesFetch(started.upload.url, { method: started.upload.method, headers: started.upload.headers, body: bytes, redirect: 'error' })
@@ -3007,7 +3008,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       if (sha256 === undefined) throw new HttpError(400, 'invalid_request', "Vercel's API signs a direct upload for its bytes' SHA-256: send `sha256`, as board's client does")
       const started = await api<{ attachment: ApiAttachment; upload: { url: string; headers: Record<string, string>; expiresAt: number } }>(who, 'POST', await onBoard(who, '/attachments'), {
-        body: { operationId: operationId(), name: fileName(name ?? null), type: mediaType(type ?? null), size, sha256 },
+        body: { operationId: operationId(), name: uploadName(name ?? null), type: mediaType(type ?? null), size, sha256 },
       })
       return { id: started.attachment.id, url: started.upload.url, headers: started.upload.headers, expiresAt: iso(started.upload.expiresAt) }
     },

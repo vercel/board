@@ -160,6 +160,7 @@ describe('vercel()', () => {
       'schemas: carries a block in a message, checked against the schema its fence names': 'passed',
       'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
+      'attachments: refuses a name that would download as a dotfile': 'passed',
       'attachments: starts a task with a file, which its root carries': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',

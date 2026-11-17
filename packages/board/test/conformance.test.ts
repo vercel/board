@@ -536,6 +536,7 @@ describe('the conformance kit', () => {
       ['grants', 'skipped', CROSS_TEAM[1]],
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
+      ['attachments', 'skipped', 'not kept here: this board keeps no files'],
     ])
   })
 
