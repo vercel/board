@@ -72,7 +72,7 @@ function tools(snap: () => Snapshot, show: (task: string) => void): Tool[] {
         type: "object",
         properties: {
           state: { type: "string", enum: [...STATES] },
-          channel: { type: "string", description: "A channel, or a run's slug: rmwmfu4z3 or swarm/rmwmfu4z3." },
+          channel: { type: "string", description: "A channel, or a run's slug: r1a2b3c or swarm/r1a2b3c." },
           holder: { type: "string", description: "An agent's name, like agent-3." },
           limit: { type: "integer", minimum: 1, maximum: 200, description: "Default 50." },
         },
