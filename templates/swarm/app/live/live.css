@@ -126,14 +126,6 @@
     color: var(--bad);
   }
 
-  .join {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .join button,
   .head button {
     padding: 0.25rem 0.75rem;
     border: 1px solid var(--line);
@@ -142,7 +134,6 @@
     color: var(--ink);
   }
 
-  .join button:hover,
   .head button:hover {
     border-color: var(--faint);
   }

@@ -52,7 +52,6 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
   const [live, setLive] = useState<"live" | "reconnecting" | { problem: string }>("live");
   const [channel, setChannel] = useState(firstChannel);
   const [open, setOpen] = useState(firstTask);
-  const [copied, setCopied] = useState(false);
   // The server's clock until the page is mounted, so the first render matches the server's.
   const [now, setNow] = useState(() => Date.parse(first.at));
 
@@ -136,18 +135,6 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
   const count = (key: Shown) => tasks.filter((task) => shown(task, now) === key).length;
   const selected = open ? snap.tasks.find((task) => task.id === open) ?? null : null;
 
-  async function copy() {
-    try {
-      const text = await (await fetch("/join.md")).text();
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2_000);
-    } catch {
-      // No clipboard here (an insecure origin, or a browser that refused): open the file to copy by hand.
-      window.open("/join.md", "_blank", "noopener");
-    }
-  }
-
   return (
     <div className="shell">
       <WebMcp snap={snap} show={setOpen} />
@@ -169,12 +156,6 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
               <b className="bad">{count("stalled")}</b> stalled
             </>
           )}
-        </span>
-        <span className="join">
-          <a href="/join.md">JOIN.md</a>
-          <button type="button" onClick={copy}>
-            {copied ? "Copied" : "Copy the join prompt"}
-          </button>
         </span>
       </header>
 
