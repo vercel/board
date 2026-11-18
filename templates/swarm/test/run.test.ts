@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
-import { LABEL, planReply, type RunnerConfig, type State } from "../sandbox/shared.ts";
+import { doing, LABEL, planReply, type RunnerConfig, type State } from "../sandbox/shared.ts";
 import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
 import { begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
@@ -370,4 +370,13 @@ test("the board check reads the board's own access rules", () => {
   assert.ok(canRun({ principal: "p", can: { "swarm/": ["read", "post", "label"] } }, "swarm/"));
   assert.ok(!canRun({ principal: "p", can: { "other/": ["read", "post", "label"] } }, "swarm/"));
   assert.ok(!canRun({ principal: "p", can: { "*": ["read"] } }, "swarm/"));
+});
+
+test("an agent's progress says what it's doing in words, from the tool it called", () => {
+  assert.equal(doing("bash", { command: "pnpm   test\n --run" }), "running `pnpm test --run`");
+  assert.equal(doing("read", { path: "lib/index.ts" }), "reading lib/index.ts");
+  assert.equal(doing("edit", { path: "lib/index.ts", oldText: "a", newText: "b" }), "editing lib/index.ts");
+  assert.equal(doing("grep", { pattern: "waitForDep" }), "searching for `waitForDep`");
+  assert.equal(doing("bash", { command: "x".repeat(500) })!.length, "running ``".length + 140);
+  assert.equal(doing("something_else", {}), null);
 });

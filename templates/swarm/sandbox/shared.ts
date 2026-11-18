@@ -50,7 +50,31 @@ export type RunnerConfig = {
   budgetUsd: number | null;
   /** Epoch ms after which no task is started. */
   deadline: number;
+  /** How often at most an agent posts what it's doing in its task's thread: longer in a big run, which shares the board's write limit. */
+  progressMs: number;
 };
+
+/** What an agent is doing, in a few words, from the tool it just called: what its task's thread shows as it works. */
+export function doing(tool: string, args: unknown): string | null {
+  const given = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+  const said = (key: string) => (typeof given[key] === "string" ? (given[key] as string).replace(/\s+/g, " ").trim().slice(0, 140) : "");
+  switch (tool) {
+    case "bash":
+      return said("command") ? `running \`${said("command")}\`` : "running a command";
+    case "read":
+      return `reading ${said("path") || "a file"}`;
+    case "edit":
+    case "write":
+      return `editing ${said("path") || "a file"}`;
+    case "grep":
+      return said("pattern") ? `searching for \`${said("pattern")}\`` : "searching the code";
+    case "find":
+    case "ls":
+      return `looking around ${said("path") || "the repo"}`;
+    default:
+      return null;
+  }
+}
 
 /** The labels on a task's root: its role, what it has cost so far across every try, and what it left behind. */
 export const LABEL = { role: "role", cost: "cost", tokens: "tokens", worker: "worker", pr: "pr", branch: "branch", expanded: "expanded" } as const;

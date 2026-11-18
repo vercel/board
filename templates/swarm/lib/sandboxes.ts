@@ -111,12 +111,20 @@ export async function baseSandbox(say: (text: string) => Promise<void> = async (
 /** What preparing a run's checkout found: the commit, its branch, and the repo's files. */
 export type Checkout = { base: string; baseBranch: string; files: string[]; setup: string | null };
 
-/** The install a repo's lockfile asks for, so the agents can run its tests: their sandboxes reach no registry. */
+/**
+ * The install a repo's lockfile asks for, so the agents can run its tests: their sandboxes reach no
+ * registry, and fork from this one, so pnpm or yarn is installed globally here, at the version the
+ * repo's `packageManager` pins or the latest. Not through corepack, whose signature check fails on
+ * releases newer than its keys.
+ */
 const INSTALL = `set -e
-if [ -f pnpm-lock.yaml ]; then corepack enable >/dev/null 2>&1 || npm i -g pnpm >/dev/null 2>&1; pnpm install --frozen-lockfile; echo pnpm
-elif [ -f yarn.lock ]; then corepack enable >/dev/null 2>&1 || true; yarn install --frozen-lockfile; echo yarn
+pinned() { node -p "const m = (require('./package.json').packageManager || '').split('+')[0]; m.startsWith('$1@') ? m : '$1@latest'" 2>/dev/null || echo "$1@latest"; }
+global() { sudo -n npm i -g --no-audit --no-fund --silent "$1" 2>/dev/null || npm i -g --no-audit --no-fund --silent "$1"; }
+export COREPACK_ENABLE_STRICT=0
+if [ -f pnpm-lock.yaml ]; then global "$(pinned pnpm)"; pnpm install --frozen-lockfile; echo pnpm
+elif [ -f yarn.lock ]; then global "$(pinned yarn)"; yarn install --frozen-lockfile; echo yarn
 elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; echo npm
-elif [ -f bun.lock ] || [ -f bun.lockb ]; then npx -y bun install --frozen-lockfile; echo bun
+elif [ -f bun.lock ] || [ -f bun.lockb ]; then global bun; bun install --frozen-lockfile; echo bun
 else echo none; fi`;
 
 /**

@@ -73,6 +73,8 @@ export async function runnerConfig(found: Run, n: number, listed = models()): Pr
     maxTasks: taskCap(config.agents),
     budgetUsd: config.budgetUsd,
     deadline: prepared!.deadline,
+    // A minute between progress notes, and more in a big run: 256 agents at one a minute would be most of the board's 300 writes a minute.
+    progressMs: Math.max(60_000, config.agents * 600),
   };
 }
 

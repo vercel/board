@@ -7,7 +7,7 @@ import { githubToken } from "@/lib/credentials";
 import { OPEN, open } from "@/lib/gate";
 import { models } from "@/lib/models";
 import { begin, launch, stop as stopRun } from "@/lib/run";
-import { SLUG } from "@/lib/runs";
+import { runs, SLUG } from "@/lib/runs";
 import { history } from "@/lib/swarm";
 
 // What the pages do, as this deployment. Every action reads or spends as the project, so each checks
@@ -68,4 +68,26 @@ export async function thread(id: string) {
   if (!/^[\w.:-]{1,128}$/.test(id)) throw new Error("not a message id");
   if (await open((await headers()).get("host"))) throw new Error(OPEN);
   return history(id);
+}
+
+/** The newest runs with their config, phase, spend and progress: what the live page's WebMCP tools answer about runs. Reads only. */
+export async function swarmRuns(limit = 20) {
+  if (await open((await headers()).get("host"))) throw new Error(OPEN);
+  return (await runs(undefined, Math.min(Math.max(1, Math.trunc(limit) || 20), 50))).map((run) => ({
+    slug: run.slug,
+    thread: run.id,
+    title: run.title,
+    phase: run.phase,
+    note: run.note,
+    repo: run.config.repo,
+    scenario: run.config.scenario,
+    model: run.config.model,
+    agents: run.config.agents,
+    budgetUsd: run.config.budgetUsd,
+    minutes: run.config.minutes,
+    spentUsd: run.cost,
+    settled: run.settled,
+    total: run.total,
+    createdAt: run.createdAt,
+  }));
 }

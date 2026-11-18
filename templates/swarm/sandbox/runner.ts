@@ -24,7 +24,7 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { blocked, brief, costOf, LABEL, OUTPUT, parsePlan, planReply, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
+import { blocked, brief, costOf, doing, LABEL, OUTPUT, parsePlan, planReply, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
 
 const config = JSON.parse(await readFile(process.env.RUNNER_CONFIG ?? SANDBOX.config, "utf8")) as RunnerConfig;
 const HOME = join(SANDBOX.dir, "home");
@@ -175,6 +175,34 @@ const modelRuntime = await ModelRuntime.create({ authPath: join(piDir, "auth.jso
 type Spend = { tokens: number; cost: number };
 
 /**
+ * What the agent is doing, posted in its task's thread as it works, so the page shows agents at work
+ * and not only when they finish: the newest action, at most once every `progressMs`, and only when it
+ * changed. What it did in between is counted, not listed.
+ */
+const progress = {
+  task: null as string | null,
+  last: 0,
+  latest: null as string | null,
+  posted: null as string | null,
+  since: 0,
+  start(task: string) {
+    Object.assign(this, { task, last: Date.now(), latest: null, posted: null, since: 0 });
+  },
+  stop() {
+    this.task = null;
+  },
+  saw(action: string) {
+    this.latest = action;
+    this.since++;
+    const now = Date.now();
+    if (!this.task || action === this.posted || now - this.last < config.progressMs) return;
+    const more = this.since > 1 ? ` (and ${this.since - 1} more steps since the last note)` : "";
+    Object.assign(this, { last: now, posted: action, since: 0 });
+    void note(this.task, `[progress] ${action}${more}`);
+  },
+};
+
+/**
  * A fresh agent on the checkout: it knows nothing but its prompt, and reads no instructions from the
  * repo's own agent files, which the repo's code shouldn't use to steer it. `write` says whether it
  * may change files and run commands.
@@ -211,6 +239,11 @@ async function agent(system: string, write: boolean, spend: Spend) {
   });
   let failed: string | null = null;
   session.subscribe((event) => {
+    if (event.type === "tool_execution_start") {
+      const action = doing(event.toolName, event.args);
+      if (action) progress.saw(action);
+      return;
+    }
     if (event.type !== "message_end" || event.message.role !== "assistant") return;
     const { usage } = event.message;
     spend.tokens += usage.input + usage.output + usage.cacheRead;
@@ -479,6 +512,7 @@ while (Date.now() < config.deadline) {
   const { title, body } = splitTask(task.text);
   log({ type: "claimed", task: task.id, role, title });
   await note(task.id, `[progress] ${config.worker} took this ${role} task, with ${config.model}.`);
+  progress.start(task.id);
 
   // What the task cost before this try counts too: a task that was given back and taken again has spent both.
   const spend: Spend = { tokens: Number(task.labels[LABEL.tokens]) || 0, cost: Number(task.labels[LABEL.cost]) || 0 };
@@ -507,6 +541,7 @@ while (Date.now() < config.deadline) {
     if (!lost.signal.aborted) errors++;
   } finally {
     clearInterval(renewing);
+    progress.stop();
   }
   // What it cost goes on the task whatever became of it: the run's spend is the sum of these.
   await label().catch((error) => log({ type: "error", message: message(error) }));

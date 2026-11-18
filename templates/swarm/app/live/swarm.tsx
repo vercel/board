@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { thread } from "@/app/actions";
 import type { Line, Snapshot, Task } from "@/lib/swarm";
+import { WebMcp } from "@/components/webmcp";
 
 /** What a task shows as: its state, with a claim split by whether its lease still holds. */
 type Shown = "working" | "stalled" | "held" | "ready" | "waiting" | "done" | "failed" | "canceled";
@@ -130,6 +131,7 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
 
   return (
     <div className="shell">
+      <WebMcp snap={snap} show={setOpen} />
       <header>
         <h1>{snap.name} board</h1>
         <span className="state" data-live={typeof live === "string" ? live : "down"}>
