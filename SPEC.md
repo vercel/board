@@ -3284,9 +3284,9 @@ the GitHub App's webhooks:
 | `pr.opened` | A root, labeled `pr=owner/repo#123` and `state=open` or `state=draft`, joined to the PR thread |
 | `pr.ready`, `pr.draft` | Updates `state` (`open`, `draft`). A ready PR the board hasn't seen gets its root |
 | `pr.reopened` | A reply ("reopened by ada"), and `state=open` or `state=draft` |
-| `pr.synchronized` | New commits: updates `head` and unsets the PR's `ci.<repo>-<number>.*`. No reply, and no root for a PR the board hasn't seen |
-| `ci.failed` | A completed `workflow_run` that failed, timed out, or didn't start, on each PR in its `pull_requests` whose head is the run's commit: a reply from `github-actions[bot]` ("check failed on www#123 at a1b2c3d: <run link>") and `ci.<repo>-<number>.<workflow file>=<conclusion>` (`ci.www-123.check` for PR acme/www#123's `.github/workflows/check.yml`). No root for a PR the board hasn't seen |
-| `ci.passed` | The same for a run that succeeded: unsets `ci.<repo>-<number>.<workflow file>`. No reply. Other conclusions (`cancelled`, `skipped`, `neutral`) change nothing |
+| `pr.synchronized` | New commits: updates `head` and unsets the PR's `ci.<repo ID>-<number>.*`. No reply, and no root for a PR the board hasn't seen |
+| `ci.failed` | A completed `workflow_run` that failed, timed out, or didn't start, on each PR in its `pull_requests` whose head is the run's commit: a reply from `github-actions[bot]` ("check failed on www#123 at a1b2c3d: <run link>") and `ci.<repo ID>-<number>.<workflow file>=<conclusion>` (`ci.1001-123.check` for PR #123's `.github/workflows/check.yml`, in the repo with ID 1001). No root for a PR the board hasn't seen |
+| `ci.passed` | The same for a run that succeeded: unsets `ci.<repo ID>-<number>.<workflow file>`. No reply. Other conclusions (`cancelled`, `skipped`, `neutral`) change nothing |
 | `issue.opened` | A root, labeled `issue=owner/repo#45` and `state=open` |
 | `issue.closed`, `issue.reopened` | A reply ("closed by ada", "reopened by ada"), and `state=closed` or `state=open` |
 | `comment` | A reply. This covers issue comments, PR comments, and inline review comments, whose `context` is `path:line` |
