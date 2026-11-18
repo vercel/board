@@ -282,20 +282,39 @@ describe("vercel(): a feed's newest events (`last`)", () => {
     expect(reads).toEqual([4, 4])
   })
 
-  it("names the channels of the board's newest events by ID, the ones it doesn't know, and never lists the board's", async () => {
+  it("names the events of the board's feed from what each says, with no request for a channel, however many there are", async () => {
     const api = fakeMessageboard({ boardFeed: true, feedLast: true, inlineActors: true, channelNames: true, channelPages: true })
-    await busy(api, 60)
+    const writer = await busy(api, 60)
     const { team, sent } = counted(api)
-    const naming = () => ({ byId: sent.filter((path) => path.startsWith('GET /channels/')).length, lists: sent.filter((path) => path === 'GET /channels').length })
 
-    const { events } = await team.poll({ last: 3 })
+    const newest = await team.poll({ last: 100 })
+    const { events } = await waited(team.poll({ after: newest.cursor, wait: 5 }), () => writer.post('dev/c7', { text: 'one more' }))
 
-    expect(new Set(events.map((event) => event.message?.channel)).size).toBe(3)
-    expect(naming()).toEqual({ byId: 3, lists: 0 })
-    // Known from then on: the same read names them without asking again.
-    const asked = sent.length
-    await team.poll({ last: 3 })
-    expect(sent.length - asked).toBe(1)
+    expect(new Set(newest.events.map((event) => event.message?.channel)).size).toBe(61)
+    expect(events.map((event) => event.message?.channel)).toEqual(['dev/c7'])
+    expect(sent.filter((path) => path.startsWith('GET /channels'))).toEqual([])
+  })
+
+  it("fails a read of the board's feed whose events name no channel, as an API from before they did", async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    await busy(api, 2)
+    const team = board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        fetch: async (input, init = {}) => {
+          const response = await as(api, 'user:u_jb')(input, init)
+          const url = new URL(input instanceof Request ? input.url : String(input))
+          if (!url.pathname.endsWith('/changes') || !response.ok) return response
+          const body = (await response.json()) as { events: Record<string, unknown>[] }
+          return Response.json({ ...body, events: body.events.map(({ channel: _channel, ...event }) => event) })
+        },
+        files: api.files,
+      }),
+    })
+
+    await expect(team.poll({ last: 5 })).rejects.toMatchObject({ status: 502, code: 'remote_error' })
+    await expect(team.poll({ channel: 'ops', last: 5 })).resolves.toMatchObject({ events: [{ message: { channel: 'ops' } }] })
   })
 
   it('answers no text of a message deleted since, in the response itself', async () => {

@@ -389,10 +389,13 @@ function fakeBoard(shared: Shared, boardId: string) {
     return last
   }
 
+  /** The name of the channel a change is in, which every event of a feed says. */
+  const channelNameOf = (change: Change) => channels.find((channel) => channel.id === change.channelId)?.name ?? ''
+
   /** A change as a read of a feed answers it: under its own cursor, with its message as it is now when asked for. */
   function changeShown(url: URL, change: Change, cursor: string) {
     const message = url.searchParams.get('include') === 'message' && change.messageId ? messageNamed(change.messageId) : undefined
-    return { ...change, cursor, ...(message ? { currentMessage: show(message) } : {}) }
+    return { ...change, channel: channelNameOf(change), cursor, ...(message ? { currentMessage: show(message) } : {}) }
   }
 
   /**
@@ -433,7 +436,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     const events = taken.flatMap((change, i) => {
       if (!within(change)) return []
       const message = include && change.messageId ? messageNamed(change.messageId) : undefined
-      return [{ ...change, cursor: at(from + i + 1), ...(message ? { currentMessage: show(message) } : {}) }]
+      return [{ ...change, channel: channelNameOf(change), cursor: at(from + i + 1), ...(message ? { currentMessage: show(message) } : {}) }]
     })
     return { events, cursor: at(from + taken.length), caughtUp: from + taken.length >= log.length }
   }
@@ -2276,7 +2279,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         .slice(from, from + 48)
         .map((change, i) => {
           const message = include && change.messageId ? messageNamed(change.messageId) : undefined
-          return { ...change, cursor: cursorAt(channelId, from + i + 1), ...(message ? { currentMessage: show(message) } : {}) }
+          return { ...change, channel: channelNameOf(change), cursor: cursorAt(channelId, from + i + 1), ...(message ? { currentMessage: show(message) } : {}) }
         })
       return { events, cursor: cursorAt(channelId, from + events.length), caughtUp: from + events.length >= feed().length }
     }
