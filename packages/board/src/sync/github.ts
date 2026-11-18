@@ -1,5 +1,5 @@
 import { ChatSyncProvider } from './chat-provider.ts'
-import { tagOf } from './tags.ts'
+import { slug, tagOf } from './tags.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
 import type { ExternalAuthor, ExternalEvent } from '../contract/external.ts'
 import { markdownOf } from './chat.ts'
@@ -114,7 +114,8 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
       // New commits: only `head` changes, with no reply, since GitHub's own timeline already lists the pushes.
       case 'synchronize':
         if (!sha) return null
-        return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.synchronized', labels: head, reply: null, createRoot: false } }
+        // The last commit's CI results aren't this one's.
+        return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.synchronized', labels: head, reply: null, createRoot: false, owns: ['ci.'] } }
       case 'ready_for_review':
         return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.ready', labels: { ...pr_label, state: 'open' }, reply: null, createRoot: true } }
       case 'converted_to_draft':
@@ -183,6 +184,50 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
   return null
 }
 
+/** Conclusions that mean a workflow failed. `cancelled` usually means a newer push superseded it. */
+const FAILED = ['failure', 'timed_out', 'startup_failure']
+/** Who CI results are posted as: GitHub Actions' bot, so they don't read as the person who pushed. */
+const ACTIONS: User = { login: 'github-actions[bot]', id: 41898282, type: 'Bot' }
+
+type WorkflowRun = {
+  name?: string
+  conclusion?: string | null
+  head_sha?: string
+  html_url?: string
+  pull_requests?: { number: number; head?: { sha?: string } }[]
+}
+
+/**
+ * Maps a completed `workflow_run` to a lifecycle event on each PR it ran for, at the commit the PR
+ * is at: a failure replies and sets `ci.<workflow>=<conclusion>`, a pass unsets it. A fork's PRs
+ * aren't in `pull_requests`, so their runs reach no thread.
+ */
+function workflowRun(body: Record<string, unknown>): { lifecycle: Lifecycle; number: number; user: User }[] {
+  if (body.action !== 'completed') return []
+  const run = body.workflow_run as WorkflowRun | undefined
+  const repo = (body.repository as { full_name?: string } | undefined)?.full_name
+  if (!run?.name || !run.head_sha || !run.conclusion || !repo) return []
+  const key = `ci.${slug(run.name)}`.slice(0, 64)
+  if (key === 'ci.') return []
+  const failed = FAILED.includes(run.conclusion)
+  if (!failed && run.conclusion !== 'success') return []
+  return (run.pull_requests ?? [])
+    .filter((pr) => pr.head?.sha === run.head_sha)
+    .map((pr) => ({
+      number: pr.number,
+      user: ACTIONS,
+      lifecycle: {
+        type: failed ? 'ci.failed' : 'ci.passed',
+        title: `PR #${pr.number}`,
+        url: `https://github.com/${repo}/pull/${pr.number}`,
+        labels: failed ? { [key]: run.conclusion! } : {},
+        unset: failed ? [] : [key],
+        reply: failed ? `${run.name} ${run.conclusion === 'failure' ? 'failed' : run.conclusion!.replace('_', ' ')} on ${run.head_sha!.slice(0, 7)}${run.html_url ? `: ${run.html_url}` : ''}` : null,
+        createRoot: false,
+      },
+    }))
+}
+
 const GitHubSubject = z.object({ type: z.enum(['pull_request', 'issue']), repo: z.string(), number: z.number().int().positive() })
 const NativeItem = z.looseObject({
   number: z.number(), title: z.string(), html_url: z.string(),
@@ -191,6 +236,7 @@ const NativeItem = z.looseObject({
 })
 export const GitHubPayload = z.looseObject({ pull_request: NativeItem.optional(), issue: NativeItem.optional(), action: z.string().optional() })
 const prTypes = ['pr.opened', 'pr.edited', 'pr.ready', 'pr.draft', 'pr.reopened', 'pr.synchronized', 'pr.closed', 'pr.labeled', 'pr.unlabeled', 'pr.assigned', 'pr.unassigned', 'review.submitted', 'review.dismissed'] as const
+const ciTypes = ['ci.failed', 'ci.passed'] as const
 const issueTypes = ['issue.opened', 'issue.edited', 'issue.closed', 'issue.reopened', 'issue.labeled', 'issue.unlabeled', 'issue.assigned', 'issue.unassigned'] as const
 const [messageEvent, editedEvent, deletedEvent, reactionEvent, lifecycleEvent] = eventSchema('github', 'comment').options
 const githubFields = { subject: GitHubSubject, raw: GitHubPayload }
@@ -200,9 +246,13 @@ const prLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
 const issueLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
   type: z.literal(type), subject: GitHubSubject.extend({ type: z.literal('issue') }), raw: GitHubPayload.extend({ issue: NativeItem }),
 })
+const ciLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
+  type: z.literal(type), subject: GitHubSubject.extend({ type: z.literal('pull_request') }),
+  raw: z.looseObject({ action: z.string().optional(), workflow_run: z.looseObject({ name: z.string(), conclusion: z.string(), head_sha: z.string(), html_url: z.string().optional() }) }),
+})
 export const GitHubEvent = z.discriminatedUnion('type', [
   messageEvent.extend(githubFields), editedEvent.extend(githubFields), deletedEvent.extend(githubFields), reactionEvent.extend(githubFields),
-  ...prTypes.map(prLifecycle), ...issueTypes.map(issueLifecycle),
+  ...prTypes.map(prLifecycle), ...issueTypes.map(issueLifecycle), ...ciTypes.map(ciLifecycle),
 ])
 export type GitHubEvent = z.infer<typeof GitHubEvent>
 
@@ -393,19 +443,27 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
       },
       intercept(key, headers, body): ReceivedEvent[] {
         const name = headers.get('x-github-event') ?? ''
-        if (!['pull_request', 'pull_request_review', 'issues'].includes(name)) return []
+        if (!['pull_request', 'pull_request_review', 'issues', 'workflow_run'].includes(name)) return []
         let parsed: Record<string, unknown>
         try {
           parsed = JSON.parse(body) as Record<string, unknown>
         } catch {
           return []
         }
+        const repo = (parsed.repository as { full_name: string }).full_name
+        if (name === 'workflow_run') {
+          const delivery = headers.get('x-github-delivery') ?? `${name}:${(parsed.workflow_run as { id?: number } | undefined)?.id}`
+          return workflowRun(parsed).map((found) => ({
+            event: { kind: 'lifecycle', channel: `${key}:${repo}:pulls`, thread: `${key}:${repo}:${found.number}`, author: author(found.user), ...found.lifecycle },
+            raw: parsed,
+            dedupe: `lifecycle:${delivery}:${found.number}`,
+          }))
+        }
         const found = lifecycle(name, parsed)
         if (!found) return []
         // Every PR and issue event carries all of its labels and assignees, so each one reconciles whichever it has.
         const item = (parsed.pull_request ?? parsed.issue) as Item | undefined
-        if (item) Object.assign(found.lifecycle, { labels: { ...tagsOf(item), ...found.lifecycle.labels }, owns: ownedBy(item) })
-        const repo = (parsed.repository as { full_name: string }).full_name
+        if (item) Object.assign(found.lifecycle, { labels: { ...tagsOf(item), ...found.lifecycle.labels }, owns: [...ownedBy(item), ...(found.lifecycle.owns ?? [])] })
         const thread = name === 'issues' ? `${key}:${repo}:issue:${found.number}` : `${key}:${repo}:${found.number}`
         const delivery = headers.get('x-github-delivery') ?? `${name}:${found.lifecycle.type}:${found.number}`
         return [
