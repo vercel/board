@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { testBoard } from './harness.ts'
+import { carried } from '../src/server/carried.ts'
+import type { BoardEventView } from '../src/api/routes.ts'
 
 const texts = (events: { type: string; message?: { text: string } }[]) => events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)
 
@@ -156,5 +158,21 @@ describe("a feed's newest events, with nothing their messages no longer carry", 
     expect((await send(team, `/tasks/${task.id}/unblock`, {})).ok).toBe(true)
 
     expect(await raw(team)).not.toContain('reason-of-a-hold-since-lifted')
+  })
+})
+
+describe('what an event says that its message no longer carries', () => {
+  it("is looked for among the message's own reactions, labels and failed deliveries, whatever text names them", async () => {
+    const team = testBoard()
+    const { id } = await team.post('dev', { text: 'here' })
+    const { message } = await team.thread(id)
+    // What a board from before emoji were checked may still hold: the name of something every object inherits.
+    const about = (type: string, payload: Record<string, unknown>) => ({ cursor: '1', type, createdAt: message.createdAt, payload: { id, ...payload }, message }) as unknown as BoardEventView
+
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      expect(carried(about('reaction.added', { emoji: name, by: message.by }))).toBeNull()
+      expect(carried(about('message.sync_failed', { target: name, error: 'refused' }))).toBeNull()
+      expect(carried(about('labels.changed', { set: { [name]: 'value' }, unset: [] }))).toMatchObject({ payload: { set: {} } })
+    }
   })
 })

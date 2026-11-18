@@ -1,4 +1,5 @@
 import type { BoardEventView, MessageView } from '../api/routes.ts'
+import { own } from '../contract/own.ts'
 
 /**
  * An event of a read of the feed's end, whose `message` is its message as it is now, with nothing that message no
@@ -14,18 +15,19 @@ export function carried(event: BoardEventView): BoardEventView | null {
   switch (event.type) {
     case 'reaction.added':
     case 'reaction.removed':
-      return message.reactions[payload.emoji as string]?.includes((payload.by as { actor?: string } | undefined)?.actor ?? '') ? event : null
+      // By its own keys alone: an emoji from before they were checked can be any text, the name of what every object inherits included.
+      return own(message.reactions, payload.emoji as string)?.includes((payload.by as { actor?: string } | undefined)?.actor ?? '') ? event : null
     case 'message.synced':
     case 'message.files_synced':
       return message.deleted ? null : event
     case 'message.sync_failed':
-      return message.undelivered[payload.target as string] === payload.error ? event : null
+      return own(message.undelivered, payload.target as string) === payload.error ? event : null
     case 'task.failed':
       return message.task?.reason === payload.reason ? event : null
     case 'task.blocked':
       return message.task?.blocked?.reason === payload.reason ? event : null
     case 'labels.changed': {
-      const set = Object.fromEntries(Object.entries((payload.set ?? {}) as Record<string, string>).filter(([key, value]) => message.labels[key] === value))
+      const set = Object.fromEntries(Object.entries((payload.set ?? {}) as Record<string, string>).filter(([key, value]) => own(message.labels, key) === value))
       return { ...event, payload: { ...payload, set } } as BoardEventView
     }
     default:
