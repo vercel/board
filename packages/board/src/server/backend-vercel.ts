@@ -1591,8 +1591,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** Whether the API reads the board's feed in one for a caller narrowed as `can` says: asked once each. */
   const acrossFeeds = new Map<string, Promise<boolean>>()
-  /** The API's refusal of the board's feed to a caller that doesn't read every channel: its cursors would count the rest. */
-  const readsSome = (error: unknown): boolean => error instanceof HttpError && error.status === 403 && /^You can't read every channel\b/.test(error.message)
+  /** The API's refusal of the board's feed to a caller that doesn't read every channel, by its code: its cursors would count the rest. */
+  const readsSome = (error: unknown): boolean => error instanceof HttpError && error.status === 403 && error.code === 'feed_needs_every_channel'
   /**
    * Whether these credentials read the board's feed in one request: not on an API from before it, which
    * takes no read of changes without a channel, and not when they read only some channels. Either way

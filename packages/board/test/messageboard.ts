@@ -379,7 +379,7 @@ function fakeBoard(shared: Shared, boardId: string) {
    */
   async function boardChanges(url: URL, actor: Actor, tree: string | null) {
     if (!(actor.can === undefined || compileAccess(actor.can as Parameters<typeof compileAccess>[0]).readsAll) || !channels.every((channel) => mayRead(actor, channel.id)))
-      throw new Refused(403, 'forbidden', "You can't read every channel of this board, so you can't read its feed across channels: read a channel's.")
+      throw new Refused(403, 'feed_needs_every_channel', "You can't read every channel of this board, so you can't read its feed across channels: read a channel's.")
     shared.feedReads++
     const scope = tree === null ? 'board' : `tree${createHash('sha256').update(tree).digest('hex').slice(0, 8)}`
     const at = (position: number) => `c1.${position}.${scope}`

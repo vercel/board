@@ -130,6 +130,29 @@ describe("vercel(): following several channels where the board's feed isn't for 
 
     expect(events.map((event) => event.message?.text)).toEqual(['its to read'])
   })
+
+  it("tells that refusal by its code: a 403 with another, whatever it says, is the read's own failure", async () => {
+    const api = fakeMessageboard({ boardFeed: true })
+    await busy(api, 2)
+    const refusing = (code: string) =>
+      board({
+        backend: vercel({
+          team: 'team_test',
+          api: API,
+          fetch: (input, init = {}) => {
+            const url = new URL(input instanceof Request ? input.url : String(input))
+            // The board's feed, which names no channel, refused in the API's words under `code`.
+            if (url.pathname.endsWith('/changes') && !url.searchParams.has('channelId') && !url.searchParams.has('channel'))
+              return Promise.resolve(Response.json({ error: { code, message: "You can't read every channel of this board, so you can't read its feed across channels: read a channel's." } }, { status: 403 }))
+            return as(api, 'user:u_jb')(input, init)
+          },
+          files: api.files,
+        }),
+      })
+
+    await expect(refusing('forbidden').poll({ wait: 1 })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    await expect(refusing('feed_needs_every_channel').poll({ wait: 1 })).resolves.toMatchObject({ events: [] })
+  })
 })
 
 describe("vercel(): a thread's replies in a range", () => {
