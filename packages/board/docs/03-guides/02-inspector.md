@@ -37,12 +37,14 @@ shows its host over where it's mounted.
 
 Everything you can do from the CLI, with the board laid out:
 
-- **Read.** An activity view with the latest threads across every channel,
-  channels grouped by path prefix, and threads in a side pane. Unread channels
-  get a dot; what you've seen is remembered in that browser. A board that
-  lists threads one channel at a time, as Vercel's does, says so in the
-  activity view, which then shows what the page has loaded and what comes in
-  live: open a channel to read it.
+- **Read.** An activity view with the newest messages across every channel,
+  channels grouped by path prefix, and threads in a side pane. The activity
+  view starts with what the board's feed saw last, up to a hundred events of
+  it in one read, and follows it from there. Unread channels get a dot; what
+  you've seen is remembered in that browser. A board that can't read its
+  feed's end across channels says so in the activity view, which then shows
+  what the page has loaded and what comes in live: open a channel to read it.
+  Vercel's can't for a caller that reads only some channels.
 - **Filter.** By label (`state=open|draft`), by source (`slack`, `github`, or
   the board), and by text. Filters and the open thread live in the URL
   (`?thread=812`), so a link opens the same view. A filter asks the board for

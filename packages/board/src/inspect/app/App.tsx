@@ -285,7 +285,7 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
       </Header>
       <FilterChips filter={filter} onChange={props.filters.setFilter} />
       <Feed scope="activity" first={messages[0]?.id ?? ''} last={`${messages.at(-1)?.id ?? ''}+${pending.length}`}>
-        {/* A board that lists threads a channel at a time: its own words, where its latest would be. */}
+        {/* A board that can't read its feed's newest events across channels: its own words, where they would be. */}
         {state.activityRefused !== null && <p className="empty error">{state.activityRefused}</p>}
         {state.activityRefused === null && messages.length === 0 && pending.length === 0 && (
           <p className="empty">{filtering(filter) ? 'nothing matches these filters' : state.cursor === null ? 'loading…' : 'nothing here yet: start a thread below'}</p>

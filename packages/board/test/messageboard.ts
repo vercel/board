@@ -279,6 +279,7 @@ type Shared = {
   /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
   feedReads: number
   boardFeed: boolean
+  feedLast: boolean
   threadRanges: boolean
   channelPages: boolean
   matchMessages: boolean
@@ -372,12 +373,32 @@ function fakeBoard(shared: Shared, boardId: string) {
     return position
   }
 
+  /** How far back the board's feed looks for its newest events: a tree with none in that stretch answers none. */
+  const FEED_STRETCH = 1000
+
+  /** How many of a feed's newest events a read asks for (`last`), or null: it goes with no `cursor`, `from` or `wait`. */
+  function lastOf(url: URL): number | null {
+    const asked = url.searchParams.get('last')
+    if (asked === null) return null
+    if (!shared.feedLast) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `last`.')
+    const last = Number(asked)
+    if (!Number.isInteger(last) || last < 1 || last > 100) throw new Refused(400, 'bad_request', 'Invalid request: `last` should be an integer from 1 to 100.')
+    if (['cursor', 'from', 'wait'].some((name) => url.searchParams.get(name) !== null)) throw new Refused(400, 'invalid_request', "`last` reads a feed's newest events: it takes no `cursor`, `from` or `wait`.")
+    return last
+  }
+
+  /** A change as a read of a feed answers it: under its own cursor, with its message as it is now when asked for. */
+  function changeShown(url: URL, change: Change, cursor: string) {
+    const message = url.searchParams.get('include') === 'message' && change.messageId ? messageNamed(change.messageId) : undefined
+    return { ...change, cursor, ...(message ? { currentMessage: show(message) } : {}) }
+  }
+
   /**
    * The board's feed in one read: every channel's changes, or with `tree` (`dev/`) a channel's and those under it,
    * for a caller that reads every channel. Its cursor is its own, and a tree's is that tree's. A read goes
    * through one poll's worth of the feed, which may show none of it, and a wait holds through changes outside the tree.
    */
-  async function boardChanges(url: URL, actor: Actor, tree: string | null) {
+  async function boardChanges(url: URL, actor: Actor, tree: string | null, last: number | null) {
     if (!(actor.can === undefined || compileAccess(actor.can as Parameters<typeof compileAccess>[0]).readsAll) || !channels.every((channel) => mayRead(actor, channel.id)))
       throw new Refused(403, 'feed_needs_every_channel', "You can't read every channel of this board, so you can't read its feed across channels: read a channel's.")
     shared.feedReads++
@@ -395,6 +416,11 @@ function fakeBoard(shared: Shared, boardId: string) {
     const within = (change: Change) => {
       const name = channels.find((channel) => channel.id === change.channelId)?.name ?? ''
       return tree === null || name === tree.slice(0, -1) || name.startsWith(tree)
+    }
+    if (last !== null) {
+      const start = Math.max(0, log.length - FEED_STRETCH)
+      const newest = log.slice(start).flatMap((change, i) => (within(change) ? [changeShown(url, change, at(start + i + 1))] : []))
+      return { events: newest.slice(-last), cursor: at(log.length), caughtUp: true }
     }
     const until = Date.now() + Math.min(Number(url.searchParams.get('wait') ?? 0), 25) * 1000
     while (!log.slice(from).some(within) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
@@ -2222,14 +2248,19 @@ function fakeBoard(shared: Shared, boardId: string) {
     }
     if (method === 'GET' && rest === '/changes') {
       const named = url.searchParams.get('channel')
+      const last = lastOf(url)
       if (url.searchParams.get('channelId') === null && (named === null || named.endsWith('/'))) {
-        if (shared.boardFeed) return boardChanges(url, actor, named)
+        if (shared.boardFeed) return boardChanges(url, actor, named, last)
         // An API from before the board's feed reads one channel's changes, and takes none without it.
         if (named === null) throw new Refused(400, 'bad_request', 'Invalid request: missing required property `channelId`.')
       }
       const channelId = (channelRead(url, actor) ?? channelAt('')).id
       shared.feedReads++
       const feed = () => feeds.get(channelId) ?? []
+      if (last !== null) {
+        const start = Math.max(0, feed().length - last)
+        return { events: feed().slice(start).map((change, i) => changeShown(url, change, cursorAt(channelId, start + i + 1))), cursor: cursorAt(channelId, feed().length), caughtUp: true }
+      }
       const cursor = url.searchParams.get('cursor')
       if (cursor !== null && url.searchParams.get('from') !== null) throw new Refused(400, 'invalid_cursor')
       const from = url.searchParams.get('from') === 'latest' ? feed().length : cursor === null ? 0 : positionOf(channelId, cursor)
@@ -2529,6 +2560,12 @@ export function fakeMessageboard(
      * for a caller that reads every channel. Vercel's doesn't yet: a read of changes that names no channel is 400 there.
      */
     boardFeed?: boolean
+    /**
+     * True for an API that reads a feed's newest events (`GET /changes` with `last`, from 1 to 100): a channel's, a
+     * tree's or the board's, oldest first, with the feed's end as the cursor. Vercel's doesn't yet: `last` is a
+     * parameter it doesn't know, and 400.
+     */
+    feedLast?: boolean
     /** False for an API that hands out matches without their message (`currentMessage`), as Vercel's does for a thread moved to a channel the registrant can't read. */
     matchMessages?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
@@ -2584,6 +2621,7 @@ export function fakeMessageboard(
     channelNames: options.channelNames ?? false,
     inlineActors: options.inlineActors ?? false,
     boardFeed: options.boardFeed ?? false,
+    feedLast: options.feedLast ?? false,
     threadRanges: options.threadRanges ?? false,
     channelPages: options.channelPages ?? false,
     threadsLimit: options.threadsLimit ?? true,

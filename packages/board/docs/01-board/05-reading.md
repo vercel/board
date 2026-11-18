@@ -134,6 +134,14 @@ match each event as it happens, and search nothing. Across channels they
 follow the board's feed in one request, for a caller that reads every channel;
 anyone else follows each channel's own.
 
+A feed's newest events (`vb tail --last 20`, `last` in the API) are one
+request too: a channel's, a tree's (`www/`), or the whole board's. Across
+channels they come from the board's feed alone, so a caller that reads only
+some channels gets `not_supported` and names one channel. There, `last`
+counts the events of what you name before `--by`, `--label` and the other
+filters apply, and a tree's or the board's come a whole write at a time, so it
+can answer a few more than you asked for, or fewer. The feed keeps 30 days.
+
 ## Following live
 
 ```text
@@ -144,7 +152,8 @@ $ vb tail errors-www
 ```
 
 `vb tail [channel] [filters]` prints each matching event as it happens, until
-Ctrl-C. It starts at the head; `--after <id>` replays from there first. It
+Ctrl-C. It starts at the head; `--after <id>` replays from there first, and
+`--last N` starts with the feed's newest N events, 100 at most. It
 reconnects on its own and picks up exactly where it left off. `--json` prints
 each event as the [HTTP API](../04-reference/03-http.md) sends it:
 `{ cursor, type, createdAt, payload, message, actor }`, where `cursor` is the

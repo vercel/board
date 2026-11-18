@@ -160,17 +160,17 @@ function once(key: string, load: () => Promise<void>): Promise<void> {
 
 // --- reading -----------------------------------------------------------------------
 
-/** How many threads the activity view asks the board for: each comes with its root and its latest reply. */
+/** How many of the feed's newest events fill the activity view: the most one read of them answers. */
 const RECENT = 100
 
 /**
- * The page shows once it knows who you are and the channels. The latest threads across them fill the
- * activity view when the board lists them, and the feed goes on from that read's cursor. A board that
- * lists threads a channel at a time says so: its words show there, and the feed starts from now.
+ * The page shows once it knows who you are and the channels. The feed's newest events across them fill the
+ * activity view, in one read, and the feed goes on from that read's cursor. A board that can't read them
+ * across channels says so: its words show there, and the feed starts from now.
  */
 export async function boot() {
   // Settled either way: a refusal is what the view shows, not a failed boot.
-  const recent = team.threads({ limit: RECENT }).then(
+  const recent = team.poll({ all: true, last: RECENT }).then(
     (page) => ({ page }),
     (error: unknown) => ({ refused: refusal(error) }),
   )
@@ -178,8 +178,11 @@ export async function boot() {
   const [me, discovery, channels] = await Promise.all([team.me(), team.discovery().catch(() => null), everyChannel(team)])
   set((s) => ({ ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])) }))
   const latest = await recent
-  if ('page' in latest) set((s) => store.merge({ ...s, cursor: latest.page.cursor }, latest.page.threads.flatMap((thread) => (thread.last ? [thread.message, thread.last] : [thread.message]))))
-  else set((s) => ({ ...s, activityRefused: latest.refused }))
+  // Folded as live events are, oldest first, so an edit or a delete among them leaves its message as it is now.
+  if ('page' in latest) {
+    listed.apply(latest.page.events)
+    set((s) => ({ ...s, cursor: latest.page.cursor }))
+  } else set((s) => ({ ...s, activityRefused: latest.refused }))
   // A burst of events is one render: they're folded in a frame at a time.
   let queue: BoardEventView[] = []
   const flush = () => {

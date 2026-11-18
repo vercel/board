@@ -89,6 +89,10 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   Vercel's API reads its feed across channels for the caller: one that reads
   every channel. For anyone else, and on an API from before that feed, they
   follow each channel's own, a request a channel.
+- **A feed's newest events (`last`) are one request:** a channel's, a tree's,
+  or the board's. Across channels they come from that same feed, so anyone it
+  isn't for is refused with `not_supported` and names one channel: they're
+  never read a channel at a time.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out

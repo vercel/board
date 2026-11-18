@@ -171,32 +171,39 @@ const posted = (id: string, channel: string, text: string, re: string | null = n
 const gets = (path: string) => asked.filter((request) => request.method === 'GET' && request.path === path).map((request) => request.query)
 
 describe("the inspector's page, reading", () => {
-  it('fills its activity view with the latest threads the board lists across channels, and follows the feed from that read', async () => {
+  it("fills its activity view with the feed's newest events across channels, in one read, and follows the feed from that read", async () => {
     const root = posted('60', 'dev', 'osprey nests here')
-    const last = posted('62', 'dev', 'seen today', '60')
-    usual['GET /channels'] = () => Response.json({ channels: [{ path: 'dev' }], cursor: '62' })
-    usual['GET /threads'] = () => Response.json({ threads: [{ message: root, replies: 2, last }], cursor: '62', older: null })
+    const reply = posted('62', 'dev', 'seen today', '60')
+    const event = (cursor: string, type: string, message: MessageView) => ({ cursor, type, createdAt: message.createdAt, payload: {}, message })
+    usual['GET /channels'] = () => Response.json({ channels: [{ path: 'dev' }], cursor: '63' })
+    // Oldest first, as the board answers them: the root, its reply, and the root's edit.
+    const events = [event('60', 'message.posted', root), event('62', 'message.posted', reply), event('63', 'message.edited', { ...root, text: 'osprey nests here, still' })]
+    next.set('GET /events', [() => Response.json({ events, cursor: '63' })])
     asked.length = 0
     await page.boot()
-    // One read of the threads, across channels, and no list of messages: each thread came with its root and its latest reply.
-    expect(gets('/threads')).toEqual([{ limit: '100' }])
+    // One read of the feed's end, across channels, and no list of threads or messages in any of them.
+    expect(gets('/events')[0]).toEqual({ all: 'true', last: '100' })
+    expect(gets('/threads')).toEqual([])
     expect(gets('/messages')).toEqual([])
-    expect(page.getState()).toMatchObject({ activityRefused: null, cursor: '62', messages: { 60: { text: 'osprey nests here' }, 62: { text: 'seen today' } } })
-    await vi.waitFor(() => expect(gets('/events')).toMatchObject([{ all: 'true', after: '62' }]))
+    // Each message is as the last event about it left it.
+    expect(page.getState()).toMatchObject({ activityRefused: null, cursor: '63', messages: { 60: { text: 'osprey nests here, still' }, 62: { text: 'seen today' } } })
+    await vi.waitFor(() => expect(gets('/events')).toMatchObject([{ all: 'true', last: '100' }, { all: 'true', after: '63' }]))
   })
 
-  it('says what a board that lists threads a channel at a time answered, where its latest would be, and follows the feed from now', async () => {
-    const words = "Vercel's boards don't support reading every channel at once yet: name one channel, and read the others one at a time. The channel list has their names"
-    next.set('GET /threads', [refuse(501, 'not_supported', words)])
+  it("says what a board that can't read its feed's newest events across channels answered, where they would be, and follows the feed from now", async () => {
+    const words = "Vercel's boards don't support reading the newest events of several channels at once here yet: read one channel's, with `channel`"
+    next.set('GET /events', [refuse(501, 'not_supported', words)])
     asked.length = 0
     await page.boot()
     expect(page.getState().activityRefused).toBe(words)
     // Nothing was read a channel at a time behind it: the page says so, and a channel loads when it's opened.
-    expect(gets('/threads')).toEqual([{ limit: '100' }])
+    expect(gets('/threads')).toEqual([])
     expect(gets('/messages')).toEqual([])
-    await vi.waitFor(() => expect(gets('/events')).toMatchObject([{ all: 'true' }]))
+    await vi.waitFor(() => expect(gets('/events')).toHaveLength(2))
     // From now: it has no read's cursor to go on from.
-    expect(gets('/events')[0]).not.toHaveProperty('after')
+    expect(gets('/events')[1]).toMatchObject({ all: 'true' })
+    expect(gets('/events')[1]).not.toHaveProperty('after')
+    expect(gets('/events')[1]).not.toHaveProperty('last')
   })
 
   it("asks the board for the threads a filter finds and reads the longer ones whole, and asks a board that can't find them that way once", async () => {

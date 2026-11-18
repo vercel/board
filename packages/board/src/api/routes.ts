@@ -128,10 +128,21 @@ export const ThreadsQuery = Filters.extend({
   path: ['before'],
 })
 
+/** The most of a feed's newest events one read answers for (`last`). */
+export const EVENTS_LAST_MAX = 100
+
+/**
+ * A read of the feed after `after`, or from now. `last` reads its newest events instead, oldest first, with the
+ * feed's end as the cursor: it answers at once, so it takes no `after` or `wait`.
+ */
 export const EventsQuery = Filters.extend({
   after: Ref.optional(),
   wait: z.coerce.number().min(0).max(300).optional(),
   all: flag.optional(),
+  last: z.coerce.number().int().min(1).max(EVENTS_LAST_MAX).optional(),
+}).refine((query) => query.last === undefined || (query.after === undefined && query.wait === undefined), {
+  message: '`last` reads the newest events at once: it takes no `after` or `wait`',
+  path: ['last'],
 })
 
 export const PostBody = z

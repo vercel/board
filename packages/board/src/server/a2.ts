@@ -22,7 +22,7 @@ import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, 
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, duplicateId, forbidden, HttpError, notFound, textTooLong, toErrorResponse } from './errors.ts'
-import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
+import { eventView, foldEvent, indexOf, lastFeed, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { createTasks, taskLimits } from './tasks.ts'
@@ -816,7 +816,7 @@ function build(options: A2Options, binding: BoardBinding) {
       const after = query.after !== undefined ? cursorAt(query.after) : undefined
       const { state: actors } = await session.state(actorsReducer)
       const feed = { session, reads, after, filters: query, all: query.all ?? false, me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }
-      const { events, cursor } = await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
+      const { events, cursor } = query.last !== undefined ? await lastFeed(feed, query.last, signal) : await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
       return { events, cursor: ref(cursor) }
     },
 

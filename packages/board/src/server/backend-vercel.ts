@@ -2212,8 +2212,81 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
+  /** Whether the API reads a feed's newest events (`last`): until it refuses the parameter, it's asked. */
+  let readsLast = true
+  const noLast = () => notSupported("reading a feed's newest events", 'follow it from now, without `last`')
+  const noLastAcross = () => notSupported('reading the newest events of several channels at once here', "read one channel's, with `channel`")
+
+  /**
+   * The newest events of one feed, oldest first, in one read: the API's `last`, on a channel's feed, a tree's or
+   * the board's, with the feed's end as the cursor. Several channels' are only ever the board's feed: where the
+   * API keeps none for the caller, or takes no `last`, the read is refused, not made a channel at a time.
+   */
+  async function newest(who: Who, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    if (!readsLast) throw noLast()
+    const { last: _last, ...rest } = query
+    // A channel that isn't there, or a thread outside the channels the read names, has no events: it goes on from now.
+    const none = () => followed(who, [], undefined, rest, signal)
+    try {
+      const name = oneChannel(query)
+      const found = name === null ? null : await inNamed(who, name, (channel) => newestOf(who, channel, query, signal))
+      if (found) return found
+      if (name !== null) return await none()
+      if (query.re !== undefined) {
+        const [channel] = await channelOfThread(who, query.re, query.channel, signal)
+        return channel ? await newestOf(who, channel, query, signal) : await none()
+      }
+      if (!(await acrossFeed(who))) throw noLastAcross()
+      return await newestOf(who, across(query.channel), query, signal)
+    } catch (error) {
+      if (unknownParameter(error, 'last')) {
+        readsLast = false
+        throw noLast()
+      }
+      if (!readsSome(error)) throw error
+      acrossFeeds.set(who.can ?? '', Promise.resolve(false))
+      throw noLastAcross()
+    }
+  }
+
+  async function newestOf(who: Who, feed: ChannelRef, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    const page = await reading<{ events: ApiChange[]; cursor: string }>(who, await onBoard(who, '/changes'), { query: { ...feedOf(feed), include: 'message', last: String(query.last) }, signal })
+    const narrow = await narrowOf(who, query)
+    const threads = threadReader(who, signal)
+    naming(who, page.events.flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
+    narrow.mentions?.ahead(page.events.flatMap((change) => (change.currentMessage ? [change.currentMessage.text] : [])))
+    const one = feed.id !== ACROSS
+    /**
+     * Where the board's feed is right after its `i`th event here. The events of one write share the API's cursor,
+     * which is after them all: one before the write's last is that many into a read from the write before's.
+     */
+    const after = (i: number): Feed => {
+      const own = page.events[i]!.cursor
+      if (own === undefined) return { at: page.cursor, skip: 0 }
+      let first = i
+      while (first > 0 && page.events[first - 1]!.cursor === own) first--
+      const before = first > 0 ? page.events[first - 1]!.cursor : undefined
+      return page.events[i + 1]?.cursor !== own || before === undefined ? { at: own, skip: 0 } : { at: before, skip: i - first + 1 }
+    }
+    const events: BoardEventView[] = []
+    for (const [i, change] of page.events.entries()) {
+      const message = change.currentMessage
+      const given = message && change.threadId ? { message, thread: query.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
+      // One channel's feed shows what concerns a message, under the API's own cursors, as a read after one of them does.
+      if (one && !given) continue
+      const event = one
+        ? await eventOf(who, change, feed.name, change.cursor ?? page.cursor, query, narrow, given)
+        : await eventOf(who, change, (await channelById(who, change.channelId)).name, cursorOf({ t: change.createdAt, feeds: { [ACROSS]: after(i) } }), query, narrow, given, threads)
+      if (event) events.push(event)
+    }
+    if (one) return { events, cursor: page.cursor }
+    const t = page.events.length > 0 ? Math.max(...page.events.map((change) => change.createdAt)) : Date.now()
+    return { events, cursor: cursorOf({ t, feeds: { [ACROSS]: { at: page.cursor, skip: 0 } } }) }
+  }
+
   /** A read of the feed, as `vb tail` makes it: one channel's feed when it names one, or every channel's. */
   async function eventsAs(who: Who, query: Protocol['events']['input'], signal: AbortSignal): Promise<Protocol['events']['output']> {
+    if (query.last !== undefined) return newest(who, query, signal)
     const name = oneChannel(query)
     const found = name === null ? null : await inNamed(who, name, (channel) => channelEvents(who, channel, query, signal))
     if (found) return found

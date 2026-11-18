@@ -78,6 +78,7 @@ export const options = {
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
   // Commands' own.
   limit: { type: 'string', short: 'n', value: 'N', description: 'how many' },
+  last: { type: 'string', value: 'N', description: "start with the feed's newest N events (1 to 100)" },
   before: { type: 'string', value: 'older', description: "a channel's threads before a page: the older its read printed" },
   'idempotency-key': { type: 'string', value: 'key', description: 'sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
@@ -724,9 +725,12 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'tail',
     description: 'what happens, live, until Ctrl-C',
     arguments: [{ name: 'channel', required: false, description: 'a channel, or a path prefix (dev/)' }],
-    options: [option('all', 'delivery receipts too')],
+    options: [option('all', 'delivery receipts too'), option('last')],
     filters: true,
-    examples: [{ name: 'follow the bugs', value: 'tail dev --label kind=bug' }],
+    examples: [
+      { name: 'follow the bugs', value: 'tail dev --label kind=bug' },
+      { name: "start with a channel's newest 20 events, then follow", value: 'tail dev --last 20' },
+    ],
   },
   {
     group: 'live',

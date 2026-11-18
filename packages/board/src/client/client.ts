@@ -389,7 +389,7 @@ export function createBoardClient(options: ClientOptions) {
   const filtersQuery = (filters: Filters = {}) => filters
 
   async function poll(
-    query: Filters & { after?: string; wait?: number; all?: boolean } = {},
+    query: Filters & { after?: string; wait?: number; all?: boolean; last?: number } = {},
     signal?: AbortSignal,
   ): Promise<EventsPage> {
     return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
@@ -861,16 +861,18 @@ export function createBoardClient(options: ClientOptions) {
 
     /** Live events. Reconnects from the last seen index whenever the stream closes, and tells `onState` whether it's live or retrying. */
     async *events(
-      query: Filters & { after?: string; all?: boolean } = {},
+      query: Filters & { after?: string; all?: boolean; last?: number } = {},
       opts: EventsOptions = {},
     ): AsyncGenerator<BoardEventView> {
+      // The feed's newest events (`last`) come first, once: a stream that reconnects goes on from where it was.
+      const { last, ...rest } = query
       let after = query.after
       let failures = 0
       const state = eventsState(opts.onState)
       while (!opts.signal?.aborted) {
         let response: Response
         try {
-          response = await raw('GET', `/events${queryString({ ...filtersQuery(query), after })}`, {
+          response = await raw('GET', `/events${queryString({ ...filtersQuery(rest), ...(after === undefined && last !== undefined ? { last } : {}), after })}`, {
             headers: { accept: 'text/event-stream' },
             ...(opts.signal ? { signal: opts.signal } : {}),
           })

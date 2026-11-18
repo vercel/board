@@ -774,6 +774,27 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: "reads a channel's newest events, oldest first, and goes on from their cursor",
+    run: async (ctx) => {
+      const { root, reply } = needRoot(ctx)
+      const page = await ctx.board.poll({ channel: ctx.channel, last: 100 }).catch((error: unknown) => {
+        // A board whose feed can't be read from its end says so, and is followed from now.
+        if (error instanceof BoardError && error.status === 501 && error.code === 'not_supported') return `not kept here: ${error.message}`
+        throw error
+      })
+      if (typeof page === 'string') return page
+      isRef(page.cursor, "the newest events' cursor")
+      const posted = page.events.filter((event) => event.type === 'message.posted').map((event) => event.message?.id)
+      check(posted.includes(root.id) && posted.includes(reply.id), `the channel's newest events should include ${root.id} and ${reply.id} being posted`)
+      check(posted.indexOf(root.id) < posted.indexOf(reply.id), `${root.id} was posted before ${reply.id}, so it should come first`)
+      const one = await ctx.board.poll({ channel: ctx.channel, last: 1 })
+      check(one.events.length <= 1, `\`last=1\` on one channel should answer one event at most, not ${one.events.length}`)
+      const next = await ctx.board.poll({ channel: ctx.channel, after: page.cursor })
+      check(!next.events.some((event) => page.events.some((read) => read.cursor === event.cursor)), 'reading on from the cursor should not repeat what it read')
+    },
+  },
+  {
+    group: 'core',
     name: 'holds a long-poll open until the next event',
     run: async (ctx) => {
       const { cursor } = await ctx.board.poll({ channel: ctx.channel, label: ctx.labels })

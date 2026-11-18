@@ -1866,7 +1866,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const stop = stopOn(controller)
       try {
         for await (const event of client().events(
-          { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+          { ...filters(args[0]), ...(flags.all ? { all: true } : {}), ...(flags.last !== undefined ? { last: Number(flags.last) } : {}) },
           { signal: controller.signal },
         ))
           if (flags.json) line(event)

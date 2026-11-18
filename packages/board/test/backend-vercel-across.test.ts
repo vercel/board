@@ -260,3 +260,99 @@ describe("vercel(): the board's channels, a page at a time", () => {
     await expect(team.channels({ after: 'made-up' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
   })
 })
+
+describe("vercel(): a feed's newest events (`last`)", () => {
+  const texts = (events: { type: string; message?: { text: string } }[]) => events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)
+
+  it("reads the board's, a tree's and a channel's in one request each, however many channels there are", async () => {
+    const reads: number[] = []
+    for (const channels of [3, 30]) {
+      const api = fakeMessageboard({ boardFeed: true, feedLast: true, inlineActors: true, channelNames: true })
+      const writer = await busy(api, channels)
+      await writer.post('dev/c1', { text: 'again in c1' })
+      const { team, feedReads } = counted(api)
+
+      expect(texts((await team.poll({ last: 3 })).events)).toEqual([`in c${channels - 1}`, 'in ops', 'again in c1'])
+      expect(texts((await team.poll({ channel: 'dev/', last: 2 })).events)).toEqual([`in c${channels - 1}`, 'again in c1'])
+      expect(texts((await team.poll({ channel: 'dev/c1', last: 5 })).events)).toEqual(['in c1', 'again in c1'])
+      reads.push(feedReads())
+    }
+
+    // Once to learn the API has the board's feed for this caller, and a read each.
+    expect(reads).toEqual([4, 4])
+  })
+
+  it('goes on from the cursor it answers, and from an event\'s own, with nothing missed or repeated', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    const writer = await busy(api, 3)
+    const { team } = counted(api)
+
+    for (const channel of [undefined, 'dev/', 'ops']) {
+      const page = await team.poll({ ...(channel ? { channel } : {}), last: 2 })
+      const text = `after the read of ${channel ?? 'the board'}`
+      await writer.post(channel === 'dev/' ? 'dev/c0' : 'ops', { text })
+      expect(texts((await team.poll({ ...(channel ? { channel } : {}), after: page.cursor })).events)).toEqual([text])
+      expect(texts((await team.poll({ ...(channel ? { channel } : {}), after: page.events[0]!.cursor })).events)).toEqual([...texts(page.events.slice(1)), text])
+    }
+  })
+
+  it("refuses it on an API from before `last`, once asked, and still follows the feed", async () => {
+    const api = fakeMessageboard({ boardFeed: true })
+    const writer = await busy(api, 3)
+    const { team, sent } = counted(api)
+
+    await expect(team.poll({ last: 5 })).rejects.toMatchObject({ status: 501, code: 'not_supported', message: expect.stringContaining('without `last`') })
+    const asked = sent.length
+    await expect(team.poll({ channel: 'ops', last: 5 })).rejects.toMatchObject({ status: 501, code: 'not_supported' })
+    expect(sent.length).toBe(asked)
+    const { events } = await waited(team.poll({ wait: 5 }), () => writer.post('ops', { text: 'still live' }))
+    expect(texts(events)).toEqual(['still live'])
+  })
+
+  it("refuses several channels' where the API has no feed across them for the caller, without reading each channel's", async () => {
+    for (const [options, headers] of [
+      [{ feedLast: true }, {}],
+      [{ feedLast: true, boardFeed: true }, { 'x-board-can': 'dev/=read' }],
+    ] as const) {
+      const api = fakeMessageboard(options)
+      await busy(api, 30)
+      const { team, feedReads } = counted(api, { headers })
+
+      await expect(team.poll({ last: 5 })).rejects.toMatchObject({ status: 501, code: 'not_supported', message: expect.stringContaining("read one channel's") })
+      await expect(team.poll({ channel: 'dev/', last: 5 })).rejects.toMatchObject({ status: 501, code: 'not_supported' })
+      expect(feedReads()).toBe(1)
+      expect(texts((await team.poll({ channel: 'dev/c1', last: 5 })).events)).toEqual(['in c1'])
+    }
+  })
+
+  it('refuses the board\'s when the API stops reading it for the caller between its asking and the read', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    await busy(api, 2)
+    const team = board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        fetch: (input, init = {}) => {
+          const url = new URL(input instanceof Request ? input.url : String(input))
+          if (url.pathname.endsWith('/changes') && url.searchParams.has('last') && !url.searchParams.has('channelId') && !url.searchParams.has('channel'))
+            return Promise.resolve(Response.json({ error: { code: 'feed_needs_every_channel', message: "You can't read every channel of this board, so you can't read its feed across channels: read a channel's." } }, { status: 403 }))
+          return as(api, 'user:u_jb')(input, init)
+        },
+        files: api.files,
+      }),
+    })
+
+    await expect(team.poll({ last: 5 })).rejects.toMatchObject({ status: 501, code: 'not_supported' })
+    await expect(team.poll({ wait: 0 })).resolves.toMatchObject({ events: [] })
+  })
+
+  it('takes no `after` or `wait` with it', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    const team = await busy(api, 1)
+    const { cursor } = await team.poll({ channel: 'ops' })
+
+    await expect(team.poll({ channel: 'ops', last: 5, after: cursor })).rejects.toMatchObject({ status: 400 })
+    await expect(team.poll({ channel: 'ops', last: 5, wait: 1 })).rejects.toMatchObject({ status: 400 })
+    await expect(team.poll({ channel: 'ops', last: 101 })).rejects.toMatchObject({ status: 400 })
+  })
+})

@@ -96,6 +96,7 @@ describe('vercel()', () => {
       'search: finds threads by text anywhere in a message of theirs, in any case, as it reads now': 'skipped',
       'search: lists the threads of every channel under a pattern at once': 'skipped',
       'core: reads events after a cursor, each with a cursor of its own': 'passed',
+      "core: reads a channel's newest events, oldest first, and goes on from their cursor": 'skipped',
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
       'core: lists the channel and you in it': 'passed',

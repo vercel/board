@@ -491,6 +491,33 @@ async function start(options: FeedOptions): Promise<number> {
 }
 
 const PAGE = 200
+/** How far back a read of the feed's newest events looks: this many pages of the log. */
+const LAST_PAGES = 10
+
+/**
+ * The newest `last` matching events, oldest first, with the feed's end as the cursor: a poll from it goes on
+ * with what comes next. It looks back a page of the log at a time until it has them, through `LAST_PAGES` at
+ * most, so a filter that matches little on a busy board can answer fewer.
+ */
+export async function lastFeed(options: FeedOptions, last: number, signal: AbortSignal): Promise<{ events: BoardEventView[]; cursor: number }> {
+  const { index: head } = await options.session.state(channelsReducer)
+  let events: BoardEventView[] = []
+  for (let to = head, pages = 0; to >= 1 && events.length < last && pages < LAST_PAGES; pages++) {
+    const from = Math.max(1, to - PAGE + 1)
+    const stretch = (await options.session.history({ gte: from, lte: to })) as BoardEvent[]
+    // Each stretch is read as a feed that starts right before it would be.
+    const feed = new FeedProjection(options)
+    await feed.preload(stretch, from - 1)
+    const found: BoardEventView[] = []
+    for (const event of stretch) {
+      const { view } = await feed.step(event, signal)
+      if (view) found.push(view)
+    }
+    events = [...found, ...events]
+    to = from - 1
+  }
+  return { events: events.slice(-last), cursor: head }
+}
 
 /**
  * One long-poll: matching events already in the log return at once; otherwise

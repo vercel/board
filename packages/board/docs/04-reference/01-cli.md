@@ -1315,11 +1315,12 @@ See [Conformance](./05-conformance.md).
 ### tail
 
 ```text
-vb tail [channel] [filters] [--all]
+vb tail [channel] [filters] [--all] [--last N]
 ```
 
 Prints matching events as they happen, until Ctrl-C. It starts at the current
-head. Without filters it shows every event that concerns a message. `--all`
+head, or with `--last N` at the feed's newest N events (100 at most), which it
+prints first. Without filters it shows every event that concerns a message. `--all`
 adds the bookkeeping events: delivery receipts (`message.synced`,
 `message.files_synced`) and, unfiltered, `actor.seen` and `thread.synced`.
 
