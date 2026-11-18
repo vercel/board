@@ -553,7 +553,15 @@ export function createBoardClient(options: ClientOptions) {
       }
       const before = await reaching()
       if (before.length > 0) throw granted(before)
-      const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      // Channels come a page at a time, so the ones at or under it are asked for by its path, every page of them.
+      // A board from before pages answers them all at once, whatever it's asked.
+      let there: ChannelView | undefined
+      for (let after: string | undefined; ; ) {
+        const page = await call<{ channels: ChannelView[]; next?: string | null }>('GET', `/channels${queryString({ prefix: path, after })}`)
+        there = page.channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+        if (there || !page.next) break
+        after = page.next
+      }
       if (there)
         throw new BoardError(
           'channel_exists',

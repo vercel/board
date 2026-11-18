@@ -35,6 +35,17 @@ describe('a private channel, from the handle', () => {
     expect((await ops.createChannel('ops/keys', { private: true })).grants?.[0]?.principals).toEqual([{ kind: 'project', projectId: 'prj_ops', name: null, environments: ['production'], teamId: TEAM_ID }])
   })
 
+  it('refuses a path with a channel under it that the first page of the board\'s channels doesn\'t reach', async () => {
+    const team = testBoard()
+    const julian = handleAs(team.fetch, () => personToken())
+    for (let i = 0; i < 100; i++) await julian.post(`a/${String(i).padStart(3, '0')}`, { text: 'x' })
+    await julian.post('vault/keys', { text: 'already here' })
+    const before = await ids(team)
+
+    await expect(julian.createChannel('vault', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists', message: expect.stringContaining('vault/keys') })
+    expect(await ids(team)).toEqual(before)
+  })
+
   it("refuses a path where it or a channel under it is there, and a caller no grant could name, before it writes anything", async () => {
     const team = testBoard()
     const julian = handleAs(team.fetch, () => personToken())
