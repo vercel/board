@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Attachment, ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, type Attachment as AttachmentType } from '../contract/schemas.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
-import { fileName, mediaType } from '../contract/files.ts'
+import { mediaType } from '../contract/files.ts'
+import { uploadName } from './file-names.ts'
 
 /**
  * Where a local board's attachments' bytes live. The board writes each file
@@ -90,7 +91,7 @@ export async function writeUpload(
   if (input.data.byteLength > max) throw new HttpError(413, 'too_large', `attachments are at most ${max / 1024 / 1024} MB`)
   const attachment: AttachmentType = {
     id: attachmentId(),
-    name: fileName(input.name),
+    name: uploadName(input.name),
     type: mediaType(input.type),
     size: input.data.byteLength,
   }
@@ -157,7 +158,7 @@ export async function startUpload(
   const expires = new Date(Date.now() + DIRECT_UPLOAD_TTL_MS)
   const ticket: Ticket = {
     id: attachmentId(),
-    name: fileName(input.name),
+    name: uploadName(input.name),
     type: mediaType(input.type),
     size: input.size,
     uploadedBy: input.uploadedBy,

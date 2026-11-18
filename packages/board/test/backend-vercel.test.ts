@@ -162,6 +162,7 @@ describe('vercel()', () => {
       'schemas: carries a block in a message, checked against the schema its fence names': 'passed',
       'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
+      'attachments: refuses a name that would download as a dotfile': 'passed',
       'attachments: starts a task with a file, which its root carries': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'skipped',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'skipped',
@@ -452,6 +453,65 @@ describe('vercel()', () => {
     await team.post('dev/web', { text: 'two' })
     await team.reply((await team.post('dev/web', { text: 'three' })).id, { text: 'four' })
     expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+  })
+
+  /** A handle on the fake whose reads of the board's whole channel list are kept: the tag each sent, and the status and tag it was answered with. */
+  const listingOn = (api: ReturnType<typeof fakeMessageboard>) => {
+    const listed: { sent: string | null; status: number; etag: string | null }[] = []
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const response = await as(api, 'user:u_jb')(input, init)
+      const url = new URL(String(input))
+      if (init?.method === 'GET' && url.pathname.endsWith('/channels') && !url.searchParams.has('name'))
+        listed.push({ sent: new Headers(init.headers).get('if-none-match'), status: response.status, etag: response.headers.get('etag') })
+      return response
+    }
+    return { team: board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) }), listed }
+  }
+
+  it("lists the board's channels again with the tag the API answered them with, and shows what it answered while the API says it holds", async () => {
+    const api = fakeMessageboard()
+    const { team, listed } = listingOn(api)
+    await team.post('ops', { text: 'one' })
+    await team.post('dev/web', { text: 'two' })
+    listed.length = 0
+    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+    const [first, second] = listed
+    expect(first).toMatchObject({ sent: null, status: 200, etag: expect.any(String) })
+    expect(second).toEqual({ sent: first!.etag, status: 304, etag: first!.etag })
+  })
+
+  it('keeps the tag of the newest list the API answered, and sends that one next', async () => {
+    const api = fakeMessageboard()
+    const { team, listed } = listingOn(api)
+    await team.post('ops', { text: 'one' })
+    await team.channels()
+    await team.createChannel('ops/alerts')
+    expect(await team.channels()).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'ops/alerts' }])
+    expect(await team.channels()).toEqual([{ path: 'general' }, { path: 'ops' }, { path: 'ops/alerts' }])
+    const [before, changed, again] = listed
+    expect(changed).toMatchObject({ sent: before!.etag, status: 200 })
+    expect(changed!.etag).not.toBe(before!.etag)
+    expect(again).toEqual({ sent: changed!.etag, status: 304, etag: changed!.etag })
+  })
+
+  it('keeps a tag for each caller the API answers apart: a profile narrowed to some channels sends none of its principal\'s', async () => {
+    const api = fakeMessageboard()
+    const { team, listed } = listingOn(api)
+    await team.post('ops', { text: 'one' })
+    await team.post('dev/web', { text: 'two' })
+    const fixer = team.as('fixer', { can: { 'dev/': ['read'] } })
+    listed.length = 0
+    for (let round = 0; round < 2; round++) {
+      expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+      expect(await fixer.channels()).toEqual([{ path: 'dev/web' }])
+    }
+    expect(listed.map(({ sent, status }) => [sent === null ? null : listed.findIndex((one) => one.etag === sent), status])).toEqual([
+      [null, 200],
+      [null, 200],
+      [0, 304],
+      [1, 304],
+    ])
   })
 
   it('makes a channel in the API before anything posts to it, once', async () => {
@@ -1082,6 +1142,15 @@ describe('vercel()', () => {
     }
   })
 
+  it('refuses an empty file as invalid_request, as every board does, and asks the API nothing', async () => {
+    const api = fakeMessageboard()
+    const pong = pongBoard(api)
+    await pong.discovery()
+    api.requests.length = 0
+    await expect(pong.upload({ data: new Uint8Array(0), name: 'empty.log' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    expect(api.requests.filter((r) => r.includes('/attachments'))).toEqual([])
+  })
+
   it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for", async () => {
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
     const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
@@ -1156,8 +1225,8 @@ describe('vercel()', () => {
     api.requests.length = 0
     const next = await team.channel('busy').messages({ after: start.cursor, limit: 150 })
     expect(next.messages.map((m) => m.text)).toEqual(texts(61, 130))
-    // One page has them all, and a second says there are no more, on an API whose pages don't.
-    expect(api.requests).toEqual(['GET /boards/brd_test/messages', 'GET /boards/brd_test/messages'])
+    // One page has them all, and the API says it caught up: no page is asked for past it.
+    expect(api.requests).toEqual(['GET /boards/brd_test/messages'])
     const some = await team.channel('busy').messages({ after: start.cursor, limit: 30 })
     expect(some.messages.map((m) => m.text)).toEqual(texts(61, 90))
     expect((await team.channel('busy').messages({ after: some.cursor, limit: 500 })).messages.map((m) => m.text)).toEqual(texts(91, 130))
@@ -1337,6 +1406,14 @@ describe('vercel()', () => {
       expect((await named(api, 'vault', 'user:u_ada').channel('dev').messages()).messages).toEqual([])
     })
 
+    it('finds a board by a name that fits in 64 characters once trimmed and NFC-normalized, as the API counts it', async () => {
+      const long = 'é'.repeat(64)
+      const api = fakeMessageboard({ boards: [{ name: long, id: 'brd_long' }] })
+      for (const name of [long.normalize('NFD'), ` ${long} `])
+        expect(await named(api, name).discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_long?teamId=team_test` })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+    })
+
     it('takes ensure only with a name', () => {
       expect(() => board({ ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') }) })).toThrow('ensure makes the board `name` names: pass name too')
     })
@@ -1404,6 +1481,27 @@ describe('vercel()', () => {
     // Named by its ID, it's read either way, so a credential that's narrowed itself is told it can't.
     const byId = board({ backend: vercel({ team: 'team_test', board: 'brd_sec', api: API, fetch: (input, init = {}) => as(api, 'user:u_jb')(input, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), 'x-board-can': 'dev/=post' } }) }) })
     await expect(byId.discovery()).rejects.toMatchObject({ status: 403 })
+  })
+
+  it("reads on from a cursor as the API's cursor, and asks for no page past one the API says caught up", async () => {
+    const api = fakeMessageboard()
+    const asked: URL[] = []
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/messages')) asked.push(url)
+      return as(api, 'user:u_jb')(input, init)
+    }
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) })
+    await team.post('busy', { text: 'm0' })
+    const { cursor } = await team.channel('busy').messages()
+    for (let i = 1; i <= 3; i++) await team.post('busy', { text: `m${i}` })
+    asked.length = 0
+    expect((await team.channel('busy').messages({ after: cursor })).messages.map((m) => m.text)).toEqual(['m1', 'm2', 'm3'])
+    expect(asked.map((url) => [url.searchParams.get('cursor'), url.searchParams.has('after')])).toEqual([[cursor, false]])
+    // A read that finds fewer than it asks for stops there too.
+    asked.length = 0
+    expect((await team.channel('busy').messages({ after: cursor, limit: 10 })).messages.map((m) => m.text)).toEqual(['m1', 'm2', 'm3'])
+    expect(asked).toHaveLength(1)
   })
 
   it("reads past the API's page of 100 after a cursor, as many as a read asks for", async () => {
@@ -1990,6 +2088,32 @@ describe('vercel()', () => {
     const started = api.send(thread.id)
     expect((await pong.thread(started)).message).toMatchObject({ channel: 'standup', text: 'standup', labels: { kind: 'standup' }, schedule: { id: thread.id, n: 0 } })
     expect((await pong.thread(root.id)).message.schedule).toBeUndefined()
+  })
+
+  it("lists again from the start, once, when the API says a page's cursor expired, and fails when it expires again", async () => {
+    const api = fakeMessageboard()
+    let expiring = 0
+    let expired = 0
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/schedules') && url.searchParams.has('cursor') && expiring > 0) {
+        expiring--
+        expired++
+        return Response.json({ error: { code: 'cursor_expired', message: 'This cursor expired: list again without one.' } }, { status: 410 })
+      }
+      return as(api, 'project:prj_pong:production')(input, init)
+    }
+    const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) })
+    const made: string[] = []
+    // The fake API pages schedules two at a time.
+    for (let n = 0; n < 5; n++) made.push((await pong.schedule('ops', { text: `ops ${n}`, in: '1h' })).id)
+    expiring = 1
+    expect((await pong.schedules({})).map((s) => s.id).sort()).toEqual(made.sort())
+    expect(expired).toBe(1)
+    expiring = 3
+    expired = 0
+    await expect(pong.schedules({})).rejects.toMatchObject({ status: 410, code: 'cursor_expired' })
+    expect(expired).toBe(2)
   })
 
   it('lists pending schedules by thread, channel, and creator, across short pages, and every one with `all`', async () => {

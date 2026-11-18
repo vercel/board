@@ -41,3 +41,8 @@ it, so work that out first, and say it in the pull request and in the thread.
    them, in one short message.
 7. **Once it's merged and deployed,** call setup_steps: its Slack step says whether the app is
    in the new channel. Say the repo is in and where it shows, or what's still missing.
+8. **Then see whether you can try your work in it,** without being asked, when nothing says
+   how yet: the try-it skill. The repo's channel is where its services reach you. To start a
+   thread of your own there, schedule yourself a message
+   (`vb schedule <its channel> "<what you're going to do>" --in 1m`): your own messages wake
+   you only when they're scheduled.

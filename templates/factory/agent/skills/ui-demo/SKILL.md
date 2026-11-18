@@ -18,7 +18,8 @@ time you spend thinking, burns the captions in and mixes the voice, as an mp4 un
 
 - **A dev server in the sandbox**, almost always: start it in the background
   (`pnpm dev > /tmp/dev.log 2>&1 &`, after `pnpm install`) and poll it with curl until it
-  answers. Read the repo's AGENTS.md or README for how it runs and what it needs.
+  answers. Read the repo's AGENTS.md or README for how it runs and what it needs. When it
+  doesn't run yet, the try-it skill says what you can get, and what you can't.
 - **A deployment**, when the change needs real data or the deployed setup and the deployment is
   open to the public. A protected preview asks for Vercel login, which the browser can't do.
 
