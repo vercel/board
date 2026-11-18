@@ -161,7 +161,7 @@ describe('the inspector store', () => {
     expect(store.filtering({ label: [] })).toBe(false)
   })
 
-  it('groups a thread\'s replies by author and time, and gives every root its own header', () => {
+  it("groups a thread's replies, and a channel's threads, by author and time", () => {
     const at = (minutes: number) => new Date(Date.UTC(2026, 9, 1, 12, minutes)).toISOString()
     const first = message(1, { createdAt: at(0), re: '9' })
     expect(continues(first, message(2, { createdAt: at(4), re: '9' }))).toBe(true)
@@ -170,8 +170,11 @@ describe('the inspector store', () => {
     expect(continues(first, message(2, { createdAt: at(1), re: '8' }))).toBe(false) // another thread
     expect(continues(first, message(2, { createdAt: at(1), re: '9' }), true)).toBe(false) // the first has replies
     expect(continues(first, message(2, { createdAt: at(1), re: '9', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null } }))).toBe(false)
-    // A root starts a thread: two by one author, a minute apart, are two threads, each with who and when.
-    expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }))).toBe(false)
+    // Two threads one author started a minute apart show who once, as Slack does, unless the first has replies.
+    expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }))).toBe(true)
+    expect(continues(message(1, { createdAt: at(0) }), message(2, { createdAt: at(1) }), true)).toBe(false)
+    // A reply moves an older thread below a newer one by the same author: it shows who started it again.
+    expect(continues(message(2, { createdAt: at(1) }), message(1, { createdAt: at(0) }))).toBe(false)
   })
 
   it("lists a channel by the board's thread pages: a task that came in from the task list shows there once a page has it", () => {

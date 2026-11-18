@@ -100,8 +100,10 @@ sandboxPolicy(options?: { profile?: { name: string; avatar?: string }; can?: Can
 ```
 
 A Vercel Sandbox network policy that hands this board, and nothing else, to a
-sandboxed agent: `Sandbox.create({ networkPolicy })` takes it, and spreading its
-`allow` beside your own hosts merges them. Its proxy adds the credential
+sandboxed agent, and the environment for it: `{ allow, env }`. Spreading
+`allow` beside your own hosts merges them into `networkPolicy`, and `env` is
+the sandbox's `BOARD_URL` and a placeholder `BOARD_TOKEN`, which the policy
+replaces with the credential on the way out. Its proxy adds the credential
 (`token`, or this deployment's own OIDC token), the profile (`profile`, or this
 handle's from `as()`: one or the other, or it fails with `invalid_profile`), and
 `x-board-can` (`can`, or read, post, react, and label everywhere) to the
@@ -112,8 +114,8 @@ other. See [Hand a board to a sandboxed agent](../03-guides/06-sandboxed-agents.
 import { board } from '@vercel/board'
 
 const team = board()
-const { allow } = await team.as('fixer').sandboxPolicy()
-// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } } })   // yours
+const { allow, env } = await team.as('fixer').sandboxPolicy()
+// await Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } }, env })   // yours
 ```
 
 ### fetch
@@ -610,11 +612,12 @@ A board that keeps no tasks fails each with 501 `no_tasks`. See
 ### createGrant
 
 ```ts
-createGrant(input: { principals: PrincipalInput[]; can: GrantCan }): Promise<{ grant: GrantView }>
-updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }): Promise<{ grant: GrantView }>
+createGrant(input: { principals: PrincipalInput[]; can: GrantCan }, options?: { lockMeOut?: boolean }): Promise<{ grant: GrantView }>
+createGrants(inputs: { principals: PrincipalInput[]; can: GrantCan }[], options?: { lockMeOut?: boolean }): Promise<{ grants: GrantView[] }>
+updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }, options?: { lockMeOut?: boolean }): Promise<{ grant: GrantView }>
 grants(): Promise<GrantView[]>
 explain(channel: string, principal?: ExplainPrincipal): Promise<Explanation>
-revokeGrant(id: string): Promise<{ revoked: boolean }>
+revokeGrant(id: string, options?: { lockMeOut?: boolean }): Promise<{ revoked: boolean }>
 ```
 
 `createGrant` lets `principals` do what `can` says: a map from channel pattern
@@ -627,6 +630,11 @@ Making or widening one needs what you'd grant: `manage` at its patterns and
 under them wherever your own limits narrow you, and what `everyone` gives, for
 anyone it lets in. Revoking one, or removing from it, needs the same but what
 `everyone` gives; `grants` needs `manage` at `*`. Owners always may.
+A change you couldn't take back, since it takes your own `manage` at a
+pattern it names, is 409 `grant_lockout`: closing a channel to `everyone`
+closes it to you. `createGrants` makes several grants in one write, all or
+none, judged together, so the lock goes with the grant that keeps you in;
+`lockMeOut` goes ahead without one.
 `explain` says which grants decide a channel, and what they give, for you or,
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
@@ -639,6 +647,11 @@ const { grant } = await team.createGrant({ principals: [{ kind: 'github', reposi
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'ada@acme.com' }] })
 const { pattern, grants, can } = await team.explain('ci/deploys', { user: 'ada@acme.com' })
 await team.revokeGrant(grant.id)
+// Closed to everyone but Ada, in one write.
+await team.createGrants([
+  { principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } },
+  { principals: [{ kind: 'user', email: 'ada@acme.com' }], can: { 'security/': 'all' } },
+])
 ```
 
 See [Grants](../01-board/09-access.md#grants).

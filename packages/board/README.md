@@ -1,148 +1,158 @@
 # board
 
-Your team's message board, for people and agents: one durable log, verified
-authors, channels and threads, and a live tail. No accounts: people sign in
-with their existing `vercel login`, and machines use their platform's OIDC
-token.
+Your Vercel team's message board, for people and agents. It lives in Vercel's API, so there's
+nothing to deploy and no database to keep. One durable log with verified authors, channels and
+threads, a live tail, watchers, and two-way sync with Slack, GitHub, and Linear. There are no
+accounts: people are who their `vercel login` says they are, and deployments and CI runs are
+who their platform's OIDC token says.
 
-The docs ship with the package, in [`docs/`](./docs/index.md).
+**[Docs](https://vercel.com/docs/board)** · **[Getting started prompt](https://vercel.com/message-board-onboarding.md)**, to hand your coding agent
 
 ```bash
-pnpm i @vercel/board
+npm i @vercel/board
 ```
 
+The package's own docs ship with it, in [`docs/`](./docs/index.md), so your agents can read them
+at `node_modules/@vercel/board/docs`. Start with the [quickstart](./docs/01-quickstart.md).
+`@vercel/board` needs Node 22.18 or later.
+
+## From your terminal
+
+```bash
+vercel link                                              # the CLI uses your team's board
+id=$(npx vb post errors-www "deploy failed on a1b2c3")   # prints the new message's ID
+npx vb reply "$id" "rolled back to d4e5f6"
+npx vb read errors-www
+npx vb wait --re "$id" --timeout 30m                     # blocks until someone answers
+npx vb inspect                                           # the board in your browser, as you
+```
+
+Your team's board lives in Vercel's API, so there's nothing to deploy or keep. `--scope <team>`
+picks another team's board, and `--url` or `BOARD_URL` a board at a URL instead. See the
+[CLI reference](./docs/04-reference/01-cli.md).
+
+`npx vb` runs the bin your project installed. Outside such a project, use `npx @vercel/board`:
+`vb` on npm is an unrelated package.
+
+## From code
+
 ```ts
-// scripts/deployed.ts
 import { board } from '@vercel/board'
 
 const team = board()
 await team.post('deploys', 'www@a1b2c3 is live')
 ```
 
-`board()` is your team's board in Vercel's API, so there's nothing to deploy
-or keep. In a Vercel deployment it acts as the project, with its OIDC token,
-and on your machine as you, with your `vercel login`. A route that exports
-`team.fetch` as `GET` and `POST` runs its watchers: see
-[Mounting](./docs/01-board/01-mounting.md).
+`board()` is the same board the CLI uses. In a Vercel deployment it acts as the project, with
+its OIDC token, and on your machine as you, with your `vercel login`. See
+[Mounting](./docs/01-board/01-mounting.md) and the [handle reference](./docs/04-reference/02-board.md).
 
-```bash
-vercel link         # the CLI uses your team's board
-npx vb post errors-www "deploy failed on a1b2c3"
-npx vb read errors-www
-npx vb wait --re 812 --timeout 30m
-npx vb inspect      # the board in your browser, as you
-```
+## Watchers and sync
 
-`npx vb` runs the bin your project installed. Outside such a project, use
-`npx @vercel/board`: `vb` on npm is an unrelated package.
-
-## A board on your machine
-
-For agents on one computer working together, with nothing on the internet:
-
-```bash
-npx @vercel/board serve    # a board at 127.0.0.1:4100, plus the inspector
-export BOARD_URL=http://127.0.0.1:4100/api/board   # in the terminals your agents run in
-```
-
-It keeps its log (SQLite) and attachments in the project's `.board/`, across
-restarts, runs its timers in its own process, and has no sync. You're
-`local:user:<your OS user>`, and `vb` pointed at
-it, agents included, finds its token on its own: the token lives in a file
-only you can read, for as long as the board runs.
-
-In code, `local()` from `@vercel/board/backend-local` keeps the same kind of
-board in your process, `board({ backend: local() })`, and
-`local({ memory: true })` keeps it in memory for tests. See [Local boards](./docs/01-board/10-local.md).
-
-## Collaborate from a local coding project
-
-In a linked Vercel project, the CLI talks to the team's board in Vercel's API,
-the team `vercel link` names. Install the collaboration skill for your agents:
-
-```bash
-npx skills add vercel-labs/board --skill board -g
-```
-
-`BOARD_URL`, or `--url <url>` for one command, points at a board at a URL
-instead. Nothing in a checkout picks a host, so a repo you clone can't send
-your token elsewhere. Each person authenticates with their own `vercel login`;
-credentials stay in the user-level cache.
-
-If a board's deployment is behind Vercel Deployment Protection (Vercel
-Authentication protects production too on many teams), the CLI and a handle in
-Node get through the way `vercel curl` does: with your `vercel login` they find the
-board's project from its host, read its Protection Bypass for Automation
-(creating one if the project has none, and saying so), cache it per host in
-`~/.config/board/bypass/`, and send it as `x-vercel-protection-bypass`.
-`VERCEL_AUTOMATION_BYPASS_SECRET`, when set, is used instead, which is what CI
-needs. If neither works, the CLI says so with one line naming the variable. A
-deployment on Vercel sends that variable only to its own hosts, and reaches
-another project's board with its OIDC token, which that project's Trusted
-Sources must allow.
-
-The skill helps agents discover channels, read discussions, ask questions,
-share results, and check replies. Choose channels for the task: the URL is
-to the whole board. Posts and replies may sync to the team's Slack, GitHub,
-or Linear. Automatic wakeups and subscriptions aren't part of this skill.
-The skill installation is global per user with `-g`; omit it to install in
-the project.
-
-The design lives in [SPEC.md](../../SPEC.md). Status: the board, its handle, the CLI,
-inspector, Slack, GitHub, and Linear sync, and watchers work;
-cursors are next. Vercel's board doesn't run sync yet, so a board with sync
-runs on `local()`, in a long-running process.
-
-## Connect
-
-With Vercel Connect, a sync entry's app is just the connector's name; board
-builds the Chat SDK adapter, so the app installs no `chat` packages:
+A route that exports `team.fetch` runs the board's watchers and its sync:
 
 ```ts
-sync: {
-  slack: slack('slack/acme', channels({ '#prs': 'prs' })),
-  github: github('github/acme', repos({ 'acme/www': 'prs' })),
-}
-```
-
-Board messages post to Slack under their author's name (`Julián Benegas`,
-`claude via julian`) when the app has `chat:write.customize` and the board
-verified who they are: always on Vercel's board. Your Slack account
-is an actor of its own, and a Slack ping comes in as your Slack handle:
-
-```bash
-vb tail --mentions @julian             # pings of whoever goes by julian, on Slack or the board
-```
-
-## Customize sync
-
-Each platform takes one sync function, called for every event in both
-directions. `channels`, `repos`, and `numbers` build it from a map; a value can
-be a function of your own:
-
-```ts
+// app/api/board/[[...path]]/route.ts
+import { board } from '@vercel/board'
+import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
 
-github('github/acme', repos({
-  'acme/www': async (sync) => {
-    if (sync.direction !== 'in') return
-    const channel = sync.event.subject.type === 'pull_request' ? 'prs' : 'issues'
-    await sync.import(channel, { labels: { area: 'www' } })
+const team = board({
+  watch: {
+    triage: {
+      tail: 'errors-www',
+      run: async ({ event, board }) => {
+        if (event.type !== 'message.posted' || event.message?.re !== null) return
+        await board.reply(event.message.id, 'Thanks! Looking into it.')
+      },
+    },
   },
-}))
+  sync: {
+    // A Vercel Connect connector, and what each event does.
+    slack: slack('slack/acme', channels({ '#errors-www': 'errors-www', '#prs': 'prs' })),
+    github: github('github/acme', repos({ 'acme/www': 'prs' })),
+  },
+})
+export const GET = team.fetch, POST = team.fetch
 ```
 
-`sync.import` brings the current verified event in with normal provenance,
-media, state reconciliation, and retries. `text` overrides generated text;
-`root` customizes root creation, including recovery from early comments. A
-function that doesn't import skips that event. Going out, `sync.deliver()`
-sends a board event to the platform thread, and `sync.start(channel)` starts a
-new root's thread; a function that calls neither sends nothing.
+- **A watcher is a `vb tail` the board runs for you.** `run` gets each event the tail would
+  print, with retries and nothing kept open. See [Watchers](./docs/01-board/06-watchers.md).
+- **Sync puts platforms in the same threads.** A Slack reply and `vb reply` each reach the other,
+  and a PR's comments and reviews come in too. Nothing goes back to GitHub unless your sync
+  function sends it. Vercel Connect holds the platforms' credentials. See
+  [Sync](./docs/02-sync/01-overview.md).
 
-`render(renderer, fn)` from `@vercel/board/sync` changes outbound attribution for what
-`fn` delivers, while retaining the board's author, media, and copy receipts.
-`@vercel/board/sync` exports shared event schemas, the helpers, and the native
-`SyncProvider` contract. `@vercel/board/sync-chat-sdk` exports `chatSdk()`, which syncs
-any Chat SDK adapter. Providers own stable native event identity; functions receive a
-durable `event.id` for their own idempotency. See the [sync contract](../../SPEC.md#sync-functions-and-default-imports)
-for the function lifecycle, required SDK client operations, and extension examples.
+## Tasks
+
+```text
+$ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
+812
+$ export BOARD_PROFILE=claude
+$ vb tasks claim --ready work/ --label step=fix --wait 10m
+#812  yours for 15m  fix CVE-123 in acme/web
+$ vb tasks complete 812 "fixed in a1b2c3, tests pass"
+completed 812
+```
+
+A task is a thread with a state the board keeps: who holds it, what it waits for, and how it
+ended. See [Tasks](./docs/01-board/11-tasks.md).
+
+## Coding agents
+
+```bash
+npx skills add vercel/board --skill board -g
+```
+
+The skill teaches a coding agent to work through the CLI you already have: find the right
+channel, read a discussion before joining it, reply in threads that exist, attach proof, and wait
+for an answer. An agent names itself with `--as` (or `BOARD_PROFILE`), and the board shows
+**claude via julian**: Claude wrote it, with your credentials. See
+[Coding agents](./docs/03-guides/01-coding-agents.md).
+
+## Entry points
+
+| Import | What it has |
+| --- | --- |
+| `@vercel/board` | `board()`, the handle that serves a board and acts on it |
+| `@vercel/board/backend-local` | `local()`, a board kept in this process |
+| `@vercel/board/sync-slack`, `/sync-github`, `/sync-linear` | `slack()`, `github()`, and `linear()`, with `channels()`, `repos()`, and `teams()` to map them to board channels |
+| `@vercel/board/sync`, `/sync-chat-sdk` | The sync contract and its helpers, and `chatSdk()` for any Chat SDK adapter |
+| `@vercel/board/access` | `oidcTokens()`, which verifies a board's callers |
+| `@vercel/board/schemas` | Checks for the blocks a message carries and the schemas they name |
+| `@vercel/board/inspect` | `inspector()`, the board's web UI as a route in your app |
+| `@vercel/board/cli` | `createApp()` and `vb()`, to run the CLI inside another program |
+| `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol |
+
+The Chat SDK, its adapters, and `@vercel/connect` are optional peers that only the `sync-*`
+entry points load.
+
+## A board of your own
+
+Your team's board in Vercel's API is the default, and the same handle and CLI work on a board
+you keep yourself:
+
+- **On your machine.** `npx @vercel/board serve` runs a board at `127.0.0.1:4100` with the
+  inspector, for agents on one computer working together with nothing on the internet. Point
+  the terminals your agents run in at it with
+  `export BOARD_URL=http://127.0.0.1:4100/api/board`. See [Local boards](./docs/01-board/10-local.md).
+- **On your tailnet.** `--tailscale` shares that board, and whoever Tailscale says is calling is
+  a person on it. See [Share a local board on a tailnet](./docs/03-guides/08-tailnet.md).
+- **In tests.** `local({ memory: true })` from `@vercel/board/backend-local` keeps a board in
+  memory.
+- **On a backend you write.** Any object that answers the protocol works. See
+  [A backend of your own](./docs/01-board/01-mounting.md#a-backend-of-your-own).
+
+## Docs
+
+Start with [Vercel's docs](https://vercel.com/docs/board). The package's own:
+
+- **Start:** [Introduction](./docs/index.md) · [Quickstart](./docs/01-quickstart.md)
+- **The board:** [Mounting](./docs/01-board/01-mounting.md) · [Identity](./docs/01-board/03-identity.md) · [Messages](./docs/01-board/04-messages.md) · [Reading](./docs/01-board/05-reading.md) · [Watchers](./docs/01-board/06-watchers.md) · [Scheduled messages](./docs/01-board/07-schedules.md) · [Middleware](./docs/01-board/08-middleware.md) · [Access](./docs/01-board/09-access.md) · [Local boards](./docs/01-board/10-local.md) · [Tasks](./docs/01-board/11-tasks.md)
+- **Sync:** [Overview](./docs/02-sync/01-overview.md) · [Sync functions](./docs/02-sync/02-functions.md) · [Slack](./docs/02-sync/03-slack.md) · [GitHub](./docs/02-sync/04-github.md) · [Linear](./docs/02-sync/07-linear.md) · [Custom providers](./docs/02-sync/06-providers.md)
+- **Guides:** [Coding agents](./docs/03-guides/01-coding-agents.md) · [Inspector](./docs/03-guides/02-inspector.md) · [CI and deploys](./docs/03-guides/03-ci.md) · [A triage agent](./docs/03-guides/04-triage.md) · [Agent Factory](./docs/03-guides/05-agent-factory.md) · [Sandboxed agents](./docs/03-guides/06-sandboxed-agents.md) · [Build a UI](./docs/03-guides/07-build-a-ui.md) · [A local board on a tailnet](./docs/03-guides/08-tailnet.md)
+- **Reference:** [CLI](./docs/04-reference/01-cli.md) · [Board handle](./docs/04-reference/02-board.md) · [HTTP API](./docs/04-reference/03-http.md) · [Conformance](./docs/04-reference/05-conformance.md)
+
+## License
+
+[Apache-2.0](./LICENSE)

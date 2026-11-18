@@ -224,6 +224,17 @@ describe("sync's records", () => {
     return { team, support, ops, julian, incident: { id: incident }, replied }
   }
 
+  it("tells two platform messages apart when their thread and message read the same joined by a bar", async () => {
+    const { support, julian } = await synced()
+    const origin = (thread: string, message: string) => ({ channel: 'slack:C1', thread, subthread: null, message, context: null })
+    const root = (text: string, at: ReturnType<typeof origin>) => support('POST', '/sync/imports', { op: 'post', author, from: 'slack', channel: 'support/inbox', text, origin: at })
+    expect((await root('first', origin('slack:C1:700', 'b|c'))).status).toBe(200)
+    expect((await root('second', origin('slack:C1:700|b', 'c'))).status).toBe(200)
+    // An edit by its platform message changes that one, not the other.
+    expect((await support('POST', '/sync/imports', { op: 'edit', author, from: 'slack', origin: { thread: 'slack:C1:700|b', message: 'c' }, text: 'second, edited' })).status).toBe(200)
+    expect((await read(julian, 'support/inbox')).map((m) => m.text)).toEqual(['first', 'second, edited'])
+  })
+
   it("won't let an import's origin take a platform thread or message another board thread syncs with", async () => {
     const { support, julian, replied } = await synced()
     const origin = (thread: string, message: string, subthread: string | null = null) => ({ channel: 'slack:C1', thread, subthread, message, context: null })
@@ -474,8 +485,8 @@ describe('who an import is by', () => {
       }
       await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(2))
       const [vercel, other] = asked.mock.calls.map(([, , body]) => body)
-      expect(vercel!.markdown).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
-      expect(vercel!.deployments).toMatchObject([{ project: 'vboard-factory', status: 'Building' }])
+      expect(vercel!.markdown).toContain('**▲ Vercel**\n- ⏳ **[acme-agents](https://vercel.com/acme/acme-agents)** · [Building]')
+      expect(vercel!.deployments).toMatchObject([{ project: 'acme-agents', status: 'Building' }])
       expect(other!.markdown).toContain('| Project |')
       expect(other).not.toHaveProperty('deployments')
       const vbRead = await vbOn(team)

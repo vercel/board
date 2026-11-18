@@ -8,9 +8,12 @@ import {
   BOARD_URL,
   caller,
   deploymentToken,
+  mount,
   personToken,
   PROJECT_ID,
+  testAuth,
   testBoard,
+  testLocal,
   workflowToken,
 } from './harness.ts'
 
@@ -357,7 +360,7 @@ describe('messages', () => {
     const ada = caller(fetch, await personToken('ada'), {})
     await julian('POST', '/messages', { channel: 'docs', text: 'hi' })
     await claude('POST', '/messages', { channel: 'docs', text: 'hi' })
-    for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]', 'ask @[Julian@vercel.com]', 'run `@julian`', '@juliana hi'])
+    for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]', 'ask @[Grace@acme.com]', 'run `@julian`', '@juliana hi'])
       await ada('POST', '/messages', { channel: 'docs', text })
 
     const texts = async (as: typeof julian, mentions: string) =>
@@ -368,7 +371,7 @@ describe('messages', () => {
     expect(await texts(ada, 'julian')).toEqual([byHandle, agentByHandle, 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]'])
     expect(await texts(ada, 'vercel:user:julian')).toEqual(await texts(ada, 'julian'))
     expect(await texts(ada, 'julian/claude')).toEqual([agentByHandle, 'cc @[vercel:user:julian+claude]'])
-    expect(await texts(ada, 'julian@vercel.com')).toEqual(['ask @[Julian@vercel.com]'])
+    expect(await texts(ada, 'grace@acme.com')).toEqual(['ask @[Grace@acme.com]'])
     // Me is my handle and my ID.
     expect(await texts(julian, 'me')).toEqual([byHandle, 'cc @[vercel:user:julian]'])
     expect(await texts(claude, 'me')).toEqual([agentByHandle, 'cc @[vercel:user:julian+claude]'])
@@ -380,17 +383,17 @@ describe('messages', () => {
     const { body: pr } = await julian('POST', '/messages', {
       channel: 'prs',
       text: 'PR #1: Add filters',
-      labels: { pr: 'vercel-labs/board#1', state: 'open' },
+      labels: { pr: 'vercel/board#1', state: 'open' },
     })
     await julian('POST', '/messages', { re: pr.message.id, text: 'Looks FLAKY to me' })
-    await julian('POST', '/messages', { channel: 'prs', text: 'PR #2: Draft', labels: { pr: 'vercel-labs/board#2', state: 'draft' } })
+    await julian('POST', '/messages', { channel: 'prs', text: 'PR #2: Draft', labels: { pr: 'vercel/board#2', state: 'draft' } })
     await julian('POST', '/messages', { channel: 'prs', text: 'no labels here' })
 
     const texts = async (query: string) =>
       (await julian('GET', `/messages?${query}`)).body.messages.map((m: { text: string }) => m.text)
     // A key alone; a root's label reaches its replies.
     expect(await texts('label=pr')).toEqual(['PR #1: Add filters', 'Looks FLAKY to me', 'PR #2: Draft'])
-    expect(await texts(`label=${encodeURIComponent('pr=vercel-labs/board#1')}`)).toEqual(['PR #1: Add filters', 'Looks FLAKY to me'])
+    expect(await texts(`label=${encodeURIComponent('pr=vercel/board#1')}`)).toEqual(['PR #1: Add filters', 'Looks FLAKY to me'])
     expect(await texts(`label=${encodeURIComponent('state=open|draft')}&text=pr%20%23`)).toEqual(['PR #1: Add filters', 'PR #2: Draft'])
     expect(await texts('label=pr&text=flaky')).toEqual(['Looks FLAKY to me'])
     expect(await texts('from=board&text=no%20labels')).toEqual(['no labels here'])
@@ -546,6 +549,71 @@ describe('its URL', () => {
       expect((await at('/api/board/elsewhere/deeper/messages/1')).status).toBe(401)
       expect(board.url).toBe('https://board-abc.vercel.app/api/board')
     } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  // A board mounted in a server of your own, behind a proxy that passes any Host on.
+  const selfHosted = () => {
+    const board = mount({ auth: { ...testAuth, local: testLocal } })
+    const at = async (host: string, path = '/me') =>
+      board.fetch(new Request(`https://${host}/api/board${path}`, { headers: { authorization: `Bearer ${await personToken('u_julian', `https://${host}/api/board`)}` } }))
+    return { board, at }
+  }
+
+  it("verifies no token in production without url, since a request's sender names its Host", async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const { board, at } = selfHosted()
+      const me = await at('attacker.example')
+      expect(me.status).toBe(500)
+      expect(await me.json()).toMatchObject({ error: { code: 'no_board_url', hint: expect.stringContaining('board({ url:') } })
+      // Nor does discovery tell a client which audience to mint for.
+      expect((await board.fetch(new Request('https://attacker.example/api/board'))).status).toBe(500)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('lets a request with no token through to who verifies it in production without url, since there is no audience to check', async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      // A host whose page signs people in with a cookie of its own.
+      const cookied = mount({ authenticate: ({ headers }) => (headers.get('cookie') === 'session=ada' ? { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } : null) })
+      const me = await cookied.fetch(new Request('https://board.example/api/board/me', { headers: { cookie: 'session=ada' } }))
+      expect(me.status).toBe(200)
+      expect(await me.json()).toMatchObject({ principal: 'vercel:user:u_ada' })
+      // No one at all is no one: refused as any board refuses them, not for want of a URL.
+      expect((await selfHosted().board.fetch(new Request('https://board.example/api/board/me'))).status).toBe(401)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('takes its URL from requests on Vercel, which routes only its own domains to it', async () => {
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      expect((await selfHosted().at('board-abc.vercel.app')).status).toBe(200)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('takes its URL from requests in development, and says once to set url', async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('NODE_ENV', 'development')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { at } = selfHosted()
+      expect((await at('localhost:3000')).status).toBe(200)
+      expect((await at('localhost:3000')).status).toBe(200)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]![0])).toContain('board({ url })')
+    } finally {
+      warn.mockRestore()
       vi.unstubAllEnvs()
     }
   })

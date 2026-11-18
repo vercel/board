@@ -62,6 +62,47 @@ describe('a mention, when it is written', () => {
     expect(await text(reply.body.message.id)).toBe('@[vercel:user:u_malte2]?')
   })
 
+  it("takes the board's own over a platform user who goes by the same handle, even in a thread only the platform user wrote in", async () => {
+    const board = testBoard({ authenticate: hostVerifier })
+    const as = (token: string) => caller(board.fetch, token)
+    await as('pt_ada')('POST', '/messages', { channel: 'lobby', text: 'hello' })
+    // A Slack user whose display name is `ada`, as the board's own sync records them, and the thread they started.
+    const eve = { actor: 'slack:user:U_EVE', principal: 'slack:user:U_EVE', profile: null }
+    await board.session.append({ type: 'actor.seen', payload: { actor: eve.actor, kind: 'external', handle: 'ada', name: 'ada', avatar: null, platform: 'slack' } })
+    const [posted] = await board.session.append({
+      type: 'message.posted',
+      payload: { channel: 'dev', text: 'ping me here', re: null, replyTo: null, thread: 'eve-thread', labels: {}, noSync: false, by: eve, origin: null, from: 'slack' },
+    })
+    const fresh = await as('pt_julian')('POST', '/messages', { channel: 'dev', text: '@ada?' })
+    expect(fresh.body.mentions).toEqual([{ written: '@ada', actor: ADA, candidates: [] }])
+    const reply = await as('pt_julian')('POST', '/messages', { re: String(posted!.index), text: '@ada, the deploy key is in the vault' })
+    expect(reply.status).toBe(201)
+    expect(reply.body.mentions).toEqual([{ written: '@ada', actor: ADA, candidates: [] }])
+    expect(reply.body.message.text).toBe('@[vercel:user:u_ada], the deploy key is in the vault')
+  })
+
+  it('takes the platform user who wrote in the thread, of several who share a handle and no one on the board has', async () => {
+    const board = testBoard({ authenticate: hostVerifier })
+    const users = ['U_EVE', 'U_EVE2'].map((id) => ({ actor: `slack:user:${id}`, principal: `slack:user:${id}`, profile: null }))
+    for (const user of users) await board.session.append({ type: 'actor.seen', payload: { actor: user.actor, kind: 'external', handle: 'eve', name: 'Eve', avatar: null, platform: 'slack' } })
+    const [posted] = await board.session.append({
+      type: 'message.posted',
+      payload: { channel: 'dev', text: 'mine', re: null, replyTo: null, thread: 'eve2-thread', labels: {}, noSync: false, by: users[1]!, origin: null, from: 'slack' },
+    })
+    const julian = caller(board.fetch, 'pt_julian')
+    const fresh = await julian('POST', '/messages', { channel: 'dev', text: '@eve?' })
+    expect(fresh.body.mentions[0]).toMatchObject({ written: '@eve', actor: null })
+    const reply = await julian('POST', '/messages', { re: String(posted!.index), text: '@eve?' })
+    expect(reply.body.message.text).toBe('@[slack:user:U_EVE2]?')
+  })
+
+  it('still names a platform user by a handle only they have', async () => {
+    const board = testBoard({ authenticate: hostVerifier })
+    await board.session.append({ type: 'actor.seen', payload: { actor: 'slack:user:U_EVE', kind: 'external', handle: 'eve', name: 'Eve', avatar: null, platform: 'slack' } })
+    const { body } = await caller(board.fetch, 'pt_julian')('POST', '/messages', { channel: 'dev', text: 'hi @eve' })
+    expect(body.message.text).toBe('hi @[slack:user:U_EVE]')
+  })
+
   it('settles the text of an edit the same way', async () => {
     const { as, said, text } = await boardOf('pt_julian', 'pt_ada')
     const { status, body } = await as('pt_julian')('POST', `/messages/${said.pt_julian}/edit`, { text: 'hello @ada and @nobody' })

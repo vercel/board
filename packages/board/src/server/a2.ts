@@ -713,6 +713,7 @@ function build(options: A2Options, binding: BoardBinding) {
     },
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
+    createGrants: async (caller, body) => access.createGrants(await identityOf(caller), body),
     updateGrant: async (caller, input) => access.updateGrant(await identityOf(caller), input),
     explain: async (caller, query) => access.explain(await identityOf(caller), query),
     revokeGrant: async (caller, input) => access.revokeGrant(await identityOf(caller), input),

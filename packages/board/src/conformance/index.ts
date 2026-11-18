@@ -218,7 +218,11 @@ type GrantInput = Parameters<Board['createGrant']>[0]
 /** What a grants check makes things with: each is revoked when it ends, whatever happens. */
 type Grants = {
   /** Makes a grant, as this run or as `by`. The first this run makes tells whether it may change grants here at all: a 403 skips the check. */
-  make(input: GrantInput, by?: Board): Promise<GrantView>
+  make(input: GrantInput, by?: Board, options?: Parameters<Board['createGrant']>[1]): Promise<GrantView>
+  /** Makes several in one write, as this run, once it has made one alone. An `everyone` grant among them is revoked before the others, which may be keeping this run in. */
+  makeAll(inputs: readonly GrantInput[]): Promise<GrantView[]>
+  /** The principal a grant names this run by: its user, its project in its environment, or its app. Null for the board's own code, which no grant narrows; a skip for a run no grant could name. */
+  self(): NonNullable<GrantInput['principals'][number]> | null
   /** That `by` is refused a grant, with a 403: one a board wrongly makes is revoked too. */
   deny(by: Board, input: GrantInput, what: string): Promise<void>
   /** This run, narrowed with `x-board-can` to `can`: a run that can't send one skips the check. */
@@ -238,15 +242,34 @@ type Grants = {
 async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void | string>): Promise<void | string> {
   const made: string[] = []
   const grants: Grants = {
-    async make(input, by) {
+    async make(input, by, options) {
       try {
-        const { grant } = await (by ?? ctx.board).createGrant(input)
+        const { grant } = await (by ?? ctx.board).createGrant(input, options)
         made.push(grant.id)
         return grant
       } catch (error) {
         if (!by && made.length === 0 && error instanceof BoardError && error.status === 403) throw new Skip("this token can't change the board's grants")
         throw unnamed(error) ?? error
       }
+    },
+    async makeAll(inputs) {
+      try {
+        const { grants: all } = await ctx.board.createGrants(inputs)
+        // Revoked newest first: everyone's go before the grants that may be keeping this run in.
+        const closes = (grant: GrantView) => grant.principals.some((principal) => principal.kind === 'everyone')
+        made.push(...all.filter((grant) => !closes(grant)).map((grant) => grant.id), ...all.filter(closes).map((grant) => grant.id))
+        return all
+      } catch (error) {
+        throw unnamed(error) ?? error
+      }
+    },
+    self() {
+      const [source, kind, id, environment] = ctx.me.principal.split(':')
+      if (source === 'board') return null
+      if (ctx.me.kind === 'person') return { kind: 'user', userId: ctx.me.principal.split(':').slice(2).join(':') }
+      if (kind === 'project' && id && environment) return { kind: 'project', project: id, environments: [environment] }
+      if (kind === 'app' && id) return { kind: 'app', app: id }
+      throw new Skip("closing a pattern to everyone would close it to this run too, which no grant could keep in: it's neither a person, a project, nor an app")
     },
     async deny(by, input, what) {
       try {
@@ -265,18 +288,8 @@ async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void 
       return ctx.withCan(canText(compileAccess(can)))
     },
     async keep(pattern) {
-      const [source, kind, id, environment] = ctx.me.principal.split(':')
-      if (source === 'board') return
-      const self =
-        ctx.me.kind === 'person'
-          ? { kind: 'user' as const, userId: ctx.me.principal.split(':').slice(2).join(':') }
-          : kind === 'project' && id && environment
-            ? { kind: 'project' as const, project: id, environments: [environment] }
-            : kind === 'app' && id
-              ? { kind: 'app' as const, app: id }
-              : null
-      if (!self) throw new Skip("closing a pattern to everyone would close it to this run too, which no grant could keep in: it's neither a person, a project, nor an app")
-      await grants.make({ principals: [self], can: { [pattern]: 'all' } })
+      const self = grants.self()
+      if (self) await grants.make({ principals: [self], can: { [pattern]: 'all' } })
     },
   }
   let result: void | string = undefined
@@ -1813,6 +1826,62 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
+    name: "refuses a grant its maker couldn't take back, unless it says lockMeOut",
+    run: (ctx) =>
+      withGrants(ctx, async ({ make }) => {
+        const pattern = `${subtreeOf(ctx)}lockout/`
+        // A board that takes no lockMeOut refuses this one, as grant bodies are strict, which stops
+        // the check here: it would make the lock below, and this run couldn't revoke it afterwards.
+        // One that drops keys it doesn't know gets past this, and the run's own handle checks a
+        // body before the board sees it, so the kit can't ask it with a key that's wrong.
+        await make(grantFor(ctx), undefined, { lockMeOut: true }).catch((error: unknown) => {
+          if (error instanceof BoardError && error.status === 400) throw new Mismatch(`a grant that says lockMeOut: expected it made, got ${error.status} ${error.code}`)
+          throw error
+        })
+        const before = (await ctx.board.grants()).length
+        let made: GrantView
+        try {
+          made = (await ctx.board.createGrant({ principals: [{ kind: 'everyone' }], can: { [pattern]: [] } })).grant
+        } catch (error) {
+          if (!(error instanceof BoardError) || error.status !== 409 || error.code !== 'grant_lockout')
+            throw new Mismatch(`closing ${pattern} to everyone, this run included: expected 409 grant_lockout, got ${error instanceof BoardError ? `${error.status} ${error.code}` : messageOf(error)}`)
+          same((await ctx.board.grants()).length, before, 'how many grants there are after the one refused')
+          return
+        }
+        // It was made: this run owns the board, which nothing locks out, or the board let it lock itself out.
+        await ctx.board.revokeGrant(made.id).catch((error: unknown) => {
+          throw new Mismatch(`closing ${pattern} to everyone, this run included: expected 409 grant_lockout, and the board made ${made.id}, which this run can't revoke now (${messageOf(error)})`)
+        })
+        return "nothing locks this run out of a channel, so no grant it makes is a lockout: it owns the board, or it's the board's own code"
+      }),
+  },
+  {
+    group: 'grants',
+    name: 'makes several grants in one write, or none of them, a lock with the grant that keeps its maker in',
+    run: (ctx) =>
+      withGrants(ctx, async ({ make, makeAll, self }) => {
+        const subtree = subtreeOf(ctx)
+        const pattern = `${subtree}batch/`
+        const lock = { principals: [{ kind: 'everyone' as const }], can: { [pattern]: [] } }
+        const me = self()
+        // Whether this run may change grants at all, before a refusal of several could mean anything else.
+        await make({ principals: [projectFor(ctx)], can: { [`${subtree}batch/ci/`]: ['read'] } })
+        // The lock first: made one at a time, the grant that keeps this run in would come too late.
+        const made = await makeAll(me ? [lock, { principals: [me], can: { [pattern]: 'all' } }, grantFor(ctx)] : [lock, grantFor(ctx)])
+        alike(made.map((grant) => grant.principals[0]?.kind), me ? ['everyone', me.kind, 'project'] : ['everyone', 'project'], "the batch's grants, in the order given")
+        check(new Set(made.map((grant) => grant.id)).size === made.length, `each of a batch's grants should have its own ID, got ${show(made.map((grant) => grant.id))}`)
+        const listed = (await ctx.board.grants()).map((grant) => grant.id)
+        check(made.every((grant) => listed.includes(grant.id)), `grants should list each one a batch made, got ${show(listed)}`)
+        // One the board refuses, and none of them is made.
+        await rejects(ctx.board.createGrants([grantFor(ctx), { principals: [projectFor(ctx)], can: { [`${subtree}*/ci`]: ['post'] } }]), 400, 'invalid_grant', "a batch with a grant whose pattern isn't one")
+        const after = (await ctx.board.grants()).map((grant) => grant.id)
+        // What a board made of a batch it refused goes with the rest: this run made it.
+        for (const id of after) if (!listed.includes(id)) await ctx.board.revokeGrant(id)
+        alike(after, listed, 'the grants after a batch that was refused')
+      }),
+  },
+  {
+    group: 'grants',
     name: 'lets a member grant on a pattern after a lock under it',
     // A skip, saying why: the run would be the member, shut out under the lock, and only the
     // board's owner or a grant on the run there, which would keep it in, could lift the lock after.
@@ -1938,6 +2007,22 @@ const CHECKS: Check[] = [
       check(message.attachments.some((a) => a.id === attachment.id), 'the post should carry the file')
       const response = await ctx.board.download(attachment.id)
       same(new TextDecoder().decode(await response.arrayBuffer()), new TextDecoder().decode(bytes), "the file's bytes")
+    },
+  },
+  {
+    group: 'attachments',
+    name: 'refuses a name that would download as a dotfile',
+    run: async (ctx) => {
+      const bytes = new TextEncoder().encode(`conformance ${ctx.labels.conformance}\n`)
+      try {
+        await ctx.board.upload({ data: bytes, name: '.conformance', type: 'text/plain' })
+      } catch (error) {
+        // A board that keeps no files says so first, and the kit reports its 501 as not kept here.
+        if (error instanceof BoardError && error.status === 501) throw error
+        if (error instanceof BoardError && error.status === 400 && error.code === 'invalid_attachment') return
+        throw new Mismatch(`a dotfile name: expected 400 invalid_attachment, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+      }
+      throw new Mismatch('a dotfile name: expected 400 invalid_attachment, and it succeeded')
     },
   },
   {

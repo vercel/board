@@ -27,7 +27,9 @@ import type {
   DeleteBody,
   EditBody,
   EventsPage,
+  CreateGrantsBody,
   GrantBody,
+  RevokeGrantBody,
   GrantView,
   UpdateGrantBody,
   ExplainQuery,
@@ -142,14 +144,19 @@ export type Protocol = {
   cancelTask: { input: Id & Input<typeof CancelTaskBody>; output: { task: MessageView } }
   /** The board's grants: needs `manage` at `*`, or a team owner. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }
-  /** A new grant, always: the same principals again are another. Needs `manage` at each pattern its `can` names. */
+  /**
+   * A new grant, always: the same principals again are another. Needs `manage` at each pattern its
+   * `can` names. One its caller couldn't take back is 409 `grant_lockout`, unless it says `lockMeOut`.
+   */
   createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView } }
+  /** Several grants in one write, all or none, in the order given: each needs what `createGrant` does, on the grants as they are, and a lockout is judged with all of them made. */
+  createGrants: { input: Input<typeof CreateGrantsBody>; output: { grants: GrantView[] } }
   /** Adds and removes principals, or replaces its `can`: needs what `checkGrantChange` says, for the grant as it was and as it'd be. 404 `grant_not_found`. */
   updateGrant: { input: Id & Input<typeof UpdateGrantBody>; output: { grant: GrantView } }
   /** Which grant decides `channel` for the caller, or with `manage` at `*` (or a team owner), the principal it names. */
   explain: { input: Input<typeof ExplainQuery>; output: Explanation }
   /** `revoked` is false when it was already gone. */
-  revokeGrant: { input: Id; output: { revoked: boolean } }
+  revokeGrant: { input: Id & Input<typeof RevokeGrantBody>; output: { revoked: boolean } }
   /** Every schema: the built-ins, then the board's own, by name and version. 501 `no_schemas` where the board keeps none. */
   schemas: { input: Nothing; output: { schemas: SchemaView[] } }
   /** One schema version, by `name@version`: 400 `invalid_schema_id` for anything else, 404 `schema_not_found` for one that isn't there. */

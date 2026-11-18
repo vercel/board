@@ -225,7 +225,7 @@ function ProfileMenu({ me }: { me: Me }) {
           </>
         }
       >
-        {item(`${person} (you)`, null)}
+        {!board.named && item(`${person} (you)`, null)}
         {AGENTS.map((agent) => item(agent, agent))}
         {me.profile !== null && !AGENTS.includes(me.profile) && item(me.profile, me.profile)}
         <MenuSeparator />
@@ -235,7 +235,7 @@ function ProfileMenu({ me }: { me: Me }) {
           </MenuItem>
         )}
         <MenuItem onClick={() => setEditing({ name: '' })}>another profile…</MenuItem>
-        {board.getProfile() !== undefined && <MenuItem onClick={() => void board.setProfile(undefined)}>as inspect started</MenuItem>}
+        {!board.named && board.getProfile() !== undefined && <MenuItem onClick={() => void board.setProfile(undefined)}>as inspect started</MenuItem>}
       </Menu>
     </div>
   )

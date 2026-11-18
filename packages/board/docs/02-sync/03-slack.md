@@ -99,7 +99,8 @@ most once a minute, while the other channels sync.
   sent `@vercel/board` as that, and pings no one for it. A board
   message can mention someone by email, `@[ada@acme.com]`, which Slack looks
   up as it posts (it needs `users:read.email`), and posts as `ada@acme.com`
-  when it finds no one. See
+  when it finds no one. It looks up the first 10 emails a message names, and
+  posts the rest as written. See
   [mentions](../01-board/03-identity.md#mentions).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.
@@ -117,9 +118,9 @@ On a local board, it's everyone a credential named, since their handle and
 name are always that credential's word: a principal a Vercel or other OIDC
 token, or [your host's verifier](../01-board/01-mounting.md#callers-of-your-own) let in,
 writing as itself or through an agent or import
-(`clever-lemur via vboard-factory`). The board's own code and its own sync's
+(`clever-lemur via acme-agents`). The board's own code and its own sync's
 platform users keep the label, as a file upload does. A person posting as
-themselves is just their name (`Julián Benegas` on Vercel's board, the handle
+themselves is just their name (`Ada Lovelace` on Vercel's board, the handle
 your verifier gives them, or a Vercel login's user ID). Anything written on a
 principal's behalf is `<name> via <principal>`: an agent (`claude via julian`),
 or a platform user another sync speaks for (`Malte via support (preview)`). A

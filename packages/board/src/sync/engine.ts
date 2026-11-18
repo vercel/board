@@ -4,7 +4,7 @@ import { derivedId } from '../client/ids.ts'
 import type { Actor, ExternalCopy } from '../contract/folds.ts'
 import { externalMessageKey, isThreadTarget } from '../contract/external.ts'
 import type { ExternalAuthor, ExternalEvent, ExternalFile, ExternalLink, Origin } from '../contract/external.ts'
-import { fileSize, typeOf } from '../contract/files.ts'
+import { fileSize, importedFileName, typeOf } from '../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment } from '../contract/schemas.ts'
 import type { BoardEventView, InboxItem, LinkView, MessageView, SyncThreadView } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
@@ -95,6 +95,8 @@ const FILE_ATTEMPTS = 3
 
 /** How long a platform's answer to who has an email holds, for `@[ada@vercel.com]`: a busy thread asks once. */
 const EMAIL_TTL_MS = 5 * 60_000
+/** How many `@[email]`s one message has looked up on a platform: each is a call to it, and a message holds thousands. */
+const EMAIL_LOOKUPS_PER_MESSAGE_MAX = 10
 
 /** How long a webhook waits for the board's tables before it lets an event into the inbox anyway: platforms resend after about 3 seconds. */
 const GATE_WAIT_MS = 2_000
@@ -518,7 +520,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         notes.push(fileNote(file, 'it was empty'))
         continue
       }
-      const name = file.name ?? `${file.type}`
+      const name = importedFileName(file.name ?? `${file.type}`)
       try {
         attachments.push((await call('upload', { data, name, type: file.mimeType || typeOf(name) })).attachment)
       } catch (error) {
@@ -787,14 +789,20 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * A message's text for a platform, through entry `key`. A mention is `@[actor-id]`, settled when
    * the message was written: it reads natively when the actor is one of this entry's own users
    * (`@[slack:user:U0456]` also naming this sync's own profile of them), and as the actor's name
-   * otherwise. An `@[email]` is whoever the platform finds with it, or the email. Everything else
+   * otherwise. An `@[email]` is whoever the platform finds with it, or the email, for the first 10
+ * a message names. Everything else
    * is text and goes as written, an `@handle` included: no sync reads one as a mention.
    */
   async function textFor(key: string, actors: Actors, text: string): Promise<string> {
     const exact = extractMentions(text).flatMap((token) => (token.kind === 'actor' ? [token.actor] : []))
     if (exact.length === 0) return text
     const found = new Map<string, string | null>()
-    for (const named of exact) if (!actors.byId[named] && isEmail(named)) found.set(named, await emailMention(key, named))
+    let asked = 0
+    for (const named of exact) {
+      if (actors.byId[named] || !isEmail(named) || found.has(named)) continue
+      // Past the cap an email goes as written, as one the platform has no one for does.
+      found.set(named, asked++ < EMAIL_LOOKUPS_PER_MESSAGE_MAX ? await emailMention(key, named) : null)
+    }
     return replaceMentions(text, (token) => {
       if (token.kind === 'handle') return null
       if (found.has(token.actor)) return found.get(token.actor) ?? token.actor
@@ -902,7 +910,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const key = keyOf(target)
     const { markdown, ...rest } = await render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
-    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...rest }
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...rest, external: message.from !== null && message.from !== 'board' }
   }
 
   async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {
@@ -1071,7 +1079,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     // A target its sync doesn't list is another's: another project's, under a key of the same name.
     if (!synced?.targets.includes(target)) return
     const [root, ...replies] = await threadOf(synced.root)
-    if (!root || root.id !== synced.root || root.deleted) return
+    // A thread whose root was written with `noSync` stays on the board, however it came to be synced.
+    if (!root || root.id !== synced.root || root.deleted || root.noSync) return
     const failures: Failure[] = []
     try {
       await offer(keyOf(target), event, root, target, (renderer) => backfill(synced, root, replies, target, failures, renderer))
@@ -1158,7 +1167,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (!synced || synced.targets.length === 0) return
     // As it is now, not as it was posted: a delivery can go out late (a backlog, a retry), and what
     // its author has since edited goes as edited, and what they deleted doesn't go at all.
-    const message = await messageOf(event.message.id)
+    const thread = await threadOf(synced.root)
+    // A reply in a thread whose root stays on the board stays there too.
+    if (thread[0]?.id !== synced.root || thread[0].noSync) return
+    const message = thread.find((found) => found.id === event.message!.id)
     if (!message || message.deleted) return
     const actors = await actorsNow()
     const failures: Failure[] = []

@@ -46,7 +46,11 @@ const describe = (error: unknown) => ((error instanceof Error ? error.message : 
 /** The SDK's error, as the board answers it: the remote's own status and code, or 502 when it never answered. */
 const rethrow = (error: unknown): never => {
   if (error instanceof BoardError)
-    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, { ...(error.hint !== undefined ? { hint: error.hint } : {}), origin: error.origin })
+    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, {
+      ...(error.hint !== undefined ? { hint: error.hint } : {}),
+      origin: error.origin,
+      ...(error.retryAfter !== undefined ? { retryAfter: error.retryAfter } : {}),
+    })
   if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
   throw new HttpError(502, 'unreachable', `the board didn't answer: ${describe(error)}`)
 }

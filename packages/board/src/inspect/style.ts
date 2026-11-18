@@ -58,6 +58,10 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 
 .boot { display: grid; place-items: center; height: 100dvh; color: var(--faint); }
 .boot.error, .error { color: var(--red); }
+.name-gate { display: grid; gap: 10px; width: min(320px, 90vw); color: var(--bright); }
+.name-gate p { margin: 0; color: var(--faint); }
+.name-gate input { width: 100%; height: 36px; padding: 0 10px; border: 0; outline: 1px solid var(--muted); background: var(--shade); font-size: 16px; }
+.name-gate .send { justify-self: end; }
 .empty, .error { padding: 20px; margin: 0; color: var(--faint); }
 .faint { color: var(--faint); }
 .grow { flex: 1; min-width: 0; }

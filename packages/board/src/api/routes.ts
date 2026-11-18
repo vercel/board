@@ -10,6 +10,7 @@ import {
   LabelKey,
   Labels,
   LabelValue,
+  NewLabels,
   MESSAGE_TEXT_MAX,
   MessageText,
   SentText,
@@ -83,6 +84,10 @@ export const MessagesQuery = Filters.extend({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+/** How many threads a read lists without a `limit`, and with one at most. */
+export const THREADS_LIMIT_DEFAULT = 50
+export const THREADS_LIMIT_MAX = 500
+
 /**
  * `limit` counts threads: each thread with a matching message, by its latest reply. `before` is a page's
  * `older`, for the threads last active before it; it pages backward, so it takes no `after`.
@@ -90,7 +95,7 @@ export const MessagesQuery = Filters.extend({
 export const ThreadsQuery = Filters.extend({
   after: Ref.optional(),
   before: z.string().min(1).max(1024).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
+  limit: z.coerce.number().int().min(1).max(THREADS_LIMIT_MAX).optional(),
 }).refine((query) => query.before === undefined || query.after === undefined, {
   message: '`before` pages back from a page\'s `older`, and `after` reads forward: pass one',
   path: ['before'],
@@ -108,7 +113,7 @@ export const PostBody = z
     re: Ref.optional(),
     /** May be empty when the message has attachments. */
     text: z.string().default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     /**
      * External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. The
@@ -154,7 +159,7 @@ export const ScheduleBody = z
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     text: z.string().default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).optional(),
     in: Duration.optional(),
@@ -219,7 +224,7 @@ export const CreateTaskBody = z
     re: Ref.optional(),
     /** As long as a post's text may be: the backend says how long that is. */
     text: z.string().optional(),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     /** IDs from `POST /attachments`, as a post takes them. */
     attachments: z.array(AttachmentId).optional(),
@@ -262,7 +267,7 @@ export const CreateTasksBody = z.object({
           key: TaskKey.optional(),
           /** May be empty when the task's root has attachments. As long as a post's text may be: the backend says how long that is. */
           text: z.string(),
-          labels: Labels.optional(),
+          labels: NewLabels.optional(),
           noSync: z.boolean().optional(),
           /** IDs from `POST /attachments`, as a post takes them. */
           attachments: z.array(AttachmentId).optional(),
@@ -378,11 +383,36 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
 export const GrantCan = z.record(z.string().min(1).max(CHANNEL_PATTERN_MAX), CanGrant)
 
+/**
+ * Says to go ahead with a grant change its caller couldn't take back: one that takes their own
+ * `manage` at a pattern it names, which is 409 `grant_lockout` without it.
+ */
+const LockMeOut = z.boolean().optional()
+
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
-export const GrantBody = z.strictObject({
+const GrantSpec = z.strictObject({
   principals: z.array(PrincipalInput).min(1).max(32),
   can: GrantCan,
 })
+
+/** What `POST /grants` takes: a grant, and `lockMeOut` to make one its caller couldn't take back. */
+export const GrantBody = GrantSpec.extend({ lockMeOut: LockMeOut })
+
+/** How many grants one write makes. */
+export const GRANT_BATCH_MAX = 16
+
+/**
+ * Several grants made in one write, all of them or none, judged together: each by the grants as
+ * they are, and what it leaves its caller with by the grants as they'd be with all of them. So a
+ * lock and the grant that keeps its maker in go in one request, in any order.
+ */
+export const CreateGrantsBody = z.strictObject({
+  grants: z.array(GrantSpec).min(1).max(GRANT_BATCH_MAX),
+  lockMeOut: LockMeOut,
+})
+
+/** What revoking a grant takes: nothing, or `lockMeOut`. */
+export const RevokeGrantBody = z.strictObject({ lockMeOut: LockMeOut }).optional()
 
 /**
  * Which grant decides a channel, and what it gives, for the caller or a principal it names: a
@@ -415,6 +445,7 @@ export const UpdateGrantBody = z
     add: z.array(PrincipalInput).min(1).max(32).optional(),
     remove: z.array(PrincipalInput).min(1).max(32).optional(),
     can: GrantCan.optional(),
+    lockMeOut: LockMeOut,
   })
   .refine((body) => body.add !== undefined || body.remove !== undefined || body.can !== undefined, 'name principals to add or remove, or a can')
 
@@ -574,7 +605,7 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     channel: ChannelPath.optional(),
     re: Ref.optional(),
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
-    labels: Labels.optional(),
+    labels: NewLabels.optional(),
     noSync: z.boolean().optional(),
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
@@ -591,7 +622,7 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     op: z.literal('labels'),
     ...Imported,
     ...Changed,
-    set: Labels.optional(),
+    set: NewLabels.optional(),
     unset: z.array(LabelKey).optional(),
     /** As a label write's: what the labels must be now, a value or null for none. */
     if: z.record(LabelKey, LabelValue.nullable()).optional(),
@@ -674,7 +705,7 @@ export const LABEL_CONDITIONS_MAX = 16
 
 export const LabelBody = z
   .object({
-    set: Labels.optional(),
+    set: NewLabels.optional(),
     unset: z.array(LabelKey).optional(),
     /**
      * What the message's labels must be now: a key's value, or null for one that mustn't be set.
@@ -715,8 +746,13 @@ export type PrincipalInput = z.input<typeof PrincipalInput>
 export type CanAt = 'all' | 'none' | readonly Permission[]
 /** A grant's `can`, as a handle takes it: each channel pattern and what it gives. */
 export type GrantCan = Readonly<Record<string, CanAt>>
-/** What `createGrant` takes. */
+/** A grant, as a handle takes it: who it names, and what they may do. */
 export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan }
+/**
+ * What a grant write takes beside its change. `lockMeOut` goes ahead with one you couldn't take
+ * back: it takes your own `manage` at a pattern it names, and is 409 `grant_lockout` without it.
+ */
+export type GrantWriteOptions = { lockMeOut?: boolean }
 /** What `updateGrant` takes: principals to add, principals to remove (by who they are, environments aside), and a `can` that replaces the grant's. */
 export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
 /** What `createSchema` takes: a version's name, its number, and its JSON Schema. */
@@ -1163,10 +1199,12 @@ export const routes = {
   /** Listing grants needs manage at `*`; changing one, manage at each pattern its `can` names. Team owners always may. */
   grants: { method: 'GET', path: '/grants' },
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },
+  /** Several grants in one write, all or none, judged together. */
+  createGrants: { method: 'POST', path: '/grants/batch', body: CreateGrantsBody },
   updateGrant: { method: 'PATCH', path: '/grants/:id', body: UpdateGrantBody },
   /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
   explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
-  revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
+  revokeGrant: { method: 'POST', path: '/grants/:id/revoke', body: RevokeGrantBody },
   /** Every schema: the built-ins, then the board's own. Anyone the board lets in reads them. */
   schemas: { method: 'GET', path: '/schemas' },
   /** One schema version, by `name@version`. */

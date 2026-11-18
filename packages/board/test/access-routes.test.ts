@@ -177,6 +177,13 @@ const WALK: Record<RouteName, Walk> = {
   createGrant: () => [
     { method: 'POST', path: '/grants', body: { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }, status: 403 },
     { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }, status: 403 },
+    // Saying to go ahead with a lockout is no way past what it may not do.
+    { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] }, lockMeOut: true }, status: 403 },
+  ],
+  // A batch is judged grant by grant: one it may not make refuses them all.
+  createGrants: () => [
+    { method: 'POST', path: '/grants/batch', body: { grants: [{ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }] }, status: 403 },
+    { method: 'POST', path: '/grants/batch', body: { grants: [{ principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }], lockMeOut: true }, status: 403 },
   ],
   updateGrant: () => [{ method: 'PATCH', path: '/grants/g1', body: { can: { '*': 'all' } }, status: 403 }],
   // What it may do itself, anywhere, without the grants that decide it; anyone else's only with manage at *.

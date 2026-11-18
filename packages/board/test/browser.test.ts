@@ -67,8 +67,9 @@ describe('board() in a browser', () => {
       async (dir, files) => {
         expect(await nodeImports(dir)).toEqual([])
         // It's the default build it bundled: nothing finds a board in the environment, or verifies a token.
+        // sandboxPolicy()'s env names BOARD_TOKEN for a sandbox, so it's a read of it that's never here.
         const all = Object.values(files).join('\n')
-        expect(all).not.toContain('BOARD_TOKEN')
+        expect(all).not.toMatch(/env\s*(?:\.\s*BOARD_TOKEN|\[\s*["'`]BOARD_TOKEN)/)
         expect(all).not.toContain('jwtVerify')
         // Nor A2: a handle on Vercel's board never loads the engine local() runs on.
         expect(all).not.toContain('contract name must be a non-empty string')
@@ -137,7 +138,7 @@ describe('board() in a browser', () => {
     // The engine's import IDs: `board-inbound`, the inbox item, and the write's index.
     const cases = [
       ['board-inbound', 'slack:C1|100', '0'],
-      ['board-inbound', 'github:vercel-labs/board#216|comment:1', '3'],
+      ['board-inbound', 'github:vercel/board#216|comment:1', '3'],
       ['board-inbound', 'ünïcode "quoted" \\ back', '1'],
       ['board-inbox', 'slack', 'slack:C1:100'],
       [],

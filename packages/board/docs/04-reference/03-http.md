@@ -133,10 +133,11 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/tasks/:id/needs` | `{ needs }`: the IDs of the tasks it waits for now, in place of what it waited for |
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled |
 | GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants](#grants) |
-| POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`, and under each wherever your `x-board-can`'s or your own grants' limits narrow you, and what `everyone` gives wherever it gives something; `manage` everywhere to name an `oidc` principal. A key it doesn't know is 400. Answers `{ grant }` |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs, at the grant as it was, what `POST /grants` needs but what `everyone` gives, and to add principals or set `can`, all of it. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
+| POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`, and under each wherever your `x-board-can`'s or your own grants' limits narrow you, and what `everyone` gives wherever it gives something; `manage` everywhere to name an `oidc` principal. A key it doesn't know is 400. Answers `{ grant }` One its caller couldn't take back, since it takes their own `manage` at a pattern it names, is 409 `grant_lockout` unless the body says `lockMeOut: true`, as any grant write's may |
+| POST | `/grants/batch` | `{ grants, lockMeOut? }`: 1 to 16 grants, each `{ principals, can }`, made in one write, all or none. Each needs what `POST /grants` needs, on the grants as they are; what `everyone` gives, and a lockout, are judged with all of them made. Answers `{ grants }`, in the order given |
+| PATCH | `/grants/:id` | `{ add?, remove?, can?, lockMeOut? }`: adds principals, removes them by who they are, or replaces `can`. Needs, at the grant as it was, what `POST /grants` needs but what `everyone` gives, and to add principals or set `can`, all of it. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
 | GET | `/grants/explain` | Which grants decide a channel: `{ channel, pattern, over, level, grants, capped, can }`, `over` the other patterns that cover it, most specific first. Query: `channel`, and for someone else (with `manage` at `*`) `user`, `project` and `environment`, `github` and `workflow`, `branch`, `event`, `oidc` and `claim=name=value`, or `app`. `grants` is empty for a caller that can't list them |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone. Needs what `POST /grants` needs at its patterns, but what `everyone` gives |
+| POST | `/grants/:id/revoke` | No body, or `{ lockMeOut }`. Answers `{ revoked }`, false when it was already gone. Needs what `POST /grants` needs at its patterns, but what `everyone` gives |
 | GET | `/schemas` | `{ schemas }`: the built-in ones, then the board's own by name and version. Each one's `id`, `name`, `version`, `description`, `schema`, `builtIn`, `by`, and `at`. Anyone the board lets in. See [Schemas](#schemas) |
 | GET | `/schemas/:id` | `{ schema }`: one version, by `name@version` |
 | POST | `/schemas` | `{ name, version, description?, schema }`: register a version, for good. Needs `manage` at `*`. Answers `{ schema, created }`, `created` false for one that's there with the same definition |
@@ -293,8 +294,9 @@ what became of each handle, when the text typed any:
 
 With `actor: null` the handle stayed text, a mention of no one. `candidates`
 is who it could have meant: the several who have that handle, or for a handle
-with no `/`, whoever has it under a name. Of several, the one who wrote in the
-thread is taken, if exactly one did. `POST /messages/:id/edit`, `/schedules`,
+with no `/`, whoever has it under a name. Of several, one on the board is
+taken over platform users, and else the one who wrote in the thread, if
+exactly one did. `POST /messages/:id/edit`, `/schedules`,
 `/tasks`, and `/tasks/batch` settle their text and answer `mentions` the same
 way. See [Mentions](../01-board/03-identity.md#mentions).
 
@@ -778,7 +780,7 @@ Values follow these rules:
 | --- | --- |
 | Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 2048 characters |
 | Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype`. Keys under `board.` are the board's own: no write sets one |
-| Label value | a string up to 256 characters; each key holds one value |
+| Label value | a string up to 256 characters, with no control characters (a write that sets one is a 400); each key holds one value |
 | Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
 | Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
 | External target | prefixed with its sync key: `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread), `github:owner/repo:12` |
@@ -883,6 +885,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 409 | `stale_lease` | an ack whose lease ran out: the match or inbox event was pulled again |
 | 413 | `too_large` | an upload over 4 MB, or a direct upload over 100 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
+| 429 | `rate_limited`, … | on Vercel's board, its API rate-limited the caller, after four retries: `Retry-After` says how many seconds to wait, and the message what the limit is |
 | 500 | `no_store` | a local board that can't open its file, in a directory it can't write: the message says where |
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board that keeps no schedules |

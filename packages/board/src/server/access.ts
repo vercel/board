@@ -472,10 +472,21 @@ export type GrantChange = {
    * judged by reach alone. Lifting what it held back widens whoever it named, but lets no one new in.
    */
   revoked?: { readonly can: WrittenCan }
+  /**
+   * What the caller may do once the change has landed, as `caller` and `own` are on the grants it
+   * applies to: judged for a lockout. Left out, as for a caller that said to go ahead, none is.
+   */
+  then?: { readonly caller: Access; readonly own: Access }
 }
 
-/** Why `checkGrantChange` refuses a change, and where: `pattern` is the spot it failed at. */
-export type GrantChangeRefusal = { reason: 'reach'; pattern: ChannelPattern; permission: 'manage' } | { reason: 'admission'; pattern: ChannelPattern; permission: Permission }
+/**
+ * Why `checkGrantChange` refuses a change, and where: `pattern` is the spot it failed at. A
+ * `lockout` is a change the caller may make, and couldn't take back.
+ */
+export type GrantChangeRefusal =
+  | { reason: 'reach'; pattern: ChannelPattern; permission: 'manage' }
+  | { reason: 'admission'; pattern: ChannelPattern; permission: Permission }
+  | { reason: 'lockout'; pattern: ChannelPattern; permission: 'manage' }
 
 /** Whether `other` is a pattern more specific than `pattern`, and under it. */
 const isUnder = (other: string, pattern: string) =>
@@ -495,6 +506,10 @@ const isUnder = (other: string, pattern: string) =>
  * - **Admission:** wherever `everyone` gives something, `caller` has it too, since any principal a
  *   grant lets in gets what `everyone` gives. A revoke or a removal lets no one in, so it's judged
  *   by reach alone, at the patterns of the grant as it was.
+ * - **Lockout:** a change that passes both, and takes the caller's own `manage` at a pattern it
+ *   names, is one the caller couldn't take back: closing `security/` to everyone closes it to
+ *   whoever closes it, unless a grant keeps them in. Judged only with `then`, what the caller may
+ *   do once the change has landed, so a caller that says to go ahead is let through.
  *
  * It looks only at the spots where access can change: the grants' patterns, the `everyone`
  * grants', and the caller's own, from `summary()`. It does no I/O, so a board and Vercel's API run
@@ -502,17 +517,21 @@ const isUnder = (other: string, pattern: string) =>
  */
 export function checkGrantChange(change: GrantChange): GrantChangeRefusal | null {
   if (change.owner) return null
-  const { caller, own } = change
+  const { caller, own, then } = change
   const everyone = change.after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone'))
   const lifted = Object.keys(change.revoked?.can ?? {})
   const made = Object.keys(change.changed?.can ?? {})
-  const spots = [...new Set([...lifted, ...made, ...everyone.flatMap((grant) => Object.keys(grant.can)), ...Object.keys(caller.summary()), ...Object.keys(own.summary())])]
-  for (const pattern of new Set([...lifted, ...made])) {
+  const touched = [...new Set([...lifted, ...made])]
+  const spots = [...new Set([...touched, ...everyone.flatMap((grant) => Object.keys(grant.can)), ...Object.keys(caller.summary()), ...Object.keys(own.summary())])]
+  for (const pattern of touched) {
     if (!caller.at('manage', pattern) || !own.at('manage', pattern)) return { reason: 'reach', pattern, permission: 'manage' }
     for (const spot of spots) if (isUnder(spot, pattern) && !own.at('manage', spot)) return { reason: 'reach', pattern: spot, permission: 'manage' }
   }
-  if (made.length === 0) return null
-  const gives = combine(everyone.map((grant) => ({ level: 'everyone' as const, can: grant.can, source: null })))
-  for (const spot of spots) for (const permission of PERMISSIONS) if (gives.at(permission, spot) && !caller.at(permission, spot)) return { reason: 'admission', pattern: spot, permission }
+  if (made.length > 0) {
+    const gives = combine(everyone.map((grant) => ({ level: 'everyone' as const, can: grant.can, source: null })))
+    for (const spot of spots) for (const permission of PERMISSIONS) if (gives.at(permission, spot) && !caller.at(permission, spot)) return { reason: 'admission', pattern: spot, permission }
+  }
+  // Reach held at each of these before the change, so one that doesn't hold after is the change's own doing.
+  if (then) for (const pattern of touched) if (!then.caller.at('manage', pattern) || !then.own.at('manage', pattern)) return { reason: 'lockout', pattern, permission: 'manage' }
   return null
 }

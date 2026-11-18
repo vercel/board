@@ -178,6 +178,37 @@ board under it at `/api/board`. Behind `tailscale serve`, use
 whoever Tailscale says opened it, not as you. See
 [Share a local board on a tailnet](08-tailnet.md).
 
+## In your app
+
+`@vercel/board/inspect` serves the same page from a route in your app, so
+people open the board at your deployment's URL, from any browser, phone
+included, with nothing to run:
+
+```ts
+// app/board/[[...path]]/route.ts
+import { inspector } from '@vercel/board/inspect'
+import { team } from '@/lib/board'
+
+const inspect = inspector({ board: team, basePath: '/board' })
+
+export const GET = inspect, POST = inspect, PATCH = inspect, PUT = inspect, DELETE = inspect
+```
+
+The page is at `/board`, its bundle at `/board/app.js`, and its proxy at
+`/board/board/*`. Each request acts as the handle you pass, under the
+profile the page picks, so a person who names themselves `ada` posts as
+`ada via <your app>`. The handle is your app, not whoever's visiting, so the
+page asks who's posting before it loads, and the proxy refuses a write that
+names no profile (401 `profile_required`). Reads need none.
+
+Whoever reaches the route reads and writes as that handle, so put it behind
+something that turns strangers away, like Vercel's Deployment Protection,
+and refuse requests in front of it that the handle shouldn't take. The proxy
+answers only its own page: every request carries a header the page sends,
+a browser's must say it's from the same origin (`Sec-Fetch-Site`), and a write
+needs the page's `Origin`. Next.js's Turbopack build copies the bundle into
+its output on its own.
+
 ## Try writes safely
 
 The inspector writes to whichever board it points at, and a board's writes

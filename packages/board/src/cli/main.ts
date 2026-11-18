@@ -2,12 +2,12 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import type { MessageView } from '../api/routes.ts'
+import { GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
 import { createTasksInChunks, TasksInChunksError } from '../client/chunks.ts'
-import { boardUrl, connect, environmentProfile, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
+import { boardUrl, connect, environmentProfile, handFetch, handLogin, handToken, PASSED, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { credentialed, credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
@@ -17,7 +17,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
+import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, patternsIn, principalsIn, type OptionToken } from './grants.ts'
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
@@ -198,8 +198,17 @@ export type App = {
   onError?: (failure: Failure, mode: { json: boolean }) => void
   /** Shows a warning, outside `--json` (where it's in the result's `warnings`); without it, the CLI prints `warning: …`. */
   onWarning?: (warning: Warning) => void
-  /** Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's asked. */
+  /**
+   * Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's
+   * asked. It's who every command runs as, wherever the app runs: nothing the environment holds
+   * goes ahead of it, a deployment's own token and `BOARD_TOKEN` included.
+   */
   login?: () => Promise<string>
+  /**
+   * A Vercel token someone passed the app for this run (`vercel board --token`): the login to use
+   * in place of `login`. Board sends it itself, as a Bearer token, never through `fetch`.
+   */
+  token?: string
   /**
    * How board's requests to Vercel's API go with that login: the app's own fetch, which adds the
    * login's credentials (a DPoP proof, say). Without it, board sends the login as a Bearer token.
@@ -228,6 +237,8 @@ let typed: string[] = []
 let warnings: Warning[] = []
 /** The board this run reached by its URL, for a failure to name. */
 let reached: string | null = null
+/** Where the credential this run sent came from, as `whoami` says it, for a refusal to say which to replace. */
+let sent: () => string | null = () => null
 /** How long the message text this run sends is, for a backend's refusal of it to say what to do instead. */
 let sentLength = 0
 
@@ -272,8 +283,37 @@ function parse(argv: string[]) {
   if (canonical(positionals[0]) !== word) throw misplaced(args, word)
 }
 
+/**
+ * An option that has another name now, `--file`: passing the old one says so, as a command that's
+ * gone does. Where the old one has no `--file` to become (one task's text, a schema written
+ * inline), it says where that goes instead.
+ */
+function renamedOption(name: string, word: string | undefined, argv: string[]): Failed | undefined {
+  // Only where the old option was: anywhere else its name is as unknown as any, and --file may
+  // be no option there, or another thing (a claim has none, and a grant's is its grants).
+  const creates = word !== undefined && argv[argv.indexOf(word) + 1] === 'create'
+  if (name === 'text-file' && word === 'tasks' && creates)
+    return usage('--text-file is gone from tasks create.', { reason: 'unknown_option', next: [{ instruction: 'Pass the text, or - to read it from stdin: --file there is a plan of several' }] })
+  if (name === 'schema' && word === 'schemas' && creates) {
+    // What it held says which it is now: a file as @<path> and stdin as - are --file's, and JSON written inline is --data's.
+    const at = argv.findIndex((arg) => arg === '--schema' || arg.startsWith('--schema='))
+    const joined = argv[at]?.startsWith('--schema=') ?? false
+    const given = joined ? argv[at]!.slice('--schema='.length) : argv[at + 1]
+    if (at === -1 || given === undefined) return usage('--schema is --file now, or --data for JSON written inline.', { reason: 'unknown_option' })
+    const [option, value] = given === '-' ? ['--file', '-'] : given.startsWith('@') ? ['--file', given.slice(1)] : ['--data', given]
+    const again = [...argv.slice(0, at), option, value, ...argv.slice(at + (joined ? 1 : 2))]
+    return usage(`--schema is ${option} now.`, { reason: 'unknown_option', next: [{ instruction: `Run it with ${option}`, argv: [...cli(), ...again] }] })
+  }
+  const was = (name === 'text-file' && word !== undefined && TEXT.has(word)) || (name === 'tasks-file' && word === 'tasks' && creates)
+  if (!was) return undefined
+  const again = argv.map((arg) => (arg === `--${name}` ? '--file' : arg.startsWith(`--${name}=`) ? `--file=${arg.slice(name.length + 3)}` : arg))
+  return usage(`--${name} is --file now.`, { reason: 'unknown_option', next: [{ instruction: 'Run it with --file', argv: [...cli(), ...again] }] })
+}
+
 /** An option `word` doesn't take: what to do instead, where there's something better to say than that. */
 function foreignOption(name: string, word: string): Failed {
+  const renamed = renamedOption(name, word, typed)
+  if (renamed) return renamed
   if (name === 'text' && TEXT.has(word)) return usage(`--text is a filter for read, tail, and wait. ${word} takes its text as an argument, in quotes.`)
   if (name === 'sync' && word === 'schedule') return usage("Can't use --sync with schedule. A schedule posts where you point it.")
   if (name === 'attach' && word === 'edit') return usage("edit can't attach files: reply with the file instead.", { reason: 'unknown_option', next: [{ instruction: 'Reply with it', argv: [...cli(), 'reply', '<ID>', '<TEXT>', '--attach', '<FILE>'] }] })
@@ -300,6 +340,8 @@ function parseFailure(error: Error & { code?: string }, argv: string[], word: st
     const dash = argv.indexOf('--')
     const options = dash === -1 ? argv : argv.slice(0, dash)
     const spaced = token === undefined ? undefined : options.find((arg) => /\s/.test(arg) && (token.startsWith('--') ? arg === token : arg.startsWith(token)))
+    const renamed = !spaced && option.startsWith('--') ? renamedOption(option.slice(2), word, argv) : undefined
+    if (renamed) return renamed
     const guess = !spaced && option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
     const next: Recovery[] = [{ instruction: 'See all options', argv: [...cli(), ...(word ? [word] : []), '--help'] }]
     const unknown = spaced ?? option
@@ -445,13 +487,14 @@ function oneText(command: string, target: string, extra: string[]) {
 }
 
 /**
- * A message's text: the argument, stdin for `-`, or the file `--text-file` names (`-` for stdin).
- * `optional` when the message can go without, as one with `--attach` files can.
+ * A message's text: the argument, stdin for `-`, or the file `--file` names (`-` for stdin).
+ * `optional` when the message can go without, as one with `--attach` files can. `missing` is
+ * what's said when there's none: a task's `--file` holds a plan, so it says so itself.
  */
-async function text(value: string | undefined, { optional = false } = {}): Promise<string> {
-  const file = flags['text-file']
+async function text(value: string | undefined, { optional = false, missing = "Missing the message's text: pass it, - to read it from stdin, or --file <path>." } = {}): Promise<string> {
+  const file = flags.file
   if (file !== undefined) {
-    if (value !== undefined) throw usage("Can't use --text-file with text: a message has no title, so its whole text comes from one or the other.")
+    if (value !== undefined) throw usage("Can't use --file with text: a message has no title, so its whole text comes from one or the other.")
     if (file === '-') return (await io.stdin()).replace(/\n$/, '')
     const data = await io.readFile(file).catch((error: unknown) => {
       // A file too big to attach is far too long for a message: say it of the text, not of --attach.
@@ -463,7 +506,7 @@ async function text(value: string | undefined, { optional = false } = {}): Promi
   }
   if (value === undefined) {
     if (optional) return ''
-    throw usage("Missing the message's text: pass it, - to read it from stdin, or --text-file <path>.", { reason: 'missing_arguments' })
+    throw usage(missing, { reason: 'missing_arguments' })
   }
   if (value !== '-') return value
   return (await io.stdin()).replace(/\n$/, '')
@@ -482,7 +525,7 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   const files: { path: string; data: Uint8Array }[] = []
   for (const path of paths) {
     const data = await io.readFile(path)
-    // `--attach -` is someone piping the message's text: stdin is the text's, as `-` or `--text-file -`.
+    // `--attach -` is someone piping the message's text: stdin is the text's, as `-` or `--file -`.
     if (!data && path === '-')
       throw usage("Can't attach -: stdin is for the message's text. Pass - as the text to read it from stdin.", {
         reason: 'file_not_found',
@@ -525,6 +568,73 @@ function grantFlags<T>(read: () => T): T {
     if (error instanceof GrantMisuse) throw usage(error.message, error.next ? { next: error.next } : {})
     throw error
   }
+}
+
+/** `--lock-me-out`, as a grant write takes it: go ahead with a change this caller couldn't take back. */
+const lockMeOut = () => (flags['lock-me-out'] ? { lockMeOut: true } : {})
+
+/** Whoever runs this, as the flags that name them in a grant, once a lockout has asked: null when no flag does. */
+let self: string[] | null = null
+
+/** The flags that name a caller in a grant: a person, a project's deployment where it runs, an app, or a repository's runs. */
+function selfFlags({ principal, handle }: Pick<Me, 'principal' | 'handle'>): string[] | null {
+  const [source, kind, ...rest] = principal.split(':')
+  if ((source === 'vercel' || source === 'local') && kind === 'user' && rest.length > 0) return ['--user', rest.join(':')]
+  if (source === 'vercel' && kind === 'project' && rest.length === 2) return ['--project', rest[0]!, '--environment', rest[1]!]
+  if (source === 'vercel' && kind === 'app' && rest.length > 0) return ['--app', rest.join(':')]
+  if (source === 'github' && kind === 'repo' && /^[^/\s]+\/[^/\s]+$/.test(handle)) return ['--github', handle]
+  return null
+}
+
+/** A grant write's refusal, on its way out: a lockout's way out names whoever runs this, which is a read away. */
+async function namingSelf(error: unknown): Promise<never> {
+  if ((error as { code?: unknown } | null)?.code === 'grant_lockout') self = await client().me().then(selfFlags, () => null)
+  throw error
+}
+
+/** The options that say which board this run acts on, as it was given them: a command suggested for the same board carries them. */
+const onSameBoard = (): string[] => [
+  ...(flags.url !== undefined ? ['--url', flags.url] : []),
+  ...(flags.scope !== undefined || flags.team !== undefined ? ['--scope', (flags.scope ?? flags.team)!] : []),
+  ...(flags.name !== undefined ? ['--name', flags.name] : []),
+]
+
+/**
+ * The ways out of a grant change the board refused as a lockout. A new grant: first, the grant
+ * that keeps manage, for whoever runs this, at each pattern it names, after which this one is no
+ * lockout. Any of them: the same command, told to go ahead.
+ */
+function lockoutRecoveries(): Recovery[] {
+  const [verb] = current.args
+  const anyway: Recovery = { instruction: verb === 'create' ? 'Make it anyway' : verb === 'revoke' ? 'Revoke it anyway' : 'Update it anyway', argv: rerun('--lock-me-out') }
+  if (verb !== 'create') return [{ instruction: 'Keep manage there first, with another grant that names you' }, anyway]
+  // A file's grants go together: the one that keeps its maker in belongs in it.
+  if (flags.file !== undefined) return [{ instruction: 'Keep manage there yourself: add a grant to the file that names you, with all there' }, anyway]
+  const all = patternsIn(flags.can ?? []).map((pattern) => `${pattern}=all`).join(';')
+  // Whoever no grant flag names (the board's own code, another issuer's token) is told what to make.
+  return [self ? { instruction: 'Keep manage there yourself first', argv: [...cli(), 'grants', 'create', ...self, '--can', all, ...onSameBoard()] } : { instruction: `Keep manage there yourself first, with a grant that names you: --can '${all}'` }, anyway]
+}
+
+/** The grants a `--file` holds: a JSON array, from the file or from stdin for `-`, each as `createGrants` takes one. The board checks what's in them. */
+async function grantsFrom(path: string): Promise<GrantInput[]> {
+  const where = path === '-' ? 'stdin' : path
+  let source: string
+  if (path === '-') source = await io.stdin()
+  else {
+    const data = await io.readFile(path)
+    if (!data) throw usage(`Can't read ${path}. There's no such file.`, { reason: 'file_not_found', next: [] })
+    source = new TextDecoder().decode(data)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    throw usage(`${where} isn't JSON.`)
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((grant) => typeof grant !== 'object' || grant === null || Array.isArray(grant)))
+    throw usage(`${where} holds no grants. It's a JSON array of them: [{"principals": [{"kind": "everyone"}], "can": {"ci/": ["read"]}}].`)
+  if (parsed.length > GRANT_BATCH_MAX) throw usage(`${where} holds ${parsed.length} grants, and one write makes ${GRANT_BATCH_MAX} at most.`)
+  return parsed as GrantInput[]
 }
 
 /** Refuses the principal flags `verb` doesn't take: plain ones on update, `--add-` and `--remove-` ones elsewhere. */
@@ -584,7 +694,7 @@ function configuredUrl(): string | null {
 
 /**
  * What a message says: its text, or with `--schema`, a block of that schema and nothing else, whose
- * JSON the text is, from wherever text comes (the argument, stdin, `--text-file`).
+ * JSON the text is, from wherever text comes (the argument, stdin, `--file`).
  */
 async function content(value: string | undefined, options: { optional?: boolean } = {}): Promise<string> {
   const said = await given(value, options)
@@ -607,15 +717,16 @@ async function given(value: string | undefined, options: { optional?: boolean })
   return block(schema, data as Record<string, unknown>)
 }
 
-/** A schema's JSON Schema, as `--schema` gives it: inline JSON, the file `@<path>` names, or stdin for `-`. */
+/** A schema's JSON Schema: from the file `--file` names, or stdin for `-`, or written inline as `--data`. */
 async function definition(): Promise<Record<string, unknown>> {
-  const given = flags.schema
-  if (given === undefined) throw usage('Missing --schema: its JSON Schema, inline, @<file>, or - for stdin.', { reason: 'missing_arguments' })
-  let source = given
-  if (given === '-') source = await io.stdin()
-  else if (given.startsWith('@')) {
-    const file = given.slice(1)
-    const data = await io.readFile(file)
+  const { file, data: inline } = flags
+  if (file !== undefined && inline !== undefined) throw usage('--file and --data both give the JSON Schema: pass one.')
+  if (file === undefined && inline === undefined) throw usage('Missing its JSON Schema: --file <path>, - for stdin, or --data <json>.', { reason: 'missing_arguments' })
+  let source: string
+  if (inline !== undefined) source = inline
+  else if (file === '-') source = await io.stdin()
+  else {
+    const data = await io.readFile(file!)
     if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
     source = new TextDecoder().decode(data)
   }
@@ -623,13 +734,13 @@ async function definition(): Promise<Record<string, unknown>> {
   try {
     parsed = JSON.parse(source)
   } catch {
-    // A path given bare is the likeliest slip: say how a file is named.
-    throw usage(given === '-' || given.startsWith('@') ? `${given === '-' ? 'stdin' : given.slice(1)} isn't JSON.` : `--schema takes JSON, or a file as @<path>: ${given.length > 40 ? `${given.slice(0, 40)}…` : given} isn't JSON.`)
+    if (inline === undefined) throw usage(`${file === '-' ? 'stdin' : file} isn't JSON.`)
+    // A path, or - for stdin, is the likeliest slip: those are --file's.
+    throw usage(`--data takes the JSON itself, and ${inline.length > 40 ? `${inline.slice(0, 40)}…` : inline} isn't JSON.`, { next: [{ instruction: 'A file, or - for stdin, goes in --file' }] })
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw usage('A schema is a JSON object: {"type":"object", …}.')
   return parsed as Record<string, unknown>
 }
-
 /** A board that predates what this run asked of it. */
 const outdated = (message: string) =>
   new Failed({
@@ -676,14 +787,14 @@ function doing(): string {
       const one = b === undefined ? 'a task' : `task ${ref(b)}`
       // `run` fails as its claim does, before its command starts, or as what it settles with after.
       if (a === 'claim' || a === 'run') return flags.ready ? `claim a task in ${b ?? 'a channel'}` : `claim ${one}`
-      if (a === 'create' && flags['tasks-file'] !== undefined) return `create tasks in ${b ?? 'a channel'}`
+      if (a === 'create' && flags.file !== undefined) return `create tasks in ${b ?? 'a channel'}`
       if (a === 'create') return b !== undefined && isMessageRef(b) ? `make ${ref(b)} a task` : `create a task in ${b ?? 'a channel'}`
       if (a === 'renew') return `renew the claim on ${one}`
       if (a === 'needs') return `change what ${one} needs`
       return `${a} ${one}`
     }
     case 'grants':
-      return a === 'create' ? 'create the grant' : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
+      return a === 'create' ? (flags.file !== undefined ? 'create the grants' : 'create the grant') : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
     case 'schemas':
       return a === 'create' ? `register schema ${b ?? ''}`.trimEnd() : a === 'inspect' ? `read schema ${b ?? ''}`.trimEnd() : 'list schemas'
     case 'sources':
@@ -733,11 +844,12 @@ function missing(): string | undefined {
 function failureOf(error: unknown): Failure {
   if (error instanceof Failed) return error.failure
   const message = error instanceof Error ? error.message : String(error)
-  const { code, status, hint, origin } = error as { code?: unknown; status?: unknown; hint?: unknown; origin?: unknown }
+  const { code, status, hint, origin, retryAfter } = error as { code?: unknown; status?: unknown; hint?: unknown; origin?: unknown; retryAfter?: unknown }
   // Not the board's or the handle's: the system's (a file it couldn't write), or a bug.
   if (typeof code !== 'string' || typeof status !== 'number')
     return { class: 'unknown', reason: 'unexpected_error', message: `Failed to ${doing()}.`, details: [message] }
-  const said = { error: { code, message, status, ...(typeof hint === 'string' ? { hint } : {}) } }
+  const wait = typeof retryAfter === 'number' && Number.isInteger(retryAfter) && retryAfter >= 0 ? retryAfter : undefined
+  const said = { error: { code, message, status, ...(typeof hint === 'string' ? { hint } : {}), ...(wait !== undefined ? { retryAfter: wait } : {}) } }
   if (origin === 'handle') {
     const fix: Recovery[] = typeof hint === 'string' ? [{ instruction: hint }] : []
     const own = (kind: Failure['class'], reason: string, next: Recovery[] = fix): Failure => ({
@@ -830,6 +942,22 @@ function failureOf(error: unknown): Failure {
       ]),
       details: [],
     }
+  // A limit on the team's boards, which the team's plan sets: no argument fixes it, and the team's own board is still there.
+  if (code === 'too_many_boards')
+    return theirs(
+      'limit',
+      code,
+      `Can't ${doing()}. The team has all the boards it can.`,
+      flags.name !== undefined
+        ? [{ instruction: "Use the team's board instead", argv: rerunWithout(['--name']).filter((arg) => arg !== '--ensure') }]
+        : process.env.BOARD_NAME
+          ? [{ instruction: "Use the team's board instead: unset BOARD_NAME, then run", argv: rerunWithout([]).filter((arg) => arg !== '--ensure') }]
+          : [],
+    )
+  if (code === 'private_boards_unavailable')
+    return theirs('limit', code, `Can't ${doing()}. This team's plan has no private boards.`, [
+      { instruction: 'Keep the board open to the whole team, or move the team to a plan with private boards' },
+    ])
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
@@ -837,8 +965,12 @@ function failureOf(error: unknown): Failure {
       'auth',
       'login_required',
       "The board didn't accept your credentials.",
-      // A token you passed is yours to replace: logging in changes nothing while BOARD_TOKEN is set. Vercel's board reads it off a deployment.
-      process.env.BOARD_TOKEN && ((reached && !vercelBoard(reached)) || credentialSource() === 'BOARD_TOKEN') ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }] : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
+      // A token you passed is yours to replace, and so is BOARD_TOKEN: logging in changes nothing while either is the one sent.
+      sent() === PASSED
+        ? [{ instruction: 'Pass a token it accepts' }]
+        : sent() === 'BOARD_TOKEN'
+          ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }]
+          : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
     )
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`)
   if (status === 404) {
@@ -847,6 +979,8 @@ function failureOf(error: unknown): Failure {
     return thing ? { ...theirs('not_found', specific('not_found'), `Couldn't find ${thing}.`), details: [] } : theirs('not_found', specific('not_found'), `Can't ${doing()}.`)
   }
   if (status === 409) {
+    // A grant change this caller couldn't take back: it keeps itself in, or says to go ahead.
+    if (code === 'grant_lockout' && current.command === 'grants') return theirs('conflict', code, `Can't ${doing()}: it would lock you out.`, lockoutRecoveries())
     // A reply's --after: what's newer is in its thread, after the message it named.
     const { args } = current
     const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
@@ -866,11 +1000,21 @@ function failureOf(error: unknown): Failure {
           : [])
   }
   if (status === 413) return theirs('limit', 'payload_too_large', `Can't ${doing()}. It's too large for the board.`)
-  if (status === 429) return theirs('rate_limit', 'rate_limited', 'Too many requests to the board. Try again in a minute.')
+  // A file too big for one request, on a board whose store takes none bigger: a limit, which the board's words give.
+  if (status === 501 && code === 'no_direct_uploads')
+    return theirs('limit', 'payload_too_large', `Can't ${doing()}. The file is too large for this board.`, [{ instruction: 'Compress it, or split it into smaller files' }])
+  // How long to wait is what the board said, when it said: a minute is only a guess.
+  if (status === 429)
+    return theirs('rate_limit', 'rate_limited', `Can't ${doing()}. Too many requests to the board.`, [
+      { instruction: wait !== undefined ? `Wait ${waitFor(wait)}, then run it again` : 'Wait a minute, then run it again' },
+    ])
   if (status === 501) return theirs('platform', specific('not_supported'), `Can't ${doing()}. This board doesn't support it.`)
   if (code === 'unreachable') return theirs('network', 'network_error', "Couldn't reach the board.")
   return theirs('platform', 'api_error', `Failed to ${doing()}.`)
 }
+
+/** `42s`, `2m`: a wait the way people say it. */
+const waitFor = (seconds: number) => (seconds < 120 ? `${Math.max(1, seconds)}s` : `${Math.ceil(seconds / 60)}m`)
 
 /** How this run ends with `failure`: shown on stderr, or by the app, and its exit code. */
 function report(failure: Failure, json: boolean): number {
@@ -918,6 +1062,7 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   const configured = url ?? (team === undefined && name === undefined ? configuredUrl() : null)
   if (configured === null) {
     const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token, options.can, options.headers) }), ...(name !== undefined ? { name, ensure: flags.ensure === true } : {}) })
+    sent = credentialSource
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -926,11 +1071,13 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   const onVercel = vercelBoard(at)
   if (onVercel) {
     const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token, options.can, options.headers) }) })
+    sent = credentialSource
     return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const extra = { ...options.headers, ...(options.can !== undefined ? { 'x-board-can': options.can } : {}) }
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(Object.keys(extra).length > 0 ? { fetch: withHeaders(extra) } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
+  sent = transport.source
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
 }
 
@@ -1219,14 +1366,22 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
-      const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
+      const limit = flags.limit ? Number(flags.limit) : THREADS_LIMIT_DEFAULT
+      // One thread more than asked for, where a read lists that many, tells whether the page is all of them.
+      // Not for --json, which is the board's page as it answered, its `older` included: that pages back
+      // from the last thread the board listed, which would be the one more, never shown.
+      const peek = !flags.json && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
+      const query = { ...filters(target), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
       const old = outdated("This board can't list threads.")
       // Only a board's own "no route" is one without the route: any other 404 says what it is.
-      const page = await board.threads(query).catch((error: unknown) => {
+      const listed = await board.threads(query).catch((error: unknown) => {
         throw error instanceof BoardError && error.status === 404 && /^no route: /.test(error.message) ? old : error
       })
-      if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
+      if (!Array.isArray((listed as { threads?: unknown }).threads)) throw old
+      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest.
+      const more = listed.threads.length > limit || (!peek && listed.threads.length === limit)
+      const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
       if (!page.threads.length && target) {
         const channels = (await board.channels()).map((c) => c.path)
@@ -1252,6 +1407,26 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const handles = new Map(unnamed.length ? (await client().actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, a.handle]) : [])
         out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
       }
+      // A page that isn't all of them says where the rest are. Without --after, they're older: a bigger
+      // --limit reaches them. After a cursor, they're newer than the page, and its cursor is past them
+      // too: what reads on is --after the newest message of the page's last thread, the latest active.
+      // With a filter on messages, a board may place a thread by its newest match, which its summary
+      // doesn't show (`last` is its latest reply, whoever wrote it), so nothing on the page says where
+      // it stopped: a bigger page after the same cursor is what's sure to miss none.
+      const latest = page.threads.at(-1)
+      if (more && flags.after !== undefined && latest) {
+        const byMessage = ['re', 'by', 'mentions', 'from', 'text'].some((key) => key in query)
+        if (!byMessage) out(`\nmore since then: ${commandLine(rerunWithout(['--after'], '--after', (latest.last ?? latest.message).id))}`)
+        else if (limit < THREADS_LIMIT_MAX) out(`\nmore since then: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))}`)
+        else out(`\n(more not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`)
+        return 0
+      }
+      if (more)
+        out(
+          limit < THREADS_LIMIT_MAX
+            ? `\n(older not shown: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))})`
+            : `\n(older not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`,
+        )
       // The cursor is where this read stopped: the next command is the one that reads on from it.
       // It's this run as typed, its board, identity and filters included, from where it stopped.
       out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)
@@ -1357,11 +1532,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         if (rest.length > 0) throw usage(`grants create takes no arguments: ${rest[0]} is one too many.`)
         onlyPrincipalFlags('create')
         const principals = grantFlags(() => principalsIn(ordered, [''])).map(({ principal }) => principal)
+        // Several grants, from a file: one write makes them all, or none.
+        if (flags.file !== undefined) {
+          if (principals.length > 0 || flags.can !== undefined) throw usage("--file holds the grants: each one in it names its own principals and can, so it goes without theirs.")
+          const { grants } = await client().createGrants(await grantsFrom(flags.file), lockMeOut()).catch(namingSelf)
+          if (flags.json) result({ grants, outcome: 'created' })
+          else for (const grant of grants) out(`created ${grantRow(grant)}`)
+          return 0
+        }
         if (principals.length === 0)
           throw usage('A grant names whom it lets in: --user, --project, --github, --oidc, --all-users, --all-projects, or --everyone.', { reason: 'missing_arguments' })
         const can = grantFlags(() => grantCanOf(flags.can ?? []))
         if (Object.keys(can).length === 0) throw usage("A grant says what it lets them do: --can pattern=permissions, like --can 'ci/=read,post'.", { reason: 'missing_arguments' })
-        const { grant } = await client().createGrant({ principals, can })
+        const { grant } = await client().createGrant({ principals, can }, lockMeOut()).catch(namingSelf)
         if (flags.json) result({ grant, outcome: 'created' })
         else out(`created ${grantRow(grant)}`)
         return 0
@@ -1388,7 +1571,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const can = flags.can !== undefined ? grantFlags(() => grantCanOf(flags.can!)) : undefined
         if (add.length === 0 && remove.length === 0 && can === undefined)
           throw usage(`grants update ${id} changes nothing: add or remove a principal (--add-user, --remove-project, …), or give --can.`, { reason: 'missing_arguments' })
-        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) })
+        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) }, lockMeOut())
         if (flags.json) result({ grant, outcome: 'updated' })
         else out(`updated ${grantRow(grant)}`)
         return 0
@@ -1406,7 +1589,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (verb === 'revoke') {
         const id = grantId(rest[0])
-        const { revoked } = await client().revokeGrant(id)
+        const { revoked } = await client().revokeGrant(id, lockMeOut())
         if (flags.json) result({ grant: id, outcome: revoked ? 'revoked' : 'unchanged' })
         else out(revoked ? `revoked ${id}` : `${id} is already gone`)
         return 0
@@ -1718,15 +1901,15 @@ function seconds(flag: 'wait' | 'lease'): number | undefined {
 }
 
 /**
- * `tasks create <channel> --tasks-file <path>`: the tasks a JSON file holds, as `tasks.createMany`
+ * `tasks create <channel> --file <path>`: the tasks a JSON file holds, as `tasks.createMany`
  * takes them, made in as many writes as the board needs. It prints each as the list shows one.
  * The whole plan goes under one key, `--idempotency-key`'s or this run's own, so one that stops
  * midway says what was made and is finished by the same command.
  */
 async function createPlan(target: string, text: string | undefined, path: string): Promise<number> {
-  if (isMessageRef(target)) throw usage(`--tasks-file starts threads in a channel, and ${ref(target)} is a thread.`)
-  const own = text !== undefined ? 'text' : (['text-file', 'label', 'needs', 'for', 'claim', 'lease', 'no-sync'] as const).find((name) => (flags as Record<string, unknown>)[name] !== undefined && (flags as Record<string, unknown>)[name] !== false)
-  if (own !== undefined) throw usage(`${own === 'text' ? 'Text' : `--${own}`} is one task's: with --tasks-file, each task in the file has its own.`)
+  if (isMessageRef(target)) throw usage(`--file holds a plan, which starts threads in a channel, and ${ref(target)} is a thread.`)
+  const own = text !== undefined ? 'text' : (['label', 'needs', 'for', 'claim', 'lease', 'no-sync'] as const).find((name) => (flags as Record<string, unknown>)[name] !== undefined && (flags as Record<string, unknown>)[name] !== false)
+  if (own !== undefined) throw usage(`${own === 'text' ? 'Text' : `--${own}`} is one task's: with --file, each task in the file has its own.`)
   const board = client()
   const tasks = await planFrom(path, board)
   // Each root is a message: the longest says what a backend's refusal of one's text means, as for a task made alone.
@@ -1761,7 +1944,7 @@ async function createPlan(target: string, text: string | undefined, path: string
   return 0
 }
 
-/** What a task of a `--tasks-file` takes, as `tasks.createMany` does. */
+/** What a task of a plan's `--file` takes, as `tasks.createMany` does. */
 const PLAN_KEYS = ['key', 'text', 'labels', 'needs', 'for', 'noSync', 'attachments']
 
 /** The help page that says what a plan holds. */
@@ -1805,7 +1988,7 @@ function checkPlan(plan: Record<string, unknown>[], where: string): void {
   }
 }
 
-/** The tasks a `--tasks-file` holds: a JSON array, from the file or from stdin for `-`. An ID may be written `#812`, and `for` as a profile's name. */
+/** The tasks a plan's `--file` holds: a JSON array, from the file or from stdin for `-`. An ID may be written `#812`, and `for` as a profile's name. */
 async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   const where = path === '-' ? 'stdin' : path
   let source: string
@@ -1819,7 +2002,8 @@ async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   try {
     parsed = JSON.parse(source)
   } catch {
-    throw usage(`${where} isn't JSON.`, { next: [planHelp()] })
+    // The likeliest slip is --file carried over from post, where it's the text.
+    throw usage(`${where} isn't JSON: --file on tasks create is a plan of tasks.`, { next: [{ instruction: "For one task's text, pass it, or - to read it from stdin" }, planHelp()] })
   }
   const shape = 'A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].'
   if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((task) => typeof task !== 'object' || task === null || Array.isArray(task))) throw usage(`${where} holds no tasks. ${shape}`, { next: [planHelp()] })
@@ -2020,7 +2204,7 @@ async function tasks(args: string[]): Promise<number> {
     const [target, body, extra] = rest
     if (!target) throw usage("Missing a channel to start a task in, or a thread's ID to make one of.", { reason: 'missing_arguments' })
     if (extra !== undefined) throw usage(`tasks create takes a channel and quoted text: ${extra} is one too many.`)
-    if (flags['tasks-file'] !== undefined) return createPlan(target, body, flags['tasks-file'])
+    if (flags.file !== undefined) return createPlan(target, body, flags.file)
     const lease = seconds('lease')
     if (lease !== undefined && !claimFlag()) throw usage('--lease is how long a claim holds the task: pass --claim too.')
     const { board, claims } = tasksOn()
@@ -2033,7 +2217,7 @@ async function tasks(args: string[]): Promise<number> {
     let made: Awaited<ReturnType<Board['tasks']['create']>>
     if (isMessageRef(target)) {
       // A thread that's there becomes a task as it is: what it says and wears are its author's.
-      const own = body !== undefined ? 'text' : (['text-file', 'label', 'no-sync', 'idempotency-key'] as const).find((name) => flags[name] !== undefined && flags[name] !== false)
+      const own = body !== undefined ? 'text' : (['label', 'no-sync', 'idempotency-key'] as const).find((name) => flags[name] !== undefined && flags[name] !== false)
       if (own !== undefined)
         throw usage(`${ref(target)} becomes a task as it is: ${own === 'text' ? 'text' : `--${own}`} is for a new thread.`, {
           next: [{ instruction: 'Make it a task as it is', argv: [...cli(), 'tasks', 'create', messageId(target)] }],
@@ -2041,7 +2225,7 @@ async function tasks(args: string[]): Promise<number> {
       made = await board.tasks.create({ re: messageId(target) }, about)
     } else {
       // A task's root is a message: how long its text is says what a backend's refusal of it means, as for a post.
-      const said = await text(body)
+      const said = await text(body, { missing: "Missing the task's text: pass it, or - to read it from stdin. --file takes a plan of several." })
       sentLength = said.length
       made = await board.tasks.create(target, {
         text: said,
@@ -2268,7 +2452,7 @@ function taskFailure(code: string, status: number): { class: Failure['class']; m
       return { class: 'usage', message: `Can't ${doing()}. --from takes an owner's ID: several can share a handle.`, next: [{ instruction: "See everyone's IDs", argv: [...cli(), 'actors'] }] }
     case 'invalid_needs':
       // A plan's tasks name each other by key too: what's wrong is in the board's words, under this.
-      if (flags['tasks-file'] !== undefined) return { class: 'usage', message: `Can't ${doing()}. A task's needs are tasks you can read, or keys of the plan's own.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
+      if (flags.file !== undefined) return { class: 'usage', message: `Can't ${doing()}. A task's needs are tasks you can read, or keys of the plan's own.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
       // A change of what a task waits for takes what a new task takes, and none that waits for it: the board's words say which.
       if (command === 'tasks' && args[0] === 'needs') return { class: 'usage', message: `Can't ${doing()}. It waits for tasks you can read, and none that waits for it.`, next: [...read('See what it waits for now'), { instruction: 'Or see the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
       return { class: 'usage', message: `Can't ${doing()}. --needs takes tasks you can read.`, next: [{ instruction: 'See the tasks there are', argv: [...cli(), 'tasks', '--state', 'all'] }] }
@@ -2399,12 +2583,14 @@ const context = (): CommandContext => ({
 export async function main(argv: string[], options: App): Promise<number> {
   // The app's login and team are the run's, and only the run's.
   handLogin(options.login ?? null)
+  handToken(options.token ?? null)
   handTeam(options.team ?? null)
   handFetch(options.fetch ?? null)
   try {
     return await runOnce(argv, options)
   } finally {
     handLogin(null)
+    handToken(null)
     handTeam(null)
     handFetch(null)
   }
@@ -2417,7 +2603,9 @@ async function runOnce(argv: string[], options: App): Promise<number> {
   positionals = []
   warnings = []
   reached = null
+  sent = () => null
   sentLength = 0
+  self = null
   try {
     parse(argv)
     if (flags.version) {

@@ -128,6 +128,11 @@ function inputOf(started: Started): PrincipalInput {
   }
 }
 
+/** Each pattern `--can` flags name, as typed: what a grant made with them reaches. */
+export const patternsIn = (values: readonly string[]): string[] => [
+  ...new Set(values.flatMap((value) => value.split(';')).map((entry) => entry.slice(0, Math.max(entry.indexOf('='), 0)).trim()).filter(Boolean)),
+]
+
 const WORDS: readonly string[] = [...PERMISSIONS, 'all', 'none']
 
 /**

@@ -9,12 +9,15 @@ export class HttpError extends Error {
   readonly hint: string | undefined
   /** `handle` for a handle's own error on its way through: everything else is the board's. */
   readonly origin: ErrorOrigin
-  constructor(status: number, code: string, message: string, options: { hint?: string; origin?: ErrorOrigin } = {}) {
+  /** For a 429, how many seconds until it's worth sending again, when that's known: the response's `Retry-After`. */
+  readonly retryAfter: number | undefined
+  constructor(status: number, code: string, message: string, options: { hint?: string; origin?: ErrorOrigin; retryAfter?: number } = {}) {
     super(message)
     this.status = status
     this.code = code
     this.hint = options.hint
     this.origin = options.origin ?? 'board'
+    this.retryAfter = options.retryAfter
   }
 }
 
@@ -56,6 +59,8 @@ export const json = (body: unknown, status = 200, headers?: HeadersInit) =>
  * it's the first issue of the option that came closest, the one with the fewest, at its own path.
  */
 function reported(issue: ZodError['issues'][number]): ZodError['issues'][number] {
+  // A record's key that its schema refused says only "Invalid key in record": what the key's schema said is the reason, at the record.
+  if (issue.code === 'invalid_key' && issue.issues[0]) return reported({ ...issue.issues[0], path: issue.path.slice(0, -1) })
   if (issue.code !== 'invalid_union' || issue.errors.length === 0) return issue
   const closest = issue.errors.reduce((best, option) => (option.length < best.length ? option : best))
   const first = closest[0]
@@ -66,7 +71,11 @@ function reported(issue: ZodError['issues'][number]): ZodError['issues'][number]
 export function toErrorResponse(error: unknown): Response {
   if (error instanceof RejectedError) return error.response
   if (error instanceof HttpError) {
-    const response = json({ error: { code: error.code, message: error.message, ...(error.hint !== undefined ? { hint: error.hint } : {}) } }, error.status)
+    const response = json(
+      { error: { code: error.code, message: error.message, ...(error.hint !== undefined ? { hint: error.hint } : {}) } },
+      error.status,
+      error.retryAfter !== undefined ? { 'retry-after': String(error.retryAfter) } : undefined,
+    )
     // The handle's own stays the handle's for the handle in this process that reads it back.
     if (error.origin === 'handle') handleErrors.add(response)
     return response

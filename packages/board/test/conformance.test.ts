@@ -87,6 +87,8 @@ const CROSS_TEAM = ['lets a project on another team in, in its environments', "g
 const TASKS_OWNED = 'lets a profile change only the tasks it made, and its principal all of them'
 const OWN_PROFILES = ['keeps a task assigned to a profile for that actor alone', "this handle's profiles are principals of their own, so none is its principal's actor"]
 /** And one no run can check: shut out by a lock, it couldn't lift the lock after. */
+/** The check a run nothing locks out skips: the board's own code here, and a board's owner. */
+const NEVER_LOCKED_OUT = ["refuses a grant its maker couldn't take back, unless it says lockMeOut", "nothing locks this run out of a channel, so no grant it makes is a lockout: it owns the board, or it's the board's own code"]
 const LOCKED_OUT = ['lets a member grant on a pattern after a lock under it', "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it"]
 const skipped = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.status !== 'passed').map((check) => [check.name, check.detail])
 
@@ -194,6 +196,7 @@ describe('the conformance kit', () => {
       NO_ROLES,
       NO_APPS,
       ...GRANTS_NARROWED.map((name) => [name, NO_CAN]),
+      NEVER_LOCKED_OUT,
       LOCKED_OUT,
       CROSS_TEAM,
       [NARROWED[3], NO_CAN],
@@ -335,6 +338,48 @@ describe('the conformance kit', () => {
     }
     expect(registers(await conformance(await clientOf(lenient)))).toMatchObject({ status: 'failed', detail: 'another definition for a version that is there: expected 409 schema_immutable, and it succeeded' })
   })
+
+  it("fails a board that lets its caller lock itself out without a word, and one that takes no lockMeOut before it makes a lock", async () => {
+    const lockout = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === NEVER_LOCKED_OUT[0])
+    const grantWrite = (request: Request) => request.method === 'POST' && /\/grants(\/batch)?$/.test(new URL(request.url).pathname)
+    const again = (request: Request, body: unknown) => new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
+    const plain = testBoard({ scheduler: fakeQueue().scheduler })
+    expect(lockout(await conformance(await clientOf(plain.fetch)))).toMatchObject({ status: 'passed' })
+
+    // A board that judges no lockout: every grant write goes ahead, as if it had said to.
+    const loose = testBoard({ scheduler: fakeQueue().scheduler })
+    const careless: Fetch = async (request) => (grantWrite(request) ? loose.fetch(again(request, { ...(await request.json()), lockMeOut: true })) : loose.fetch(request))
+    expect(lockout(await conformance(await clientOf(careless)))).toMatchObject({ status: 'failed', detail: expect.stringContaining('expected 409 grant_lockout, and the board made') })
+
+    // A board from before lockMeOut refuses the key, as an unknown one, and judges no lockout either.
+    // The check stops at the refusal, so it makes no lock there that the run couldn't revoke.
+    const old = testBoard({ scheduler: fakeQueue().scheduler })
+    const strict: Fetch = async (request) => {
+      if (!grantWrite(request)) return old.fetch(request)
+      const body = await request.json()
+      if ('lockMeOut' in body) return Response.json({ error: { code: 'invalid_request', message: 'unknown key: lockMeOut' } }, { status: 400 })
+      return old.fetch(again(request, { ...body, lockMeOut: true }))
+    }
+    expect(lockout(await conformance(await clientOf(strict)))).toMatchObject({ status: 'failed', detail: 'a grant that says lockMeOut: expected it made, got 400 invalid_request' })
+    expect((await old.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+  }, 60_000)
+
+  it('fails a board that makes part of a batch of grants it refuses, and revokes what it made of it', async () => {
+    const BATCH_OF_GRANTS = 'makes several grants in one write, or none of them, a lock with the grant that keeps its maker in'
+    const batch = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name === BATCH_OF_GRANTS)
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    expect(batch(await conformance(await clientOf(board.fetch)))).toMatchObject({ status: 'passed' })
+    // A board that makes a batch's grants one by one, up to the one it refuses.
+    const piecemeal: Fetch = async (request) => {
+      const response = await board.fetch(request.clone())
+      if (request.method !== 'POST' || !new URL(request.url).pathname.endsWith('/grants/batch') || response.status !== 400) return response
+      const { grants } = await request.json()
+      await board.fetch(new Request(request.url.replace(/\/batch$/, ''), { method: 'POST', headers: request.headers, body: JSON.stringify(grants[0]) }))
+      return response
+    }
+    expect(batch(await conformance(await clientOf(piecemeal)))).toMatchObject({ status: 'failed', detail: expect.stringMatching(/^the grants after a batch that was refused: expected /) })
+    expect((await board.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
+  }, 60_000)
 
   it('fails a board that ignores x-board-can, and skips its checks where it can\'t send the header', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
@@ -489,6 +534,7 @@ describe('the conformance kit', () => {
       ['grants', 'skipped', NO_APPS[1]],
       ['grants', 'skipped', LOCKED_OUT[1]],
       ['grants', 'skipped', CROSS_TEAM[1]],
+      ['attachments', 'skipped', 'not kept here: this board keeps no files'],
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
     ])
@@ -674,6 +720,7 @@ describe('the conformance kit', () => {
     expect(asRun.checks.filter((check) => check.detail?.startsWith('closing a pattern to everyone')).map((check) => check.name)).toEqual([
       'lets the most specific pattern decide, then the closest principal there, and adds up ties',
       'lets everyone narrow what something else lets in, and lets no one in itself',
+      'makes several grants in one write, or none of them, a lock with the grant that keeps its maker in',
     ])
     expect(await grantIds()).toEqual(before)
   })

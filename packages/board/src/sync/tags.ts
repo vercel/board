@@ -9,10 +9,11 @@ export const slug = (name: string) =>
 
 /**
  * A platform's label or assignee as a board label: `bug` → `tag.bug=bug`,
- * `julianbenegas` → `assignee.julianbenegas=julianbenegas`. The keys don't
+ * `grace` → `assignee.grace=grace`. The keys don't
  * name the platform, so a filter like `--label tag.bug` holds for any of them.
  */
 export function tagOf(prefix: 'tag' | 'assignee', name: string | undefined | null): [string, string] | null {
   const key = name ? slug(name) : ''
-  return key ? [`${prefix}.${key}`.slice(0, 64), name!.slice(0, 256)] : null
+  // A label value a write sets has no control character, so a name with one still comes in, without it.
+  return key ? [`${prefix}.${key}`.slice(0, 64), name!.replace(/\p{Cc}/gu, '').slice(0, 256)] : null
 }

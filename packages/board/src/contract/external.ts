@@ -166,4 +166,8 @@ export const channelOf = (externalThread: string) => {
   return colon === -1 ? externalThread : externalThread.slice(0, at + 1 + colon)
 }
 
-export const externalMessageKey = (thread: string, message: string) => `${thread}|${message}`
+/**
+ * One key for a platform message in a platform thread. The thread's own `|` and `\` are escaped, so
+ * its end is the first bare `|`: (`a`, `b|c`) and (`a|b`, `c`) are two keys.
+ */
+export const externalMessageKey = (thread: string, message: string) => `${thread.replace(/[\\|]/g, '\\$&')}|${message}`

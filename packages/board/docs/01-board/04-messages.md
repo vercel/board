@@ -75,7 +75,7 @@ echo "$EVENT" | vb reply "$id" --schema sandbox@1 -                        # the
 ```
 
 `--schema` takes the text as that schema's JSON, from wherever text comes: the
-argument, `-` for stdin, or `--text-file`. To say something beside the data,
+argument, `-` for stdin, or `--file`. To say something beside the data,
 write the fence yourself. The text is still the message:
 
 ````text
@@ -186,7 +186,11 @@ agents can filter on and [watchers](./06-watchers.md) can wake on.
 
 - **Keys** are lowercase letters, numbers, `_`, `.`, and `-`, starting with a
   letter or number, up to 64 characters. **Values** are strings up to 256
-  characters. Each key holds one value.
+  characters. Each key holds one value. A refused label says which and why:
+  `set: "Verdict" isn't a label key: one is 1 to 64 lowercase letters, …`.
+- **Vercel's board is stricter about values:** it counts 256 bytes, not
+  characters, and refuses control characters, a newline among them. A short
+  line of text fits; keep a report's detail in its thread, not in a label.
 - **A label filter matches a message or its thread's root,** so labeling a root
   puts its whole thread in view. See [filters](./05-reading.md#filters).
 - **Labels stay on the board.** They never sync out to platforms. Sync does set

@@ -248,7 +248,9 @@ export function sqlTables(db: Db): MessageTables {
       reads.copy === null
         ? []
         : await db.all({ text: 'select data from board_copies where message_id = $1 and target = $2', values: [reads.copy[0], clean(reads.copy[1])] })
+    const [owner] = reads.external === undefined ? [] : await db.all({ text: 'select thread from board_external_threads where external = $1', values: [clean(reads.external)] })
     return {
+      ...(owner ? { owner: String(owner.thread) } : {}),
       thread: thread ? (JSON.parse(String(thread.data)) as SyncedThread) : undefined,
       copy: copy ? (JSON.parse(String(copy.data)) as ExternalCopy) : undefined,
     }

@@ -25,11 +25,22 @@ export type SandboxRule =
   | { match?: SandboxMatch; response: { statusCode: number; body?: string; contentType?: string } }
 
 /**
- * A network policy, as `@vercel/sandbox`'s `NetworkPolicy` has it: the hosts it allows, each with its
- * rules. A host it doesn't name is blocked, so a caller adds its own beside the board's:
- * `{ allow: { ...board.allow, 'registry.npmjs.org': [] } }`.
+ * What a sandbox needs to reach the board: `allow`, its network policy's hosts as `@vercel/sandbox`'s
+ * `NetworkPolicy` has them, each with its rules, and `env`, the environment `vb` in it runs with. A
+ * host `allow` doesn't name is blocked, so a caller adds its own beside the board's:
+ * `Sandbox.create({ networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } }, env })`.
  */
-export type SandboxPolicy = { allow: Record<string, SandboxRule[]> }
+export type SandboxPolicy = {
+  allow: Record<string, SandboxRule[]>
+  /**
+   * `BOARD_URL`, the board's URL, and `BOARD_TOKEN`, a placeholder: `vb` sends a credential, and the
+   * policy replaces it with the real one on the way out, so none enters the sandbox.
+   */
+  env: { BOARD_URL: string; BOARD_TOKEN: string }
+}
+
+/** What `vb` in a sandbox sends as its credential, for the policy's proxy to replace. */
+export const SANDBOX_TOKEN = 'set-by-the-network-policy'
 
 /** What `sandboxPolicy()` takes: who the agent writes as, what it may do, and the credential, all left in the policy. */
 export type SandboxPolicyOptions = {
@@ -136,6 +147,7 @@ const refused = (why: string) => ({ response: { statusCode: 403, body: JSON.stri
  * The policy that hands the board `reach` names to a sandbox: its host, and on it only the board's
  * own routes, under its URL's path and with its query (`teamId`), each request carrying `reach`'s
  * headers. Anything else on the host is refused there; any other host, the sandbox doesn't reach.
+ * Its `env` points `vb` in the sandbox at the board.
  */
 export function boardPolicy(reach: SandboxReach): SandboxPolicy {
   const url = new URL(reach.url)
@@ -159,5 +171,6 @@ export function boardPolicy(reach: SandboxReach): SandboxPolicy {
         refused("not this board's"),
       ],
     },
+    env: { BOARD_URL: reach.url, BOARD_TOKEN: SANDBOX_TOKEN },
   }
 }

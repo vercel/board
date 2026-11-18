@@ -41,6 +41,25 @@ describe('attachments', () => {
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(PNG)
   })
 
+  it('refuses a name that would download as a dotfile or show other than it reads, and stores an ordinary one as it is', async () => {
+    const { board, token } = await setup()
+    const upload = async (name: string) => {
+      const headers = { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-board-filename': encodeURIComponent(name) }
+      const response = await board.fetch(new Request(`${BOARD_URL}/attachments`, { method: 'POST', headers, body: PNG }))
+      return { status: response.status, body: await response.json() }
+    }
+    for (const name of ['.npmrc', 'config/.envrc', 'invoice\u202efdp.exe', 'shot\u200b.png', 'two\u2028lines.png']) {
+      const refused = await upload(name)
+      expect(refused.status, name).toBe(400)
+      expect(refused.body.error.code, name).toBe('invalid_attachment')
+    }
+    expect((await upload('.npmrc')).body.error.message).toContain("can't start with a dot")
+    expect((await upload('invoice\u202efdp.exe')).body.error.message).toContain('invisible formatting')
+    const kept = await upload('after fix.png')
+    expect(kept.status).toBeLessThan(300)
+    expect(kept.body.attachment.name).toBe('after fix.png')
+  })
+
   it('mints no id that starts with "-", which a command line reads as a flag, and still serves those it did', async () => {
     const blob = memoryBlob()
     const { client } = await setup({ blob })

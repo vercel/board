@@ -52,9 +52,13 @@ describe("sandboxPolicy() on a board this deployment keeps", () => {
     expect(Object.keys(policy.allow)).toEqual([new URL(BOARD_URL).host])
     expect(JSON.stringify(policy)).toContain(token)
 
+    // Its env points vb at the board, with a placeholder for the credential the policy sends instead.
+    expect(policy.env).toEqual({ BOARD_URL: (await team.discovery()).url, BOARD_TOKEN: 'set-by-the-network-policy' })
+    expect(JSON.stringify(policy.env)).not.toContain(token)
+
     const network = sandboxNetwork(policy, team.fetch)
     // What runs in the sandbox has no token of its own: its board sends none.
-    const agent = board({ backend: http(BOARD_URL, { fetch: network.fetch }) }).as(null)
+    const agent = board({ backend: http(policy.env.BOARD_URL, { fetch: network.fetch }) }).as(null)
     const posted = await agent.post('dev/fixes', 'on it')
     expect(posted.by).toEqual({ actor: `vercel:project:${PROJECT_ID}:production+fixer`, principal: `vercel:project:${PROJECT_ID}:production`, profile: 'fixer' })
     expect(posted.author).toMatchObject({ kind: 'agent', name: 'fixer', avatar: 'https://example.com/fixer.png', via: { name: 'board', environment: 'production' } })
@@ -146,6 +150,9 @@ describe("sandboxPolicy() on Vercel's board", () => {
     const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })
     const policy = await pong.as({ name: 'fixer', avatar: 'https://example.com/fixer.png' }).sandboxPolicy({ token: 'project:prj_pong:production' })
     expect(Object.keys(policy.allow)).toEqual(['localhost'])
+    // The URL names the board and its team, as discovery does, so vb in the sandbox finds it from BOARD_URL alone.
+    expect(policy.env).toEqual({ BOARD_URL: (await pong.discovery()).url, BOARD_TOKEN: 'set-by-the-network-policy' })
+    expect(policy.env.BOARD_URL).toBe(`${API}/v1/messageboard/boards/brd_test?teamId=team_test`)
     const network = sandboxNetwork(policy, (request) => api.fetch(request))
     // The sandbox's vb, pointed at the board's URL, which names its ID and team.
     const agent = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: network.fetch }) })
@@ -197,6 +204,24 @@ describe("sandboxPolicy() on Vercel's board", () => {
     }
     for (const [method, path] of [['DELETE', ''], ['PATCH', ''], ['POST', '/members'], ['DELETE', '/channels/ch_1'], ['GET', '/audit'], ['DELETE', `/threads/x/messages/1`], ['PUT', '/channels']])
       expect(await asked(method!, path!)).toEqual([method, path, 403, "not this board's"])
+  })
+
+  it("lets through a read that names its channel by name, and a message asked for with its channel, where the API takes them", async () => {
+    const api = fakeMessageboard({ channelNames: true })
+    const pong = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }) })
+    const root = await pong.post('dev', 'on it')
+    await pong.schedule('dev', { text: 'check back', in: '1h' })
+    const network = sandboxNetwork(await pong.as('fixer').sandboxPolicy({ token: 'project:prj_pong:production', can: 'all' }), (request) => api.fetch(request))
+    const agent = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: network.fetch, files: api.files }) })
+    api.requests.length = 0
+    expect((await agent.threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([root.id])
+    expect((await agent.messages({ channel: 'dev' })).messages.map((m) => m.id)).toEqual([root.id])
+    expect((await agent.poll({ channel: 'dev', wait: 0 })).events).toEqual([])
+    expect((await agent.schedules({ channel: 'dev' })).map((one) => one.channel)).toEqual(['dev'])
+    expect((await agent.thread(root.id)).message.channel).toBe('dev')
+    // Every one of them reached the API, and none asked for a channel on the way.
+    expect(network.blocked).toEqual([])
+    expect(api.requests.filter((r) => /\/channels(\/[^/]+)?$/.test(r))).toEqual([])
   })
 
   it("hands it the task calls an agent's vb makes there, which are version 2 of the API's, and nothing else at that version", async () => {

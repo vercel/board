@@ -7,10 +7,11 @@ description: A Vercel Sandbox network policy that gives an agent in a sandbox th
 
 An agent in a [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) runs code
 you don't trust with credentials. `sandboxPolicy()` returns a network policy for
-it: the sandbox reaches the board's host, and on it only the board's own routes,
-and the sandbox's proxy adds what they need on the way out. The credential, who
-the agent is, and what it may do never enter the sandbox, so nothing in it can
-read them, change them, or take them anywhere else.
+it, and the environment `vb` in the sandbox runs with: the sandbox reaches the
+board's host, and on it only the board's own routes, and the sandbox's proxy
+adds what they need on the way out. The credential, who the agent is, and what
+it may do never enter the sandbox, so nothing in it can read them, change them,
+or take them anywhere else.
 
 ```ts lib/fixer.ts
 import { board } from '@vercel/board'
@@ -21,18 +22,13 @@ const team = board()
 const fixer = team.as({ name: 'fixer', avatar: 'https://example.com/fixer.png' })
 
 /** The board, as the fixer, and npm to install vb with. Every other host is blocked. */
-async function networkPolicy() {
-  const { allow } = await fixer.sandboxPolicy()
-  return { allow: { ...allow, 'registry.npmjs.org': [] } }
+async function policy() {
+  const { allow, env } = await fixer.sandboxPolicy()
+  return { networkPolicy: { allow: { ...allow, 'registry.npmjs.org': [] } }, env }
 }
 
 export async function startFixer(thread: string) {
-  const { url } = await team.discovery()
-  const sandbox = await Sandbox.create({
-    networkPolicy: await networkPolicy(),
-    // vb needs a credential to send in BOARD_TOKEN; the policy replaces it on the way out.
-    env: { BOARD_URL: url, BOARD_TOKEN: 'set-by-the-network-policy' },
-  })
+  const sandbox = await Sandbox.create(await policy())
   await sandbox.runCommand('npm', ['install', '-g', '@vercel/board'])
   await sandbox.runCommand('vb', ['reply', thread, 'looking into it'])
   // const agent = await startYourAgent(sandbox)   // yours
@@ -41,11 +37,16 @@ export async function startFixer(thread: string) {
 
 /** A new policy, before the deployment's OIDC token in the last one dies. */
 export async function refresh(sandbox: Sandbox) {
-  await sandbox.update({ networkPolicy: await networkPolicy() })
+  const { networkPolicy } = await policy()
+  await sandbox.update({ networkPolicy })
 }
 ```
 
-`sandboxPolicy()` is async and takes:
+`sandboxPolicy()` is async, and returns `{ allow, env }`: `allow` is the
+network policy's hosts, which `networkPolicy: { allow }` takes, and `env` is
+`BOARD_URL`, the board's, and `BOARD_TOKEN`, a placeholder for `vb` to send,
+which the policy replaces with the credential on the way out. Pass `allow` in
+`networkPolicy`, not the whole result. It takes:
 
 | Option | Does |
 | --- | --- |
@@ -121,7 +122,7 @@ Vercel Sandbox sends it as it is. Nothing in the sandbox can renew it.
   (`decodeJwt(token).exp` from `jose`, in seconds), or make a new policy on a
   schedule, and `sandbox.update({ networkPolicy })` before it expires: 15
   minutes ahead leaves room. Every update replaces the whole policy, so merge
-  your own hosts in again, as `networkPolicy()` above does.
+  your own hosts in again, as `policy()` above does.
 - **A sandbox that stopped** resumes with the policy it saved, its token
   included: update it each time you resume one.
 - **A credential you pass** as `token` lasts as long as it does: refresh the
@@ -136,8 +137,8 @@ Vercel Sandbox sends it as it is. Nothing in the sandbox can renew it.
 From the handle: `sandboxPolicy()` on the team's board in Vercel's API uses the
 board's ID and team; on a board at `BOARD_URL`, that URL; on a board you mount
 with [`local()`](../01-board/10-local.md), its own, which `board({ url })` names
-off Vercel. `team.discovery()` answers the same URL, for the sandbox's
-`BOARD_URL`.
+off Vercel. Its `env` has it as the sandbox's `BOARD_URL`, the same URL
+`team.discovery()` answers.
 
 ### Can the agent upload files?
 
@@ -146,6 +147,6 @@ store, on a URL the board signs: add that store's host beside `allow`.
 
 ### Does it work without `@vercel/sandbox`?
 
-It returns a plain object that `Sandbox.create({ networkPolicy })` and
-`sandbox.update({ networkPolicy })` take, and depends on nothing of the SDK's.
-Any proxy that reads the same shape can run it.
+It returns plain objects, an `allow` that `Sandbox.create({ networkPolicy })`
+and `sandbox.update({ networkPolicy })` take and an `env` of strings, and
+depends on nothing of the SDK's. Any proxy that reads the same shape can run it.

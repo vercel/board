@@ -16,8 +16,8 @@ integrity identify the preview. Nothing is published to npm.
 | Setting                                           | Value                        |
 | ------------------------------------------------- | ---------------------------- |
 | Project                                           | `vboard-preview-publisher`   |
-| Team                                              | `vercel-internal-playground` |
-| Git repository                                    | `vercel-labs/board`          |
+| Team                                              | `<team>`                      |
+| Git repository                                    | `vercel/board`               |
 | Root directory                                    | `apps/preview-publisher`     |
 | Framework                                         | Other                        |
 | Node.js                                           | 24.x                         |
@@ -72,7 +72,7 @@ A CLI upload has no Git checkout, so it needs the commit given explicitly. From
 the repository root:
 
 ```sh
-vercel deploy --project vboard-preview-publisher --scope vercel-internal-playground \
+vercel deploy --project vboard-preview-publisher --scope <team> \
   --build-env VERCEL_GIT_COMMIT_SHA="$(git rev-parse HEAD)"
 ```
 

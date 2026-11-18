@@ -149,7 +149,9 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const location = `${key}:${this.toNative(message.threadId)}|${message.id}`
     if (input.kind === 'message') return `message:${location}`
     // A digest, not the text: an inbox event ID is short (300 characters on Vercel's API), and a message isn't.
-    return `edited:${location}|${createHash('sha256').update(message.text).digest('base64url')}`
+    // With when it was edited, where the platform says: an edit back to earlier text is a new edit, not a retry.
+    const at = message.metadata?.editedAt ? new Date(message.metadata.editedAt).getTime() : NaN
+    return `edited:${location}|${createHash('sha256').update(message.text).digest('base64url')}${Number.isFinite(at) ? `|${at}` : ''}`
   }
 
   protected author(author: ChatAuthor, raw: unknown) {

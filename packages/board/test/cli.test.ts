@@ -60,33 +60,37 @@ describe('cli', () => {
     expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message.text).toBe(text)
   })
 
-  it('takes the text from a file with --text-file, or from stdin with --text-file -', async () => {
+  it('takes the text from a file with --file, or from stdin with --file -', async () => {
     const dir = await tmp('board-text-')
     const note = join(dir, 'note.md')
     await writeFile(note, '## Findings\n\n- export is broken\n- fixed in a1b2c3\n')
-    const id = (await vb(['post', 'text-files', '--text-file', note])).stdout.trim()
+    const id = (await vb(['post', 'text-files', '--file', note])).stdout.trim()
     const read = async () => JSON.parse((await vb(['read', id, '--json'])).stdout) as { message: { text: string }; replies: { text: string }[] }
     // As the file has it, but for the newline it ends with.
     expect((await read()).message.text).toBe('## Findings\n\n- export is broken\n- fixed in a1b2c3')
-    expect(await vb(['reply', id, '--text-file', '-'], {}, 'from a pipe\n')).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(['reply', id, '--file', '-'], {}, 'from a pipe\n')).toMatchObject({ code: 0, stderr: '' })
     expect((await read()).replies.map((m) => m.text)).toEqual(['from a pipe'])
     await writeFile(note, 'edited from the file\n')
-    expect(await vb(['edit', id, '--text-file', note])).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(['edit', id, '--file', note])).toMatchObject({ code: 0, stderr: '' })
     expect((await read()).message.text).toBe('edited from the file')
     // Text from two places is one too many, and a file that isn't there says so.
-    expect(await vb(['reply', id, 'hi', '--text-file', note])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --text-file with text: a message has no title, so its whole text comes from one or the other\.\n/) })
-    expect(failure(await vb(['reply', id, '--text-file', join(dir, 'missing.md'), '--json']))).toMatchObject({ reason: 'file_not_found' })
+    expect(await vb(['reply', id, 'hi', '--file', note])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --file with text: a message has no title, so its whole text comes from one or the other\.\n/) })
+    expect(failure(await vb(['reply', id, '--file', join(dir, 'missing.md'), '--json']))).toMatchObject({ reason: 'file_not_found' })
+    // The option's old name says its new one, with the command to run, and posts nothing.
+    expect(await vb(['reply', id, '--text-file', note])).toEqual({ code: 2, stdout: '', stderr: `error: --text-file is --file now.\n\n  Run it with --file:\n    vb reply ${id} --file ${note}\n` })
+    // A command that takes no file is told only that it doesn't know the option.
+    expect((await vb(['read', 'text-files', '--text-file', note])).stderr.split('\n')[0]).toBe('error: Unknown option --text-file for vb read.')
     // One too big to attach says so of the text, not of --attach. Sparse: nothing is written.
     const huge = join(dir, 'huge.log')
     await writeFile(huge, '')
     await truncate(huge, 101 * 1024 * 1024)
-    expect(await vb(['reply', id, '--text-file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
+    expect(await vb(['reply', id, '--file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
     expect((await read()).replies).toHaveLength(1)
     // Text over the limit, from stdin or a file, is the board's to refuse, and says to attach it instead.
     await writeFile(note, 'x'.repeat(10_001))
     const tooLong = /^error: Can't reply to #\d+\. A message's text is at most 10,000 characters\.\n\n {2}Put the long part in a file and --attach it, with a short summary as the text\n/
     expect(await vb(['reply', id, '-'], {}, 'x'.repeat(10_001))).toMatchObject({ code: 1, stderr: expect.stringMatching(tooLong) })
-    expect(await vb(['reply', id, '--text-file', note])).toMatchObject({ code: 1, stderr: expect.stringMatching(tooLong) })
+    expect(await vb(['reply', id, '--file', note])).toMatchObject({ code: 1, stderr: expect.stringMatching(tooLong) })
     expect(failure(await vb(['post', 'text-files', '-', '--json'], {}, 'x'.repeat(10_001)))).toMatchObject({ reason: 'payload_too_large' })
     expect((await read()).replies).toHaveLength(1)
     // An edit can't attach, so it says to reply with the file instead.
@@ -260,9 +264,10 @@ describe('cli', () => {
 
     // A board that moved: same-origin and cross-origin hops are followed, and only the board's origin gets the token and bypass.
     const board = testBoard({ url: undefined })
-    const seen = { moved: [] as (string | null)[], board: [] as (string | null)[] }
+    const seen = { moved: [] as (string | null)[], board: [] as { path: string; authorization: string | null; bypass: string | null }[] }
     const target = await serve(async (request) => {
-      seen.board.push(request.headers.get('authorization'), request.headers.get('x-vercel-protection-bypass'))
+      const { pathname: path } = new URL(request.url)
+      seen.board.push({ path, authorization: request.headers.get('authorization'), bypass: request.headers.get('x-vercel-protection-bypass') })
       return board.fetch(request)
     })
     const moved = await serve(async (request) => {
@@ -277,7 +282,10 @@ describe('cli', () => {
       const me = await vb(['whoami', '--json'], { BOARD_URL: at, BOARD_TOKEN: token, VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
       // Its discovery, which sends nothing, and /me, whose token stays on the origin it was asked for.
       expect(seen.moved.filter(Boolean)).toEqual([`Bearer ${token}`, `Bearer ${token}`])
-      expect(seen.board).toEqual([null, null, null, null])
+      // /me reaches the board bare, and turned away, it ends the command: its discovery, sent
+      // alongside, may not have got there yet, but whatever did came with no credentials either.
+      expect(seen.board).toContainEqual({ path: '/api/board/me', authorization: null, bypass: null })
+      expect(seen.board.filter((request) => request.authorization !== null || request.bypass !== null)).toEqual([])
       expect(me.code).toBe(1)
     } finally {
       await Promise.all([moved.close(), target.close()])
@@ -352,6 +360,45 @@ describe('cli', () => {
     expect(await vb(['label', id, '--unset', 'owner', '--if', 'owner=claude'])).toMatchObject({ code: 0, stderr: '' })
     expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message.labels).toEqual({})
     expect(await vb(['label', id, 'x=1', '--if', 'owner'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --if takes key=value, and owner isn't one\. For a label that mustn't be set, --if-unset key\./) })
+  })
+
+  it('says the rule a label key or value broke, and which one broke it', async () => {
+    const id = (await vb(['post', 'reviews', 'review of a1b2c3'])).stdout.trim()
+    const rule = `isn't a label key: one is 1 to 64 lowercase letters, numbers, ., _, and -, starting with a letter or number\n`
+    expect(await vb(['label', id, 'Verdict=pass'])).toMatchObject({ code: 2, stderr: `error: Can't label #${id}.\n  set: "Verdict" ${rule}` })
+    expect(await vb(['post', 'reviews', 'x', '--label', 'my verdict=pass'])).toMatchObject({ code: 2, stderr: `error: Can't post to reviews.\n  labels: "my verdict" ${rule}` })
+    expect(await vb(['label', id, `verdict=${'a'.repeat(300)}`])).toMatchObject({
+      code: 2,
+      stderr: `error: Can't label #${id}.\n  set.verdict: a label value is at most 256 characters, and this one has 300\n`,
+    })
+    // A line of text is a value: the rule is length, not letters.
+    expect(await vb(['label', id, 'verdict=Looks good: ship it, 2 nits (see #4)'])).toMatchObject({ code: 0, stderr: '' })
+  })
+
+  it('says when a read of a channel left threads out, and reads on to them without skipping any', async () => {
+    // Where the board is before any of them: a board-wide read's cursor.
+    await vb(['post', 'paged-before', 'not in paged'])
+    const start = JSON.parse((await vb(['read', '--json'])).stdout).cursor as string
+    const ids: string[] = []
+    for (const n of [1, 2, 3, 4, 5]) ids.push((await vb(['post', 'paged', `job ${n}`])).stdout.trim())
+    const shown = (stdout: string) => [...stdout.matchAll(/^#(\S+) /gm)].map((match) => match[1]!)
+    // The newest two, and how to see older ones.
+    const newest = await vb(['read', 'paged', '--limit', '2'])
+    expect(shown(newest.stdout)).toEqual(ids.slice(3))
+    expect(newest.stdout).toContain('\n(older not shown: vb read paged --limit 4)\n')
+    // As many as there are: nothing is left out, so it says nothing.
+    expect((await vb(['read', 'paged', '--limit', '5'])).stdout).not.toContain('not shown')
+    // After a cursor, page by page, each line pasted as it says: every thread once, none skipped.
+    const seen: string[] = []
+    let command = ['read', 'paged', '--limit', '2', '--after', start]
+    for (let page = 0; page < 5; page++) {
+      const { stdout } = await vb(command)
+      seen.push(...shown(stdout))
+      const more = /\nmore since then: vb (.+)\n$/.exec(stdout)
+      if (!more) break
+      command = more[1]!.split(' ')
+    }
+    expect(seen).toEqual(ids)
   })
 
   it('edits and deletes --if-revision only while no one has changed the message since', async () => {
@@ -513,7 +560,7 @@ describe('cli', () => {
 
     const read = await vb(['read', 'open-work', '--limit', '1'])
     expect(read).toMatchObject({ code: 0, stderr: '' })
-    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\n\\(older not shown: vb read open-work --limit 2\\)\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
 
     const all = await vb(['read', 'open-work'])
     expect(all.stdout).toContain(`#${second}  u_julian`)

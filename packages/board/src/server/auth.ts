@@ -112,6 +112,14 @@ export const issuerName = (iss: string) => {
   return `${url.host}${url.pathname.replace(/\/+$/, '')}`.replace(/[%:]/g, (char) => (char === '%' ? '%25' : '%3A'))
 }
 
+/**
+ * Whether a token's `sub` can be in a principal's ID. A `+` starts a profile in an actor's ID
+ * (`<principal>+claude`), and a `]` or a space ends a mention of one (`@[actor-id]`), so a `sub`
+ * with one would read as another workflow's profile. Its token is refused, as a host verifier's
+ * principal with one is: an ID is never rewritten, since messages already carry the old ones.
+ */
+export const subFits = (sub: string) => !/[\s+\]]/.test(sub)
+
 /** OIDC issuers to trust, checked: two that name the same principals can't both be. */
 export function trustedIssuers(issuers: readonly string[]): Set<string> {
   const named = new Map<string, string>()

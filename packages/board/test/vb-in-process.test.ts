@@ -184,7 +184,7 @@ describe('vb()', () => {
       readFile: async (path: string) => (path === '/work/shot.png' ? png : null),
       writeFile: async (path: string, data: Uint8Array) => void saved.set(path, data),
     }
-    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 2, stderr: "error: --attach and --text-file can't read files here: pass readFile in vb()'s options.\n" })
+    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 2, stderr: "error: --attach and --file can't read files here: pass readFile in vb()'s options.\n" })
     expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/missing.png'], files)).toMatchObject({ code: 2, stderr: "error: Can't attach /work/missing.png. There's no such file.\n" })
     const id = (await vb(team, ['post', 'dev', 'proof', '--attach', '/work/shot.png', '--no-sync'], files)).stdout.trim()
     const root = JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message
@@ -193,9 +193,9 @@ describe('vb()', () => {
     expect(saved.get('/work/copy.png')).toEqual(png)
     const piped = await vb(team, ['post', 'dev', '-', '--no-sync'], { stdin: 'from stdin\n' })
     expect(JSON.parse((await vb(team, ['read', piped.stdout.trim(), '--json'])).stdout).message.text).toBe('from stdin')
-    // --text-file reads through readFile too: the sandbox's files, not this machine's.
+    // --file reads through readFile too: the sandbox's files, not this machine's.
     const notes = { readFile: async (path: string) => (path === '/work/note.md' ? new TextEncoder().encode('from the sandbox\n') : null) }
-    const written = await vb(team, ['post', 'dev', '--text-file', '/work/note.md', '--no-sync'], notes)
+    const written = await vb(team, ['post', 'dev', '--file', '/work/note.md', '--no-sync'], notes)
     expect(JSON.parse((await vb(team, ['read', written.stdout.trim(), '--json'])).stdout).message.text).toBe('from the sandbox')
   })
 
@@ -203,15 +203,15 @@ describe('vb()', () => {
     const team = await handle()
     const plan = JSON.stringify([{ key: 'fix', text: 'fix the export', labels: { step: 'fix' } }, { text: 'review the fix', needs: [{ key: 'fix' }] }])
     const files = { readFile: async (path: string) => (path === '/work/plan.json' ? new TextEncoder().encode(plan) : null) }
-    const made = await vb(team, ['tasks', 'create', 'work', '--tasks-file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)
+    const made = await vb(team, ['tasks', 'create', 'work', '--file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)
     expect(made).toMatchObject({ code: 0, stderr: '' })
     const [fix, review] = made.stdout.split('\n').filter(Boolean).map((row) => /^#(\S+)/.exec(row)![1]!)
     expect(made.stdout.replace(/ +/g, ' ')).toBe(`#${fix} ready fix the export step=fix\n#${review} waiting review the fix needs #${fix}\n`)
     // The same key again is the same tasks, and a file that isn't there is said as any is.
-    expect((await vb(team, ['tasks', 'create', 'work', '--tasks-file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)).stdout).toBe(made.stdout)
-    expect(await vb(team, ['tasks', 'create', 'work', '--tasks-file', '/work/missing.json'], files)).toMatchObject({ code: 2, stderr: "error: Can't read /work/missing.json. There's no such file.\n" })
+    expect((await vb(team, ['tasks', 'create', 'work', '--file', '/work/plan.json', '--idempotency-key', 'plan-1'], files)).stdout).toBe(made.stdout)
+    expect(await vb(team, ['tasks', 'create', 'work', '--file', '/work/missing.json'], files)).toMatchObject({ code: 2, stderr: "error: Can't read /work/missing.json. There's no such file.\n" })
     // From its stdin, as one document.
-    const piped = await vb(team, ['tasks', 'create', 'piped', '--tasks-file', '-', '--json'], { stdin: plan })
+    const piped = await vb(team, ['tasks', 'create', 'piped', '--file', '-', '--json'], { stdin: plan })
     expect(piped).toMatchObject({ code: 0, stderr: '' })
     expect(JSON.parse(piped.stdout).tasks.map((root: { text: string; channel: string; task: { state: string } }) => [root.text, root.channel, root.task.state])).toEqual([['fix the export', 'piped', 'ready'], ['review the fix', 'piped', 'waiting']])
     expect(JSON.parse((await vb(team, ['tasks', '--state', 'all', '--json'])).stdout).tasks).toHaveLength(4)

@@ -65,13 +65,30 @@ export const MessageId = z.number().int().positive()
 const INHERITED = new Set([...Object.getOwnPropertyNames(Object.prototype), 'prototype'])
 const notInherited = (name: string) => !INHERITED.has(name)
 
+/** The longest label key and value: a value is a word or a line, like `fixed` or a short verdict. */
+export const LABEL_KEY_MAX = 64
+export const LABEL_VALUE_MAX = 256
+
+/** What a refused key is told: the key itself, and the rule, so the next try needn't guess it. */
+const notALabelKey = (issue: { input?: unknown }) =>
+  `${JSON.stringify(String(issue.input))} isn't a label key: one is 1 to ${LABEL_KEY_MAX} lowercase letters, numbers, ., _, and -, starting with a letter or number`
+
 export const LabelKey = z
   .string()
-  .max(64)
-  .regex(/^[a-z0-9][a-z0-9_.-]*$/, 'invalid label key')
+  .max(LABEL_KEY_MAX, { error: notALabelKey })
+  .regex(/^[a-z0-9][a-z0-9_.-]*$/, { error: notALabelKey })
   .refine(notInherited, 'label key is a reserved name')
-export const LabelValue = z.string().max(256).refine(storable, 'label value has a NUL character or a lone surrogate')
+export const LabelValue = z
+  .string()
+  .max(LABEL_VALUE_MAX, { error: (issue) => `a label value is at most ${LABEL_VALUE_MAX} characters, and this one has ${String(issue.input).length}` })
+  .refine(storable, 'label value has a NUL character or a lone surrogate')
 export const Labels = z.record(LabelKey, LabelValue)
+/**
+ * A label value as a write sets it: no control characters either, so a value can't break the line
+ * a reader shows it on (`vb read` prints labels inline). Labels already in a log keep what they have.
+ */
+export const NewLabelValue = LabelValue.refine((value) => !/\p{Cc}/u.test(value), 'label value has a control character')
+export const NewLabels = z.record(LabelKey, NewLabelValue)
 
 /** Normalized short names, as Chat SDK names them: `eyes`, `check`, `thumbs_up`. */
 export const Emoji = z

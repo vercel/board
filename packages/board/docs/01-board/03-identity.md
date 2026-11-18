@@ -122,7 +122,7 @@ A **principal** is who holds the credential. It's a readable string:
 | `tailscale:user:ada@example.com` | a person on a `vb serve` board [behind Tailscale](../03-guides/08-tailnet.md), by their login |
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
-| `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
+| `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub`. A token whose `sub` has a `+`, `]`, or space is refused: it would read as another workflow's profile |
 | `slack:user:U0456`, `github:user:583231` | a platform user the board's own [sync](../02-sync/01-overview.md) checked, under the sync key they came through |
 | `board:watch:triage`, `board:client`, `board:client:deploys` | a [local board](./10-local.md)'s own [watchers](./06-watchers.md) and [handle](./01-mounting.md#the-handle), with `as()`'s profile |
 
@@ -285,8 +285,9 @@ warning: @nobody names no one here: it stays text, and mentions no one.
 - **A handle is settled when you write.** `@ada` and `@julian/claude` name
   whoever has that handle in full, among the actors you can see. When that's
   exactly one, the board stores `@[their-id]` in its place, and the answer
-  says who. Of several, it's the one who wrote in the thread, if exactly one
-  did.
+  says who. Of several, one on the board wins over platform users (a synced
+  user's handle is their display name, theirs to set); else it's the one who
+  wrote in the thread, if exactly one did.
 - **A handle that names no one stays text.** No one has it, several do, or
   someone has it only under a name (`@malte` isn't `support/malte`): it's kept
   as typed, a mention of no one, and the answer says so, with who it could

@@ -62,7 +62,12 @@ export function project(before: Before, event: BoardEvent): Change {
 }
 
 /** The sync state an event touches: its thread's sync, and for a file receipt, the copy it's about. */
-export type SyncBefore = { thread: SyncedThread | undefined; copy: ExternalCopy | undefined }
+export type SyncBefore = {
+  thread: SyncedThread | undefined
+  copy: ExternalCopy | undefined
+  /** For a `thread.synced`, the board thread its target is already synced with, if any. */
+  owner?: string | undefined
+}
 
 /** What an event changes in the sync state: rows to write, each replacing what was there. */
 export type SyncChange = {
@@ -73,12 +78,13 @@ export type SyncChange = {
 }
 
 /** The sync rows `event` reads before it applies: none for events that don't touch the sync state. */
-export function syncReads(event: BoardEvent): { thread: string | null; copy: [number, string] | null } {
+export function syncReads(event: BoardEvent): { thread: string | null; copy: [number, string] | null; external?: string } {
   switch (event.type) {
     case 'message.posted':
       // A reply's thread is only read for a root, which the event itself creates.
       return { thread: null, copy: null }
     case 'thread.synced':
+      return { thread: event.payload.thread, copy: null, external: event.payload.target }
     case 'message.synced':
       return { thread: event.payload.thread, copy: null }
     case 'message.files_synced':
@@ -100,10 +106,12 @@ export function projectSync(before: SyncBefore, event: BoardEvent): SyncChange {
   if (before.thread) setOwn(state.threads, key, structuredClone(before.thread))
   const reads = syncReads(event)
   if (reads.copy && before.copy) state.copies[reads.copy[0]] = { [reads.copy[1]]: structuredClone(before.copy) }
+  if (reads.external !== undefined && before.owner !== undefined) setOwn(state.byExternalThread, reads.external, before.owner)
   foldSync(state, event)
   const thread = own(state.threads, key)
   if (thread && JSON.stringify(thread) !== JSON.stringify(before.thread)) change.thread = { key, data: thread }
-  for (const [external, owner] of Object.entries(state.byExternalThread)) change.externalThreads.push([external, owner])
+  for (const [external, owner] of Object.entries(state.byExternalThread))
+    if (!(external === reads.external && owner === before.owner)) change.externalThreads.push([external, owner])
   for (const [message, targets] of Object.entries(state.copies))
     for (const [target, copy] of Object.entries(targets)) {
       const unchanged = reads.copy?.[0] === Number(message) && reads.copy[1] === target && JSON.stringify(copy) === JSON.stringify(before.copy)

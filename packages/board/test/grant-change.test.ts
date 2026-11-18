@@ -74,8 +74,45 @@ describe('checkGrantChange', () => {
     expect(checkGrantChange({ ...carol, after: [g1, everyone({ 'security/': ['read'] })], revoked: grant({ 'dev/': ['post'] }) })).toBeNull()
   })
 
+  it("calls a change its caller couldn't take back a lockout, once it's told what the caller may do after it", () => {
+    // A member makes factory/ read-only for everyone, themselves included: they may, and then can't lift it.
+    const lock = everyone({ 'factory/': ['read'], 'factory/memory/': [] })
+    const member = as({ '*': 'all' })
+    const shut = as({ '*': 'all', 'factory/': ['read'], 'factory/memory/': [] }, { '*': 'all' })
+    expect(checkGrantChange({ ...member, after: [g1, lock], changed: lock })).toBeNull()
+    expect(checkGrantChange({ ...member, after: [g1, lock], changed: lock, then: shut })).toEqual({ reason: 'lockout', pattern: 'factory/', permission: 'manage' })
+    // A grant that keeps them in at factory/ alone leaves the lock's other pattern closed to them.
+    const half = as({ '*': 'all', 'factory/memory/': [] }, { '*': 'all' })
+    expect(checkGrantChange({ ...member, after: [g1, lock], changed: lock, then: half })).toEqual({ reason: 'lockout', pattern: 'factory/memory/', permission: 'manage' })
+    // One that keeps them in at each of its patterns keeps it theirs to lift.
+    expect(checkGrantChange({ ...member, after: [g1, lock], changed: lock, then: member })).toBeNull()
+  })
+
+  it('calls revoking the grant that kept the caller in a lockout too, and a group grant that narrows them', () => {
+    const lock = everyone({ 'factory/': ['read'] })
+    const kept = { principals: [{ kind: 'user' }], can: { 'factory/': 'all' } } as const
+    const member = as({ '*': 'all' })
+    const shut = as({ '*': 'all', 'factory/': ['read'] }, { '*': 'all' })
+    expect(checkGrantChange({ ...member, after: [g1, lock], revoked: kept, then: shut })).toEqual({ reason: 'lockout', pattern: 'factory/', permission: 'manage' })
+    // Every person reads dev/ and no more: the caller is one of them, by their own limits.
+    const narrowed: GrantShape = { principals: [{ kind: 'all-users' }], can: { 'dev/': ['read'] } }
+    const reader = as({ '*': 'all', 'dev/': ['read'] })
+    expect(checkGrantChange({ ...member, after: [g1, narrowed], changed: narrowed, then: reader })).toEqual({ reason: 'lockout', pattern: 'dev/', permission: 'manage' })
+  })
+
+  it("refuses what the caller may not do as that, not as a lockout it could say to go ahead with", () => {
+    // Bob is shut out of security/ already: another grant there is beyond his reach, and he'd still be shut out after it.
+    const lock = everyone({ 'security/': [] })
+    const more = everyone({ 'security/': ['read'] })
+    const bob = as({ '*': 'all', 'security/': [] }, { '*': 'all' })
+    expect(checkGrantChange({ ...bob, after: [g1, lock, more], changed: more, then: as({ '*': 'all', 'security/': ['read'] }, { '*': 'all' }) })).toEqual({ reason: 'reach', pattern: 'security/', permission: 'manage' })
+  })
+
   it('lets an owner no token narrows make any grant', () => {
     const changed = grant({ '*': 'all' })
     expect(checkGrantChange({ ...as({}), owner: true, after: [g1, everyone({ 'secret/': ['read'] }), changed], changed })).toBeNull()
+    // Nothing locks an owner out, so nothing it does is a lockout.
+    const lock = everyone({ '*': [] })
+    expect(checkGrantChange({ ...as({}), owner: true, after: [lock], changed: lock, then: as({}) })).toBeNull()
   })
 })

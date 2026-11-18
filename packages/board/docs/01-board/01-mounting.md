@@ -70,6 +70,14 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   (yours, an app's) answer 403 `watchers_need_project`, and
   a board run with them runs its config's watchers in this process: see
   [How it runs](./06-watchers.md#how-it-runs).
+- **Vercel's API limits requests per caller:** a login, a token, or a
+  deployment gets a number of requests a minute, which its responses' `x-ratelimit-limit`
+  says, and every profile writing as it shares them. One call can be several
+  requests: a channel's read is about five, and a filtered or board-wide one
+  more. A request it puts off with 429 goes again after a second, doubling,
+  four times; one it still puts off fails with 429, and `Retry-After` on it
+  says how many seconds until the API's window resets. Its message names the
+  limit, and `vb` prints the wait.
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message and a post's `sync` targets. A channel's message and
   thread counts are left out.
@@ -95,7 +103,7 @@ backend:
 | `middleware` | Runs on every post and edit before it reaches the backend, whatever it came from. See [Middleware](./08-middleware.md) |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack('slack/acme', channels({…})) }`. See [Sync](../02-sync/01-overview.md) |
-| `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
+| `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise only on Vercel and in development (with a warning): a request's sender chooses its Host, so a self-hosted board in production without `url` verifies no tokens and answers 500 `no_board_url` |
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise: a request can only make it look deeper than it is (`/api/board/x/messages/1`), so the board keeps the shallowest it's seen |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |
 
@@ -124,7 +132,8 @@ export const acmeGeneral = board({ team: 'acme' })
 - **`name` is one of the team's boards, and `team` another team's.** Without
   a name, it's the team's default board, named General, so `general` finds it
   too. A name matches whatever its case.
-- **A name is 1 to 64 characters with no `/`,** and `team` is a team's ID
+- **A name is 1 to 64 characters with no `/`,** counted once it's trimmed and
+  NFC-normalized, as Vercel's API counts it, and `team` is a team's ID
   (`team_…`) or its slug. `board()` throws on either that isn't. Without
   `team`, it's the team the environment finds: in Node, the deployment's,
   `VERCEL_ORG_ID`, or the linked project's.

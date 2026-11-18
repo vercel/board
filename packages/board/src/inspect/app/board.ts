@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { BoardEventView, Explanation, GrantInput, InboxEntry, Me, MessageView, SchemaInput, SyncedView, TaskView } from '../../api/routes.ts'
+import type { BoardEventView, Explanation, GrantInput, GrantWriteOptions, InboxEntry, Me, MessageView, SchemaInput, SyncedView, TaskView } from '../../api/routes.ts'
 // `@vercel/board/access`, in an app of yours.
 import { compileAccess } from '../../server/access.ts'
 import { board, BoardError, type Attachment, type EventsState, type ExplainPrincipal, type PostOptions, type ScheduleTiming } from '../../server/index.default.ts'
@@ -11,6 +11,7 @@ import { board, BoardError, type Attachment, type EventsState, type ExplainPrinc
 import { http } from '../../backend-http/index.default.ts'
 import { toast } from './chrome.ts'
 import { listing } from './listing.ts'
+import { base } from './nav.tsx'
 import * as store from './store.ts'
 import { refusal, said } from './words.ts'
 
@@ -18,12 +19,18 @@ import { refusal, said } from './words.ts'
 
 const meta = (name: string) => document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content ?? ''
 
+/**
+ * Served from an app (`@vercel/board/inspect`), the page acts as the app's handle, which isn't
+ * whoever's visiting, so it writes only as a profile you name: never as yourself.
+ */
+export const named = meta('inspect-named') === '1'
+
 /** A profile you post as: its name, and the avatar you gave it (an https URL), if any. */
 export type Profile = { name: string; avatar?: string }
 
 /** You, as no profile. Its `fetch` sends the page's credential for the proxy: a token only this run's page has. */
 const yourself = board({
-  backend: http(`${location.origin}/board`, {
+  backend: http(`${location.origin}${base}/board`, {
     fetch: (input, init) => {
       const headers = new Headers(init?.headers)
       headers.set('x-inspect-token', meta('inspect-token'))
@@ -65,10 +72,16 @@ let profile: Profile | null | undefined = (() => {
 const avatars: Record<string, string> = stored<Record<string, string>>(AVATARS_KEY) ?? {}
 
 export const getProfile = () => profile
+
+/**
+ * Whether the page waits for a profile before it reads anything: served from an app, with none picked
+ * yet. The handle's own profile doesn't count there: it's the app's name, not the visitor's.
+ */
+export const needsName = () => named && (profile === undefined || profile === null)
 export const avatarOf = (name: string): string | undefined => avatars[name]
 
 const handleFor = (choice: Profile | null | undefined) => {
-  const as = choice === undefined ? started : choice
+  const as = choice === undefined && !named ? started : (choice ?? null)
   return as === null ? yourself : yourself.as(as)
 }
 
@@ -76,7 +89,7 @@ const handleFor = (choice: Profile | null | undefined) => {
 let team = handleFor(profile)
 
 /** Switches who you post as, then learns the identity that is, and remembers it once the board takes it. */
-export async function setProfile(next: Profile | null | undefined) {
+export async function setProfile(next: Profile | null | undefined): Promise<boolean> {
   const handle = handleFor(next)
   try {
     const me = await handle.me()
@@ -85,7 +98,7 @@ export async function setProfile(next: Profile | null | undefined) {
     set((s) => ({ ...s, me }))
   } catch (error) {
     toast(`couldn't switch: ${said(error)}`)
-    return
+    return false
   }
   if (next) {
     if (next.avatar) avatars[next.name] = next.avatar
@@ -96,6 +109,7 @@ export async function setProfile(next: Profile | null | undefined) {
     else localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
     localStorage.setItem(AVATARS_KEY, JSON.stringify(avatars))
   } catch {}
+  return true
 }
 
 /** What you may do where: `me.can` is each channel pattern's permissions, and `compileAccess` answers for a channel. */
@@ -317,7 +331,7 @@ export async function send(
       ? (await team.tasks.create(post.channel, { ...options, needs: post.task.needs, for: post.task.for })).task
       : await write(post.re === null ? { channel: post.channel } : { re: post.re }, options)
     outgoing.delete(key)
-    set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent]))
+    set((s) => store.sent(s, key, sent))
   } catch (error) {
     set((s) => ({ ...s, pending: s.pending.map((p) => (p.key === key ? { ...p, error: refusal(error) } : p)) }))
   }
@@ -545,23 +559,41 @@ export async function loadGrants() {
   }
 }
 
+/** Whether the board refused a grant change as one its caller couldn't take back: it takes their own `manage` where it reaches. */
+const lockout = (error: unknown) => error instanceof BoardError && error.code === 'grant_lockout'
+
+/**
+ * A grant change, asked about first when the board refuses it as a lockout: it's sent again with
+ * `lockMeOut` on a yes, and a no leaves the board's refusal as it was.
+ */
+async function askingFirst<T>(write: (options: GrantWriteOptions) => Promise<T>): Promise<T> {
+  try {
+    return await write({})
+  } catch (error) {
+    if (!lockout(error) || !confirm(`${said(error)}: only someone who still manages grants there could change it then. Go ahead?`)) throw error
+    return write({ lockMeOut: true })
+  }
+}
+
 /** A new grant. Answers what the board refused it for, in its words, or null once it's made. */
 export async function createGrant(input: GrantInput): Promise<string | null> {
   try {
-    await team.createGrant(input)
+    await askingFirst((options) => team.createGrant(input, options))
     await loadGrants()
     return null
   } catch (error) {
-    return said(error)
+    // Kept open on a lockout they said no to, with what would avoid it.
+    return lockout(error) ? `${said(error)}. Make a grant that names you there first.` : said(error)
   }
 }
 
 /** Revokes a grant: its principals' next requests are refused. */
 export async function revokeGrant(id: string) {
   try {
-    await team.revokeGrant(id)
+    await askingFirst((options) => team.revokeGrant(id, options))
   } catch (error) {
-    toast(`couldn't revoke ${id}: ${said(error)}`)
+    // A lockout they said no to is no failure: nothing was asked of the board again.
+    if (!lockout(error)) toast(`couldn't revoke ${id}: ${said(error)}`)
   }
   await loadGrants()
 }

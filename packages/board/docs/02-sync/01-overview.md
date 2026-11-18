@@ -171,7 +171,8 @@ like any message on the board, but never goes back through the key it came by.
 
 Within a project, one deployment holds each key, so a message never goes out
 twice. Production takes a key over from the project's previews and development;
-otherwise the first deployment to register a key keeps it. A deployment that
+otherwise the first deployment to register a key keeps it, though a preview
+never takes a key the project's production held. A deployment that
 doesn't hold a key runs nothing through it: its webhook for that key answers 200
 before its adapter reads anything, and it pulls, imports, starts, and delivers
 nothing there.
@@ -192,7 +193,7 @@ $ vb read general --source www/slack --json   # trimmed to text and from
 {"text": "checkout is down", "from": "www/slack"}
 
 $ vb sync 812
-support/slack  C0C8XN8SQRG  message 1792780353.701549
+support/slack  C0123ABCDEF  message 1792780353.701549
 www/slack      C0D2K4R7Q1M  message 1792780391.118204
 ```
 
@@ -219,9 +220,9 @@ for that link`. A handle has them as `board.sync(id)` and `board.linked(url)`.
 
 ```text
 $ vb sync 812
-slack   C0C8XN8SQRG  https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
+slack   C0123ABCDEF  https://acme.slack.com/archives/C0123ABCDEF/p1792780353701549
 
-$ vb read https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
+$ vb read https://acme.slack.com/archives/C0123ABCDEF/p1792780353701549
 #812  ada · 2h
       checkout is down
 ```

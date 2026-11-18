@@ -43,7 +43,7 @@ describe('local auth', () => {
   })
 
   it('turns OS usernames into handles', () => {
-    expect(localHandle('Julian Benegas')).toBe('julian-benegas')
+    expect(localHandle('Grace Hopper')).toBe('grace-hopper')
     expect(localHandle('DOMAIN\\jb')).toBe('domain-jb')
     expect(localHandle('_')).toBe('me')
   })
@@ -296,7 +296,8 @@ describe('vb serve', () => {
 
   it('is the board at a host you allow, and at its own address for any other', async () => {
     const { project, env } = await setup()
-    const serving = serveIn(project, env, ['--no-inspect', '--allow-host', 'box.tailnet.ts.net'])
+    // As in production, where a board that checks no Host itself takes none from a request.
+    const serving = serveIn(project, { ...env, NODE_ENV: 'production' }, ['--no-inspect', '--allow-host', 'box.tailnet.ts.net'])
     const url = await serving.url
     const discovered = async (headers: Record<string, string>) => JSON.parse((await forwarded(url, '', headers)).body)
     // A proxy that keeps the Host it was asked for, and says the request came over TLS.

@@ -216,13 +216,13 @@ describe('vb sync <id>', () => {
   it('prints a row a target: its key, where, and the link or why it didn’t reach it', () => {
     expect(
       formatSynced([
-        { target: 'slack:C0C8XN8SQRG', key: 'slack', thread: 'slack:C0C8XN8SQRG:1.2', message: '1.2', url: 'https://acme.slack.com/archives/C0C8XN8SQRG/p12', undelivered: null },
+        { target: 'slack:C0123ABCDEF', key: 'slack', thread: 'slack:C0123ABCDEF:1.2', message: '1.2', url: 'https://acme.slack.com/archives/C0123ABCDEF/p12', undelivered: null },
         { target: 'github:acme/www:12', key: 'github', thread: 'github:acme/www:12', message: null, url: null, undelivered: 'rate limited' },
         { target: 'slack:C0INCIDENTS', key: 'slack', thread: null, message: null, url: null, undelivered: null },
       ]),
     ).toBe(
       [
-        'slack   C0C8XN8SQRG  https://acme.slack.com/archives/C0C8XN8SQRG/p12',
+        'slack   C0123ABCDEF  https://acme.slack.com/archives/C0123ABCDEF/p12',
         "github  acme/www:12  didn't reach it: rate limited",
         'slack   C0INCIDENTS  no copy yet',
       ].join('\n'),

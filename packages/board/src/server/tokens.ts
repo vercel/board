@@ -2,6 +2,7 @@ import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTPayload, type JWTVeri
 import {
   GITHUB_ISSUER,
   issuerName,
+  subFits,
   markVerified,
   privateHost,
   TOKENS,
@@ -34,24 +35,48 @@ function factsOf(issuer: TokenFacts['issuer'], iss: string, claims: Claims): Tok
 const issuerMatches = (iss: string, accepted: string | RegExp) =>
   typeof accepted === 'string' ? iss === accepted : accepted.test(iss)
 
+/** The keys of the issuers seen most recently: an issuer a token names costs a fetch, so what stays is bounded. */
 const remoteKeys = new Map<string, JWTVerifyGetKey>()
+const loading = new Map<string, Promise<JWTVerifyGetKey>>()
+const REMOTE_KEYS_MAX = 100
+const DISCOVERY_TIMEOUT_MS = 5000
 
 /**
  * An issuer's keys, by OIDC Discovery 1.0: its document under the issuer, naming that issuer
  * (§4.3), and its keys at an https `jwks_uri` (§3), which must be on the internet, as a grant's
- * issuer must. Like jose's own fetch of the keys, it follows no redirect.
+ * issuer must. Like jose's own fetch of the keys, it follows no redirect. Callers asking for the
+ * same issuer at once share one fetch, and a fetch that stalls gives up.
  */
-async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
+function keysFor(iss: string): Promise<JWTVerifyGetKey> {
   const cached = remoteKeys.get(iss)
-  if (cached) return cached
+  if (cached) {
+    remoteKeys.delete(iss)
+    remoteKeys.set(iss, cached)
+    return Promise.resolve(cached)
+  }
+  let pending = loading.get(iss)
+  if (!pending) {
+    pending = discover(iss).finally(() => loading.delete(iss))
+    loading.set(iss, pending)
+  }
+  return pending
+}
+
+async function discover(iss: string): Promise<JWTVerifyGetKey> {
   const unknown = (why: string) => unauthorized(`cannot load keys for issuer ${iss}: ${why}`)
-  const response = await fetch(`${iss.replace(/\/+$/, '')}/.well-known/openid-configuration`, { redirect: 'manual' })
+  const response = await fetch(`${iss.replace(/\/+$/, '')}/.well-known/openid-configuration`, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+  }).catch(() => {
+    throw unknown('its discovery did not answer')
+  })
   if (response.status !== 200) throw unknown(`its discovery answered ${response.status}`)
   const config = (await response.json().catch(() => null)) as { issuer?: unknown; jwks_uri?: unknown } | null
   if (config?.issuer !== iss) throw unknown("its discovery names another issuer")
   const jwks = typeof config.jwks_uri === 'string' ? URL.parse(config.jwks_uri) : null
   if (jwks?.protocol !== 'https:' || privateHost(jwks.hostname)) throw unknown("its jwks_uri isn't an https URL on the internet")
-  const keys = createRemoteJWKSet(jwks)
+  const keys = createRemoteJWKSet(jwks, { timeoutDuration: DISCOVERY_TIMEOUT_MS })
+  if (remoteKeys.size >= REMOTE_KEYS_MAX) remoteKeys.delete(remoteKeys.keys().next().value!)
   remoteKeys.set(iss, keys)
   return keys
 }
@@ -101,6 +126,7 @@ function createVerifier(options: {
 
     if (isOidc) {
       if (typeof claims.sub !== 'string' || claims.sub === '') throw unauthorized(`token from ${iss} without sub`)
+      if (!subFits(claims.sub)) throw unauthorized(`token from ${iss} has a sub with a +, a ], or a space, which a principal's ID can't hold`)
       return { id: `oidc:${issuerName(iss)}:${claims.sub}`, kind: 'workflow', handle: claims.sub.slice(0, 128), expiresAt, facts }
     }
     if (isGitHub)

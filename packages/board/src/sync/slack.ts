@@ -51,7 +51,7 @@ export type SlackClient = {
   }
   /** Says which scopes the app has (`response_metadata.scopes`, from Slack's `x-oauth-scopes`). */
   /** Also whose a token is (`user_id`), for a person's own. */
-  auth?: { test(args?: Record<string, unknown>): Promise<{ user_id?: string; user?: string; response_metadata?: { scopes?: string[] } }> }
+  auth?: { test(args?: Record<string, unknown>): Promise<{ user_id?: string; user?: string; team_id?: string; response_metadata?: { scopes?: string[] } }> }
 }
 
 type SlackPost = {
@@ -90,11 +90,15 @@ const MENTIONED = /@\uF8F0([A-Z0-9_]+)\uF8F1/g
 const mentionedAs = (user: string) => `\uF8F0${user}\uF8F1`
 /** A user's mention in Slack's own mrkdwn, with the name Slack may give it: `<@U0456>`, `<@U0456|ada>`. */
 const SLACK_MENTION = /<@([A-Z0-9_]+)(?:\|[^<>]*)?>/g
-/** A Slack user's ID, as `<@U0456>` names one. */
-const SLACK_USER_ID = /^[A-Z0-9_]+$/
+/**
+ * A Slack user's ID, as `<@U0456>` names one: `U…`, or `W…` on Enterprise Grid. A bot's own ID
+ * (`B…`, the author of an app's messages) isn't one, and Slack shows `<@B0456>` as it's written.
+ */
+const SLACK_USER_ID = /^[UW][A-Z0-9_]+$/
 /**
  * A Slack user as Slack mentions them, from their ID alone. Only a user's ID: anything else between
- * `<@` and `>` could close the mention and open Slack's own markup (`<!channel>`).
+ * `<@` and `>` could close the mention and open Slack's own markup (`<!channel>`), and a bot's ID
+ * shows as markup, so the mention stays text.
  */
 function slackMention(id: string): string | null {
   const user = id.startsWith('slack:user:') ? id.slice('slack:user:'.length) : null
@@ -218,6 +222,16 @@ const MARKS: Record<string, string> = { b: '**', strong: '**', i: '_', em: '_', 
 const BLOCKS = new Set(['p', 'div', 'details', 'table', 'tr', 'ul', 'ol', 'li', 'blockquote', 'pre', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 const attribute = (attrs: string, name: string) => new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(attrs)?.slice(1).find((v) => v !== undefined) ?? ''
 
+/**
+ * Slack's `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^…>` notify a whole channel or user
+ * group. Text from other platforms (a GitHub comment) isn't allowed to ping them, so a word joiner
+ * breaks the markup; the text reads the same. A message written on the board isn't touched: its
+ * author may mean to ping a group. Code isn't spared: what Slack takes for code isn't what a regex
+ * here does (an escaped backtick, runs that don't match, a fence nobody closed), and guessing wrong
+ * pings a channel, where a joiner in copied code is only in the way.
+ */
+export const withoutBroadcasts = (markdown: string): string => markdown.replace(/<!(?=[a-z^])/gi, '<\u2060!')
+
 /** GitHub's markdown allows inline HTML, which Slack shows as raw tags: as markdown instead, outside code. */
 export function withoutHtml(markdown: string): string {
   if (!/<\/?[a-z!]/i.test(markdown) || /[\uE000\uE001]/.test(markdown)) return markdown
@@ -270,6 +284,13 @@ type SlackUser = {
   name?: string
   real_name?: string
   is_bot?: boolean
+  /** A guest: one channel or several, never every public channel. */
+  is_restricted?: boolean
+  is_ultra_restricted?: boolean
+  /** Someone from another organization, in a Slack Connect channel. */
+  is_stranger?: boolean
+  /** The workspace they belong to: the app's own for its people, another's for a Slack Connect member. */
+  team_id?: string
   profile?: { display_name?: string; real_name?: string; image_72?: string; image_48?: string }
 }
 
@@ -698,8 +719,10 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       // A link Slack didn't unfurl, read with the app's token, but only from a public channel
       // the app is already in. The token reads what the app can, not what the person who
       // posted the link can, and every board reader would see the snapshot: private
-      // channels and DMs are left to Slack's unfurl, which checks the poster. Nor does it
-      // join a channel someone linked, which would announce the app there.
+      // channels and DMs are left to Slack's unfurl, which checks the poster, and so is a
+      // channel shared with another organization. A guest or someone from another
+      // organization who posted the link may not see that channel, so nothing is read for
+      // them. Nor does it join a channel someone linked, which would announce the app there.
       async fetchLink(link, linker): Promise<FetchedLink> {
         const [, channel, thread] = link.thread.split(':')
         const web = await client()
@@ -707,13 +730,30 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         if (!web || !replies || !channel || !thread) return { snapshot: null, unavailable: 'no Slack client to read it with' }
         const one = async (channel: string, thread: string, ts: string) =>
           (await replies({ channel, ts: thread, oldest: ts, latest: ts, inclusive: true, limit: 1 })).messages?.find((m) => m.ts === ts)
+        const [, at, root] = linker.thread.split(':')
+        const linkingMessage = at && root ? one(at, root, linker.message).catch(() => undefined) : Promise.resolve(undefined)
+        // Whoever posted the link, as Slack knows them: an app or the board's own message passes, a
+        // person who is a guest or from another workspace, or one Slack won't say, doesn't.
+        const posterMayRead = async () => {
+          const poster = (await linkingMessage)?.user
+          if (!poster) return (await linkingMessage) !== undefined
+          const user = (await web.users?.info({ user: poster }).catch(() => undefined))?.user
+          if (!user) return false
+          if (user.is_bot) return true
+          if (user.is_restricted || user.is_ultra_restricted || user.is_stranger) return false
+          // A Slack Connect member of a shared channel belongs to another workspace, whatever else Slack flags.
+          const team = (await web.auth?.test().catch(() => undefined))?.team_id
+          return !!team && user.team_id === team
+        }
         let found: SlackMessage | undefined
         let unavailable = 'message_not_found'
         try {
           const info = (await web.conversations.info({ channel })).channel
           if (!info) unavailable = 'channel_not_found'
           else if (info.is_private || info.is_im || info.is_mpim) unavailable = 'private_channel'
+          else if (info.is_ext_shared) unavailable = 'shared_channel'
           else if (!info.is_member) unavailable = 'not_in_channel'
+          else if (!(await posterMayRead())) unavailable = 'poster_cannot_read'
           else found = await one(channel, thread, link.message)
         } catch (error) {
           unavailable = slackError(error)
@@ -722,8 +762,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           // Slack's unfurl skips Chat SDK, so it can come in before its message, when there's
           // nothing yet to edit. By now it's on the message that links it, which the app can
           // read: that message came from a channel the app is in.
-          const [, at, root] = linker.thread.split(':')
-          const linking = at && root ? await one(at, root, linker.message).catch(() => undefined) : undefined
+          const linking = await linkingMessage
           const unfurled = linking ? slackLinks('', linking.text ?? '', linking.attachments, mrkdwn).find((known) => known.url === link.url)?.snapshot : null
           return unfurled ? { snapshot: unfurled, unavailable: null } : { snapshot: null, unavailable }
         }
@@ -866,14 +905,15 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   }
 
   /**
-   * A message goes out under its author's name (`Julián Benegas`, `clever-lemur via vboard-factory`,
+   * A message goes out under its author's name (`Ada Lovelace`, `clever-lemur via acme-agents`,
    * `Malte via support (slack)`), and their picture when it has one Slack can show, instead of the
    * app's, with the text's `**name**: ` label dropped. Without `chat:write.customize` it posts as
    * the app, label and all.
    */
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
-    const { as, deployments, ...given } = body
-    const post = { ...given, markdown: withoutHtml(given.markdown) }
+    const { as, deployments, external, ...given } = body
+    const html = withoutHtml(given.markdown)
+    const post = { ...given, markdown: external ? withoutBroadcasts(html) : html }
     if (deployments && !post.files?.length) {
       const laidOut = await this.postDeployments(target, as, post.markdown, deployments)
       if (laidOut) return laidOut
@@ -937,8 +977,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
 
   /** An edit keeps the label out only where the message went out under its author's name. */
   override async edit(thread: string, message: string, body: ProviderPost) {
-    const { as, deployments, ...given } = body
-    const post = { ...given, markdown: withoutHtml(given.markdown) }
+    const { as, deployments, external, ...given } = body
+    const html = withoutHtml(given.markdown)
+    const post = { ...given, markdown: external ? withoutBroadcasts(html) : html }
     // Only an app that may name a message's sender ever sent one under a name.
     const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as) : false
     const edited = named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { ExternalEvent, ExternalLocation } from '../contract/external.ts'
-import { Labels, LabelKey } from '../contract/schemas.ts'
+import { NewLabels, LabelKey } from '../contract/schemas.ts'
 
 export const EventBase = z.object({
   id: z.string().min(1),
@@ -47,7 +47,7 @@ export type RootOverride = (root: Readonly<SyncRoot>) => { text?: string; labels
 export const SyncOverrides = z.object({
   root: z.custom<RootOverride>((value) => typeof value === 'function').optional(),
   text: z.string().optional(),
-  labels: Labels.optional(),
+  labels: NewLabels.optional(),
   unset: z.array(LabelKey).optional(),
   noSync: z.boolean().optional(),
 }).strict()

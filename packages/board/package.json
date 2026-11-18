@@ -1,8 +1,17 @@
 {
   "name": "@vercel/board",
-  "version": "0.48.1",
+  "version": "0.50.2",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vercel/board.git",
+    "directory": "packages/board"
+  },
+  "homepage": "https://github.com/vercel/board#readme",
+  "bugs": {
+    "url": "https://github.com/vercel/board/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -41,6 +50,10 @@
     "./cli/commands": {
       "types": "./dist/cli-commands.d.mts",
       "default": "./dist/cli-commands.mjs"
+    },
+    "./inspect": {
+      "types": "./dist/inspect.d.mts",
+      "default": "./dist/inspect.mjs"
     },
     "./backend-local": {
       "types": "./dist/backend-local.d.mts",
@@ -135,5 +148,8 @@
     "chat": {
       "optional": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

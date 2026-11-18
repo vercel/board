@@ -71,6 +71,21 @@ describe("a mention that comes in from Slack, on the board's own sync", () => {
     expect(sent[0]).toContain('<@U_GRACE>, over to you')
   })
 
+  it("mentions a Slack app's bot, which Slack can't mention by its bot ID, by its name instead", async () => {
+    const { board, sent, says } = mirrored()
+    const julian = await julianOn(board.fetch)
+    await says('', '600.1', 'building it', { subtype: 'bot_message', bot_id: 'B_RAVEN', username: 'raven', text: 'building it' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    const raven = (await actors(julian)).find((actor) => actor.id === root!.by.actor)!
+    expect(raven.id).toContain('B_RAVEN')
+    const reply = await julian('POST', '/messages', { re: root!.id, text: `@${raven.handle} keep it` })
+    expect(reply.body.mentions).toMatchObject([{ actor: { id: raven.id } }])
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).not.toContain('<@B_RAVEN>')
+    expect(sent[0]).toContain(`${raven.name} keep it`)
+  })
+
   it('names them under the sync key the mention came through, as it names who wrote', async () => {
     const { board, says } = mirrored('slack-eu')
     const julian = await julianOn(board.fetch)

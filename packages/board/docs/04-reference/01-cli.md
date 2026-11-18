@@ -50,15 +50,28 @@ const code = await createApp({
   onWarning: (warning) => console.error(warning.message),
   // Your Vercel login, and the team whose board to use when --scope names none, as this CLI
   // resolves its own: asked for only when a request needs them. Help, a typo, or misuse never asks.
-  // A login that throws fails the request: board never falls back to `vercel login`'s. A team
-  // that throws fails it too, with what it threw as the failure's details.
+  // The login is who every command runs as, wherever this CLI runs: nothing in the environment
+  // goes ahead of it, a deployment's own token and BOARD_TOKEN included. One that throws fails the
+  // request: board never falls back to `vercel login`'s. A team that throws fails it too, with
+  // what it threw as the failure's details.
   login: async () => process.env.VERCEL_AUTH_TOKEN!,
   team: async () => process.env.VERCEL_ORG_ID ?? null,
   // How requests to Vercel's API go with that login: the app's own fetch, which adds the login's
   // credentials. Without it, the login goes as a Bearer token, which a DPoP login can't use.
   // fetch: (input, init) => yourSignedFetch(input, init), // a DPoP proof for each request
+  // A Vercel token someone passed for this run, as `vercel board --token` takes one: the login to
+  // use in place of `login`. Board sends it itself, as a Bearer token, never through `fetch`. A
+  // board at a URL gets a token minted with it, never the token itself.
+  // token: yourFlags.token,
 }).run(process.argv.slice(3))
 ```
+
+The CLI that runs board's says who its commands run as. With a `login` (or a
+`token`), every command runs as that login, on a deployment and with
+`BOARD_TOKEN` set too, so `vercel board` is you, as every `vercel` command is.
+A board at a URL gets a token minted with that login. To act as a deployment's
+project, or with `BOARD_TOKEN`, run `vb`. [`whoami`](#whoami) names a passed
+token as its source, `the token you passed`.
 
 `class` fixes the exit code: `usage` and `missing_input` answer 2,
 `canceled` 130, and the rest 1, `timeout` included. Without `onError`, board
@@ -82,9 +95,10 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 `VERCEL_ORG_ID`'s, or the team of the nearest linked project
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
-reads and writes with `BOARD_TOKEN`, or else as you, with the login the Vercel
-CLI hands it (`VERCEL_AUTH_TOKEN`) or `vercel login`'s. It never sends
-`VERCEL_TOKEN`.
+reads and writes as the login the CLI that runs it gives it. Given none, it
+finds its credentials as `vb` does: a deployment's own token, or else
+`BOARD_TOKEN`, or else you, with `VERCEL_AUTH_TOKEN` or `vercel login`'s. It
+never sends `VERCEL_TOKEN`.
 
 ### In-process, on a handle
 
@@ -237,9 +251,14 @@ for one to pass.
   `completed 812`, `blocked 813`, `unassigned 815`.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
-- **Text can come from a file or stdin.** `--text-file note.md` reads a file,
-  and `--text-file -`, or `-` as the text, reads stdin. Text may be left out
+- **Text can come from a file or stdin.** `--file note.md` reads a file,
+  and `--file -`, or `-` as the text, reads stdin. Text may be left out
   when the message has `--attach` files.
+- **`--file` is what a command takes from a file,** and `-` there reads
+  stdin: a message's text on `post`, `reply`, `edit`, and `schedule`, a plan
+  of tasks on `tasks create`, several grants on `grants create`, and a JSON
+  Schema on `schemas create`, which also takes one written inline, as
+  `--data`.
 - **Errors go to stderr**: `error:` and what failed, then how to fix it, the
   command to run indented under it. With `--json`, one JSON document instead.
   See [Errors](#errors).
@@ -373,7 +392,7 @@ react, label, and sync everywhere:
 
 ```text
 $ vb whoami --scope test
-Julián Benegas (vercel:user:u_jb)
+Ada Lovelace (vercel:user:u_jb)
 board   https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test
 source  the Vercel CLI
 can     *  read
@@ -499,10 +518,11 @@ options every command takes: board help
 
 ```text
 vb grants [list]
-vb grants create <principal>... --can <pattern=permissions>...
-vb grants update <grant> [--add-<kind> <name>]... [--remove-<kind> <name>]... [--can <pattern=permissions>]...
+vb grants create <principal>... --can <pattern=permissions>... [--lock-me-out]
+vb grants create --file <path> [--lock-me-out]
+vb grants update <grant> [--add-<kind> <name>]... [--remove-<kind> <name>]... [--can <pattern=permissions>]... [--lock-me-out]
 vb grants explain [<principal>] <channel>
-vb grants revoke <grant>
+vb grants revoke <grant> [--lock-me-out]
 ```
 
 `vb grants` lists each grant's ID, the principals it names as the flags that
@@ -534,7 +554,13 @@ comma-separated list, `all`, or `none`. A board that verifies tokens itself,
 as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an
 app's client ID.
 
-`create` prints the grant it made as its row. `update` takes `--add-<kind>` and
+`create --file <path>` makes several grants in one write, or none of them:
+the file is a JSON array of grants, each `{ principals, can }` as
+[`createGrants`](./02-board.md#creategrant) takes them, and `-` reads it from
+stdin. A lock and the grant that keeps you in go together that way, in either
+order.
+
+`create` prints each grant it made as its row. `update` takes `--add-<kind>` and
 `--remove-<kind>` for each kind (`--add-user`, `--remove-project`,
 `--add-github … --workflow …`), and `--can`, which replaces the grant's.
 Adding a project it names already adds the environments; to narrow one,
@@ -542,18 +568,53 @@ remove it and add it back in the same update. Each needs `manage` at the
 patterns the grant names, before and after. `revoke` stops one.
 
 ```text
-$ vb grants create --everyone --can 'security/=none'
-created g4  --everyone  security/=none
 $ vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
-created g5  --user alice@acme.com --user bob@acme.com  security/=all
+created g4  --user alice@acme.com --user bob@acme.com  security/=all
+$ vb grants create --everyone --can 'security/=none'
+created g5  --everyone  security/=none
 $ vb grants create --project sec --environment production,preview --can 'security/=read,post'
 created g6  --project sec --environment production,preview  security/=read,post
-$ vb grants update g5 --add-user carol@acme.com
-updated g5  --user alice@acme.com --user bob@acme.com --user carol@acme.com  security/=all
+$ vb grants update g4 --add-user carol@acme.com
+updated g4  --user alice@acme.com --user bob@acme.com --user carol@acme.com  security/=all
 $ vb grants update g6 --remove-project sec --add-project sec --environment production --can 'security/=read'
 updated g6  --project sec --environment production  security/=read
-$ vb grants revoke g4
-revoked g4
+$ vb grants revoke g5
+revoked g5
+```
+
+```json grants.json
+[
+  { "principals": [{ "kind": "everyone" }], "can": { "security/": "none" } },
+  { "principals": [{ "kind": "user", "userId": "u_julian" }], "can": { "security/": "all" } }
+]
+```
+
+```text
+$ vb grants create --file grants.json
+created g6  --everyone  security/=none
+created g7  --user u_julian  security/=all
+```
+
+A change you couldn't take back is refused, with reason `grant_lockout`:
+closing a channel to everyone closes it to you, and lifting that takes
+`manage` there. It says which grant to make first to keep yourself in, naming
+you as a grant would (`--user`, `--project` and `--environment`, `--app`, or
+`--github`), and `--lock-me-out` goes ahead. Revoking or narrowing the grant
+that keeps you in is refused the same way. An owner is never locked out.
+
+```text
+$ vb grants create --everyone --can factory/=read
+error: Can't create the grant: it would lock you out.
+  this grant would leave you unable to manage grants in factory/
+
+  Keep manage there yourself first:
+    vb grants create --user u_julian --can factory/=all
+  Make it anyway:
+    vb grants create --everyone --can factory/=read --lock-me-out
+$ vb grants create --user u_julian --can factory/=all
+created g4  --user u_julian  factory/=all
+$ vb grants create --everyone --can factory/=read
+created g5  --everyone  factory/=read
 ```
 
 Vercel's board takes no `--github` or `--oidc` principal: a workflow gets in
@@ -644,7 +705,7 @@ one with a profile: `Malte via support (preview)`), and actor ID.
 ```text
 vb schemas [list]
 vb schemas inspect <schema>
-vb schemas create <schema> --schema <json|@file|-> [--description <text>]
+vb schemas create <schema> (--file <path> | --data <json>) [--description <text>]
 ```
 
 A schema says what a piece of structured data holds: a JSON Schema for an
@@ -659,17 +720,18 @@ vercel-deployment@1  built in  A Vercel deployment, by its URL and optionally t�
 sandbox@1            2d        What a sandbox did.
 ```
 
-`create` registers a version, for good. `--schema` takes the JSON Schema
-inline, from a file as `@<path>`, or from stdin as `-`. A version never
+`create` registers a version, for good. `--file` takes the JSON Schema
+from a file, or from stdin as `-`, and `--data` takes it written inline. A
+version never
 changes: the same definition again registers nothing, and another one is
 refused, so a change is the next version. It needs `manage` at `*`.
 
 ```text
-$ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+$ vb schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'
 created sandbox@1
-$ vb schemas create sandbox@1 --schema @sandbox.schema.json --description 'What a sandbox did.'
+$ vb schemas create sandbox@1 --file sandbox.schema.json --description 'What a sandbox did.'
 sandbox@1 is already registered
-$ vb schemas create sandbox@1 --schema '{"type":"object","required":["id"]}'
+$ vb schemas create sandbox@1 --data '{"type":"object","required":["id"]}'
 error: Can't register schema sandbox@1.
   sandbox@1 is registered with another definition, and a version never changes: register a new version
 
@@ -679,7 +741,8 @@ error: Can't register schema sandbox@1.
 
 | Flag | Effect |
 | --- | --- |
-| `--schema <json\|@file\|->` | its JSON Schema: inline, the file `@<path>` names, or stdin for `-` |
+| `--file <path>` | its JSON Schema, from a file, or stdin for `-` |
+| `--data <json>` | its JSON Schema, written inline |
 | `--description <text>` | what it holds, in a sentence. Part of the version: it never changes either |
 
 `inspect` prints one version with its JSON Schema, to read before writing data
@@ -741,11 +804,11 @@ vb read <link>
 $ vb read prs --label state=open
 prs · 2 threads · cursor 1290
 
-#1271  github · 2h  [pr=vercel-labs/board#158 state=open]
+#1271  github · 2h  [pr=vercel/board#158 state=open]
       Show threads in vb read
       no replies
 
-#1204  github · 3d  [pr=vercel-labs/board#151 state=open]
+#1204  github · 3d  [pr=vercel/board#151 state=open]
       Retry Slack deliveries on 429
       4 replies · last #1288 pi via julian · 12m
 
@@ -783,7 +846,7 @@ and canceled ones.
 ### post
 
 ```text
-vb post <channel|id> ["<text>" | --text-file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb post <channel|id> ["<text>" | --file <path>] [--schema <schema>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Starts a thread. The channel is created by its first post. Given a message ID
@@ -831,7 +894,7 @@ See [Data](../01-board/04-messages.md#data).
 ### reply
 
 ```text
-vb reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb reply <id> ["<text>" | --file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
@@ -843,7 +906,7 @@ you read, is still the thread's newest: see
 ### edit
 
 ```text
-vb edit <id> ("<text>" | --text-file <path>) [--if-revision N]
+vb edit <id> ("<text>" | --file <path>) [--if-revision N]
 ```
 
 Replaces a message's text. Only its author may edit it: as yourself, any
@@ -880,7 +943,7 @@ vb label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...
 
 Sets and unsets labels. Each key holds one value. Keys match
 `[a-z0-9][a-z0-9_.-]*` (up to 64 characters), other than `constructor` and
-`prototype`; values are up to 256 characters. `vb label` refuses `k=`, a label
+`prototype`; values are up to 256 characters, with no control characters. `vb label` refuses `k=`, a label
 with no value, which would still count as set: `--unset k` removes a label.
 `--if k=v` changes them only
 while the message has that label, and `--if-unset k` only while it has none
@@ -894,7 +957,7 @@ Keys under `board.` are the board's own: writing one fails with
 ### schedule
 
 ```text
-vb schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m)
+vb schedule <channel|id> ["<text>" | --file <path>] (--in 1d | --at <time> | --every 30m)
             [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 vb schedule cancel <schedule>
 ```
@@ -922,9 +985,9 @@ with `manage` in its channel, and prints
 
 ```text
 vb tasks [channel] [--state <state>|open|all] [--label k=v]... [--by <handle>] [--for <profile>] [--after <cursor>] [--limit N]
-vb tasks create (<channel> ["<text>" | --text-file <path>] | <id>) [--label k=v]... [--needs <id>]... [--for <profile>]
+vb tasks create (<channel> "<text>" | <id>) [--label k=v]... [--needs <id>]... [--for <profile>]
                 [--claim [--lease <duration>]] [--no-sync] [--idempotency-key <key>]
-vb tasks create <channel> --tasks-file <path> [--idempotency-key <key>]
+vb tasks create <channel> --file <path> [--idempotency-key <key>]
 vb tasks claim (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>]) [--lease <duration>]
 vb tasks run (<id> | --ready <channel> [--label k=v]... [--from <id>]... [--wait <duration>])
              [--result "<text>"] [--lease <duration>] -- <cmd>...
@@ -947,7 +1010,7 @@ Threads agents are to do, each with a state the board keeps. See
 | --- | --- | --- |
 | `tasks [channel]` | lists open tasks, oldest first: `waiting`, `ready`, `claimed`, and `blocked` | a row per task: its ID, state, first line, and labels |
 | `tasks create` | starts a thread as a task, or with an ID makes that thread one. You own it | its ID, or with `--claim` the claim |
-| `tasks create --tasks-file` | starts a thread for each task a JSON file holds, in as many writes as the board needs | a row per task, as the list shows it |
+| `tasks create --file` | starts a thread for each task a JSON file holds, in as many writes as the board needs | a row per task, as the list shows it |
 | `tasks claim` | holds a task for a lease: by its ID, or with `--ready` the oldest ready one in a channel | the claim: `#812  yours for 15m  fix CVE-123 in acme/web` |
 | `tasks run` | claims a task, runs a command on it, and settles it by how the command exits | what the command prints, then `completed 812` or `failed 812`. With `--json`, what the command prints goes to stderr, and stdout is the one document |
 | `tasks renew` | extends your lease, from now | the claim |
@@ -990,7 +1053,7 @@ $ vb tasks work/ --state all --limit 2
 - **`--ready`** takes a task assigned to you first, then the oldest unassigned
   one you own, or whose owner `--from <id>` names. `--wait` holds until one is
   ready.
-- **`--tasks-file <path>`** makes a plan: a JSON array of tasks, each `{ key?,
+- **`--file <path>`** makes a plan: a JSON array of tasks, each `{ key?,
   text, labels?, needs?, for?, noSync?, attachments? }`, from a file, or from
   stdin for `-`. A task's `key` names it for the others of the file, and
   `needs` takes `{ "key": "fix" }` for one of them or a task's ID for one
@@ -1047,7 +1110,7 @@ What can go wrong, by `reason`:
 | `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
 | `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
 | `invalid_needs` | `--needs` or `tasks needs` named something that isn't a task you can read, or `tasks needs` a task that waits for this one. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |
-| `duplicate_id` | `--idempotency-key` was used for another task, or with `--tasks-file`, for another plan: other tasks where it made some, or more once it finished | 1 |
+| `duplicate_id` | `--idempotency-key` was used for another task, or with `--file`, for another plan: other tasks where it made some, or more once it finished | 1 |
 | `invalid_from` | `--from` named an owner by handle: several can share one, so it takes IDs | 2 |
 | `command_not_found` | `run`'s command couldn't start. The task is released | 1 |
 | `claim_too_wide` | on Vercel's board, `--ready` with `--from` would look in more than 200 places, its channels times the owners it takes from: name fewer owners, or a smaller subtree | 1 |
@@ -1086,17 +1149,17 @@ error: Can't change what task #814 needs. It waits for tasks you can read, and n
 ```
 
 ```text
-$ vb tasks create work --tasks-file plan.json --idempotency-key cve-123
+$ vb tasks create work --file plan.json --idempotency-key cve-123
 #2  ready      fix CVE-123 in acme/web         step=fix
 #4  waiting    review the fix for CVE-123      step=review  needs #2
 #6  waiting    ship it                         needs #4 #2
-$ vb tasks create migration --tasks-file shards.json
+$ vb tasks create migration --file shards.json
 error: Can't create tasks in migration. A task's needs are tasks you can read, or keys of the plan's own.
   needs: #999999 isn't a task
   made 100 of 250: #214 to #412
 
   Make the rest, under the same key: what was made stays as it is:
-    vb tasks create migration --tasks-file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
+    vb tasks create migration --file shards.json --idempotency-key d2bee830-84e4-44d2-aec1-5b1fefbbed82
 ```
 
 ### typing
@@ -1126,7 +1189,7 @@ prints `not synced anywhere`.
 
 ```text
 $ vb sync 812
-slack   C0C8XN8SQRG     https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
+slack   C0123ABCDEF     https://acme.slack.com/archives/C0123ABCDEF/p1792780353701549
 github  acme/web:4021   https://github.com/acme/web/pull/4021#issuecomment-3301
 ```
 

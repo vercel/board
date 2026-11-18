@@ -256,6 +256,7 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Me
       throw badRequest('sync attaches whole threads: use `board sync <id> <target>`')
   } else {
     if (!channel) throw badRequest('a post needs a channel')
+    if (input.noSync && input.sync?.length) throw badRequest('`noSync` and `sync` contradict each other')
     if (input.after !== undefined) throw badRequest('`after` is for replies', 'invalid_after')
     thread = id!
   }
@@ -335,7 +336,6 @@ async function commitPost(
   if (re === null) {
     for (const requested of input.sync ?? []) {
       const target = syncTarget(requested)
-      await unclaimed(ctx, target, thread, identity.principal.access)
       if (!targets.some((t) => t.target === target.target)) targets.push({ ...target, cause: 'request' })
     }
   }
@@ -382,12 +382,17 @@ async function commitPost(
       const before = events.findIndex((event) => event.type === 'message.posted')
       rows = await appendFrom(ctx, async () => {
         const { position, events: more } = await along()
+        // As of the same index the batch is conditioned on: see `unclaimedAt`.
+        for (const target of targets) await unclaimed(ctx, target, thread, identity.principal.access)
         const came = more({ id: position + 1 + before, thread })
         // The post says how many came with it, so a replay tells its own append from what was written since.
         const batch = events.map((event) => (event.type === 'message.posted' ? { ...event, payload: { ...event.payload, along: came.length } } : event)) as Events
         return { position, events: [...batch, ...came] }
       })
-    } else rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
+    } else if (targets.some((target) => target.kind === 'thread'))
+      // A thread it claims must still be unclaimed as the append lands: two posts can't both take one.
+      rows = await appendWhile(ctx, unclaimedAt(ctx, targets, thread, identity.principal.access), events)
+    else rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
   } catch (error) {
     // The same request sent twice at once: what came after `after`, or took its ID, may be the other one.
     const twice = (error instanceof HttpError && error.code === 'newer_message') || (input.with !== undefined && duplicateEvent(error))
@@ -541,17 +546,28 @@ const readerFor = (ctx: WriteContext, access: Access, message: Message): Promise
  * Refuses an external thread another board thread is synced with: taking it
  * over would send its replies away from that thread, to a caller who may not
  * read it. A reader of that thread's channel learns which thread it is. It
- * reads the tables once they've applied the whole log, so a sync just made
- * counts.
+ * reads the tables as they are: it runs inside an append's look, whose
+ * `appendFrom` has them apply the log first, and whose append lands only if
+ * nothing, another claim included, landed since.
  */
 async function unclaimed(ctx: WriteContext, target: SyncTarget, thread: string, access: Access) {
   if (target.kind !== 'thread') return
-  await ctx.reads.ensure()
   const owner = await ctx.reads.tables.threadOf(target.target)
   if (owner === null || owner === thread) return
   const synced = await ctx.reads.tables.syncOf(owner)
   const which = synced && access.readable(synced.channel) ? `#${synced.root}` : 'another thread'
   throw new HttpError(409, 'already_synced', `${target.target} is already synced with ${which}`)
+}
+
+/**
+ * An append's condition that none of `targets` is another thread's, as `unclaimed` refuses: it
+ * returns the index its reads reflect at least, so the append lands only if nothing, another
+ * claim included, landed since.
+ */
+const unclaimedAt = (ctx: WriteContext, targets: readonly SyncTarget[], thread: string, access: Access) => async () => {
+  const position = await ctx.reads.tables.position()
+  for (const target of targets) await unclaimed(ctx, target, thread, access)
+  return position
 }
 
 /**
@@ -867,16 +883,21 @@ export async function writeAttach(
 ): Promise<{ attached: boolean }> {
   const message = spent(input.authorized, 'sync')
   const { target, kind } = input.target
-  await ctx.reads.ensure()
-  if ((await ctx.reads.tables.syncOf(message.thread))?.targets.includes(target)) return { attached: false }
-  await unclaimed(ctx, input.target, message.thread, input.identity.principal.access)
-  // Applied before it answers, so replies from the platform thread find it at once.
-  await untilApplied(ctx, await ctx.session.append({
-    type: 'thread.synced',
+  const event = {
+    type: 'thread.synced' as const,
     id: await derivedId('board', message.thread, 'sync', target),
     payload: { thread: message.thread, target, kind, cause: input.cause, by: input.identity.author },
-  }))
-  return { attached: true }
+  }
+  // Only while no other thread has claimed it since it looked: two attaches can't both take one.
+  const rows = await appendFrom(ctx, async () => {
+    const position = await ctx.reads.tables.position()
+    if ((await ctx.reads.tables.syncOf(message.thread))?.targets.includes(target)) return { position, events: [] }
+    await unclaimed(ctx, input.target, message.thread, input.identity.principal.access)
+    return { position, events: [event] }
+  })
+  // Applied before it answers, so replies from the platform thread find it at once.
+  await untilApplied(ctx, rows)
+  return { attached: rows.length > 0 }
 }
 
 /**

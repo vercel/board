@@ -71,6 +71,13 @@ outside it. It revokes them all when a check ends, and a revoke that fails
 fails the check. Two runs on one board at once see each other's grants there,
 so run one at a time, on a scratch board.
 
+To check that a board refuses a grant its maker couldn't take back, a run
+that isn't the board's owner closes a pattern to everyone, itself included,
+and expects 409 `grant_lockout`. A board that made that grant would leave one
+the run can't revoke, so the check first makes a grant that says `lockMeOut`,
+and stops where the board refuses the key. A run that owns the board skips
+the check: nothing locks it out.
+
 The grants checks name a project, a GitHub repository, a person who's a
 viewer, and an app installed on the team. A board that verifies tokens
 itself, as `vb serve` does, takes the made-up IDs they use by default, and

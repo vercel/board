@@ -42,7 +42,7 @@ describe("the CLI's commands, as data", () => {
     const read = await capture(() => main(['read', '--help'], app))
     expect(read.code).toBe(0)
     expect(read.stdout).toMatch(/^usage: board read \[channel\|id\|link\] \[filters\] \[options\]\n\nthe latest threads/)
-    expect(read.stdout).toMatch(/\noptions:\n  -n, --limit <N>  threads to list \(default: 50\)\n/)
+    expect(read.stdout).toMatch(/\noptions:\n  -n, --limit <N>  threads to list \(default: 50, at most 500\)\n/)
     expect(read.stdout).toMatch(/\nfilters:\n  --re <id> +in a thread/)
     // A bare --mentions means you: its value is optional.
     expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)

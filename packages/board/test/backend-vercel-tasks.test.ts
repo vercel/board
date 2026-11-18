@@ -126,10 +126,10 @@ describe("vercel()'s tasks", () => {
     expect(await ask('POST', `${v1}/threads/${threadOf(plain.id)}/task`, {})).toEqual([404, 'not_found'])
     expect(await ask('POST', `${v1}/threads/${threadOf(task.id)}/task/claim`, { claimToken: token })).toEqual([404, 'not_found'])
     expect(await ask('POST', `${v1}/threads/task/claim`, { claimToken: token, channel: 'work' })).toEqual([404, 'not_found'])
-    expect(await ask('POST', `${v1}/threads`, { channel: 'work', text: 'a task, the old way', task: {} })).toEqual([400, 'bad_request'])
-    expect(await ask('GET', `${v1}/threads?task=open`)).toEqual([400, 'bad_request'])
+    expect(await ask('POST', `${v1}/threads`, { channel: 'work', text: 'a task, the old way', task: {} })).toEqual([400, 'invalid_request'])
+    expect(await ask('GET', `${v1}/threads?task=open`)).toEqual([400, 'invalid_request'])
     const { channels } = (await (await as(api, 'user:u_jb')(`${API}${v1}/channels?name=work&teamId=team_test`)).json()) as { channels: { id: string }[] }
-    expect(await ask('GET', `${v1}/threads?channelId=${channels[0]!.id}&task=open`)).toEqual([400, 'bad_request'])
+    expect(await ask('GET', `${v1}/threads?channelId=${channels[0]!.id}&task=open`)).toEqual([400, 'invalid_request'])
     expect(await ask('GET', `${v1}/threads?channelId=${channels[0]!.id}`)).toEqual([200, null])
     // And the new routes are version 2 alone, which has nothing else.
     expect(await ask('POST', `${v1}/tasks/${threadOf(task.id)}/claim`, { claimToken: token })).toEqual([404, 'not_found'])
@@ -404,8 +404,8 @@ describe("vercel()'s tasks", () => {
     const v2 = '/v2/messageboard/boards/brd_test'
     const post = (operationId: string) => ask('POST', `${v1}/threads`, { operationId, channel: 'work', text: 'a post' })
     // Its shape first: a UUIDv7, lowercase. Then its time: within the last 7 days, and no more than 5 minutes ahead.
-    expect((await post(crypto.randomUUID())).code).toBe('bad_request')
-    expect((await post(operationAt().toUpperCase())).code).toBe('bad_request')
+    expect((await post(crypto.randomUUID())).code).toBe('invalid_request')
+    expect((await post(operationAt().toUpperCase())).code).toBe('invalid_request')
     expect(await post(operationAt(Date.now() - 7 * DAY - MINUTE))).toMatchObject({ status: 409, code: 'operation_expired_or_unknown', error: { maxAgeDays: 7, maxClockSkewSeconds: 300 } })
     expect((await post(operationAt(Date.now() + 6 * MINUTE))).code).toBe('operation_expired_or_unknown')
     expect((await post(operationAt(Date.now() - 7 * DAY + MINUTE))).status).toBe(200)
@@ -530,7 +530,7 @@ describe("vercel()'s tasks", () => {
     }
     const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
     const thread = threadOf(there.id)
-    expect(await ask({ operationId: 'release-42', tasks: plain(1) })).toEqual([400, 'bad_request'])
+    expect(await ask({ operationId: 'release-42', tasks: plain(1) })).toEqual([400, 'invalid_request'])
     // A body of more than 64 KB is refused for that, whatever else it is, and says nothing of items.
     expect(await ask({ operationId: 'release-42', tasks: Array.from({ length: 101 }, () => ({ text: 'x'.repeat(700) })) })).toEqual([413, 'entity_too_large'])
     // The body's shape, before anything else.
@@ -545,8 +545,8 @@ describe("vercel()'s tasks", () => {
       [{ key: 'a', text: 'a' }, { text: 'x', needs: [{ key: 'a' }, { key: 'a' }] }],
       [{ text: 'x', needs: Array.from({ length: 21 }, () => `thr_${crypto.randomUUID()}`) }],
     ])
-      expect(await ask({ tasks }), JSON.stringify(tasks).slice(0, 80)).toEqual([400, 'bad_request'])
-    expect(await ask({ channelId: 'general', tasks: plain(1) })).toEqual([400, 'bad_request'])
+      expect(await ask({ tasks }), JSON.stringify(tasks).slice(0, 80)).toEqual([400, 'invalid_request'])
+    expect(await ask({ channelId: 'general', tasks: plain(1) })).toEqual([400, 'invalid_request'])
     // Then what the caller may, each task's own fields, how they wait for each other, the count, and only then what takes a read.
     expect(await ask({ tasks: [{ text: 'x', needs: [{ key: 'nobody' }] }] }, 'plans=read')).toEqual([403, 'forbidden'])
     expect(await ask({ tasks: [{ text: 'labeled', labels: { step: 'fix' } }] }, 'plans=read,post')).toEqual([403, 'forbidden'])
@@ -566,8 +566,8 @@ describe("vercel()'s tasks", () => {
     expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
     // A key of the caller's own: 1 to 512 characters of anything. The same request under it, a field left out being its
     // empty value, makes nothing more; a channel named another way is another request.
-    expect(await ask({ idempotencyKey: '', tasks: plain(1) })).toEqual([400, 'bad_request'])
-    expect(await ask({ idempotencyKey: 'k'.repeat(513), tasks: plain(1) })).toEqual([400, 'bad_request'])
+    expect(await ask({ idempotencyKey: '', tasks: plain(1) })).toEqual([400, 'invalid_request'])
+    expect(await ask({ idempotencyKey: 'k'.repeat(513), tasks: plain(1) })).toEqual([400, 'invalid_request'])
     const keyed = { channel: 'keyed', idempotencyKey: `release 42 / the plan ${'é'.repeat(480)}` }
     expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a' }, { text: 'b', needs: [{ key: 'a' }] }] })).toEqual([200, null])
     expect(await ask({ ...keyed, tasks: [{ key: 'a', text: 'a', labels: {}, noSync: false, attachments: [], needs: [], for: null }, { text: 'b', needs: [{ key: 'a' }] }] })).toEqual([200, null])

@@ -255,6 +255,16 @@ function listed(state: State, message: MessageView): State {
   return { ...state, listings: { ...state.listings, [message.channel]: { ...listing, rows: { ...listing.rows, [root]: next } } } }
 }
 
+/**
+ * Your post, as the board answered it: in place of the post on its way, and a new thread listed in its
+ * channel at once, so it never leaves the page while the stream catches up. A reply's thread moves on
+ * when the stream brings it, in order, so replies the stream hasn't brought yet still count.
+ */
+export function sent(state: State, key: string, message: MessageView): State {
+  const next = merge({ ...state, pending: state.pending.filter((p) => p.key !== key) }, [message])
+  return message.re === null ? listed(next, message) : next
+}
+
 /** The channel of a live reply whose thread its listing doesn't have, so its first page is read again; else null. */
 export function unlistedReply(state: State, event: BoardEventView): string | null {
   const message = event.message
@@ -458,23 +468,26 @@ export const sourcePlatform = (m: Pick<MessageView, 'from' | 'author'>, platform
   m.from === null ? null : (m.author?.platform ?? platforms[m.from] ?? m.from)
 
 /**
- * Whether `m` continues `previous` under one header: a reply by the same author in the same thread,
- * the same day and close in time, with nothing in between. A root never does: it starts a thread,
- * so it shows who started it, and when.
+ * Whether `m` continues `previous` under one header, as Slack shows a run of messages: by the same
+ * author in the same place (a channel's threads, or one thread's replies), the same day and close in
+ * time, with nothing in between. A thread with replies ends the run, so the next shows who wrote it.
  */
 export function continues(previous: Groupable | undefined, m: Groupable, hasReplies = false): boolean {
   return (
     !!previous &&
-    m.re !== null &&
     !hasReplies &&
     !previous.deleted &&
     previous.by.actor === m.by.actor &&
     previous.channel === m.channel &&
     previous.re === m.re &&
     sameDay(previous.createdAt, m.createdAt) &&
-    Date.parse(m.createdAt) - Date.parse(previous.createdAt) < GROUP_MS
+    gap(previous, m) >= 0 &&
+    gap(previous, m) < GROUP_MS
   )
 }
+
+// A channel lists threads by latest activity, so an older one can come after a newer one: it never runs on from it.
+const gap = (previous: Groupable, m: Groupable) => Date.parse(m.createdAt) - Date.parse(previous.createdAt)
 
 
 // --- who's who ---------------------------------------------------------------------------------

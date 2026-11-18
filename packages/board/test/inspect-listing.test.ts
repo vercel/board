@@ -219,3 +219,37 @@ describe("the inspector's channel view", () => {
     expect(board.view.hasOlder('ops')).toBe(false)
   })
 })
+
+describe('a post from the inspector', () => {
+  const pending = (m: MessageView): store.Pending => ({ channel: m.channel, re: m.re, text: m.text, noSync: false, labels: {}, key: `k${m.id}`, createdAt: m.createdAt, error: null })
+
+  it('shows in its channel as soon as the board answers it, before the stream brings it', async () => {
+    const board = fakeBoard(() => [{ root: message(1), replies: [] }])
+    await board.view.load('ops')
+    const root = message(2)
+    board.set({ ...board.state(), pending: [pending(root)] })
+    board.set(store.sent(board.state(), 'k2', root))
+    expect(board.shown()).toEqual([
+      ['1', 0, null],
+      ['2', 0, null],
+    ])
+    expect(board.state().pending).toEqual([])
+    board.view.apply([posted(root)])
+    expect(board.shown()).toEqual([
+      ['1', 0, null],
+      ['2', 0, null],
+    ])
+  })
+
+  it("counts every reply in a thread when the board answers yours before the stream brings someone else's", async () => {
+    // Three replies the page counts, and only the latest of them loaded.
+    const board = fakeBoard(() => [{ root: message(1), replies: [reply(2, 1), reply(3, 1), reply(4, 1)] }])
+    await board.view.load('ops')
+    const theirs = message(5, { re: '1', thread: 't1', text: 'theirs', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null } })
+    const mine = reply(6, 1)
+    board.set({ ...board.state(), pending: [pending(mine)] })
+    board.set(store.sent(board.state(), 'k6', mine))
+    board.view.apply([posted(theirs), posted(mine)])
+    expect(board.shown()).toEqual([['1', 5, '6']])
+  })
+})
