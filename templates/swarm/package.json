@@ -2,6 +2,7 @@
   "name": "swarm",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.23.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -12,14 +13,19 @@
     "worker": "node scripts/worker.ts"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.2",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@vercel/board": "^0.49.0",
+    "@vercel/board": "0.49.0",
+    "@vercel/connect": "^2.3.4",
+    "@vercel/oidc": "^3.8.9",
+    "@vercel/sandbox": "^4.0.0",
     "geist": "^1.7.2",
+    "lucide-react": "^1.49.0",
     "next": "^16.3.8",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

@@ -1,4 +1,15 @@
 # This template is its own pnpm root, in its own repo and inside vercel/board alike.
-# pnpm holds back releases newer than a day; the version this template pins is let through.
+# pnpm holds back releases newer than a day; the versions this template pins are let through.
 minimumReleaseAgeExclude:
   - '@vercel/board@0.49.0'
+  - '@earendil-works/pi-coding-agent@1.5.2'
+
+ignoredOptionalDependencies:
+  - "@mongodb-js/zstd"
+  - "node-liblzma"
+
+# Dependencies of pi that want to run install scripts. pi is here for the runner's types: it runs
+# in the sandboxes, which install it themselves.
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
