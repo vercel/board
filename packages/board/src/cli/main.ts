@@ -1422,10 +1422,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         throw error instanceof BoardError && error.status === 404 && /^no route: /.test(error.message) ? old : error
       })
       if (!Array.isArray((listed as { threads?: unknown }).threads)) throw old
-      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest. A board that
-      // answers `older` says itself whether there are more.
-      const older = typeof listed.older === 'string' ? listed.older : undefined
-      const more = listed.older === null ? false : older !== undefined || listed.threads.length > limit || (!peek && listed.threads.length === limit)
+      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest. A page asked for
+      // as shown says itself whether there are more, by its `older`. One asked for a thread more doesn't: its `older`
+      // is past the thread it left out.
+      const older = !peek && typeof listed.older === 'string' ? listed.older : undefined
+      const more = peek ? listed.threads.length > limit : listed.older === null ? false : older !== undefined || listed.threads.length === limit
       const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
       if (!page.threads.length && target) {

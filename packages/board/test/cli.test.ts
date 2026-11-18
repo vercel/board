@@ -399,6 +399,13 @@ describe('cli', () => {
     expect(back).toEqual(ids)
     // As many as there are: nothing is left out, so it says nothing.
     expect((await vb(['read', 'paged', '--limit', '5'])).stdout).not.toContain('not shown')
+    // A read of more than one channel asks for a thread more to tell, so its page's `older` is past the one it
+    // left out: it says a bigger page, which leaves none out.
+    const wide = await vb(['read', 'paged/', '--limit', '2'])
+    expect(shown(wide.stdout)).toEqual(ids.slice(3))
+    expect(wide.stdout).toContain('\n(older not shown: vb read paged/ --limit 4)\n')
+    expect(shown((await vb(['read', 'paged/', '--limit', '4'])).stdout)).toEqual(ids.slice(1))
+    expect((await vb(['read', 'paged/', '--limit', '5'])).stdout).not.toContain('not shown')
     // Back and forward at once is neither.
     expect(await vb(['read', 'paged', '--before', 'x', '--after', start])).toMatchObject({ code: 2, stderr: expect.stringContaining("Can't use --before with --after") })
     // After a cursor, page by page, each line pasted as it says: every thread once, none skipped.
