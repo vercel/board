@@ -1,11 +1,11 @@
 // What a campaign promises, on a board in memory and with sandboxes that are only names:
 // node --test test/*.test.ts
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
-import { tasksChannel, workerName } from "../lib/board.ts";
+import { ROOT, tasksChannel, workerName } from "../lib/board.ts";
 import { campaign, snapshot } from "../lib/campaign.ts";
 import { cancel, claimNext, unblock } from "../lib/queue.ts";
 import { DEFAULTS, parseConfig, plan, type Config } from "../lib/config.ts";
@@ -53,8 +53,7 @@ function fake(files: string[]) {
 const files = (count: number) => Array.from({ length: count }, (_, at) => `src/file-${at}.js`);
 
 /** A campaign launched on a fresh board, with `count` files to migrate. */
-async function started(count: number, over: Partial<Config> = {}) {
-  const board = fresh();
+async function started(count: number, over: Partial<Config> = {}, board: Board = fresh()) {
   const { boxes, calls, up } = fake(files(count));
   const made = await begin(config(over), board);
   await launch(made, board, boxes);
@@ -108,6 +107,30 @@ test("a launch makes one task per group of files and starts as many agents as th
   });
   // Four agents were asked for, and three tasks are ready: a fourth would have nothing to claim.
   assert.deepEqual(calls.started.sort(), [1, 2, 3]);
+});
+
+// Vercel's board, as vercel/board's tests fake it: in a copy of this template outside that repo, there's no fake, and this is skipped.
+const FAKE = new URL("../../../packages/board/test/messageboard.ts", import.meta.url);
+const hasFake = await access(FAKE).then(
+  () => true,
+  () => false,
+);
+
+/** What app/api/live does with a snapshot: polls everything under the campaigns' channel since its cursor, and gets only that. */
+async function followsOn(board: Board) {
+  const { slug } = await started(3, {}, board);
+  const { cursor } = (await snapshot(slug, board))!;
+  assert.equal((await board.poll({ channel: `${ROOT}/`, after: cursor, wait: 0 })).events.length, 0);
+  await board.post(tasksChannel(slug), "a change after the snapshot");
+  const page = await board.poll({ channel: `${ROOT}/`, after: cursor, wait: 0 });
+  assert.deepEqual(page.events.map((event) => event.message?.text), ["a change after the snapshot"]);
+}
+
+test("the live feed follows on from a snapshot's cursor", () => followsOn(fresh()));
+
+test("on Vercel's board, the live feed follows on from a snapshot's cursor", { skip: !hasFake && "no fake of Vercel's API here" }, async () => {
+  const { fakeMessageboard, as } = await import(FAKE.href);
+  await followsOn(makeBoard({ team: "team_test", fetch: as(fakeMessageboard(), "user:u_jb") }));
 });
 
 test("a launch that lists no files fails, says why, and leaves no sandbox", async () => {

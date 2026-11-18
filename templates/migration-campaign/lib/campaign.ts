@@ -213,8 +213,10 @@ const allTasks = async (board: Board, slug: string): Promise<Task[]> => (await l
  */
 export async function snapshot(slug: string, board: Board = team()): Promise<Snapshot | null> {
   // The position first: a change that lands between the reads is in the next snapshot rather than in neither.
-  // One channel's read, whatever the number of campaigns: its cursor is the board's position all the same.
-  const { cursor } = await board.messages({ channel: ROOT, limit: 1 });
+  // The subtree's position, which the live route polls from: a poll that waits for nothing reads no
+  // messages (on Vercel's board, the newest change of each channel). One channel's own read answers
+  // that channel's cursor, which a poll of the subtree refuses.
+  const { cursor } = await board.poll({ channel: `${ROOT}/`, wait: 0 });
   const { threads } = await board.threads({ channel: ROOT, label: { campaign: slug }, limit: 5 });
   const root = threads.find(({ message }) => message.labels.campaign === slug)?.message;
   if (!root) return null;
