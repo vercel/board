@@ -86,4 +86,19 @@ describe('cli hooks', () => {
     expect((await vb(['hooks', 'uninstall', 'pi'], at)).stdout).toBe('Pi  not installed\n')
     expect(await readFile(pi, 'utf8')).toBe('export default () => {}\n')
   })
+
+  it("leaves another tool's hooks that only look like board's", async () => {
+    const home = await tmp('board-home-')
+    const at = { HOME: home, CODEX_HOME: join(home, '.codex'), PI_CODING_AGENT_DIR: join(home, 'pi-agent') }
+    for (const dir of ['.claude', 'pi-agent/extensions']) await mkdir(join(home, dir), { recursive: true })
+    const settings = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'reviewbot hook stop --agent reviewer' }] }] } }
+    const claude = join(home, '.claude', 'settings.json')
+    await writeFile(claude, JSON.stringify(settings))
+    const pi = join(home, 'pi-agent', 'extensions', 'board.ts')
+    const extension = 'const COMMAND = "make lint"\nexport default function lint() {}\n'
+    await writeFile(pi, extension)
+    expect((await vb(['hooks', 'uninstall', 'claude', 'pi'], at)).stdout).toBe('Claude Code  not installed\nPi           not installed\n')
+    expect(JSON.parse(await readFile(claude, 'utf8'))).toEqual(settings)
+    expect(await readFile(pi, 'utf8')).toBe(extension)
+  })
 })

@@ -89,12 +89,11 @@ describe('withoutHtml', () => {
 })
 
 describe('Slack broadcasts from other platforms', () => {
-  const comment = 'cc <!channel> <!here> <!everyone> <!subteam^S123|oncall> and <@U123>, <https://x.dev|x>, `<!here>`, <!-- note -->'
+  const comment = 'cc <!channel> <!here> <!everyone> <!subteam^S123|oncall> and <@U123>, <https://x.dev|x>, <!-- note -->'
   const inert = (text: string) => {
-    expect(text).not.toMatch(/(?<!`)<!(channel|everyone|subteam)/)
+    expect(text).not.toMatch(/<!(channel|here|everyone|subteam)/)
     expect(text).toContain('<@U123>')
     expect(text).toContain('<https://x.dev|x>')
-    expect(text).toContain('`<!here>`') // code keeps its text
   }
 
   it('reach Slack as text, in posts, edits, and messages sent under an agent’s name', async () => {
@@ -114,11 +113,15 @@ describe('Slack broadcasts from other platforms', () => {
   it('keep their words', () => {
     expect(withoutBroadcasts('hey <!channel>').replace('\u2060', '')).toBe('hey <!channel>')
     expect(withoutBroadcasts('<!-- c --> a <! b')).toBe('<!-- c --> a <! b')
-    expect(withoutBroadcasts('```\n<!here>\n```')).toBe('```\n<!here>\n```')
   })
 
-  it("defuse what only looks like code: tildes, and a fence nobody closed", () => {
-    for (const text of ['prefix ~~~ <!channel>', '~~~\n<!channel>\n~~~', '```\n<!channel>', 'a ` b <!channel>', '`a` <!channel> `b`'])
-      expect([text, withoutBroadcasts(text)]).toEqual([text, text.replace('<!', '<\u2060!')])
+  it("are defused wherever they are, since what looks like code here may not be code to Slack", async () => {
+    const { provider, sent } = slackWith()
+    const disguised = [
+      'prefix ~~~ <!channel>', '~~~\n<!channel>\n~~~', '```\n<!channel>', 'a ` b <!channel>',
+      '\\`<!channel>\\`', '`` <!channel> `', '` <!channel> ``', '```\n<!channel>\n```', '`<!channel>`',
+    ]
+    for (const markdown of disguised) await provider.post(thread, 'thread', { markdown, external: true })
+    expect(sent.map((post) => (post as { markdown: string }).markdown).filter((text) => text.includes('<!channel'))).toEqual([])
   })
 })

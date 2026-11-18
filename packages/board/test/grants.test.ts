@@ -451,6 +451,20 @@ describe('grants', () => {
     expect((await another('POST', '/messages', { channel: 'ci', text: 'not granted' })).status).toBe(403)
   })
 
+  it("refuses a token whose sub would read as another workflow's profile, and changes no one's ID", async () => {
+    const { person, as, board } = await setUp()
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['read', 'post'] } })
+    for (const sub of ['build+pi', 'build]', 'build pi']) {
+      const refused = await (await as(oidcToken({ sub })))('POST', '/messages', { channel: 'ci', text: 'hi' })
+      expect([sub, refused.status, refused.body.error.message]).toEqual([sub, 401, `token from ${OIDC_ISS} has a sub with a +, a ], or a space, which a principal's ID can't hold`])
+    }
+    const who = async (call: Awaited<ReturnType<typeof as>>) => (await call('POST', '/messages', { channel: 'ci', text: 'hi' })).body.message.by.actor as string
+    // So `build`'s profile `pi` is the only one who is that actor, and a `%` in a sub is still just a `%`.
+    expect(await who(caller(board.fetch, await oidcToken({ sub: 'build' }), { 'x-board-profile': 'pi' }))).toBe('oidc:gitlab.test:build+pi')
+    expect(await who(await as(oidcToken({ sub: 'build%2Bpi' })))).toBe('oidc:gitlab.test:build%2Bpi')
+    expect(await who(await as(oidcToken()))).toBe('oidc:gitlab.test:project_path:acme/api:ref_type:branch:ref:main')
+  })
+
   it("finds a grant's issuer's keys by OIDC discovery, never by a redirect or on the board's own network", async () => {
     const ISS = 'https://idp.acme.dev'
     const DISCOVERY = `${ISS}/.well-known/openid-configuration`

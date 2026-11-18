@@ -149,22 +149,39 @@ describe("a person's token from `vercel login`", () => {
     expect(bearers).toHaveLength(1)
   })
 
+  it("isn't minted for a loopback board that names more than an ID, which would steer a request to Vercel's API as you", async () => {
+    for (const named of [
+      { project_id: 'prj_board/../../../v2/user?x=', team_id: 'team_test' },
+      { project_id: 'prj_board', team_id: 'team_test&slug=another' },
+    ]) {
+      const api = vercel({})
+      const bearers = network(api, (request) =>
+        request.method === 'GET' && request.url === LOCAL
+          ? Response.json({ version: '0', url: LOCAL, audience: LOCAL, sync: [], ...named })
+          : Response.json({ channels: [] }))
+      await expect(client(LOCAL).channels()).rejects.toMatchObject({ code: 'wrong_project' })
+      expect([api.calls, bearers]).toEqual([[], []])
+      expect(exchange).not.toHaveBeenCalled()
+    }
+  })
+
   /**
-   * What a command prints from an app passed `token`, or none. Its `fetch` adds the app's own login's
-   * credentials to whatever it sends, as `vercel board`'s does: a login Vercel's API turns away here.
+   * What a command prints from an app passed `token`, or none, with `login` as its own login, or
+   * none. Its `fetch` adds the app's own login's credentials to whatever it sends, as
+   * `vercel board`'s does: with no `login`, one Vercel's API turns away here.
    */
-  async function app(args: string[], token?: string) {
+  async function app(args: string[], token?: string, login?: string) {
     let stdout = ''
     let stderr = ''
     const out = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => ((stdout += String(chunk)), true))
     const err = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => ((stderr += String(chunk)), true))
     const appFetch: typeof fetch = (input, init) => {
       const headers = new Headers(init?.headers)
-      headers.set('authorization', 'Bearer the-apps-own-login')
+      headers.set('authorization', `Bearer ${login ?? 'the-apps-own-login'}`)
       return globalThis.fetch(input, { ...init, headers })
     }
     try {
-      const code = await createApp({ appName: 'vercel board', fetch: appFetch, ...(token ? { token } : {}) }).run(args)
+      const code = await createApp({ appName: 'vercel board', fetch: appFetch, ...(token ? { token } : {}), ...(login ? { login: async () => login } : {}) }).run(args)
       return { code, stdout, stderr }
     } finally {
       out.mockRestore()
@@ -200,6 +217,28 @@ describe("a person's token from `vercel login`", () => {
     expect(refused.stderr).not.toMatch(/BOARD_TOKEN|vercel login/)
     // Passed none, BOARD_TOKEN is what went, and what to replace.
     expect((await app(['read', 'general'])).stderr).toContain('BOARD_TOKEN')
+  })
+
+  it("is minted with the login an app gives it, ahead of BOARD_TOKEN, and a board that refuses it says to log in again", async () => {
+    const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
+    const board = testBoard()
+    let refuses = false
+    const bearers = network(api, (request) =>
+      refuses && !(request.method === 'GET' && request.url === BOARD_URL) ? Response.json({ error: { code: 'unauthorized', message: 'no' } }, { status: 401 }) : board.fetch(request),
+    )
+    // `vercel login`'s is an account Vercel's API turns away here, and BOARD_TOKEN is someone else on this board.
+    login.token = 'another-login'
+    const theirs = await personToken('u_bo', BOARD_URL)
+    vi.stubEnv('BOARD_URL', BOARD_URL)
+    vi.stubEnv('BOARD_TOKEN', theirs)
+    expect(JSON.parse((await app(['whoami', '--json'], undefined, 'vercel-cli-token')).stdout)).toMatchObject({ principal: 'vercel:user:u_julian', source: 'vercel login' })
+    expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: BOARD_URL })
+    expect(bearers).not.toContain(`Bearer ${theirs}`)
+    // BOARD_TOKEN isn't what went, so it isn't what to replace.
+    refuses = true
+    const refused = await app(['read', 'general'], undefined, 'vercel-cli-token')
+    expect(refused).toMatchObject({ code: 1, stderr: expect.stringContaining('vercel login') })
+    expect(refused.stderr).not.toContain('BOARD_TOKEN')
   })
 
   it("fails when a login a CLI hands it fails, never acting as `vercel login`'s account", async () => {

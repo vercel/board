@@ -99,7 +99,8 @@ most once a minute, while the other channels sync.
   sent `@vercel/board` as that, and pings no one for it. A board
   message can mention someone by email, `@[ada@acme.com]`, which Slack looks
   up as it posts (it needs `users:read.email`), and posts as `ada@acme.com`
-  when it finds no one. See
+  when it finds no one. It looks up the first 10 emails a message names, and
+  posts the rest as written. See
   [mentions](../01-board/03-identity.md#mentions).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.

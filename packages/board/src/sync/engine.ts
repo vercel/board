@@ -95,6 +95,8 @@ const FILE_ATTEMPTS = 3
 
 /** How long a platform's answer to who has an email holds, for `@[ada@vercel.com]`: a busy thread asks once. */
 const EMAIL_TTL_MS = 5 * 60_000
+/** How many `@[email]`s one message has looked up on a platform: each is a call to it, and a message holds thousands. */
+const EMAIL_LOOKUPS_PER_MESSAGE_MAX = 10
 
 /** How long a webhook waits for the board's tables before it lets an event into the inbox anyway: platforms resend after about 3 seconds. */
 const GATE_WAIT_MS = 2_000
@@ -787,14 +789,20 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * A message's text for a platform, through entry `key`. A mention is `@[actor-id]`, settled when
    * the message was written: it reads natively when the actor is one of this entry's own users
    * (`@[slack:user:U0456]` also naming this sync's own profile of them), and as the actor's name
-   * otherwise. An `@[email]` is whoever the platform finds with it, or the email. Everything else
+   * otherwise. An `@[email]` is whoever the platform finds with it, or the email, for the first 10
+ * a message names. Everything else
    * is text and goes as written, an `@handle` included: no sync reads one as a mention.
    */
   async function textFor(key: string, actors: Actors, text: string): Promise<string> {
     const exact = extractMentions(text).flatMap((token) => (token.kind === 'actor' ? [token.actor] : []))
     if (exact.length === 0) return text
     const found = new Map<string, string | null>()
-    for (const named of exact) if (!actors.byId[named] && isEmail(named)) found.set(named, await emailMention(key, named))
+    let asked = 0
+    for (const named of exact) {
+      if (actors.byId[named] || !isEmail(named) || found.has(named)) continue
+      // Past the cap an email goes as written, as one the platform has no one for does.
+      found.set(named, asked++ < EMAIL_LOOKUPS_PER_MESSAGE_MAX ? await emailMention(key, named) : null)
+    }
     return replaceMentions(text, (token) => {
       if (token.kind === 'handle') return null
       if (found.has(token.actor)) return found.get(token.actor) ?? token.actor

@@ -32,8 +32,9 @@ A change people will notice gets a changeset (`pnpm changeset`); its PR is
 titled and described as [pr titles and descriptions](#pr-titles-and-descriptions)
 says. On `main`,
 `.github/workflows/release.yml` opens a "Version Packages" PR; merging it
-publishes `@vercel/board` to npm by trusted publishing (OIDC, no token; no provenance
-while the repo is private). The CLI and the API read their version from
+publishes `@vercel/board` to npm by trusted publishing (OIDC, no token). npm attaches
+provenance to a release on its own, which it does only from a public repo: the
+workflow has no flag for it. The CLI and the API read their version from
 `package.json`, so never edit `src/version.ts` to bump it.
 
 To try a commit before it's released, install its tarball from the

@@ -503,6 +503,70 @@ describe('vercel()', () => {
     expect((await waiting).events.map((event) => event.message?.text)).toEqual([`@${me.handle} this one`])
   }, 15_000)
 
+  it('finds a mention board() settled to an actor ID by the handle it was written as, naming the mentioned in one request', async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
+    const julian = handleOn(api)
+    // Two actors who wrote somewhere else, so nothing a read of dev answers names them.
+    await julian.as('claude').post('other', { text: 'hi' })
+    await handleOn(api, 'user:u_ada').post('other', { text: 'hi' })
+    // And a project's agent, whom the API names under the project (`pong/claude`).
+    await pongBoard(api).as('claude').post('other', { text: 'hi' })
+    const val = handleOn(api, 'user:u_val')
+    const asking = await val.post('dev', { text: '@julian/claude can you look?' })
+    await val.post('dev', { text: 'and @ada, can you?' })
+    await val.post('dev', { text: '@nobody-here, anyone?' })
+    await val.post('dev', { text: '@[vercel:user:u_zed+claude] are you there?' })
+    const pinging = await val.post('dev', { text: '@pong/claude ping' })
+    // What's stored is the ID each handle settled to.
+    expect(asking.text).toBe('@[vercel:user:u_jb+claude] can you look?')
+    expect(pinging.text).toBe('@[vercel:project:prj_pong:production+claude] ping')
+    const inner = as(api, 'user:u_val')
+    const asked: string[][] = []
+    const lists: number[] = []
+    let failing = false
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actors')) (url.searchParams.has('id') ? asked.push(url.searchParams.getAll('id').sort()) : lists.push(1))
+      if (failing && url.pathname.endsWith('/actors')) return Response.json({ error: { code: 'internal_error', message: 'Something went wrong.' } }, { status: 500 })
+      return inner(input, init)
+    }) as typeof globalThis.fetch
+    /** A read in a process of its own, as each `vb read --mentions` is. */
+    const fresh = () => board({ backend: vercel({ team: 'team_test', api: API, fetch }) })
+    const texts = (messages: { text: string }[]) => messages.map((message) => message.text)
+    // By the handle as written, by the person it's under, and by its ID: the same message.
+    expect(texts((await fresh().threads({ channel: 'dev', mentions: 'julian/claude' })).threads.map((thread) => thread.message))).toEqual([asking.text])
+    expect(asked).toEqual([['vercel:project:prj_pong:production+claude', 'vercel:user:u_ada', 'vercel:user:u_jb+claude', 'vercel:user:u_zed+claude']])
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'julian' })).messages)).toEqual([asking.text])
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'vercel:user:u_jb+claude' })).messages)).toEqual([asking.text])
+    expect(texts((await fresh().threads({ mentions: 'ada' })).threads.map((thread) => thread.message))).toEqual(['and @[vercel:user:u_ada], can you?'])
+    // A handle that settled to no one is still matched as written.
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'nobody-here' })).messages)).toEqual(['@nobody-here, anyone?'])
+    // A project's agent by the API's handle for it, and by its project; neither it nor an ID the API names no one by is a bare `claude`.
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'pong/claude' })).messages)).toEqual([pinging.text])
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'pong' })).messages)).toEqual([pinging.text])
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'claude' })).messages)).toEqual([])
+    // An ID asks for no one: it matches as written.
+    asked.length = 0
+    expect(texts((await fresh().messages({ channel: 'dev', mentions: 'vercel:user:u_jb+claude' })).messages)).toEqual([asking.text])
+    expect(asked).toEqual([])
+    // A wait for a mention wakes on one settled to an ID.
+    const waiting = fresh().poll({ channel: 'dev', mentions: 'julian/claude', wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await val.post('dev', { text: '@ada not this one' })
+    await val.post('dev', { text: '@julian/claude this one' })
+    expect((await waiting).events.map((event) => event.message?.text)).toEqual(['@[vercel:user:u_jb+claude] this one'])
+    // Never the whole list: the mentioned are asked for by ID.
+    expect(lists).toEqual([])
+    // A read of the actors that fails fails the poll, which reads the same change again and finds the mention.
+    const { cursor } = await fresh().poll({ channel: 'dev' })
+    await val.post('dev', { text: '@pong/claude again' })
+    const later = fresh()
+    failing = true
+    await expect(later.poll({ channel: 'dev', mentions: 'pong', after: cursor })).rejects.toMatchObject({ status: 500 })
+    failing = false
+    expect((await later.poll({ channel: 'dev', mentions: 'pong', after: cursor })).events.map((event) => event.message?.text)).toEqual(['@[vercel:project:prj_pong:production+claude] again'])
+  }, 15_000)
+
   it('filters a channel by what its messages say without reading the threads its list brought whole', async () => {
     const found = async (inlineThreadMessages: boolean) => {
       const api = fakeMessageboard({ inlineThreadMessages })
@@ -2569,6 +2633,18 @@ describe('vercel()', () => {
     await pong.inboxPush('slack', [pushed('slack:C1', '1'), pushed('slack:C2', '1'), pushed('slack:C2', '2')])
     expect((await pong.inbox('slack', { channel: 'slack:C1', limit: 1 })).map((entry) => entry.id)).toEqual(['slack:C1/1'])
     expect((await pong.inbox('slack', { limit: 2 })).map((entry) => entry.id)).toEqual(['slack:C2/2', 'slack:C2/1'])
+  })
+
+  it('says when an inbox event was pushed as an ISO time, from the milliseconds the API answers', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const before = Date.now()
+    await pong.inboxPush('slack', [{ id: 'e1', event: { kind: 'message' as const, channel: 'slack:C1', thread: 'slack:C1:1', subthread: null, message: '1', isRoot: true, text: 'hi', context: null, author }, raw: null }])
+    const [entry] = await pong.inbox('slack')
+    expect(entry!.createdAt).toBe(new Date(entry!.createdAt).toISOString())
+    expect(Date.parse(entry!.createdAt)).toBeGreaterThanOrEqual(before)
   })
 
   it('hashes a registration with its sync entries, as a board on http() does', async () => {
