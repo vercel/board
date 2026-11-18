@@ -23,6 +23,10 @@ export type Task = {
   needs: string[];
   /** Why it's held for a person, or how it ended: its result, or why it failed or was canceled. */
   note: string | null;
+  /** What it is in a launched run (`plan`, `work`, `review`, `find`, `verify`, `report`), from its `role` label: null for a task people made. */
+  role: string | null;
+  /** The pull request it opened, from its `pr` label, when it opened one. */
+  pr: string | null;
   author: string;
   replies: number;
   last: Line | null;
@@ -118,6 +122,8 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
       lease: task.claim?.until ?? null,
       needs: task.needs,
       note: task.blocked?.reason ?? task.result ?? task.reason ?? null,
+      role: message.labels.role ?? null,
+      pr: message.labels.pr ?? null,
       author: author(message),
       replies,
       last: last ? line(last) : null,

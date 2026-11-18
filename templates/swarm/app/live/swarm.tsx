@@ -111,21 +111,29 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
     return [...open].filter(([path]) => !runChannels.has(path)).sort(([a], [b]) => a.localeCompare(b));
   }, [snap]);
 
+  // Choosing another run or channel closes a task of another one: the panel shows what's selected.
+  const pick = (next: string | null) => {
+    setChannel(next);
+    const shownTask = open ? snap.tasks.find((task) => task.id === open) : null;
+    if (shownTask && !within(shownTask.channel, next)) setOpen(null);
+  };
+
   const openIn = (path: string) => snap.tasks.filter((task) => task.channel === path && !ENDED.includes(task.state)).length;
 
   // Who's here: everyone holding a task, and everyone who wrote lately.
   const agents = useMemo(() => {
     const seen = new Map<string, { holding: number; last: string | null }>();
-    for (const line of [...snap.flow].reverse()) seen.set(line.author, { holding: 0, last: line.at });
-    for (const task of snap.tasks) {
+    for (const line of [...flow].reverse()) seen.set(line.author, { holding: 0, last: line.at });
+    for (const task of tasks) {
       if (task.state !== "claimed" || !task.holder) continue;
       const agent = seen.get(task.holder) ?? { holding: 0, last: null };
       seen.set(task.holder, { ...agent, holding: agent.holding + 1 });
     }
     return [...seen].sort(([, a], [, b]) => b.holding - a.holding || (b.last ?? "").localeCompare(a.last ?? ""));
-  }, [snap]);
+  }, [flow, tasks]);
 
-  const count = (key: Shown) => snap.tasks.filter((task) => shown(task, now) === key).length;
+  // The counts and the agents follow what's selected: one run's, or the whole swarm's.
+  const count = (key: Shown) => tasks.filter((task) => shown(task, now) === key).length;
   const selected = open ? snap.tasks.find((task) => task.id === open) ?? null : null;
 
   async function copy() {
@@ -177,11 +185,13 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
             <ul>
               {snap.runs.map((entry) => (
                 <li key={entry.slug}>
-                  <button type="button" className="run" aria-pressed={channel === entry.channel} onClick={() => setChannel(entry.channel)} title={entry.goal}>
+                  <button type="button" className="run" aria-pressed={channel === entry.channel} onClick={() => pick(entry.channel)} title={entry.goal}>
                     <span className="text">{entry.title}</span>
                     <span className="faint run-meta">
                       <i data-phase={entry.phase} aria-hidden />
-                      {entry.phase} · {openIn(entry.channel)} open · ${entry.cost.toFixed(2)}
+                      {entry.phase} · {openIn(entry.channel)} open · ${entry.cost.toFixed(2)} · {ago(entry.createdAt, now)} ago</span>
+                    <span className="faint run-meta">
+                      {entry.slug}
                     </span>
                   </button>
                 </li>
@@ -192,14 +202,14 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
         <h2>Channels</h2>
         <ul>
           <li>
-            <button type="button" aria-pressed={!channel} onClick={() => setChannel(null)}>
+            <button type="button" aria-pressed={!channel} onClick={() => pick(null)}>
               <span>{snap.swarm}</span>
               <span className="faint">all</span>
             </button>
           </li>
           {channels.map(([path, open]) => (
             <li key={path}>
-              <button type="button" aria-pressed={channel === path} onClick={() => setChannel(path)}>
+              <button type="button" aria-pressed={channel === path} onClick={() => pick(path)}>
                 <span>{path.slice(snap.swarm.length) || path}</span>
                 <span className="faint">{open || ""}</span>
               </button>
@@ -221,7 +231,7 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
       </nav>
 
       <section className="pane" aria-label="Flow">
-        {run ? <RunBar run={run} now={now} /> : null}
+        {run ? <RunBar run={run} tasks={tasks} now={now} show={setOpen} /> : null}
         <h2>Flow</h2>
         {flow.length === 0 ? (
           <p className="faint pad">
@@ -335,8 +345,70 @@ function Composer({ placeholder, action, send, hint }: { placeholder: string; ac
   );
 }
 
+/** A pull request's link as people say it: `acme/web#12`. */
+const prName = (url: string) => url.replace(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+).*$/, "$1#$2");
+
+/** The pull requests a task opened: its `pr` label, or links in its result. */
+const prsOf = (task: Task) => [...new Set([...(task.pr ? [task.pr] : []), ...(task.note?.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/g) ?? [])])];
+
+/**
+ * What a run came to, in one place: the pull requests it opened, then how each of its tasks ended,
+ * the planner's and the reviews' left out (a review shows on the work it reviewed). A review run's
+ * report comes first: it's the run's result.
+ */
+function Results({ run, tasks, show }: { run: RunView; tasks: Task[]; show: (id: string) => void }) {
+  const ended = tasks.filter((task) => ENDED.includes(task.state));
+  const prs = [...new Set(ended.filter((task) => task.role === "work").flatMap(prsOf))];
+  const reviews = new Map(tasks.filter((task) => task.role === "review").map((task) => [task.needs[0], task]));
+  const outcomes = ended.filter((task) => task.role !== "plan" && task.role !== "review" && task.role !== "verify");
+  const report = ended.find((task) => task.role === "report" && task.state === "completed");
+  if (ended.length === 0) return null;
+  return (
+    <div className="results">
+      <h3>Results</h3>
+      {report?.note && (
+        <button type="button" className="report" onClick={() => show(report.id)}>
+          {report.note.slice(0, 600)}
+        </button>
+      )}
+      {prs.length > 0 && (
+        <p>
+          <span className="faint">{prs.length === 1 ? "Pull request" : `${prs.length} pull requests`}</span>{" "}
+          {prs.map((url, i) => (
+            <span key={url}>
+              {i > 0 && ", "}
+              <a href={url} target="_blank" rel="noreferrer">
+                {prName(url)}
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
+      <ul>
+        {outcomes.map((task) => {
+          const review = reviews.get(task.id);
+          const verdict = review && ENDED.includes(review.state) ? (review.state === "completed" ? "approved" : "changes asked") : null;
+          return (
+            <li key={task.id}>
+              <button type="button" onClick={() => show(task.id)} title={task.note ?? task.title}>
+                <i data-state={task.state === "completed" ? "done" : task.state} aria-hidden />
+                <span className="text">{task.title}</span>
+                <span className="faint">
+                  {prsOf(task).map(prName).join(", ") || (task.state === "completed" ? firstLine(task.note ?? "done").slice(0, 80) : task.state)}
+                  {verdict ? ` · ${verdict}` : ""}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {run.phase !== "running" && run.phase !== "preparing" && outcomes.length === 0 && !report && <p className="faint">No work tasks finished: {run.note ?? "the run ended before its plan had any."}</p>}
+    </div>
+  );
+}
+
 /** The selected run: what it was asked, where it stands, and a way to stop it. */
-function RunBar({ run, now }: { run: RunView; now: number }) {
+function RunBar({ run, tasks, now, show }: { run: RunView; tasks: Task[]; now: number; show: (id: string) => void }) {
   const [stopping, setStopping] = useState<string | null>(null);
   const live = run.phase === "preparing" || run.phase === "running";
   const left = run.deadline && live ? Date.parse(run.deadline) - now : null;
@@ -377,6 +449,7 @@ function RunBar({ run, now }: { run: RunView; now: number }) {
       </p>
       {run.note && <p className="faint">{run.note}</p>}
       {stopping && stopping !== "…" && <p className="bad">{stopping}</p>}
+      <Results run={run} tasks={tasks} show={show} />
       {run.phase === "running" && (
         <Composer
           placeholder={run.scenario === "pipeline" ? "Ask the swarm for more: add a CHANGELOG entry for each optimization…" : "Ask the swarm to look at something: check the retry logic in lib/fetch.ts…"}

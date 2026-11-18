@@ -271,6 +271,58 @@
     opacity: 0.4;
   }
 
+  /* What a run came to. */
+  .results {
+    display: grid;
+    gap: 0.3rem;
+    margin-top: 0.4rem;
+  }
+
+  .results h3 {
+    padding: 0;
+  }
+
+  .results ul button {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.15rem 0;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .results ul .text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  .results ul i {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--faint);
+    flex: none;
+  }
+
+  .results i[data-state="done"] {
+    background: var(--ready);
+  }
+
+  .results .report {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    text-align: left;
+    white-space: pre-wrap;
+  }
+
+  .results a {
+    text-decoration: underline;
+  }
+
   /* The selected run, above its flow. */
   .runbar {
     display: grid;
