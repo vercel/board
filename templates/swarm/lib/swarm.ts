@@ -59,6 +59,8 @@ export type RunView = {
   scenario: string;
   model: string;
   agents: number;
+  /** How many of them are up: one per task that's ready or being worked, so the plan decides it. */
+  up: number;
   phase: string;
   note: string | null;
   cost: number;
@@ -168,6 +170,7 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
       scenario: run.config.scenario,
       model: run.config.model,
       agents: run.config.agents,
+      up: run.up,
       phase: run.phase,
       note: run.note,
       cost: run.cost,

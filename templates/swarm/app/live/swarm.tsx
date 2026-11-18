@@ -346,7 +346,7 @@ function RunBar({ run, now }: { run: RunView; now: number }) {
         {run.goal}
       </p>
       <p className="faint">
-        <i data-phase={run.phase} aria-hidden /> {run.phase} · {run.repo} · {run.scenario} · {run.model} · {run.agents} {run.agents === 1 ? "agent" : "agents"}
+        <i data-phase={run.phase} aria-hidden /> {run.phase} · {run.repo} · {run.scenario} · {run.model} · <span title="An agent starts for each task that's ready or being worked, up to the run's number: the plan decides how many work at once.">{live ? `${run.up} of ${run.agents} agents up` : `${run.agents} ${run.agents === 1 ? "agent" : "agents"}`}</span>
       </p>
       <p>
         <span className="faint">spent</span> ${run.cost.toFixed(2)}

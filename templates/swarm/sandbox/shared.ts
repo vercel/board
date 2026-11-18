@@ -46,6 +46,8 @@ export type RunnerConfig = {
   price: TokenPrice | null;
   /** The most work tasks a plan makes. */
   maxTasks: number;
+  /** How many agents the run has: the planner splits the goal to keep as many busy as it genuinely allows. */
+  agents: number;
   /** What the whole run may spend, in dollars, or null for no cap. */
   budgetUsd: number | null;
   /** Epoch ms after which no task is started. */

@@ -71,6 +71,7 @@ export async function runnerConfig(found: Run, n: number, listed = models()): Pr
     context: model?.context ?? 128_000,
     price: model?.price ?? null,
     maxTasks: taskCap(config.agents),
+    agents: config.agents,
     budgetUsd: config.budgetUsd,
     deadline: prepared!.deadline,
     // A minute between progress notes, and more in a big run: 256 agents at one a minute would be most of the board's 300 writes a minute.
@@ -185,13 +186,18 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
   const taken = new Set(up.map(({ n }) => n));
   const missing: number[] = [];
   for (let n = 1; n <= agents && taken.size + missing.length < want; n++) if (!taken.has(n)) missing.push(n);
-  if (missing.length === 0) return;
+  // How many agents are up, for the page: written only when it changed.
+  const upLabel = async (count: number) => {
+    if (root.labels.up !== String(count)) await board.label(found.id, { set: { up: String(count) } });
+  };
+  if (missing.length === 0) return upLabel(up.length);
   const timeoutMs = Math.max(10 * 60_000, found.prepared!.deadline - Date.now() + 5 * 60_000);
   const listed = models();
   const started = await inBatches(missing, START_AT_ONCE, START_FOR_MS, async (n) => boxes.startAgent(slug, n, await runnerConfig(found, n, listed), { timeoutMs, write }));
   const failed = started.flatMap((result) => (result.status === "rejected" ? [message(result.reason)] : []));
   const ok = started.length - failed.length;
   if (ok) await say(board, found.id, `Started ${ok} ${ok === 1 ? "agent" : "agents"}: ${up.length + ok} of ${agents} up.`);
+  await upLabel(up.length + ok);
   if (failed.length) await say(board, found.id, `Couldn't start ${failed.length} ${failed.length === 1 ? "agent" : "agents"}: ${failed[0]}`);
 }
 

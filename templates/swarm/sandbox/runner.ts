@@ -299,7 +299,7 @@ async function plan({ task, body, stop, spend }: Job): Promise<Outcome> {
   const planner = await agent(
     `${RUN}
 
-You plan. Read the repository enough to split the goal into at most ${config.maxTasks} tasks. Each task is done by a different agent alone, in a fresh checkout, as one pull request, with no knowledge of the others: so tasks must not touch the same files, and each brief must say exactly what to change, where, and how to check it. Fewer, well-scoped tasks beat many small ones. If the goal is one change, plan one task.
+You plan. Read the repository enough to split the goal into at most ${config.maxTasks} tasks. Each task is done by a different agent alone, in a fresh checkout, as one pull request, with no knowledge of the others: so tasks must not touch the same files, and each brief must say exactly what to change, where, and how to check it. The run has ${config.agents} ${config.agents === 1 ? "agent" : "agents"} working in parallel, one per task: split the goal into as many independent tasks as it genuinely allows, up to ${config.maxTasks}, so that a broad goal keeps most of them busy (one task per module, file, route, or function the goal touches). Never invent busywork to fill agents, and never split one change across tasks that touch the same files. If the goal is truly one change, plan one task.
 
 Answer with only a JSON array in a \`\`\`json block: [{"title": "<one line, what the PR does>", "brief": "<what to change, where, and how to verify it>"}]. If the goal can't be done in this repository, answer with a first line \`BLOCKED: <why>\`.
 

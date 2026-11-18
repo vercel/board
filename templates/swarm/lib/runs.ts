@@ -33,6 +33,8 @@ export type Run = {
   /** Its tasks that are settled, and all of them, as its last reconcile counted them. */
   settled: number;
   total: number;
+  /** How many of its agents are up, as its last reconcile counted them. */
+  up: number;
   /** Whether its sandboxes are gone: an ended run is reconciled until they are. */
   torn: boolean;
   prepared: Prepared | null;
@@ -77,6 +79,7 @@ function toRun(message: MessageView, replies: MessageView[] = []): Run | null {
     cost: Number(message.labels.cost) || 0,
     settled: Number(message.labels.settled) || 0,
     total: Number(message.labels.total) || 0,
+    up: Number(message.labels.up) || 0,
     torn: message.labels.torn === "yes",
     prepared,
     createdAt: message.createdAt,

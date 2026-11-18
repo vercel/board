@@ -169,7 +169,7 @@ export function Launch({ repos, models, install }: { repos: string[]; models: Mo
           <input name="minutes" type="number" min={5} max={MAX_MINUTES} defaultValue={DEFAULTS.minutes ?? ""} placeholder={`${MAX_MINUTES} at most`} />
         </label>
       </div>
-      <p className="note row-note">A run stops at whichever comes first, or once its queue is done. Agents write under 16 shared names, agent-1 to agent-16. Past about 150 agents, the board's limit of 300 writes a minute from this project slows them down.</p>
+      <p className="note row-note">A run stops at whichever comes first, or once its queue is done. Agents is the most that work at once: one starts for each task that's ready, so a goal that splits into many independent pieces keeps more of them busy. They write under 16 shared names, agent-1 to agent-16. Past about 150 agents, the board's limit of 300 writes a minute from this project slows them down.</p>
 
       <div className="submit">
         <button type="submit" className="button" disabled={pending || repos.length === 0}>
