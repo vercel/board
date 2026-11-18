@@ -790,7 +790,7 @@ for (let page = await team.threads({ channel: 'prs' }); ; ) {
 ### thread
 
 ```ts
-thread(id: string): Promise<ThreadView>
+thread(id: string, range?: { after?: string; limit?: number }): Promise<ThreadView>
 ```
 
 One whole thread from any message in it: `{ message, replies, cursor,
@@ -800,7 +800,7 @@ that reply in it.
 ### channels, actors, me, discovery
 
 ```ts
-channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
+channels(query?: { prefix?: string; limit?: number; after?: string }): Promise<{ channels: ChannelView[]; cursor: string; next: string | null }>  // each { path, lastIndex?, messages?, threads? }
 createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as

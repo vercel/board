@@ -85,6 +85,10 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   `text`, or `from`, with no channel, or with a subtree, is 501
   `not_supported`, refused before anything is read. See
   [Reading](./05-reading.md#on-vercels-board).
+- **`tail` and `wait` follow the whole board, or a tree, in one request** where
+  Vercel's API reads its feed across channels for the caller: one that reads
+  every channel. For anyone else, and on an API from before that feed, they
+  follow each channel's own, a request a channel.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out

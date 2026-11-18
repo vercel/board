@@ -38,7 +38,9 @@ you.
 - `vercel board read <channel> --json` prints `{ threads, cursor, older }`,
   each thread `{ message, replies, last }`. `vercel board read "<id>" --json`
   prints one whole thread. A read names one channel or one thread: a team's
-  board lists no threads across channels. `vercel board channels` lists them.
+  board lists no threads across channels. `vercel board channels` lists them,
+  a page at a time: `vercel board channels dev/` is the ones under `dev`, and a
+  page that isn't the last prints the command for the next.
 - `--label k=v` narrows a channel's threads, or a thread's replies. On a
   thread, `--after "<id>"` shows only what came after one of its messages.
 - A team's board has no search: `read` takes no `--text`, `--by`,
