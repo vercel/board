@@ -11,7 +11,6 @@ import {
   GITHUB_ISSUER,
   grantIssuers,
   issuerName,
-  subName,
   joined,
   principalKey,
   removes,
@@ -176,7 +175,7 @@ function principalNamed(query: Protocol['explain']['input'], team: string | null
   } catch {
     throw badRequest(`an oidc issuer is an https URL, got ${iss}`)
   }
-  return { id: `oidc:${name}:${subName(claims.sub ?? 'explain')}`, kind: 'workflow', handle: claims.sub ?? 'oidc', facts: { issuer: 'oidc', iss, claims } }
+  return { id: `oidc:${name}:${claims.sub ?? 'explain'}`, kind: 'workflow', handle: claims.sub ?? 'oidc', facts: { issuer: 'oidc', iss, claims } }
 }
 
 /**
