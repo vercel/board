@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { Sandbox, type NetworkPolicy } from "@vercel/sandbox";
 import { SANDBOX, type RunnerConfig } from "../sandbox/shared.ts";
-import { agentName, RUNS, runChannel, team } from "./board.ts";
+import { profileOf, RUNS, runChannel, team } from "./board.ts";
 import { githubToken } from "./credentials.ts";
 
 // The sandboxes a run works in. Three kinds, each forked from the one before:
@@ -177,7 +177,7 @@ export const agentCan = (slug: string) => `${RUNS}=read;${runChannel(slug)}=read
  */
 async function agentPolicy(n: number, scope: Scope): Promise<{ policy: NetworkPolicy; boardUrl: string }> {
   const token = await oidc();
-  const agent = team().as(agentName(n));
+  const agent = team().as(profileOf(n));
   const [{ allow }, { url }, gh] = await Promise.all([agent.sandboxPolicy({ token, can: agentCan(scope.slug) }), team().discovery(), githubToken(scope.repo, scope.write)]);
   const gateway = process.env.AI_GATEWAY_API_KEY ?? token;
   const policy = {
@@ -198,10 +198,10 @@ function standIn(token: string): string {
 }
 
 /** What `vb` in a sandbox needs to find the board: where it is, who it writes as, and something to send where the policy puts the credential. */
-async function boardEnv(url: string, worker: string): Promise<Record<string, string>> {
+async function boardEnv(url: string, profile: string): Promise<Record<string, string>> {
   const at = new URL(url);
   if (at.hostname === "localhost" || at.hostname === "127.0.0.1") throw new Error("A sandbox can't reach a board on your machine. Unset BOARD_URL to use your team's board.");
-  const env: Record<string, string> = { BOARD_URL: url, BOARD_PROFILE: worker };
+  const env: Record<string, string> = { BOARD_URL: url, BOARD_PROFILE: profile };
   if (at.host !== "api.vercel.com") return { ...env, BOARD_TOKEN: PLACEHOLDER };
   const teamId = at.searchParams.get("teamId");
   return { ...env, VERCEL_OIDC_TOKEN: standIn(await oidc()), ...(teamId ? { VERCEL_ORG_ID: teamId } : {}) };
@@ -210,7 +210,7 @@ async function boardEnv(url: string, worker: string): Promise<Record<string, str
 /** Starts agent `n` of a run in a sandbox of its own, forked from the run's checkout. */
 export async function startAgent(slug: string, n: number, runner: RunnerConfig, opts: { timeoutMs: number; write: boolean }): Promise<string> {
   const { policy, boardUrl } = await agentPolicy(n, { slug, repo: runner.github, write: opts.write });
-  const env = await boardEnv(boardUrl, runner.worker);
+  const env = await boardEnv(boardUrl, profileOf(n));
   const sandbox = await Sandbox.fork({
     sourceSandbox: sourceName(slug),
     // An agent that's started again gets a name of its own: the one before it may still be shutting down.

@@ -33,8 +33,12 @@ const exec = promisify(execFile);
 
 /** How long a claim holds without a renewal. Vercel's board gives five minutes at most. */
 const LEASE = "5m";
-/** A claim is renewed this often, and what the task has cost is written then too, so the run's budget sees it mid-task. */
-const RENEW_MS = 80_000;
+/**
+ * A claim is renewed this often, and what the task has cost is written then too, so the run's budget
+ * sees it mid-task. Two minutes leaves three of the lease's five to spare, and keeps a big run under
+ * the board's per-caller write limit: every agent writes as this one project.
+ */
+const RENEW_MS = 120_000;
 /** One agent turn: long enough for a real change, short enough that a stuck one ends. */
 const TURN_MS = 15 * 60_000;
 /** How much of a diff a reviewer reads, and of a thread an agent reads. */
@@ -74,12 +78,14 @@ const note = (id: string, text: string) => post(id, text).catch((error) => log({
 const read = (id: string) => vb<{ message: Message; replies: Message[] }>("read", id);
 
 /** The run's phase, from its thread's root. Agents work only while it says `running`. */
-const phase = async () => (await read(config.run)).message.labels.phase;
-
-/** What the whole run has spent, from every task's `cost` label. */
-async function spent(): Promise<number> {
-  const page = await vb<{ tasks?: Array<{ message?: Message } & Partial<Message>> }>("tasks", config.channel, "--state", "all", "-n", "500");
-  return (page.tasks ?? []).reduce((sum, entry) => sum + (Number((entry.message ?? entry).labels?.[LABEL.cost]) || 0), 0);
+/**
+ * The run as its thread says: its phase, and what it has spent, the sum of its tasks' `cost` labels
+ * that reconcile writes there. One read, however many tasks the run has: with hundreds of agents,
+ * each summing every task on every renewal would be most of the run's board reads.
+ */
+async function runState(): Promise<{ phase: string | undefined; cost: number }> {
+  const { labels } = (await read(config.run)).message;
+  return { phase: labels.phase, cost: Number(labels[LABEL.cost]) || 0 };
 }
 
 /** The last reply in a thread that carries an agent's output of `role`, without its first word. */
@@ -434,9 +440,16 @@ const ROLE: Record<Role, (job: Job) => Promise<Outcome>> = { plan, work, review,
 const claimOver = (error: unknown) => ["claim_lost", "claim_not_held", "task_finished"].includes((error as Failure).reason ?? "");
 
 /** Whether the run may spend more: under its budget, counting what this task has spent and not yet labeled. */
-async function underBudget(extra = 0): Promise<boolean> {
-  if (config.budgetUsd === null) return true;
-  return (await spent().catch(() => 0)) + extra < config.budgetUsd;
+/**
+ * Whether the run may go on: it's still running and under its budget. The run's cost on its thread
+ * lags (reconcile sums it), so what this agent's current try has spent is added on top: it may count
+ * part of that twice, which stops a run a little early rather than late.
+ */
+async function goOn(extra = 0): Promise<"running" | "stopped" | "spent"> {
+  const state = await runState().catch(() => ({ phase: "running", cost: 0 }));
+  if (state.phase !== "running") return "stopped";
+  if (config.budgetUsd !== null && state.cost + extra >= config.budgetUsd) return "spent";
+  return "running";
 }
 
 await writeFile(SANDBOX.pid, String(process.pid));
@@ -444,8 +457,7 @@ log({ type: "up", model: config.model });
 let errors = 0;
 let idle = 0;
 while (Date.now() < config.deadline) {
-  if ((await phase().catch(() => "running")) !== "running") break;
-  if (!(await underBudget())) break;
+  if ((await goOn()) !== "running") break;
   let task: Message;
   try {
     // The oldest ready task of the run's, or none within the wait. The owner is named: a claim takes another owner's tasks only then.
@@ -481,8 +493,9 @@ while (Date.now() < config.deadline) {
         if (claimOver(error)) lost.abort("the claim on this task was lost");
       });
       await label().catch(() => {});
-      if ((await phase().catch(() => "running")) !== "running") lost.abort("the run was stopped");
-      else if (!(await underBudget())) lost.abort("the run's budget is spent");
+      const now = await goOn(spend.cost - before);
+      if (now === "stopped") lost.abort("the run was stopped");
+      else if (now === "spent") lost.abort("the run's budget is spent");
     })();
   }, RENEW_MS);
   let outcome: Outcome;

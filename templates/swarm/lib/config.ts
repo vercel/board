@@ -24,8 +24,13 @@ export type Config = {
   minutes: number | null;
 };
 
-/** The most agents a run has. Vercel's board gives one caller 20 profiles, and each agent is one. */
-export const MAX_AGENTS = 16;
+/**
+ * The most agents a run has. Agents share 16 board profiles (`profileOf`), so the number isn't held
+ * to the board's 20 profiles. What does hold a big run back: every agent writes as this one project,
+ * and Vercel's board takes 300 writes a minute from one caller; your team's sandbox concurrency; and
+ * AI Gateway's rate limits for the model.
+ */
+export const MAX_AGENTS = 256;
 
 /** The longest a run goes: a sandbox's own limit, with room to stop. */
 export const MAX_MINUTES = 240;
@@ -54,7 +59,10 @@ export const ABOUT_SCENARIO: Record<Scenario, { label: string; about: string }> 
 };
 
 /** How many work tasks a pipeline's plan makes, and how many areas a review reads: a couple per agent. */
-export const taskCap = (agents: number) => Math.min(20, Math.max(3, agents * 2));
+export const taskCap = (agents: number) => Math.min(TASK_MAX, Math.max(3, agents * 2));
+
+/** The most tasks one plan or one review splits into: a planner writes its plan in one reply, and more than this doesn't fit one. */
+export const TASK_MAX = 120;
 
 const text = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 

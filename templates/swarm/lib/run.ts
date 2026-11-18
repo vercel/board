@@ -190,11 +190,23 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
   if (missing.length === 0) return;
   const timeoutMs = Math.max(10 * 60_000, found.prepared!.deadline - Date.now() + 5 * 60_000);
   const listed = models();
-  const started = await Promise.allSettled(missing.map(async (n) => boxes.startAgent(slug, n, await runnerConfig(found, n, listed), { timeoutMs, write })));
+  const started = await inBatches(missing, START_AT_ONCE, START_FOR_MS, async (n) => boxes.startAgent(slug, n, await runnerConfig(found, n, listed), { timeoutMs, write }));
   const failed = started.flatMap((result) => (result.status === "rejected" ? [message(result.reason)] : []));
   const ok = started.length - failed.length;
   if (ok) await say(board, found.id, `Started ${ok} ${ok === 1 ? "agent" : "agents"}: ${up.length + ok} of ${agents} up.`);
   if (failed.length) await say(board, found.id, `Couldn't start ${failed.length} ${failed.length === 1 ? "agent" : "agents"}: ${failed[0]}`);
+}
+
+/** How many agents' sandboxes are forked at once, and for how long one reconcile starts more: the next one starts the rest. */
+const START_AT_ONCE = 16;
+const START_FOR_MS = 200_000;
+
+/** Runs `work` on each item, `size` at a time, starting no new batch after `forMs`. What wasn't started isn't in the result. */
+export async function inBatches<T, R>(items: T[], size: number, forMs: number, work: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const until = Date.now() + forMs;
+  const results: PromiseSettledResult<R>[] = [];
+  for (let at = 0; at < items.length && Date.now() < until; at += size) results.push(...(await Promise.allSettled(items.slice(at, at + size).map(work))));
+  return results;
 }
 
 /** Reconciles every run that could have sandboxes: what the cron runs, and the page while it's open. */

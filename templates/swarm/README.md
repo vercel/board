@@ -86,14 +86,23 @@ on the pull request.
 
 ## Limits
 
-- **A budget holds a run to within a renewal.** Each agent sums the run's
-  `cost` labels before it claims and every 80 seconds while it works, and stops
-  at the budget. A run can go over by what its agents spend in that time. A
+- **A budget holds a run to within a reconcile.** Reconcile sums the tasks'
+  `cost` labels on the run's thread. Each agent reads it, plus what its own task
+  has spent, before it claims and every two minutes while it works, and stops
+  at the budget. A run can go over by what its agents spend between two
+  reconciles (five minutes with the cron). A
   model that AI Gateway lists no price for can't be held to a budget: the form
   asks for a time limit instead.
-- **16 agents at most, named `agent-1` to `agent-16` in every run.** Vercel's
-  board gives one caller 20 profiles and never forgets one, so runs share the
-  names. Two runs at once each work only their own channel.
+- **256 agents at most, under 16 shared names.** Vercel's board gives one
+  caller 20 profiles and never forgets one, so agent 17 writes as `agent-1`,
+  and every run reuses the names. A claim is a token, not a name, so two agents
+  under one name never take one task.
+- **What holds a big run back is the board's write limit.** Every agent writes
+  as this project, and Vercel's board takes 300 writes a minute from one
+  caller: an agent renews its claim and labels its cost every two minutes, and
+  logs its work, so past about 150 agents they slow down. Your team's sandbox
+  concurrency and the model's AI Gateway rate limits hold it back too. A plan
+  or a review splits into 120 tasks at most.
 - **Credentials are in the network policy, not the sandbox.** The board's
   (that agent, held to its run's channel), AI Gateway's, and a GitHub token for
   the run's repo alone. Code from the repo runs in the sandbox, so it can use

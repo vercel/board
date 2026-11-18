@@ -6,9 +6,9 @@ import { test } from "node:test";
 import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
 import { LABEL, planReply, type RunnerConfig, type State } from "../sandbox/shared.ts";
-import { runChannel } from "../lib/board.ts";
+import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
-import { begin, ending, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
+import { begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
 import { run as readRun, snapshot } from "../lib/runs.ts";
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
 import { areas, expand, seed } from "../lib/scenarios.ts";
@@ -28,7 +28,7 @@ const zero = (): Record<State, number> => ({ waiting: 0, ready: 0, claimed: 0, b
 // ─── the form ───────────────────────────────────────────────────────────────
 
 test("a config holds every number to its range, and takes a GitHub URL for its repo", () => {
-  const parsed = parseConfig({ repo: "https://github.com/acme/web.git", goal: "Find the security bugs in the API.", model: "anthropic/claude-haiku-5.5", agents: 99, budgetUsd: "0", minutes: "100000" });
+  const parsed = parseConfig({ repo: "https://github.com/acme/web.git", goal: "Find the security bugs in the API.", model: "anthropic/claude-haiku-5.5", agents: 100_000, budgetUsd: "0", minutes: "100000" });
   assert.ok("config" in parsed);
   assert.equal(parsed.config.repo, "acme/web");
   assert.equal(parsed.config.agents, MAX_AGENTS);
@@ -36,6 +36,32 @@ test("a config holds every number to its range, and takes a GitHub URL for its r
   assert.equal(parsed.config.minutes, 240);
   assert.equal(parsed.config.scenario, "pipeline");
   assert.equal(parsed.config.title, "Find the security bugs in the API.");
+});
+
+test("a run of hundreds of agents writes under no more than the board's profiles, each profile shared evenly", () => {
+  const used = new Map<string, number>();
+  for (let n = 1; n <= MAX_AGENTS; n++) used.set(profileOf(n), (used.get(profileOf(n)) ?? 0) + 1);
+  assert.equal(used.size, PROFILES);
+  assert.ok(PROFILES < 20, "the board gives one caller 20 profiles, and the launcher needs one");
+  assert.deepEqual(new Set(used.values()), new Set([MAX_AGENTS / PROFILES]));
+  assert.equal(profileOf(1), profileOf(PROFILES + 1));
+});
+
+test("agents start a batch at a time, and no new batch starts once the time is up", async () => {
+  let running = 0;
+  let most = 0;
+  const all = await inBatches(Array.from({ length: 40 }, (_, i) => i), 16, 60_000, async (n) => {
+    most = Math.max(most, ++running);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    running--;
+    if (n === 3) throw new Error("no sandbox");
+    return n;
+  });
+  assert.equal(all.length, 40);
+  assert.equal(most, 16);
+  assert.equal(all.filter((result) => result.status === "rejected").length, 1);
+  const late = await inBatches([1, 2, 3, 4], 2, 0, async (n) => n);
+  assert.equal(late.length, 0);
 });
 
 test("a config needs a repo, a goal, a model, and a budget or a time limit", () => {
