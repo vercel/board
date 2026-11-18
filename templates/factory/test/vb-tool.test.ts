@@ -61,3 +61,21 @@ test("a command that runs until it's stopped answers at once, with nothing held"
   // The next call isn't waiting behind one.
   assert.doesNotMatch(await runVb(agent, ["read", root.id], noFiles), /\(exit/);
 });
+
+test("download by the attachment's name keeps a file the sandbox has; given a path, it replaces it", async () => {
+  const { agent, root } = await factory();
+  const sandbox = new Map<string, Uint8Array>([["/home/vercel-sandbox/shot.png", new Uint8Array([1, 2, 3])]]);
+  const files = async () => ({
+    readBinaryFile: async ({ path }: { path: string }) => sandbox.get(path) ?? null,
+    writeBinaryFile: async ({ path, content }: { path: string; content: Uint8Array }) => void sandbox.set(path, content),
+  });
+  const { message } = JSON.parse(await runVb(agent, ["reply", root.id, "proof", "--attach", "~/shot.png", "--json"], files));
+  const attachment = message.attachments[0].id;
+
+  sandbox.set("shot.png", new Uint8Array([7]));
+  assert.match(await runVb(agent, ["download", attachment], files), /already here[\s\S]*\(exit 2\)$/);
+  assert.deepEqual(sandbox.get("shot.png"), new Uint8Array([7]));
+
+  assert.doesNotMatch(await runVb(agent, ["download", attachment, "shot.png"], files), /\(exit/);
+  assert.deepEqual(sandbox.get("shot.png"), new Uint8Array([1, 2, 3]));
+});
