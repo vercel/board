@@ -447,13 +447,14 @@ const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
  * A thread's replies as `--after` and `--label` narrow them, from the replies its read answered: those after the
  * message `--after` names, which is one of the thread's, and those that wear every `--label`, or whose root does.
  */
-function narrowedReplies(thread: { message: MessageView; replies: MessageView[] }): MessageView[] {
+function narrowedReplies(thread: { message: MessageView; replies: MessageView[] }, cut: { after: boolean }): MessageView[] {
   let replies = thread.replies
   if (flags.after !== undefined) {
     const id = flags.after.replace(/^#/, '')
     const at = [thread.message, ...replies].findIndex((message) => message.id === id)
-    if (at === -1) throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
-    replies = replies.slice(at)
+    // A board asked for the replies after it answered them alone: one from before that answers the whole thread, cut here.
+    if (at === -1 && cut.after) throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+    if (at !== -1) replies = replies.slice(at)
   }
   const labels = (flags.label ?? []).map((label) => {
     const eq = label.indexOf('=')
@@ -1367,13 +1368,22 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // A thread is read whole: what finds threads doesn't narrow one, and it's said before anything is read.
         const across = (['by', 'text', 'mentions', 'source', 're', 'before'] as const).find((name) => flags[name] !== undefined)
         if (across !== undefined) throw usage(`Can't use --${across} on one thread. It's read whole: --after and --label narrow its replies.`)
-        const thread = link ? await board.linked(target) : await board.thread(messageId(target))
+        // A board reads the replies after a message itself, so a long thread isn't read whole for its last few.
+        const after = !link && flags.after !== undefined ? flags.after.replace(/^#/, '') : undefined
+        const thread = link
+          ? await board.linked(target)
+          : await board.thread(messageId(target), after !== undefined && isMessageRef(after) ? { after: messageId(after) } : {}).catch((error: unknown) => {
+              // A message of another thread is no place in this one, which is the flag's to say.
+              if (error instanceof BoardError && error.status === 400 && /isn't a message of this thread/.test(error.message))
+                throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+              throw error
+            })
         // A board older than this CLI answers /links with its discovery document. Its 404 stays: a
         // current board's means the link isn't one it synced.
         if (link && !Array.isArray((thread as { replies?: unknown }).replies)) throw outdated("This board can't read links.")
         // What narrows it is narrowed here, from the replies it came with.
         const narrowed = flags.after !== undefined || (flags.label?.length ?? 0) > 0
-        const replies = narrowed ? narrowedReplies(thread) : thread.replies
+        const replies = narrowed ? narrowedReplies(thread, { after: link || after === undefined || !isMessageRef(after) }) : thread.replies
         if (flags.json) return result({ ...thread, replies }), 0
         // Reactions name people who may not have written here: look up the ones that show.
         const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))

@@ -1039,6 +1039,41 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return messages
   }
 
+  /** Whether the API reads a thread's messages in a range (`after`, `limit`, `order`): until it refuses one, it's asked. */
+  let threadRanges = true
+  /**
+   * A thread's root, and its replies in a range: after the message at `after`, the first `limit` of them, or with no
+   * `after`, the newest. The API reads the range itself, a page of 100 at most, and the root apart when the range
+   * leaves it out; one from before ranges answers 400 for the parameter, and the whole thread is read and cut here.
+   */
+  async function threadRange(who: Who, threadId: string, range: { after?: number; limit?: number }, signal?: AbortSignal): Promise<ApiMessage[]> {
+    const cut = ([root, ...replies]: ApiMessage[]) => {
+      const rest = range.after === undefined ? replies : replies.filter((reply) => reply.sequence > range.after!)
+      return root ? [root, ...(range.limit === undefined ? rest : range.after === undefined ? rest.slice(-range.limit) : rest.slice(0, range.limit))] : []
+    }
+    if (!threadRanges) return cut(await threadMessages(who, threadId, signal))
+    const path = await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`)
+    // One more than asked for when it reads the newest: the root is among them when the thread is that short.
+    const wanted = range.limit === undefined ? Infinity : range.after === undefined ? range.limit + 1 : range.limit
+    const order = range.after === undefined ? { order: 'desc' } : { after: String(range.after) }
+    const read: ApiMessage[] = []
+    try {
+      let cursor: string | undefined
+      do {
+        const page = await reading<{ messages: ApiMessage[]; cursor: string | null }>(who, path, { query: { ...order, limit: String(Math.min(PAGE_MAX, wanted - read.length)), cursor }, ...(signal ? { signal } : {}) })
+        read.push(...page.messages)
+        cursor = page.cursor ?? undefined
+      } while (cursor && read.length < wanted)
+    } catch (error) {
+      if (!['after', 'limit', 'order'].some((name) => unknownParameter(error, name))) throw error
+      threadRanges = false
+      return cut(await threadMessages(who, threadId, signal))
+    }
+    const replies = read.filter((message) => message.sequence > 1).sort((a, b) => a.sequence - b.sequence)
+    const root = read.find((message) => message.sequence === 1) ?? (await messageById(who, idAt(threadId, 1), signal)).message
+    return [root, ...(range.limit === undefined ? replies : range.after === undefined ? replies.slice(-range.limit) : replies.slice(0, range.limit))]
+  }
+
   /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
   async function reactors(who: Who, message: ApiMessage): Promise<Record<string, string[]>> {
     if (!message.reactions || Object.keys(message.reactions).length === 0) return {}
@@ -3013,10 +3048,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (after === undefined) threads.reverse()
       return { threads, cursor: cursorOf({ t: newest, feeds }) }
     },
-    async message(caller, { id }, signal) {
+    async message(caller, { id, after, limit }, signal) {
       const who = whoOf(caller)
       const { thread, channel } = await messageIn(who, id, signal)
-      const [root, ...replies] = await threadMessages(who, thread.id, signal)
+      const from = after === undefined ? undefined : locate(after)
+      if (after !== undefined && from?.threadId !== thread.id) throw new HttpError(400, 'invalid_request', `after: ${after} isn't a message of this thread`)
+      const [root, ...replies] =
+        from !== undefined || limit !== undefined ? await threadRange(who, thread.id, { ...(from ? { after: from.sequence } : {}), ...(limit !== undefined ? { limit } : {}) }, signal) : await threadMessages(who, thread.id, signal)
       if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
       // The root and its replies are named together: one after the other, they'd ask for their authors apart.
       const [message, ...shown] = await Promise.all([root, ...replies].map((each) => view(who, each, channel.name)))

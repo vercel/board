@@ -88,6 +88,7 @@ describe('vercel()', () => {
       'core: raises the version with each edit, reaction, and label': 'passed',
       'core: drops a deleted message from what its labels find': 'passed',
       "core: reads one channel's messages after a cursor of its own, oldest first, and on from where it stopped": 'passed',
+      "core: reads a thread's replies after one of its messages, and as many of its newest as it's asked for": 'passed',
       "core: reads one channel's newest messages, as many as it's asked for": 'passed',
       'core: lists threads, each with its reply count and latest reply': 'passed',
       // Vercel's API keeps no index to find threads by what they say, or across channels.

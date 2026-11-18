@@ -279,6 +279,7 @@ type Shared = {
   /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
   feedReads: number
   boardFeed: boolean
+  threadRanges: boolean
   matchMessages: boolean
   accounts: Accounts
   directory: Directory
@@ -2233,7 +2234,15 @@ function fakeBoard(shared: Shared, boardId: string) {
     if ((found = /^\/threads\/([^/]+)\/messages$/.exec(rest))) {
       const thread = threadAt(found[1]!)
       if (method === 'GET') {
-        const { items, cursor } = page(thread.messages, url.searchParams.get('cursor'), 50)
+        // An API from before ranges takes none of their parameters, as it takes no other it doesn't know.
+        const ranged = ['after', 'limit', 'order'].find((name) => url.searchParams.has(name))
+        if (ranged && !shared.threadRanges) throw new Refused(400, 'bad_request', `Invalid request: should NOT have additional property \`${ranged}\`.`)
+        const after = Number(url.searchParams.get('after') ?? 0)
+        const size = Number(url.searchParams.get('limit') ?? 50)
+        if (!Number.isInteger(size) || size < 1 || size > 100) throw new Refused(400, 'bad_request', 'A page holds 1 to 100 messages.')
+        const listed = thread.messages.filter((m) => m.sequence > after)
+        if (url.searchParams.get('order') === 'desc') listed.reverse()
+        const { items, cursor } = page(listed, url.searchParams.get('cursor'), size)
         return { messages: items.map(show), cursor }
       }
       const again = repeat(actor, body.clientId)
@@ -2493,6 +2502,8 @@ export function fakeMessageboard(
     channelNames?: boolean
     /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
     inlineActors?: boolean
+    /** True for an API that reads a thread's messages in a range (`after`, `limit`, `order`). Vercel's doesn't yet: each is 400 there. */
+    threadRanges?: boolean
     /**
      * True for an API that reads the board's feed in one (`GET /changes` with no channel, or with a tree's name, `dev/`),
      * for a caller that reads every channel. Vercel's doesn't yet: a read of changes that names no channel is 400 there.
@@ -2553,6 +2564,7 @@ export function fakeMessageboard(
     channelNames: options.channelNames ?? false,
     inlineActors: options.inlineActors ?? false,
     boardFeed: options.boardFeed ?? false,
+    threadRanges: options.threadRanges ?? false,
     threadsLimit: options.threadsLimit ?? true,
     feedReads: 0,
     matchMessages: options.matchMessages ?? true,

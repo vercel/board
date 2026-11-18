@@ -46,6 +46,7 @@ import {
   SyncImportBody,
   UploadStartBody,
   SyncReceiptBody,
+  ThreadQuery,
   ThreadsQuery,
   TypingBody,
   type MessageView,
@@ -125,6 +126,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'schemas':
       return {}
     case 'message':
+      return { id, ...ThreadQuery.parse(queryObject(url)) }
     case 'posted':
     case 'synced':
     case 'cancelSchedule':

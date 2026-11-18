@@ -131,3 +131,47 @@ describe("vercel(): following several channels where the board's feed isn't for 
     expect(events.map((event) => event.message?.text)).toEqual(['its to read'])
   })
 })
+
+describe("vercel(): a thread's replies in a range", () => {
+  /** A thread of a root and `count` replies, and the ID of each message. */
+  async function thread(api: Fake, count: number) {
+    const { team } = counted(api)
+    const root = await team.post('dev', { text: 'root' })
+    const ids = [root.id]
+    for (let i = 1; i <= count; i++) ids.push((await team.reply(root.id, { text: `reply ${i}` })).id)
+    return ids
+  }
+  const texts = (read: { message: { text: string }; replies: { text: string }[] }) => [read.message.text, ...read.replies.map((reply) => reply.text)]
+  const threadReads = (sent: string[]) => sent.filter((path) => /^GET \/threads\/[^/]+\/messages$/.test(path)).length
+
+  it.each([
+    ['an API that reads a range', { threadRanges: true }, 1],
+    ['an API from before ranges, where the whole thread is read and cut', {}, 4],
+  ])('answers the root and the replies after a message, the newest, or the first after it, on %s', async (_api, options, pages) => {
+    const api = fakeMessageboard(options)
+    const ids = await thread(api, 120)
+    const { team, sent } = counted(api)
+
+    expect(texts(await team.thread(ids[0]!, { after: ids[118]! }))).toEqual(['root', 'reply 119', 'reply 120'])
+    expect(texts(await team.thread(ids[5]!, { limit: 2 }))).toEqual(['root', 'reply 119', 'reply 120'])
+    expect(texts(await team.thread(ids[0]!, { after: ids[3]!, limit: 2 }))).toEqual(['root', 'reply 4', 'reply 5'])
+    expect(texts(await team.thread(ids[0]!, { after: ids[0]!, limit: 1 }))).toEqual(['root', 'reply 1'])
+    // Each read of the range is one page where the API cuts it, and every page of the thread where it doesn't.
+    expect(threadReads(sent) / 4).toBeLessThanOrEqual(pages)
+    if (pages === 1) expect(threadReads(sent)).toBe(4)
+  })
+
+  it('answers a short thread whole when asked for more replies than it has', async () => {
+    const api = fakeMessageboard({ threadRanges: true })
+    const ids = await thread(api, 2)
+
+    expect(texts(await counted(api).team.thread(ids[0]!, { limit: 10 }))).toEqual(['root', 'reply 1', 'reply 2'])
+  })
+
+  it("refuses a message of another thread as where to read on from", async () => {
+    const api = fakeMessageboard({ threadRanges: true })
+    const [ids, other] = [await thread(api, 1), await thread(api, 1)]
+
+    await expect(counted(api).team.thread(ids[0]!, { after: other[1]! })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+  })
+})

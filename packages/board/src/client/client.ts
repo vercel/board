@@ -37,6 +37,7 @@ import type {
   SchemaInput,
   SchemaView,
   ThreadsPage,
+  ThreadQueryInput,
   ThreadsQueryInput,
   ThreadSummaryView,
   ThreadView,
@@ -597,7 +598,11 @@ export function createBoardClient(options: ClientOptions) {
       messages: (query: Omit<ChannelMessagesQueryInput, 'channel'> = {}) =>
         call<MessagesPage>('GET', `/messages${queryString({ channel: name, ...query })}`),
     }),
-    thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
+    /**
+     * A thread: its root and its replies. `after`, one of its messages, answers the replies after it, and `limit` that
+     * many of them: with `after` the first after it, to read on from, and without, the newest.
+     */
+    thread: (id: string, range: ThreadQueryInput = {}) => call<ThreadView>('GET', `/messages/${path(id)}${queryString(range)}`),
     /** Your own post with the client ID you gave it, as posting it answered: 404 `post_not_found` when there's none. */
     posted: async (id: string) => (await call<{ message: MessageView }>('GET', `/posts/${path(id)}`)).message,
     /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads; `before` takes a page's `older`. */

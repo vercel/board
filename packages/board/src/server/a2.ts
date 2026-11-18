@@ -546,13 +546,18 @@ function build(options: A2Options, binding: BoardBinding) {
         ...(older !== undefined ? { older: older && olderRef(older) } : {}),
       }
     },
-    async message(caller, { id }, signal) {
+    async message(caller, { id, after, limit }, signal) {
       const { principal } = (await identityOf(caller))
       const at = messageAt(id)
       const message = await reads.message(at, signal)
       if (!message || !principal.access.readable(message.channel)) throw notFound(`message not found: #${at}`, 'message_not_found')
       const [{ messages, cursor }, { state: actors }] = await Promise.all([reads.thread(message.re ?? message.id, signal), session.state(actorsReducer)])
-      const [root, ...replies] = messages
+      const [root, ...all] = messages
+      // The replies after one of its messages, the first `limit` of them; or with no message, the newest.
+      const from = after === undefined ? 0 : messages.findIndex((each) => each.id === messageAt(after))
+      if (from === -1) throw new HttpError(400, 'invalid_request', `after: ${after} isn't a message of this thread`)
+      const rest = all.slice(from)
+      const replies = limit === undefined ? rest : after === undefined ? rest.slice(-limit) : rest.slice(0, limit)
       const reader = await reads.reader(principal.access, messages)
       return {
         message: view(root!, actors, reader),

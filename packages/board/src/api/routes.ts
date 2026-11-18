@@ -89,6 +89,15 @@ export const ChannelMessagesQuery = z.strictObject({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+/**
+ * A thread read in part: the root, and of its replies the ones after one of its messages (`after`), `limit` of
+ * them. With `after` they're the first after it, to read on from; without, the newest.
+ */
+export const ThreadQuery = z.strictObject({
+  after: id.optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
+
 /** How many threads a read lists without a `limit`, and with one at most. */
 export const THREADS_LIMIT_DEFAULT = 50
 export const THREADS_LIMIT_MAX = 500
@@ -734,6 +743,7 @@ export type SyncImportInput = z.input<typeof SyncImportBody>
 export type SyncReceiptInput = z.input<typeof SyncReceiptBody>
 export type SyncFindInput = z.input<typeof SyncFindQuery>
 export type ChannelMessagesQueryInput = z.input<typeof ChannelMessagesQuery>
+export type ThreadQueryInput = z.input<typeof ThreadQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
@@ -1155,7 +1165,7 @@ export const routes = {
   actors: { method: 'GET', path: '/actors' },
   /** One channel's messages across its threads: the newest, or those after one of its cursors. */
   channelMessages: { method: 'GET', path: '/messages', query: ChannelMessagesQuery },
-  message: { method: 'GET', path: '/messages/:id' },
+  message: { method: 'GET', path: '/messages/:id', query: ThreadQuery },
   /** Threads with a matching message, one summary each, by latest activity. `before` takes a page's `older`. */
   threads: { method: 'GET', path: '/threads', query: ThreadsQuery },
   post: { method: 'POST', path: '/messages', body: PostBody },

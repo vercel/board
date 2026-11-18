@@ -622,6 +622,21 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: "reads a thread's replies after one of its messages, and as many of its newest as it's asked for",
+    run: async (ctx) => {
+      const { root, reply } = needRoot(ctx)
+      const ids = (read: { message: MessageView; replies: MessageView[] }) => [read.message.id, ...read.replies.map((m) => m.id)]
+      const whole = ids(await ctx.board.thread(root.id))
+      const after = ids(await ctx.board.thread(root.id, { after: reply.id }))
+      same(show(after), show([root.id, ...whole.slice(whole.indexOf(reply.id) + 1)]), 'a thread read after one of its replies: its root, and the replies after that one')
+      const first = ids(await ctx.board.thread(reply.id, { after: root.id, limit: 1 }))
+      same(show(first), show(whole.slice(0, 2)), 'a thread read for the first reply after its root')
+      const newest = ids(await ctx.board.thread(root.id, { limit: 1 }))
+      same(show(newest), show([root.id, whole.at(-1)]), 'a thread read for its newest reply')
+    },
+  },
+  {
+    group: 'core',
     name: "reads one channel's newest messages, as many as it's asked for",
     run: async (ctx) => {
       needRoot(ctx)
