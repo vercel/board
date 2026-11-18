@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import { GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
+import { everyChannel } from '../client/channels.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
@@ -386,8 +387,8 @@ export type Io = {
   error(chunk: string): void
   /** A file's bytes, for `--attach`; null when there's no such file. */
   readFile(path: string): Promise<Uint8Array | null>
-  /** Saves a file, for `download`. */
-  writeFile(path: string, data: Uint8Array): Promise<void>
+  /** Saves a file, for `download`; with `exclusive`, fails with `EEXIST` rather than replace one that's there. */
+  writeFile(path: string, data: Uint8Array, options?: { exclusive?: boolean }): Promise<void>
   /** What `-` reads. */
   stdin(): Promise<string>
   /** Stops `tail` and `wait`, and fails any other command its requests haven't finished, as `board`'s handle ends them; without one, Ctrl-C stops `tail` and `wait`. */
@@ -409,7 +410,7 @@ const TERMINAL: Io = {
     if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw tooLarge(path)
     return new Uint8Array(await readFile(path))
   },
-  writeFile: (path, data) => writeFile(path, data),
+  writeFile: (path, data, { exclusive = false } = {}) => writeFile(path, data, { flag: exclusive ? 'wx' : 'w' }),
   stdin: readStdin,
   tty: process.stdout.isTTY === true,
 }
@@ -430,6 +431,16 @@ function messageId(value: string | undefined, what = 'message ID'): string {
   return id
 }
 
+/** Characters that change how a name reads without showing: invisible formatting (bidi overrides, zero-width), and line and paragraph separators. */
+const INVISIBLE = /[\p{Cf}\u2028\u2029]/gu
+
+/** A download that would replace a file, which only a path given to download may. */
+const exists = (path: string) =>
+  usage(`${path} is already here, and download keeps it: give download a path to save the attachment elsewhere.`, {
+    reason: 'file_exists',
+    next: [{ instruction: 'Save it under another name', argv: [...cli(), 'download', '<ID>', '<PATH>'] }],
+  })
+
 /** A file over what a direct upload takes. */
 const tooLarge = (path: string) =>
   new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't attach ${path}. It's over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be.` })
@@ -442,6 +453,28 @@ const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value
 
 /** A message's ID as it's passed back: bare when it goes bare, `#<id>` when it could be a channel's name. */
 const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
+
+/**
+ * A thread's replies as `--after` and `--label` narrow them, from the replies its read answered: those after the
+ * message `--after` names, which is one of the thread's, and those that wear every `--label`, or whose root does.
+ */
+function narrowedReplies(thread: { message: MessageView; replies: MessageView[] }, cut: { after: boolean }): MessageView[] {
+  let replies = thread.replies
+  if (flags.after !== undefined) {
+    const id = flags.after.replace(/^#/, '')
+    const at = [thread.message, ...replies].findIndex((message) => message.id === id)
+    // A board asked for the replies after it answered them alone: one from before that answers the whole thread, cut here.
+    if (at === -1 && cut.after) throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+    if (at !== -1) replies = replies.slice(at)
+  }
+  const labels = (flags.label ?? []).map((label) => {
+    const eq = label.indexOf('=')
+    return eq === -1 ? { key: label, values: null } : { key: label.slice(0, eq), values: label.slice(eq + 1).split('|') }
+  })
+  const wears = (message: MessageView, { key, values }: (typeof labels)[number]) =>
+    Object.hasOwn(message.labels, key) && (values === null || values.includes(message.labels[key]!))
+  return replies.filter((reply) => labels.every((label) => wears(reply, label) || wears(thread.message, label)))
+}
 
 /** `--if-revision N`, as an edit or a delete takes it. */
 function ifRevision(): { revision?: number } {
@@ -1306,11 +1339,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         } else out(created ? `created ${channel.path}` : `${channel.path} already exists`)
         return 0
       }
-      if (sub !== undefined && sub !== 'list') throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
-      if (rest.length > 0) throw usage(`channels list takes no arguments: ${rest[0]} is one too many.`)
-      const channels = await client().channels()
-      if (flags.json) return result({ channels }), 0
-      if (channels.length === 0) return out('no channels yet'), 0
+      // What isn't `list` or `create` is the prefix of a list, `channels dev/`: with more after it, a command there isn't.
+      if (sub !== undefined && sub !== 'list' && rest.length > 0) throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
+      const [prefix, extra] = sub === 'list' ? rest : args
+      if (extra !== undefined) throw usage(`channels list takes one prefix: ${extra} is one too many.`)
+      if (flags.limit !== undefined && !(/^[1-9]\d*$/.test(flags.limit) && Number(flags.limit) <= CHANNELS_LIMIT_MAX)) throw usage(`--limit takes 1 to ${CHANNELS_LIMIT_MAX} channels, and ${flags.limit} isn't one.`)
+      const listed = await client().channels({ ...(prefix !== undefined ? { prefix } : {}), ...(flags.limit !== undefined ? { limit: Number(flags.limit) } : {}), ...(flags.after !== undefined ? { after: flags.after } : {}) })
+      if (flags.json) return result({ channels: listed.channels, next: listed.next }), 0
+      // A page comes in the board's order: shown by path, so the ones under one prefix are together.
+      const channels = [...listed.channels].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      if (channels.length === 0) return out(prefix === undefined && flags.after === undefined ? 'no channels yet' : `no channels${prefix !== undefined ? ` under ${prefix}` : ''}${flags.after !== undefined ? ' after that page' : ''}`), 0
       let group = ''
       for (const channel of channels) {
         const prefix = channel.path.includes('/') ? channel.path.slice(0, channel.path.lastIndexOf('/') + 1) : ''
@@ -1327,6 +1365,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           : ''
         out(`${prefix ? '  ' : ''}${channel.path}${counted}`)
       }
+      // A page that isn't the last says how to read the next.
+      if (listed.next !== null) out(`\n(more not shown: ${commandLine(rerunWithout(['--after'], '--after', listed.next))})`)
       return 0
     }
 
@@ -1343,15 +1383,25 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // A platform's link to a message (a Slack permalink, a GitHub comment) reads the board's thread it synced.
       const link = target !== undefined && /^https?:\/\//i.test(target)
       if (target && (link || isMessageRef(target))) {
-        const thread = link ? await board.linked(target) : await board.thread(messageId(target))
+        // A thread is read whole: what finds threads doesn't narrow one, and it's said before anything is read.
+        const across = (['by', 'text', 'mentions', 'source', 're', 'before'] as const).find((name) => flags[name] !== undefined)
+        if (across !== undefined) throw usage(`Can't use --${across} on one thread. It's read whole: --after and --label narrow its replies.`)
+        // A board reads the replies after a message itself, so a long thread isn't read whole for its last few.
+        const after = !link && flags.after !== undefined ? flags.after.replace(/^#/, '') : undefined
+        const thread = link
+          ? await board.linked(target)
+          : await board.thread(messageId(target), after !== undefined && isMessageRef(after) ? { after: messageId(after) } : {}).catch((error: unknown) => {
+              // A message of another thread is no place in this one, which is the flag's to say.
+              if (error instanceof BoardError && error.status === 400 && /isn't a message of this thread/.test(error.message))
+                throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+              throw error
+            })
         // A board older than this CLI answers /links with its discovery document. Its 404 stays: a
         // current board's means the link isn't one it synced.
         if (link && !Array.isArray((thread as { replies?: unknown }).replies)) throw outdated("This board can't read links.")
-        // With filters, the root and only the replies that match them.
-        const narrowed = Object.keys(filters()).length > 0
-        const replies = narrowed
-          ? (await board.messages({ ...filters(), re: thread.message.id, limit: 500 })).messages.filter((m) => m.re !== null)
-          : thread.replies
+        // What narrows it is narrowed here, from the replies it came with.
+        const narrowed = flags.after !== undefined || (flags.label?.length ?? 0) > 0
+        const replies = narrowed ? narrowedReplies(thread, { after: link || after === undefined || !isMessageRef(after) }) : thread.replies
         if (flags.json) return result({ ...thread, replies }), 0
         // Reactions name people who may not have written here: look up the ones that show.
         const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
@@ -1367,11 +1417,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 0
       }
       const limit = flags.limit ? Number(flags.limit) : THREADS_LIMIT_DEFAULT
-      // One thread more than asked for, where a read lists that many, tells whether the page is all of them.
-      // Not for --json, which is the board's page as it answered, its `older` included: that pages back
-      // from the last thread the board listed, which would be the one more, never shown.
-      const peek = !flags.json && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
-      const query = { ...filters(target), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
+      if (flags.before !== undefined && flags.after !== undefined) throw usage("Can't use --before with --after. One pages back, the other reads forward.")
+      // A read of one channel's threads as they are is the one a board pages back, by the `older` its page answers:
+      // it's asked for the page as shown, so that `older` goes on from the last thread listed.
+      const paged = target !== undefined && !target.endsWith('/') && Object.keys(filters()).length === 0
+      // Otherwise one thread more than asked for, where a read lists that many, tells whether the page is all of
+      // them. Not for --json, which is the board's page as it answered.
+      const peek = !paged && !flags.json && flags.before === undefined && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
+      const query = { ...filters(target), ...(flags.before !== undefined ? { before: flags.before } : {}), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
       const old = outdated("This board can't list threads.")
       // Only a board's own "no route" is one without the route: any other 404 says what it is.
@@ -1379,12 +1432,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         throw error instanceof BoardError && error.status === 404 && /^no route: /.test(error.message) ? old : error
       })
       if (!Array.isArray((listed as { threads?: unknown }).threads)) throw old
-      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest.
-      const more = listed.threads.length > limit || (!peek && listed.threads.length === limit)
+      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest. A page asked for
+      // as shown says itself whether there are more, by its `older`. One asked for a thread more doesn't: its `older`
+      // is past the thread it left out.
+      const older = !peek && typeof listed.older === 'string' ? listed.older : undefined
+      const more = peek ? listed.threads.length > limit : listed.older === null ? false : older !== undefined || listed.threads.length === limit
       const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
       if (!page.threads.length && target) {
-        const channels = (await board.channels()).map((c) => c.path)
+        // Every channel, a page at a time: a name close to the one typed could be any of them.
+        const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
           const guess = closest(target, channels)
           throw new Failed({
@@ -1407,8 +1464,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const handles = new Map(unnamed.length ? (await client().actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, a.handle]) : [])
         out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
       }
-      // A page that isn't all of them says where the rest are. Without --after, they're older: a bigger
-      // --limit reaches them. After a cursor, they're newer than the page, and its cursor is past them
+      // A page that isn't all of them says where the rest are. Without --after, they're older: --before the
+      // page's `older` reaches them where the board answered one, and a bigger --limit where it didn't. After
+      // a cursor, they're newer than the page, and its cursor is past them
       // too: what reads on is --after the newest message of the page's last thread, the latest active.
       // With a filter on messages, a board may place a thread by its newest match, which its summary
       // doesn't show (`last` is its latest reply, whoever wrote it), so nothing on the page says where
@@ -1418,15 +1476,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const byMessage = ['re', 'by', 'mentions', 'from', 'text'].some((key) => key in query)
         if (!byMessage) out(`\nmore since then: ${commandLine(rerunWithout(['--after'], '--after', (latest.last ?? latest.message).id))}`)
         else if (limit < THREADS_LIMIT_MAX) out(`\nmore since then: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))}`)
-        else out(`\n(more not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`)
+        else out(`\n(more not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label)`)
         return 0
       }
       if (more)
         out(
-          limit < THREADS_LIMIT_MAX
-            ? `\n(older not shown: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))})`
-            : `\n(older not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`,
+          older !== undefined
+            ? `\n(older not shown: ${commandLine(rerunWithout(['--before'], '--before', older))})`
+            : limit < THREADS_LIMIT_MAX
+              ? `\n(older not shown: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))})`
+              : `\n(older not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so read one channel and page back with --before, or narrow it with --label)`,
         )
+      // A page back from one isn't where the board is now: only a read of the latest says what's new since.
+      if (flags.before !== undefined) return 0
       // The cursor is where this read stopped: the next command is the one that reads on from it.
       // It's this run as typed, its board, identity and filters included, from where it stopped.
       out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)
@@ -1762,8 +1824,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (args[1] === '-') return io.write(data), 0
       const disposition = response.headers.get('content-disposition') ?? ''
       const filename = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
-      const path = args[1] ?? basename(filename ? decodeURIComponent(filename) : id)
-      await io.writeFile(path, data)
+      // Whoever posted the file chose its name: saved by it, it never lands as a dotfile or replaces a file.
+      const saveAs = basename(filename ? decodeURIComponent(filename) : id)
+        .replace(INVISIBLE, '')
+        .replace(/^[.\s]+/, '')
+      const path = args[1] ?? (saveAs || id)
+      try {
+        await io.writeFile(path, data, { exclusive: args[1] === undefined })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          throw exists(path)
+        }
+        throw error
+      }
       if (flags.json) result({ attachment: { id }, path, outcome: 'downloaded' })
       else out(path)
       return 0
@@ -1814,7 +1887,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const stop = stopOn(controller)
       try {
         for await (const event of client().events(
-          { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+          { ...filters(args[0]), ...(flags.all ? { all: true } : {}), ...(flags.last !== undefined ? { last: Number(flags.last) } : {}) },
           { signal: controller.signal },
         ))
           if (flags.json) line(event)
@@ -2173,7 +2246,7 @@ async function tasks(args: string[]): Promise<number> {
     })
     // Nothing in a channel that doesn't exist is a typo, of a channel or of what to do.
     if (page.tasks.length === 0 && verb && flags.after === undefined) {
-      const channels = (await board.channels()).map((c) => c.path)
+      const channels = (await everyChannel(board)).map((c) => c.path)
       // `work/` is `work` and what's under it: the channel itself is enough for it to be there.
       const name = verb.replace(/\/$/, '')
       if (!channels.some((path) => path === name || path.startsWith(`${name}/`))) {

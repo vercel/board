@@ -65,9 +65,9 @@ function fakeBoard(threads: () => { root: MessageView; replies: MessageView[] }[
       const { createdAt, id } = active(shown.at(-1) ?? listed[0] ?? { root: message(0), replies: [] })
       return options.paged === false ? page : { ...page, older: listed.length > limit ? JSON.stringify({ createdAt, id }) : null }
     },
-    async messages({ limit }): Promise<MessagesPage> {
+    async messages(): Promise<MessagesPage> {
       reads.messages++
-      return { messages: (options.messages ?? []).slice(-limit), cursor: 'c' }
+      return { messages: options.messages ?? [], cursor: 'c' }
     },
     async thread() {
       reads.thread++
@@ -181,6 +181,9 @@ describe("the inspector's channel view", () => {
       ['1', ['2']],
       ['3', []],
     ])
+    // Its newest messages are all the view has: a channel's messages page forward only, so there's no page before them.
+    expect([old.view.hasOlder('ops'), await old.view.older('ops')]).toEqual([false, false])
+    expect(old.reads).toEqual({ threads: [undefined], messages: 1, thread: 0 })
   })
 
   it('keeps a live post in a channel named like a built-in, and the rest of its batch', async () => {

@@ -344,8 +344,9 @@ describe('messages', () => {
     await julian('POST', '/messages', { channel: 'www/staging', text: 'two' })
     await ada('POST', '/messages', { channel: 'docs', text: 'hey @julian' })
 
+    // Every post here starts a thread, so the threads a filter finds are the messages that match it.
     const texts = async (query: string) =>
-      (await julian('GET', `/messages?${query}`)).body.messages.map((m: { text: string }) => m.text)
+      (await julian('GET', `/threads?${query}`)).body.threads.map((t: { message: { text: string } }) => t.message.text)
     expect(await texts('channel=www/')).toEqual(['one', 'two'])
     expect(await texts('label=status=open')).toEqual(['one'])
     // Julian has written, so Ada's handle for him is stored as the mention of him it is.
@@ -363,8 +364,9 @@ describe('messages', () => {
     for (const text of ['@Julian look', 'over to @julian/claude', 'cc @[vercel:user:julian]', 'cc @[vercel:user:julian+claude]', 'ask @[Grace@acme.com]', 'run `@julian`', '@juliana hi'])
       await ada('POST', '/messages', { channel: 'docs', text })
 
+    // Every post here starts a thread, so the threads a filter finds are the messages that match it.
     const texts = async (as: typeof julian, mentions: string) =>
-      (await as('GET', `/messages?channel=docs&mentions=${encodeURIComponent(mentions)}`)).body.messages.map((m: { text: string }) => m.text)
+      (await as('GET', `/threads?channel=docs&mentions=${encodeURIComponent(mentions)}`)).body.threads.map((t: { message: { text: string } }) => t.message.text)
     // A handle that names one actor was stored as a mention of them, the same as their ID written out.
     const [byHandle, agentByHandle] = ['@[vercel:user:julian] look', 'over to @[vercel:user:julian+claude]']
     // A person is everyone they are: their handle and ID, and their agents'.
@@ -389,16 +391,19 @@ describe('messages', () => {
     await julian('POST', '/messages', { channel: 'prs', text: 'PR #2: Draft', labels: { pr: 'vercel/board#2', state: 'draft' } })
     await julian('POST', '/messages', { channel: 'prs', text: 'no labels here' })
 
+    // The threads with a message that matches, each by its root.
     const texts = async (query: string) =>
-      (await julian('GET', `/messages?${query}`)).body.messages.map((m: { text: string }) => m.text)
-    // A key alone; a root's label reaches its replies.
-    expect(await texts('label=pr')).toEqual(['PR #1: Add filters', 'Looks FLAKY to me', 'PR #2: Draft'])
-    expect(await texts(`label=${encodeURIComponent('pr=vercel/board#1')}`)).toEqual(['PR #1: Add filters', 'Looks FLAKY to me'])
+      (await julian('GET', `/threads?${query}`)).body.threads.map((t: { message: { text: string } }) => t.message.text)
+    // A key alone.
+    expect(await texts('label=pr')).toEqual(['PR #1: Add filters', 'PR #2: Draft'])
+    expect(await texts(`label=${encodeURIComponent('pr=vercel/board#1')}`)).toEqual(['PR #1: Add filters'])
     expect(await texts(`label=${encodeURIComponent('state=open|draft')}&text=pr%20%23`)).toEqual(['PR #1: Add filters', 'PR #2: Draft'])
-    expect(await texts('label=pr&text=flaky')).toEqual(['Looks FLAKY to me'])
+    // A root's label reaches its replies: the reply that says it wears none of its own.
+    expect(await texts('label=pr&text=flaky')).toEqual(['PR #1: Add filters'])
+    expect(await texts('label=state=draft&text=flaky')).toEqual([])
     expect(await texts('from=board&text=no%20labels')).toEqual(['no labels here'])
     expect(await texts('from=slack')).toEqual([])
-    expect((await julian('GET', '/messages?label=Bad=1')).status).toBe(400)
+    expect((await julian('GET', '/threads?label=Bad=1')).status).toBe(400)
   })
 })
 

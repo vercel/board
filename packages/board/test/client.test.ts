@@ -187,9 +187,9 @@ describe('board() with no backend', () => {
     // fetch's credentials in place of the deployment's: Ada, reading the same board.
     const ada = board({ name: 'security', fetch: as(api, 'user:u_ada') })
     expect((await ada.me()).principal).toBe('vercel:user:u_ada')
-    expect((await ada.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from pong'])
+    expect((await ada.channel('dev').messages()).messages.map((m) => m.text)).toEqual(['from pong'])
     // Without a name, the team's default board, where nothing was posted.
-    expect((await board().messages({ channel: 'dev' })).messages).toEqual([])
+    expect((await board().channel('dev').messages()).messages).toEqual([])
   })
 
   it('is http() to the board BOARD_URL names, as the token holder with its profile, and sends it no credentials meant for Vercel', async () => {
@@ -354,7 +354,7 @@ describe('the audience a handle mints a token for, in Node', () => {
     }) as typeof globalThis.fetch
     const handle = against(flaky)
     await expect(handle.channels()).rejects.toMatchObject({ code: 'no_board' })
-    await expect(handle.channels()).resolves.toEqual([])
+    await expect(handle.channels()).resolves.toMatchObject({ channels: [] })
     expect(asked).toEqual([EVIL])
     expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
   })

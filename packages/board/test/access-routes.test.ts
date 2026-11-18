@@ -41,12 +41,13 @@ const WALK: Record<RouteName, Walk> = {
   actors: () => [
     { method: 'GET', path: '/actors', status: 200, check: (body) => expect(body.actors.map((a: any) => a.handle)).not.toContain('keeper') },
   ],
-  messages: ({ secret }) =>
+  // One channel by its whole name: what it can't read is as empty as what isn't there.
+  channelMessages: () =>
+    ['?channel=secret', '?channel=secret/never-posted', '?channel=secret&limit=1'].map((query) => ({ method: 'GET', path: `/messages${query}`, status: 200, check: nothingFrom('messages') })),
+  threads: ({ secret }) =>
     ['', '?channel=secret', '?channel=secret/', `?re=${secret.root}`, '?by=keeper', '?label=private', '?text=hush', '?mentions=keeper'].map(
-      (query) => ({ method: 'GET', path: `/messages${query}`, status: 200, check: nothingFrom('messages') }),
+      (query) => ({ method: 'GET', path: `/threads${query}`, status: 200, check: nothingFrom('threads') }),
     ),
-  threads: () =>
-    ['', '?channel=secret', '?label=private'].map((query) => ({ method: 'GET', path: `/threads${query}`, status: 200, check: nothingFrom('threads') })),
   events: () => [
     { method: 'GET', path: '/events?after=0', status: 200, check: nothingFrom('events') },
     {

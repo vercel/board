@@ -61,7 +61,7 @@ describe("a host's authenticate", () => {
     const tenant = hosted('team_a')
     for (const token of [await personToken(), await deploymentToken('board', PROJECT_ID)]) {
       const call = caller(tenant.fetch, token)
-      expect((await call('GET', '/messages')).status).toBe(404)
+      expect((await call('GET', '/threads')).status).toBe(404)
       expect((await call('POST', '/messages', { channel: 'dev', text: 'hi' })).status).toBe(404)
     }
   })
@@ -113,7 +113,7 @@ describe("a host's authenticate", () => {
     const deploy = caller(tenant.fetch, 'pt_deploy')
     expect((await deploy('POST', '/messages', { channel: 'feedback/app', text: 'from the app' })).status).toBe(201)
     expect((await deploy('POST', '/messages', { channel: 'dev', text: 'elsewhere' })).status).toBe(403)
-    expect((await deploy('GET', '/messages')).body.messages).toEqual([])
+    expect((await deploy('GET', '/threads')).body.threads).toEqual([])
   })
 
   it("keeps two tenants' boards apart", async () => {
@@ -121,9 +121,9 @@ describe("a host's authenticate", () => {
     const b = hosted('team_b')
     await caller(a.fetch, 'pt_ada')('POST', '/messages', { channel: 'dev', text: 'team a only' })
     const bob = caller(b.fetch, 'pt_bob')
-    expect((await bob('GET', '/messages')).body.messages).toEqual([])
+    expect((await bob('GET', '/threads')).body.threads).toEqual([])
     // Ada's credentials don't open team b's board.
-    expect((await caller(b.fetch, 'pt_ada')('GET', '/messages')).status).toBe(404)
+    expect((await caller(b.fetch, 'pt_ada')('GET', '/threads')).status).toBe(404)
   })
 
   it('rejects with the Response it throws, and fails on a principal that breaks the ID scheme', async () => {
@@ -143,21 +143,21 @@ describe("a host's authenticate", () => {
       url: BOARD_URL,
       authenticate: () => ({ id: 'ada+pi', kind: 'person', handle: 'ada' }),
     })
-    expect((await caller(malformed.fetch, 'x')('GET', '/messages')).status).toBe(500)
+    expect((await caller(malformed.fetch, 'x')('GET', '/threads')).status).toBe(500)
     // `]` would end an exact mention, `@[<actor id>]`, so nobody could mention it.
     const unmentionable = board({
       store: memory(),
       url: BOARD_URL,
       authenticate: () => ({ id: 'vercel:user:a]b', kind: 'person', handle: 'ada' }),
     })
-    expect((await caller(unmentionable.fetch, 'x')('GET', '/messages')).status).toBe(500)
+    expect((await caller(unmentionable.fetch, 'x')('GET', '/threads')).status).toBe(500)
 
     const expired = board({
       store: memory(),
       url: BOARD_URL,
       authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', expiresAt: new Date(0) }),
     })
-    expect((await caller(expired.fetch, 'x')('GET', '/messages')).status).toBe(401)
+    expect((await caller(expired.fetch, 'x')('GET', '/threads')).status).toBe(401)
   })
 
   it("recognizes a page's own session from its headers, with no token", async () => {

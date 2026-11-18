@@ -110,7 +110,7 @@ describe('the CLI on a board that runs a sync', () => {
     const julian = caller(synced.fetch, await personToken('u_julian', url))
     let root = ''
     await vi.waitFor(async () => {
-      root = (await julian('GET', '/messages?channel=firehose&text=checkout')).body.messages[0]?.id
+      root = (await julian('GET', '/threads?channel=firehose&text=checkout')).body.threads[0]?.message.id
       expect(root).toBeTruthy()
     })
     const read = await on(['read', 'https://acme.slack.com/archives/C1/p1727000000123456'])

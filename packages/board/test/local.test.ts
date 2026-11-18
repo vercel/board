@@ -41,7 +41,7 @@ describe('local()', () => {
         ['skipped', 'lets a member grant on a pattern after a lock under it'],
         ['skipped', 'lets a project on another team in, in its environments'],
       ])
-      expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+      expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'search', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     } finally {
       await team.close()
     }
@@ -64,7 +64,7 @@ describe('local()', () => {
 
     // Another process, by the same name in another case: the same board, its file included.
     const again = open('SECURITY')
-    expect((await again.team.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys'])
+    expect((await again.team.channel('dev').messages()).messages.map((m) => m.text)).toEqual(['rotate the keys'])
     expect(await (await again.team.download(posted.attachments[0]!.id)).text()).toBe('pixels')
     await again.backend.close()
   })
@@ -92,7 +92,7 @@ describe('local()', () => {
     }
     for (const name of names) {
       const backend = local({ dir })
-      expect((await board({ backend, name }).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual([`only on ${name}`])
+      expect((await board({ backend, name }).channel('dev').messages()).messages.map((m) => m.text)).toEqual([`only on ${name}`])
       await backend.close()
     }
     expect((await readdir(dir)).filter((file) => file.endsWith('.db')).length).toBe(3)
@@ -121,10 +121,10 @@ describe('local()', () => {
     await board({ backend: acme, team: 'acme', name: 'security' }).post('dev', 'from acme')
     await acme.close()
     const ours = local({ dir })
-    expect((await board({ backend: ours, name: 'security' }).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from acme'])
+    expect((await board({ backend: ours, name: 'security' }).channel('dev').messages()).messages.map((m) => m.text)).toEqual(['from acme'])
     await ours.close()
     const other = local({ dir })
-    expect((await board({ backend: other, team: 'acme' }).messages({ channel: 'dev' })).messages).toEqual([])
+    expect((await board({ backend: other, team: 'acme' }).channel('dev').messages()).messages).toEqual([])
     await other.close()
     expect((await readdir(dir)).filter((name) => name.endsWith('.db')).sort()).toEqual(['local.db', 'security.db'])
   })
@@ -136,8 +136,8 @@ describe('local()', () => {
     try {
       const team = board({ backend: local({ memory: true }) })
       await team.post('dev', 'only here')
-      expect((await team.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['only here'])
-      expect((await board({ backend: local({ memory: true }) }).messages({ channel: 'dev' })).messages).toEqual([])
+      expect((await team.channel('dev').messages()).messages.map((m) => m.text)).toEqual(['only here'])
+      expect((await board({ backend: local({ memory: true }) }).channel('dev').messages()).messages).toEqual([])
       expect(await readdir(dir)).toEqual([])
     } finally {
       process.chdir(cwd)

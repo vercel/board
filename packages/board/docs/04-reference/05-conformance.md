@@ -113,15 +113,13 @@ The whole protocol, on every board:
 - **An edit or a delete at a `revision`** lands only while the message is at
   it, which reactions and labels leave as it is: of three edits racing at one
   revision, one lands, and an edit from before a delete is a conflict too.
-- **A label matches on the message or its thread's root.**
 - **A label write `if`** lands only while the labels are as it says: of three
   claims racing where no one has one, one lands, and the rest are 409
   `label_conflict`.
-- **`after` takes a cursor or a message ID,** and reads oldest first.
+- **One channel's messages** read oldest first, after a cursor a read of the
+  channel answered, and its newest by a `limit`. Reading on from a page's
+  cursor repeats nothing and skips nothing.
 - **Threads** come with their reply count and latest reply.
-- **`text` matches anywhere in a message's own text,** in any case, with `%`
-  and `_` as themselves: a reply isn't found by its root's text, its thread is
-  found by the reply's, and an edited message by what it says now.
 - **Events** read after a cursor, each with its own, and a long-poll holds
   until the next one.
 - **A delete leaves a tombstone.**
@@ -147,6 +145,7 @@ Then the rest, a group each in the report:
 
 | Group | Check |
 | --- | --- |
+| `search` | finds threads by `text` anywhere in a message of theirs, in any case, with `%` and `_` as themselves: a thread is found by a reply's text, and by what an edited message says now; and lists the threads of every channel under a pattern (`conformance/`) at once |
 | `paging` | posts three threads, reads the channel's latest two, then pages back by each page's `older` until it's `null`, and finds each thread once, its own three included; and refuses `before` with `after` (400 `invalid_request`). Skipped on a board whose pages have no `older` |
 | `schedules` | schedules a reply a day out, lists it, and cancels it; and keeps a schedule's `noSync`, so its sends stay off every platform |
 | `tasks` | starts a thread as a task and makes one of a thread that was there: its root reads with `task`, whose `by` is the actor that made it one, a reply lands in its thread, `board.task=ready` finds it, and `GET /tasks` lists it. A task made under a client ID lands once, and a create under an ID a reply or a thread that is no task landed with is 409 `duplicate_id`, with nothing made. Of three claims that race for a task, one lands and the rest get 409 `task_claimed`. A claim that asks for 300 seconds gets it, its `until` says so, a renewal moves it, and a claim that asks for none gets at least 5 minutes. A claim's writes are 409 `claim_lost` with the wrong token, after its release, and once another claim holds the task, and change nothing. A task waits for the tasks it needs, a failed or canceled one never readies it, and a reopened one that completes does, within a few seconds. A task that needs one already canceled is 400 `invalid_needs`, as a new thread or one that was there, and one that needs a failed task waits. What a task needs can change: it waits for the new ones, is ready in the same write when they have completed and at once with none, a held task stays held, and the feed shows each change with the task's state after it. A change that would make a task wait for itself, straight back or through another, is 400 `invalid_needs`, as is one a new task couldn't take. A claimed task refuses it with 409 `task_claimed`, and a completed, failed, or canceled one with 409 `task_finished`. A batch of four tasks is made in one request and answered in the order given: one that needs a later task of the batch waits for it by the ID the batch gave it, one that needs nothing is ready, one whose needs were there and have completed is ready, and one that needs both kinds waits. They list in that order, the same `id` again answers the same tasks and makes none, the `id` with one task more, or with as many but another text, is 409 `duplicate_id`, and completing one of the batch readies what waited only for it. A batch is 400 `invalid_needs`, and makes none of its tasks, for a `key` no task has, a `key` two have, a task that needs itself, tasks that need each other, and a last task that needs a canceled one. `GET /tasks?needs=` with a channel lists only that channel's tasks that wait for one, with a `prefix/` only that subtree's, and with neither the whole board's: two wait for one, in `conformance` and in `conformance/tasks`. Skipped for a token that can't post there. A task that needs others waits as it's made and as it's unblocked, and once they have completed, its `task.ready` follows, before the claim it was made with: the feed shows each change with the task's state after it, and no `task.ready` for a task that needs none. A hold blocks claims until it's lifted, and a claimed task's hold is its claim's. A task assigned to a profile is claimed only as that actor. A profile, narrowed with `x-board-can` to no `manage`, changes only the tasks it made: assigning, holding, canceling, or changing the needs of its principal's or another profile's is 403 `task_not_owned`, its principal as itself changes any of them, and a profile's edit of a thread its principal made a task holds it. Skipped for a run that can't send headers, or that writes as a profile. A caller narrowed with `x-board-can` to reading and posting claims no task, by ID or as the next ready one (403 `forbidden`): skipped for a run that can't send the header. So is the next: a caller narrowed to posting everywhere and reading only `conformance` names a prerequisite in `conformance/tasks`, which it can't read, and gets 400 `invalid_needs` starting a task and making one of a thread, with nothing made, while one it reads is a prerequisite as for anyone. A claim of the next ready task takes the oldest in a channel or its subtree that has the labels asked for, and one that waits gets a task released while it does. A feed filtered on `board.task=ready` shows a task become ready and get claimed, with no token in it. A label write or a post that sets a label under `board.` is 400 `reserved_label`. A label write holds on `board.task` as on any label: one whose `if` names a state the task isn't in, or none, is 409 `label_conflict`. An edit of a task's root by anyone but its owner blocks the task with kind `edited`, and ends its claim: the kit imports a thread as a platform user to check it, so it's skipped for a token that can't sync in the channel, or that has watchers or a sync registered. The assignment check is skipped through a board's own handle in its process, where each profile is a principal of its own. It waits out no lease, and has one principal: what a second one may claim or change isn't checked |
@@ -158,10 +157,12 @@ Then the rest, a group each in the report:
 
 Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
-schedules, tasks, grants, schemas, or files, and say so: one that answers
-one of those groups' checks with a 501 has it skipped, `not kept here`, with
-what the board said. A board that's meant to keep them and doesn't yet answers
-otherwise, and fails.
+schedules, tasks, grants, schemas, or files, and no index to find threads by
+(`search`), and say so: one that answers one of those groups' checks with a
+501 has it skipped, `not kept here`, with what the board said. A board that's
+meant to keep them and doesn't yet answers otherwise, and fails.
+Vercel's board keeps no search index, and lists threads one channel at a
+time: both `search` checks are skipped there, with its own words for each.
 Vercel's API reads who writes as boards did before, so a run there fails two
 core checks until it reads `x-board-profile` as a structured header and its
 avatar from there alone: the profile it shows is the whole header, and the
@@ -180,7 +181,7 @@ under a lock, and grants across teams aren't specified yet.
 ```ts
 type ConformanceReport = {
   url: string
-  checks: { group: 'core' | 'paging' | 'schedules' | 'tasks' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
+  checks: { group: 'core' | 'paging' | 'search' | 'schedules' | 'tasks' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
   ok: boolean // nothing failed
 }
 ```

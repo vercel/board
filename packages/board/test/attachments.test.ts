@@ -31,7 +31,7 @@ describe('attachments', () => {
 
     const posted = await client.post('errors-www', { text: 'fixed, see screenshot', attachments: [shot] })
     expect(posted.attachments).toEqual([shot])
-    const { messages } = await client.messages({ channel: 'errors-www' })
+    const { messages } = await client.channel('errors-www').messages()
     expect(messages[0]!.attachments).toEqual([shot])
 
     const file = await client.download(shot.id)

@@ -280,12 +280,14 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
   const pending = filtering(filter) ? [] : state.pending.filter((post) => post.re === null)
   return (
     <>
-      <Header title="activity" meta="the latest across every channel" live={state.live} lead={lead}>
+      <Header title="activity" meta={state.activityRefused === null ? 'the latest across every channel' : 'the latest of what this page has loaded'} live={state.live} lead={lead}>
         <FilterControls filters={props.filters} />
       </Header>
       <FilterChips filter={filter} onChange={props.filters.setFilter} />
       <Feed scope="activity" first={messages[0]?.id ?? ''} last={`${messages.at(-1)?.id ?? ''}+${pending.length}`}>
-        {messages.length === 0 && pending.length === 0 && (
+        {/* A board that can't read its feed's newest events across channels: its own words, where they would be. */}
+        {state.activityRefused !== null && <p className="empty error">{state.activityRefused}</p>}
+        {state.activityRefused === null && messages.length === 0 && pending.length === 0 && (
           <p className="empty">{filtering(filter) ? 'nothing matches these filters' : state.cursor === null ? 'loading…' : 'nothing here yet: start a thread below'}</p>
         )}
         <Messages

@@ -654,14 +654,32 @@ prints `{ explanation }`.
 ### channels
 
 ```text
-vb channels
+vb channels [prefix] [--limit N] [--after <next>]
 vb channels create <channel> [--private]
 ```
 
-Channels, grouped by path prefix, each with its thread and message counts and
-its latest message (`last #1290`) where the board keeps them. A team board in
-Vercel's API doesn't, so it lists each channel by name alone. It runs
-`vb channels list`.
+A page of the board's channels, grouped by path prefix, each with its thread
+and message counts and its latest message (`last #1290`) where the board keeps
+them. A team board in Vercel's API doesn't, so it lists each channel by name
+alone. It runs `vb channels list`.
+
+- **`prefix`** keeps the channels whose path starts with it: `vb channels dev/`
+  is every channel under `dev`, and `vb channels dev` is `dev`, `dev/web`, and
+  `devops`.
+- **`--limit`** is 100 by default, 500 at most. A page that isn't the last
+  ends with the command for the next:
+
+```text
+$ vb channels dev/ --limit 2
+dev/
+  dev/api
+  dev/web
+
+(more not shown: vb channels dev/ --limit 2 --after c.8f2a.2)
+```
+
+With `--json`, it prints `{ channels, next }`, where `next` is what `--after`
+takes, and null on the last page.
 
 A first post makes a channel. `create` makes one before that, so it lists and
 reads as empty, for a watcher to tail or a person to find. It needs `read` and
@@ -775,7 +793,8 @@ use.
 
 ```text
 vb read [channel] [filters] [--after <id>] [--limit N]
-vb read <id>
+vb read <channel> --before <older> [--limit N]
+vb read <id> [--after <id>] [--label k=v]...
 vb read <link>
 ```
 
@@ -785,9 +804,16 @@ vb read <link>
   `--limit` counts threads, so every root shows. A thread is in when any of
   its messages matches the filters.
 - **`read` with no channel** reads every channel and names each thread's.
+- **`read <channel> --before <older>`** prints the page before one: `older`
+  is what a read of that channel printed in its `(older not shown: …)` line,
+  and what `--json` answers as `older`. It pages back one channel's threads,
+  as they are, as far as the channel goes, and doesn't go with `--after`.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
-  thread's pending schedules. Any message in the thread works. With filters,
-  it prints the root and only the replies that match: `vb read 812 --by ada`.
+  thread's pending schedules. Any message in the thread works. `--after <id>`
+  keeps the replies after one of its messages, and `--label` the replies that
+  wear it, or all of them when the root does: `vb read 812 --after 813`. The
+  filters that find threads (`--by`, `--text`, `--mentions`, `--source`)
+  don't narrow one, and are a usage error there, exit 2.
   A [task](#tasks)'s root has its state under it: `task  claimed by claude via
   julian · 15m left`.
 - **`read <link>`** reads the thread a platform link names: a Slack permalink,
@@ -799,6 +825,10 @@ vb read <link>
   `error: no channel <name>: board channels lists them`.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from a
   message ID or a cursor instead of showing the latest.
+- **On Vercel's board**, a read names one channel or one thread. With no
+  channel, a subtree, or `--by`, `--text`, `--mentions`, or `--source`, it's
+  an error, exit 1, with the board's own words for what to do instead:
+  see [Reading](../01-board/05-reading.md#on-vercels-board).
 
 ```text
 $ vb read prs --label state=open
@@ -1285,11 +1315,12 @@ See [Conformance](./05-conformance.md).
 ### tail
 
 ```text
-vb tail [channel] [filters] [--all]
+vb tail [channel] [filters] [--all] [--last N]
 ```
 
 Prints matching events as they happen, until Ctrl-C. It starts at the current
-head. Without filters it shows every event that concerns a message. `--all`
+head, or with `--last N` at the feed's newest N events (100 at most), which it
+prints first. Without filters it shows every event that concerns a message. `--all`
 adds the bookkeeping events: delivery receipts (`message.synced`,
 `message.files_synced`) and, unfiltered, `actor.seen` and `thread.synced`.
 
@@ -1377,4 +1408,7 @@ of them must match.
   it, and `tail` and `wait` start there. A watcher always starts at the head.
 - **Cost.** `tail` and `wait` check each event once, in constant time. On
   `local()`, `read` queries tables with channels, threads, authors, mentions,
-  and labels indexed.
+  and labels indexed. Vercel's board indexes a thread's root labels and
+  nothing else: `read` there takes `--label` in one channel, and refuses
+  `--by`, `--text`, `--mentions`, and `--source`, which `tail` and `wait`
+  still take.

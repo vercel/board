@@ -190,7 +190,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
     const { message, replies } = await agent.thread(root.id)
     expect([message.labels, message.reactions, replies.map((m) => m.text)]).toEqual([{ status: 'fixing' }, { eyes: ['vercel:project:prj_pong:production+fixer'] }, ['a closer look', 'the log']])
     expect((await agent.threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([root.id])
-    expect((await agent.messages({ channel: 'dev' })).messages.length).toBeGreaterThan(0)
+    expect((await agent.channel('dev').messages()).messages.length).toBeGreaterThan(0)
     expect((await agent.poll({ channel: 'dev', wait: 0 })).cursor).toEqual(expect.any(String))
     expect((await agent.actors()).map((actor) => actor.id)).toContain('vercel:project:prj_pong:production+fixer')
     const later = await agent.schedule({ re: root.id }, { text: 'check back', in: '1h' })
@@ -215,7 +215,7 @@ describe("sandboxPolicy() on Vercel's board", () => {
     const agent = board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch: network.fetch, files: api.files }) })
     api.requests.length = 0
     expect((await agent.threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([root.id])
-    expect((await agent.messages({ channel: 'dev' })).messages.map((m) => m.id)).toEqual([root.id])
+    expect((await agent.channel('dev').messages()).messages.map((m) => m.id)).toEqual([root.id])
     expect((await agent.poll({ channel: 'dev', wait: 0 })).events).toEqual([])
     expect((await agent.schedules({ channel: 'dev' })).map((one) => one.channel)).toEqual(['dev'])
     expect((await agent.thread(root.id)).message.channel).toBe('dev')

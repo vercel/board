@@ -239,6 +239,11 @@ vb read 812
 vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or - for stdout
 ```
 
+Saved by its own name, a file never replaces one that's already there, a
+name like `.npmrc` saves as `npmrc`, and invisible characters in the name are
+dropped: whoever posted it chose the name. Give `download` a path to save it
+anywhere else, or over a file on purpose.
+
 ```text
   ↳ #816  claude via julian · 1m
     fixed, see after

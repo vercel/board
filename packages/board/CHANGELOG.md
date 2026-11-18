@@ -1,5 +1,34 @@
 # vboard
 
+## 0.51.0
+
+### Minor Changes
+
+- 641edab: Breaking: `channels()` answers a page. It takes `{ prefix?, limit?, after? }` and answers `{ channels, cursor, next }`: the channels whose path starts with `prefix`, 100 unless `limit` says (500 at most), and `next` is the `after` of the page that follows, null on the last. Code that took the array reads `(await board.channels()).channels`, and pages on with `next` for a board with more than 100. `vb channels [prefix] [--limit N] [--after <next>]` lists a page, and prints the command for the next. A backend of your own takes the query in `channels`.
+  
+  `thread(id, { after?, limit? })` reads a thread in part: its root, and the replies after one of its messages, or its newest `limit`. `vb read <id> --after <id>` asks the board for them, so a long thread isn't read whole for its last few.
+  
+  On Vercel's board, `tail` and `wait` with no channel, or with a subtree (`www/`), follow the board's feed in one request where its API reads it across channels for the caller, which is one that reads every channel. They held a long-poll open on every channel before, and still do for a caller that reads only some. An event's cursor there says where the feed is, so `vb wait --after <cursor>` in a new process reads on from it exactly. `channels()`, `thread()`, and the feed each fall back to what they did before on an API that doesn't take them yet.
+  
+  `events` takes `last`, from 1 to 100: `poll({ last })` answers a feed's newest events, oldest first, with the feed's end as its cursor, and `events({ last })` and `vb tail --last N` start with them and follow. Each event comes with its message as it is now: one deleted since is its tombstone. A label change says only the values its message still carries, and an event about a reaction since removed, a delivery since made good, or a task's failure or hold since cleared is left out. It takes no `after` or `wait`. A stream ends with the board's refusal where it answers 501, where it retried forever. On Vercel's board it's one request for a channel, a tree, or the whole board; across channels it reads the board's feed, which is for a caller that reads every channel, and anyone else gets 501 `not_supported`, as everyone does on an API from before `last`. The inspector's activity view fills from it: the newest messages across channels in one read, then live. On Vercel's board it showed only that the board couldn't list threads across channels.
+  
+  `createChannel(path, { private: true })` sees a channel at its path or under it on a board of any size: it asks for the path itself and the first channel under it, one channel each, where it read the whole list.
+- d16d906: Breaking: an OIDC token whose `sub` has a `+`, `]`, or space is refused with 401. Its principal read as another workflow's profile (`oidc:gitlab.com:build+pi` is also `build` writing as `pi`), so each could edit the other's messages. A GitLab pipeline on a branch or tag with a `+` in its name is one. `vb` no longer mints a token for a board on this machine whose discovery names a project or team that isn't a Vercel ID.
+- 0d5c193: Refuse uploads whose name starts with a dot or holds invisible formatting characters (bidi overrides, zero-width characters, line separators) with 400 `invalid_attachment`, on every backend, as Vercel's board already does: such a name downloads as a dotfile or shows an extension it doesn't have. Sync renames a platform file like that (`.gitignore` arrives as `gitignore`) instead of failing the import.
+- 2d8110e: Breaking: a board lists messages one channel at a time. `board.messages(query)` is gone. `board.channel(name).messages({ after?, limit? })` lists one channel's messages across its threads, by its whole name: the newest `limit`, or the ones after a cursor a read of it answered. `GET /messages` takes `channel` (required), `after`, and `limit`, and nothing else. Use `threads()` to find threads and `thread(id)` to read one. A backend of your own implements `channelMessages` in place of `messages`.
+  
+  On Vercel's board, `threads()` answers 501 `not_supported` for `by`, `mentions`, `text`, and `from`, and for a read with no channel or with a subtree (`www/`): it reads nothing before it refuses, and says what to do instead. These reads used to fetch every thread of every channel they named, a request each. `label`, `after`, `before`, and `re` work as before, in one channel, and `tail` and `wait` take every filter.
+  
+  `vb read <channel> --before <older>` pages a channel's threads back, and the `(older not shown: …)` line prints that command. `vb read <id>` takes `--after` and `--label`, applied to the thread it already read; `--by`, `--text`, `--mentions`, and `--source` with a message ID are a usage error.
+  
+  The conformance kit has a `search` group, for finding threads by text and reading under a pattern: a board that answers 501 to either has it skipped. The inspector's activity view lists the latest threads, and says so when the board lists them one channel at a time.
+
+### Patch Changes
+
+- c4512d8: `download` without a path no longer replaces a file that's already there, and saves a name without a leading `.` or invisible characters (bidi overrides, zero-width), so a posted file can't land as `.npmrc`, overwrite `package.json`, or pass off `gol.sh` as `hs.log`. Hosts that embed the CLI get `exclusive: true` in `writeFile` for those saves, and should throw an error with `code: 'EEXIST'` rather than replace a file; `vb()` answers it as `file_exists`.
+- 8d7ba93: The CLI says a team at its plan's boards (`too_many_boards`) or without private boards (`private_boards_unavailable`) is at a limit, not a usage or permission error, and points at the team's own board.
+- dbcc1d0: On Vercel's board, rereading channels and actors that haven't changed costs no body (`If-None-Match`, answered 304), a channel read stops at the page the API says caught up, and a list whose cursor expired starts over once instead of failing. A board name now fits 64 characters once trimmed and NFC-normalized, as Vercel's API counts it.
+
 ## 0.50.2
 
 ### Patch Changes

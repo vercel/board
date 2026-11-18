@@ -19,8 +19,10 @@ import type {
   Me,
   PrincipalInput,
   MatchView,
+  ChannelMessagesQueryInput,
+  ChannelsPage,
+  ChannelsQueryInput,
   MessagesPage,
-  MessagesQueryInput,
   MessageView,
   RegisterInput,
   RegistrationView,
@@ -37,6 +39,7 @@ import type {
   SchemaInput,
   SchemaView,
   ThreadsPage,
+  ThreadQueryInput,
   ThreadsQueryInput,
   ThreadSummaryView,
   ThreadView,
@@ -386,7 +389,7 @@ export function createBoardClient(options: ClientOptions) {
   const filtersQuery = (filters: Filters = {}) => filters
 
   async function poll(
-    query: Filters & { after?: string; wait?: number; all?: boolean } = {},
+    query: Filters & { after?: string; wait?: number; all?: boolean; last?: number } = {},
     signal?: AbortSignal,
   ): Promise<EventsPage> {
     return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
@@ -501,7 +504,15 @@ export function createBoardClient(options: ClientOptions) {
       }),
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
-    channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
+    /**
+     * A page of the board's channels: `prefix` keeps the ones whose path starts with it (`dev/`), `limit` is how many
+     * (100 unless it says, 500 at most), and `after` takes a page's `next`, which is null on the last.
+     */
+    channels: async (query: ChannelsQueryInput = {}) => {
+      const page = await call<Omit<ChannelsPage, 'next'> & { next?: string | null }>('GET', `/channels${queryString(query)}`)
+      // A board from before pages answers them all, and no `next`.
+      return { ...page, next: page.next ?? null }
+    },
     /**
      * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
      * there. `created` is false when it was there already; it's left as it is.
@@ -542,7 +553,12 @@ export function createBoardClient(options: ClientOptions) {
       }
       const before = await reaching()
       if (before.length > 0) throw granted(before)
-      const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      // Only what the lock would close is asked for, a channel each: the path itself, which lists first of the names
+      // that start with it, and the first channel under it. Its siblings (`vault-old` beside `vault`) are never read.
+      // A board from before pages answers every channel to either, and is searched the same.
+      const first = async (prefix: string) =>
+        (await call<{ channels: ChannelView[] }>('GET', `/channels${queryString({ prefix, limit: 1 })}`)).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      const there = (await first(path)) ?? (await first(pattern))
       if (there)
         throw new BoardError(
           'channel_exists',
@@ -588,9 +604,20 @@ export function createBoardClient(options: ClientOptions) {
     },
     actors: async () => (await call<{ actors: (Actor & Pick<ActorView, 'verified'>)[] }>('GET', '/actors')).actors,
 
-    messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
-      call<MessagesPage>('GET', `/messages${queryString(query)}`),
-    thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
+    /**
+     * One channel, by its whole name: a board lists messages a channel at a time, never across channels. Its
+     * `messages()` are the channel's across its threads, oldest first: the newest `limit` (50 without one), or with
+     * `after`, a cursor a read of this channel answered, the ones posted since.
+     */
+    channel: (name: string) => ({
+      messages: (query: Omit<ChannelMessagesQueryInput, 'channel'> = {}) =>
+        call<MessagesPage>('GET', `/messages${queryString({ channel: name, ...query })}`),
+    }),
+    /**
+     * A thread: its root and its replies. `after`, one of its messages, answers the replies after it, and `limit` that
+     * many of them: with `after` the first after it, to read on from, and without, the newest.
+     */
+    thread: (id: string, range: ThreadQueryInput = {}) => call<ThreadView>('GET', `/messages/${path(id)}${queryString(range)}`),
     /** Your own post with the client ID you gave it, as posting it answered: 404 `post_not_found` when there's none. */
     posted: async (id: string) => (await call<{ message: MessageView }>('GET', `/posts/${path(id)}`)).message,
     /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads; `before` takes a page's `older`. */
@@ -839,22 +866,25 @@ export function createBoardClient(options: ClientOptions) {
 
     /** Live events. Reconnects from the last seen index whenever the stream closes, and tells `onState` whether it's live or retrying. */
     async *events(
-      query: Filters & { after?: string; all?: boolean } = {},
+      query: Filters & { after?: string; all?: boolean; last?: number } = {},
       opts: EventsOptions = {},
     ): AsyncGenerator<BoardEventView> {
+      // The feed's newest events (`last`) come first, once: a stream that reconnects goes on from where it was.
+      const { last, ...rest } = query
       let after = query.after
       let failures = 0
       const state = eventsState(opts.onState)
       while (!opts.signal?.aborted) {
         let response: Response
         try {
-          response = await raw('GET', `/events${queryString({ ...filtersQuery(query), after })}`, {
+          response = await raw('GET', `/events${queryString({ ...filtersQuery(rest), ...(after === undefined && last !== undefined ? { last } : {}), after })}`, {
             headers: { accept: 'text/event-stream' },
             ...(opts.signal ? { signal: opts.signal } : {}),
           })
         } catch (error) {
           if (opts.signal?.aborted) return
-          if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+          // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
+      if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
           state.failed()
           await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
           continue

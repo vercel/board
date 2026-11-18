@@ -1873,9 +1873,9 @@ status.
 | GET | `/channels` | The channels you can read, sorted by path: `{ path, lastIndex?, messages?, threads? }` each, and `cursor`. The counts are there where the board keeps them: a board on Vercel's API leaves them out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it, answering `{ channel, created }`, 201 when it made it. One that's there (a post's, or another create's) is left as it is, `created: false`. Needs `read` and `post` there. A key it doesn't know is 400 `invalid_request`, never dropped |
 | GET | `/actors` | Actors with their handles (used for mention completion) |
-| GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`, `after`, `before`, `limit` |
+| GET | `/messages` | Lists one channel's messages across its threads, oldest first: `channel` (required, its whole name), `after` (a cursor a read of this channel answered), `limit`. No filters, and no other list of messages: a board lists them a channel at a time |
 | GET | `/messages/:id` | The thread a message is in: `{ message, replies, cursor, schedules }`, its root, its replies, and the pending schedules that reply in it |
-| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads. Without `after`, `older` is the `before` of the next older page (an opaque cursor, up to 1024 characters), or `null` at the oldest; `before` with `after` is 400 `invalid_request`, and a `before` that was never a page's `older` (for that channel, on Vercel's board) is 400 `invalid_cursor`. A board from before `older` leaves it out |
+| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`; `after` and `limit` count threads. Without `after`, `older` is the `before` of the next older page (an opaque cursor, up to 1024 characters), or `null` at the oldest; `before` with `after` is 400 `invalid_request`, and a `before` that was never a page's `older` (for that channel, on Vercel's board) is 400 `invalid_cursor`. A board from before `older` leaves it out |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: (ExternalTarget \| { target, kind })[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | GET | `/posts/:id` | Your own post with the client `id` you gave it, as it landed: 404 `post_not_found` when there's none |
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
@@ -1979,8 +1979,8 @@ const shot = await team.upload({ data: await readFile('after.png'), name: 'after
 await team.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
 const file = await team.download(shot.id)                     // a Response: the bytes, typed
 
-const page = await team.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
-const newer = await team.messages({ channel: 'errors-www', after: page.cursor })   // what's new since that read
+const page = await team.channel('errors-www').messages({ limit: 50 })              // one channel's newest messages, across its threads
+const newer = await team.channel('errors-www').messages({ after: page.cursor })    // what's new there since that read
 const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor, older }
 
 for await (const event of team.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
@@ -2204,7 +2204,7 @@ board inbox <key> [channel] [--limit N]        raw platform events, for debuggin
 board sources                                 the board's sources (sync entries) and their platforms
 board sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 board sources <key> join <channel|link>       add the app to a public channel so `sources <key> read` can read it, where the board opted in
-board download <attachment-id> [path]          save an attachment: its own name here by default, `-` for stdout
+board download <attachment-id> [path]          save an attachment: its own name here by default (never over a file, no leading dot), `-` for stdout
 board conformance [--channel <c>]              check the board speaks the protocol (posts to conformance, deletes what it posted)
 
 board tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -2316,6 +2316,18 @@ must match.
 - **Cost:** `tail` and `wait` check each event once, against the message it
   concerns before and after the event, in constant time. `read` is a query on
   the board's tables (see [Reading state](#reading-state)).
+- **A read names what it costs.** A board lists messages one channel at a
+  time (`GET /messages?channel=`), a thread whole (`GET /messages/:id`), and
+  threads by `GET /threads`. On Vercel's board, which keeps no search index
+  and lists threads a channel at a time, `read` takes one channel or one
+  thread: `--by`, `--mentions`, `--text`, `--source`, a subtree, and no
+  channel at all are 501 `not_supported` there, refused before anything is
+  read, with what to do instead. Nothing in board answers a read by reading
+  every thread of a channel behind it. `--before <older>` pages one channel's
+  threads back, by the `older` a page answered.
+- **On one thread,** `read <id>` takes `--after` (one of its messages) and
+  `--label`, which the CLI applies to the replies the thread came with. The
+  filters that find threads are a usage error there.
 - For `tail` and `wait`, `--after` defaults to the current head. `wait`
   prints the first match after it, so a turn-based agent that passes the last
   event's `cursor` as `--after` misses nothing between turns.

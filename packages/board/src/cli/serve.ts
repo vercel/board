@@ -136,7 +136,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   }))
   try {
     // Opened now, so a directory it can't write says so before it serves.
-    await team.channels()
+    await team.channels({ limit: 1 })
   } catch (error) {
     server.close()
     throw error

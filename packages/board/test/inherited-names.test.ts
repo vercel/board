@@ -99,7 +99,7 @@ describe('names every object has', () => {
     // A Vercel login's handle is its user ID, which may be one of them.
     const named = caller(fetch, await personToken('constructor'), {})
     expect((await named('POST', '/messages', { channel: 'dev', text: 'hi' })).status).toBe(201)
-    const texts = async (query: string) => (await julian('GET', `/messages?${query}`)).body.messages.map((message: { text: string }) => message.text)
+    const texts = async (query: string) => (await julian('GET', `/threads?${query}`)).body.threads.map((t: { message: { text: string } }) => t.message.text)
     expect(await texts('mentions=vercel:user:constructor')).toEqual(['thanks @constructor', 'cc @[constructor]'])
     expect(await texts('mentions=__proto__')).toEqual(['cc @[__proto__]'])
     expect(await texts('by=constructor')).toEqual(['hi'])

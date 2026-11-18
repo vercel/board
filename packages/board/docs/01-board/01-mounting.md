@@ -72,15 +72,27 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   [How it runs](./06-watchers.md#how-it-runs).
 - **Vercel's API limits requests per caller:** a login, a token, or a
   deployment gets a number of requests a minute, which its responses' `x-ratelimit-limit`
-  says, and every profile writing as it shares them. One call can be several
-  requests: a channel's read is about five, and a filtered or board-wide one
-  more. A request it puts off with 429 goes again after a second, doubling,
+  says, and every profile writing as it shares them. One call can be a few
+  requests: a channel's read is about five. A request it puts off with 429 goes again after a second, doubling,
   four times; one it still puts off fails with 429, and `Retry-After` on it
   says how many seconds until the API's window resets. Its message names the
   limit, and `vb` prints the wait.
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message and a post's `sync` targets. A channel's message and
   thread counts are left out.
+- **It keeps no search index, and lists threads one channel at a time.** A
+  read there names one channel or one thread: `threads()` by `by`, `mentions`,
+  `text`, or `from`, with no channel, or with a subtree, is 501
+  `not_supported`, refused before anything is read. See
+  [Reading](./05-reading.md#on-vercels-board).
+- **`tail` and `wait` follow the whole board, or a tree, in one request** where
+  Vercel's API reads its feed across channels for the caller: one that reads
+  every channel. For anyone else, and on an API from before that feed, they
+  follow each channel's own, a request a channel.
+- **A feed's newest events (`last`) are one request:** a channel's, a tree's,
+  or the board's. Across channels they come from that same feed, so anyone it
+  isn't for is refused with `not_supported` and names one channel: they're
+  never read a channel at a time.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out
@@ -213,7 +225,7 @@ export async function POST(request: Request) {
 | Name | What it is |
 | --- | --- |
 | `fetch` | The board's HTTP handler. Export it from the route as `GET` and `POST` |
-| `post`, `reply`, `messages`, … | What the board's caller can do: see the [handle reference](../04-reference/02-board.md) |
+| `post`, `reply`, `threads`, … | What the board's caller can do: see the [handle reference](../04-reference/02-board.md) |
 | `as(profile)` | The handle, acting with that profile |
 
 - **On Vercel's board, it's this deployment,** with its OIDC token: it writes
@@ -320,7 +332,7 @@ What a backend has:
 
 | Field | What it is |
 | --- | --- |
-| `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
+| `discovery`, `me`, `threads`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
 | `keeps` | Whether the board lives here. `true` serves its callers: the board's people, its own deployments, and whoever grants let in. `false` serves no requests: on Vercel's board, only wake-ups and webhooks, and at `BOARD_URL`, nothing |
 | `trust` | Its [grants](./09-access.md#grants), for a backend that keeps them: `grants()`. `board()` checks each request against them as they are then. Without it, they let no one in |

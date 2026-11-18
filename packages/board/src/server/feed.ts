@@ -1,3 +1,4 @@
+import { carried } from './carried.ts'
 import type { z } from 'zod'
 import type { ActorView, Filters, LinkView, MessageView, BoardEventView, TaskView } from '../api/routes.ts'
 import type { ParsedFilters } from '../api/routes.ts'
@@ -491,6 +492,69 @@ async function start(options: FeedOptions): Promise<number> {
 }
 
 const PAGE = 200
+/** How far back a read of the feed's newest events looks: this many pages of the log. */
+const LAST_PAGES = 10
+
+/**
+ * The newest `last` matching events, oldest first, with the feed's end as the cursor: a poll from it goes on
+ * with what comes next. It looks back a page of the log at a time until it has them, through `LAST_PAGES` at
+ * most, so a filter that matches little on a busy board can answer fewer.
+ */
+export async function lastFeed(options: FeedOptions, last: number, signal: AbortSignal): Promise<{ events: BoardEventView[]; cursor: number }> {
+  const { index: head } = await options.session.state(channelsReducer)
+  let events: BoardEventView[] = []
+  for (let to = head, pages = 0; to >= 1 && events.length < last && pages < LAST_PAGES; pages++) {
+    const from = Math.max(1, to - PAGE + 1)
+    const stretch = (await options.session.history({ gte: from, lte: to })) as BoardEvent[]
+    // Each stretch is read as a feed that starts right before it would be.
+    const feed = new FeedProjection(options)
+    await feed.preload(stretch, from - 1)
+    const found: BoardEventView[] = []
+    for (const event of stretch) {
+      const { view } = await feed.step(event, signal)
+      if (view) found.push(view)
+    }
+    events = [...found, ...events]
+    to = from - 1
+  }
+  return { events: await asNow(options, events.slice(-last), head, signal), cursor: head }
+}
+
+/** What an event's payload says of its message: answered as the message has it now. */
+const CONTENT = ['text', 'blocks', 'attachments', 'links', 'labels'] as const
+
+/**
+ * Events read from the feed's end, each with its message as it is at `head`, not as the event left it: the walk
+ * replays the log, and what was deleted or edited since is no longer the board's to answer. One whose message can't
+ * be read now is left out, and so is one a filter on what messages say found by what it said then.
+ */
+async function asNow(options: FeedOptions, events: BoardEventView[], head: number, signal: AbortSignal): Promise<BoardEventView[]> {
+  const idOf = (event: BoardEventView) => (event.message ? indexOf(event.message.id) : null)
+  const ids = [...new Set(events.flatMap((event) => idOf(event) ?? []))]
+  if (ids.length === 0) return events
+  const now = await options.reads.messagesAt(ids, head, signal)
+  const reader = await options.reads.reader(options.access, now.values())
+  const said = options.filters as { text?: unknown; mentions?: unknown }
+  const byWords = said.text !== undefined || said.mentions !== undefined
+  return events.flatMap((event) => {
+    const id = idOf(event)
+    if (id === null || !event.message) return [event]
+    const current = now.get(id)
+    if (!current || !options.access.readable(current.channel)) return []
+    const message = view(current, options.actors, reader)
+    if (byWords && (message.deleted || message.text !== event.message.text)) return []
+    const payload: Record<string, unknown> = { ...(event.payload as Record<string, unknown>) }
+    for (const key of CONTENT) {
+      if (!(key in payload)) continue
+      const was = payload[key]
+      // An event that kept its attachments by ID answers the IDs the message has now.
+      payload[key] = key === 'attachments' && Array.isArray(was) && was.every((item) => typeof item === 'string') ? message.attachments.map((attachment) => attachment.id) : message[key]
+    }
+    // And with nothing else the message no longer carries: a label's value, a reaction, a hold's reason.
+    const settled = carried({ ...event, payload, message } as BoardEventView)
+    return settled ? [settled] : []
+  })
+}
 
 /**
  * One long-poll: matching events already in the log return at once; otherwise

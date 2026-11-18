@@ -2,27 +2,24 @@ import type { BoardEventView, MessagesPage, ThreadsPage } from '../../api/routes
 import * as store from './store.ts'
 
 // How a channel's view loads: a page of its threads at a time, by latest activity, from the board's
-// thread list. A board whose pages have no `older` is from before it, and its channels load by
-// messages, as they did.
+// thread list. A board whose pages have no `older` is from before it, and its channels show their
+// newest messages, with no page before them.
 
 /** What the view reads of the board. */
 export type ListingClient = {
   threads(query: { channel: string; limit: number; before?: string }): Promise<ThreadsPage>
-  messages(query: { channel: string; limit: number; before?: string }): Promise<MessagesPage>
+  /** One channel's newest messages. */
+  messages(channel: string): Promise<MessagesPage>
 }
 
 const THREADS = 25
-const MESSAGES = 200
 
 export function listing(client: ListingClient, get: () => store.State, set: (next: (state: store.State) => store.State) => void, limit = THREADS) {
-  /** Channels loaded by messages whose oldest is here. */
-  const exhausted = new Set<string>()
   /** A first page being read again, per channel, and whether something asked for it once more since. */
   const refreshing = new Map<string, { again: boolean }>()
 
-  async function messages(channel: string, before?: string) {
-    const page = await client.messages({ channel, limit: MESSAGES, ...(before !== undefined ? { before } : {}) })
-    if (page.messages.length < MESSAGES) exhausted.add(channel)
+  async function messages(channel: string) {
+    const page = await client.messages(channel)
     set((s) => store.merge(s, page.messages))
   }
 
@@ -51,17 +48,13 @@ export function listing(client: ListingClient, get: () => store.State, set: (nex
       set((s) => store.mergeThreads(s, channel, page, 'older'))
       return (page.older ?? null) !== null
     }
-    const oldest = Object.values(get().messages)
-      .filter((m) => m.channel === channel)
-      .sort(store.byWritten)[0]
-    if (exhausted.has(channel) || !oldest) return false
-    await messages(channel, oldest.id)
-    return !exhausted.has(channel)
+    // A board that pages no threads back: its newest messages are all a channel's view has.
+    return false
   }
 
   const hasOlder = (channel: string) => {
     const listed = store.listingOf(get(), channel)
-    return listed ? !listed.loaded || listed.older !== null : !exhausted.has(channel)
+    return listed ? !listed.loaded || listed.older !== null : false
   }
 
   /** Reads a channel's first page again, once for every burst that asks while it waits or reads. */

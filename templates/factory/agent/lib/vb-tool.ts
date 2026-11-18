@@ -47,7 +47,15 @@ export type SandboxFiles = {
 export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>): Promise<string> {
   const { code, stdout, stderr } = await vb(board, args, {
     readFile: async (path) => (await files()).readBinaryFile({ path: sandboxPath(path) }),
-    writeFile: async (path, content) => (await files()).writeBinaryFile({ path: sandboxPath(path), content }),
+    writeFile: async (path, content, options?: { exclusive?: boolean }) => {
+      const sandbox = await files();
+      const at = sandboxPath(path);
+      // vb asks for this when the name came from the attachment: never replace a file the sandbox has.
+      if (options?.exclusive && (await sandbox.readBinaryFile({ path: at })) !== null) {
+        throw Object.assign(new Error(`${path} already exists`), { code: "EEXIST" });
+      }
+      await sandbox.writeBinaryFile({ path: at, content });
+    },
   });
   return [stdout.trimEnd(), stderr.trimEnd(), code === 0 ? "" : `(exit ${code})`].filter(Boolean).join("\n") || "(no output)";
 }

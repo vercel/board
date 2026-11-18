@@ -78,7 +78,7 @@ describe('board() and its backend', () => {
       routes: [{ method: 'GET', path: '/health', handle: async () => Response.json({ ok: true }) }],
       keeps: true,
       bind: () => {},
-      messages: record('messages'),
+      threads: record('threads'),
       async post(caller: Caller, input: { channel?: string; text: string }) {
         calls.push({ method: 'post', caller, input })
         if (input.channel === 'missing') throw new HttpError(404, 'message_not_found', 'message not found: #nope')
@@ -89,10 +89,10 @@ describe('board() and its backend', () => {
     const token = await personToken()
     const julian = caller(fetch, token, { 'x-board-profile': 'claude', 'x-board-can': 'dev/=read' })
 
-    expect(await julian('GET', '/messages?channel=dev&label=state=open|draft&limit=5')).toEqual({ status: 200, body: { messages: [], cursor: '0' } })
+    expect(await julian('GET', '/threads?channel=dev&label=state=open|draft&limit=5')).toEqual({ status: 200, body: { messages: [], cursor: '0' } })
     expect(await julian('POST', '/messages', { channel: 'dev', text: 'hello' })).toMatchObject({ status: 201, body: { message: { id: 'm1' } } })
     expect(calls.map(({ method, input }) => [method, input])).toEqual([
-      ['messages', { channel: 'dev', label: [['state', ['open', 'draft']]], limit: 5 }],
+      ['threads', { channel: 'dev', label: [['state', ['open', 'draft']]], limit: 5 }],
       ['post', { channel: 'dev', text: 'hello' }],
     ])
     // Who the request is, as board() verified it: its principal, with what it may do, narrowed by its scope.
@@ -120,15 +120,15 @@ describe('board() and its backend', () => {
     expect((await julian('POST', '/wake', {})).status).toBe(404)
     expect(await (await fetch(new Request(`${BOARD_URL}/health`))).json()).toEqual({ ok: true })
     // A request board() can't verify never reaches it, and neither does a claim that doesn't parse.
-    expect((await fetch(new Request(`${BOARD_URL}/messages`, { headers: { cookie: 'session=abc' } }))).status).toBe(401)
-    expect((await caller(fetch, token, { 'x-board-profile': 'not a profile' })('GET', '/messages')).status).toBe(400)
+    expect((await fetch(new Request(`${BOARD_URL}/threads`, { headers: { cookie: 'session=abc' } }))).status).toBe(401)
+    expect((await caller(fetch, token, { 'x-board-profile': 'not a profile' })('GET', '/threads')).status).toBe(400)
     expect(calls).toHaveLength(3)
 
     // Your own code is `{ self }`: the backend decides who that is.
     const own = board({ backend: { ...mine, bind: () => {} } as Backend, url: BOARD_URL })
-    await own.messages()
+    await own.threads()
     expect(calls.at(-1)!.caller).toEqual({ self: null, origin: { via: { kind: 'client', name: null } } })
-    await own.as('deploys').messages()
+    await own.as('deploys').threads()
     expect(calls.at(-1)!.caller).toEqual({ self: 'deploys', profile: 'deploys', origin: { via: { kind: 'client', name: 'deploys' } } })
   })
 
@@ -168,7 +168,7 @@ describe('a board on http()', () => {
     // No discovery to send anyone elsewhere: a repo links the team's board itself.
     const discovery = await project.fetch(new Request(V0_URL))
     expect([discovery.status, await discovery.json()]).toEqual([404, nothing])
-    expect(await (await julianOn(project.fetch, V0_URL))('GET', '/messages')).toEqual({ status: 404, body: nothing })
+    expect(await (await julianOn(project.fetch, V0_URL))('GET', '/threads')).toEqual({ status: 404, body: nothing })
     // Its own handle asks the board it uses.
     expect(await project.discovery()).toMatchObject({ url: BOARD_URL, audience: BOARD_URL })
   })

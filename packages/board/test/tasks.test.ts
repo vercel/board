@@ -101,9 +101,9 @@ describe('a task', () => {
     const thread = (await bo('GET', `/messages/${root.id}`)).body
     expect(thread.message.task).toEqual(root.task)
     expect(thread.replies.map((reply: MessageView) => reply.text)).toEqual(['patched, running the tests'])
-    expect((await bo('GET', '/messages?channel=work&label=board.task=ready')).body.messages.map((m: MessageView) => m.id)).toContain(root.id)
+    expect((await bo('GET', '/threads?channel=work&label=board.task=ready')).body.threads.map((t: { message: MessageView }) => t.message.id)).toContain(root.id)
     expect((await bo('GET', '/threads?label=board.task=ready&label=step=fix')).body.threads.map((t: { message: MessageView }) => t.message.id)).toEqual([root.id])
-    expect((await bo('GET', '/messages?label=board.task=claimed')).body.messages).toEqual([])
+    expect((await bo('GET', '/threads?label=board.task=claimed')).body.threads).toEqual([])
   })
 
   it("has its root's blocks checked as a post's are, and carries them", async () => {
@@ -1371,8 +1371,8 @@ describe('labels under board.', () => {
     expect((await ada('POST', `/messages/${id}/labels`, { set: { step: 'fix' }, if: { 'board.task': 'ready' } })).status).toBe(200)
     await claim(bo, id)
     expect(code(await ada('POST', `/messages/${id}/labels`, { set: { step: 'review' }, if: { 'board.task': 'ready' } }))).toEqual([409, 'label_conflict'])
-    expect((await ada('GET', '/messages?label=board.task=claimed|blocked')).body.messages.map((m: MessageView) => m.id)).toEqual([id])
-    expect((await ada('GET', '/messages?label=board.task')).body.messages.map((m: MessageView) => m.id)).toEqual([id])
+    expect((await ada('GET', '/threads?label=board.task=claimed|blocked')).body.threads.map((t: { message: MessageView }) => t.message.id)).toEqual([id])
+    expect((await ada('GET', '/threads?label=board.task')).body.threads.map((t: { message: MessageView }) => t.message.id)).toEqual([id])
     expect((await read(ada, id)).labels).toEqual({ step: 'fix', 'board.task': 'claimed' })
   })
 })

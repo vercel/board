@@ -474,6 +474,8 @@ async function* events(
   query: Parameters<BoardClient['events']>[0] = {},
   opts: EventsOptions = {},
 ): AsyncGenerator<BoardEventView> {
+  // The feed's newest events (`last`) are its first read, which takes no wait: it goes on from their cursor.
+  const { last, ...rest } = query
   let after = query.after
   let failures = 0
   /** Whether the board has answered since the feed started, or since it last failed. */
@@ -482,10 +484,11 @@ async function* events(
   while (!opts.signal?.aborted) {
     let page: Awaited<ReturnType<BoardClient['poll']>>
     try {
-      page = await client.poll({ ...query, ...(after !== undefined ? { after } : {}), wait: answered ? EVENTS_WAIT_S : 0 } as Parameters<BoardClient['poll']>[0], opts.signal)
+      page = await client.poll((after === undefined && last !== undefined ? { ...rest, last } : { ...rest, ...(after !== undefined ? { after } : {}), wait: answered ? EVENTS_WAIT_S : 0 }) as Parameters<BoardClient['poll']>[0], opts.signal)
     } catch (error) {
       if (opts.signal?.aborted) return
-      if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+      // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
+      if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
       answered = false
       state.failed()
       await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 500 * 2 ** failures++)))

@@ -9,6 +9,9 @@ import type {
   TaskNeedsBody,
   BlockTaskBody,
   CancelTaskBody,
+  ChannelMessagesQuery,
+  ChannelsPage,
+  ChannelsQuery,
   ChannelView,
   ClaimReadyTaskBody,
   ClaimTaskBody,
@@ -47,7 +50,6 @@ import type {
   MatchView,
   Me,
   MessagesPage,
-  MessagesQuery,
   MessageView,
   PostBody,
   ReactBody,
@@ -71,6 +73,7 @@ import type {
   SyncReceiptBody,
   SyncThreadView,
   SyncedView,
+  ThreadQuery,
   ThreadsQuery,
   ThreadView,
   TypingBody,
@@ -91,13 +94,14 @@ export type Protocol = {
   /** Where the board is and what it syncs, for a client to mint a token from: it needs none itself. */
   discovery: { input: Nothing; output: Discovery }
   me: { input: Nothing; output: Me }
-  channels: { input: Nothing; output: { channels: ChannelView[]; cursor: string } }
+  channels: { input: Input<typeof ChannelsQuery>; output: ChannelsPage }
   /** `created` is false for a channel that was there already, made by a post or another create. */
   createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
   actors: { input: Nothing; output: { actors: (Actor & Pick<ActorView, 'verified'>)[]; cursor: string } }
-  messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
+  /** One channel's messages across its threads, oldest first: the newest `limit`, or those after one of the channel's cursors. */
+  channelMessages: { input: Input<typeof ChannelMessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
-  message: { input: Id; output: ThreadView }
+  message: { input: Id & Input<typeof ThreadQuery>; output: ThreadView }
   /** `mentions` says what became of each `@handle` the text typed, when it typed any: see `Mentioned`. A write that takes a text answers it the same way. */
   post: { input: Input<typeof PostBody>; output: { message: MessageView; mentions?: Mentioned[] } }
   /** The caller's own post with client ID `id`, as it landed: 404 `post_not_found` when there's none. */

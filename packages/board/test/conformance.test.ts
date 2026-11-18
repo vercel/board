@@ -172,13 +172,13 @@ describe('the conformance kit', () => {
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'search', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 23 }, () => 'passed'))
-    const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
+    const { messages } = await client.channel('conformance').messages({ limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
     expect((await client.tasks.list({ channel: 'conformance', state: 'all' })).tasks).toEqual([])
-    expect((await client.messages({ channel: 'conformance', limit: 500, label: ['board.task'] })).messages).toEqual([])
+    expect((await client.threads({ channel: 'conformance', label: ['board.task'], limit: 500 })).threads).toEqual([])
   })
 
   it("passes through a board's own handle, in-process", async () => {
@@ -400,7 +400,7 @@ describe('the conformance kit', () => {
     ])
     // What a board wrongly took, the kit put back: no watchers, and nothing it imported left in the channel.
     expect((await board.watchers()).filter((registration) => Object.keys(registration.watch).length > 0 || (registration.sync?.length ?? 0) > 0)).toEqual([])
-    expect((await board.messages({ channel: 'conformance', limit: 500 })).messages.filter((message) => !message.deleted)).toEqual([])
+    expect((await board.channel('conformance').messages({ limit: 500 })).messages.filter((message) => !message.deleted)).toEqual([])
     const without = await conformance(await clientOf(board.fetch))
     expect(without.checks.filter((check) => NARROWED.includes(check.name)).map((check) => [check.status, check.detail])).toEqual(NARROWED.map(() => ['skipped', NO_CAN]))
   })
@@ -518,7 +518,7 @@ describe('the conformance kit', () => {
       [HEADERS[3], expect.stringMatching(/^a post with x-board-session should carry no session, got \{.*"session":/)],
       ['shows no session on a message, its event, or you', expect.stringMatching(/^a message should carry no session, got \{.*"session":/)],
     ])
-    const { messages } = await board.messages({ channel: 'conformance', limit: 500 })
+    const { messages } = await board.channel('conformance').messages({ limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })
 
@@ -558,7 +558,7 @@ describe('the conformance kit', () => {
     expect(tasks.filter((check) => check.status !== 'skipped').map((check) => check.name)).toEqual([])
     expect([...new Set(tasks.map((check) => check.detail))]).toEqual(['not kept here: this board keeps no tasks'])
     // The check that imports from a platform asks about tasks first, so nothing was imported for it.
-    expect((await board.messages({ channel: 'conformance', limit: 500 })).messages.filter((message) => message.text.includes('to make a task'))).toEqual([])
+    expect((await board.channel('conformance').messages({ limit: 500 })).messages.filter((message) => message.text.includes('to make a task'))).toEqual([])
     expect(asked.length).toBeGreaterThan(0)
   })
 
@@ -737,7 +737,7 @@ describe('the conformance kit', () => {
     expect(report.ok).toBe(true)
     expect(patterns.length).toBeGreaterThan(20)
     expect(patterns.filter((pattern) => !pattern.startsWith('conformance/grants/'))).toEqual([])
-    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance', 'conformance/tasks'])
+    expect((await board.channels()).channels.map((channel) => channel.path)).toEqual(['conformance', 'conformance/tasks'])
   })
 
   it('refuses principals that are its own before it writes anything, which the checks would change under it', async () => {
@@ -745,7 +745,7 @@ describe('the conformance kit', () => {
     const before = (await team.grants()).map((grant) => grant.id)
     const asProject = await clientAs(team.fetch, () => deploymentToken('v0', 'prj_v0', 'production'))
     await expect(conformance(asProject, { principals: { project: 'prj_v0' } })).rejects.toThrow("principals.project is this run's own project, prj_v0")
-    expect((await team.messages({ channel: 'conformance', limit: 10 })).messages).toEqual([])
+    expect((await team.channel('conformance').messages({ limit: 10 })).messages).toEqual([])
     expect((await team.grants()).map((grant) => grant.id)).toEqual(before)
     const asRun = await clientAs(team.fetch, () => workflowToken())
     await expect(conformance(asRun, { principals: { repository: 'acme/web' } })).rejects.toThrow("principals.repository is this run's own repository, acme/web")
@@ -853,8 +853,38 @@ describe('the conformance kit', () => {
     const ignoring = broken(board.fetch, { request: (url) => url.pathname.endsWith('/messages') && url.searchParams.delete('after') })
     const report = await conformance(await clientOf(ignoring))
     expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
-      ['reads a channel after a cursor or a message ID, oldest first', 'reading after a message should leave it out'],
+      ["reads one channel's messages after a cursor of its own, oldest first, and on from where it stopped", expect.stringContaining("reading on from a page's cursor should repeat none of it")],
     ])
+  })
+
+  it("fails a board whose read of a channel's messages lists more than it's asked for", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const unlimited = broken(board.fetch, { request: (url) => url.pathname.endsWith('/messages') && url.searchParams.delete('limit') })
+    const report = await conformance(await clientOf(unlimited))
+    expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
+      ["reads one channel's messages after a cursor of its own, oldest first, and on from where it stopped", expect.stringContaining('how many messages a read with a limit of 1 lists')],
+      ["reads one channel's newest messages, as many as it's asked for", expect.stringContaining('a read with a limit of 2 should list 2 at most')],
+    ])
+  })
+
+  it('reports finding threads by text, and reading under a pattern, as not kept here on a board that answers 501 not_supported', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const asked: string[] = []
+    // A board with no index for either, as one on Vercel's API: its thread list says so.
+    const unindexed: Fetch = async (request) => {
+      const url = new URL(request.url)
+      if (!url.pathname.endsWith('/threads') || !(url.searchParams.has('text') || url.searchParams.get('channel')?.endsWith('/'))) return board.fetch(request)
+      asked.push(url.search)
+      return Response.json({ error: { code: 'not_supported', message: "this board doesn't find threads that way" } }, { status: 501 })
+    }
+    const report = await conformance(await clientOf(unindexed))
+    expect(report.ok).toBe(true)
+    const search = report.checks.filter((check) => check.group === 'search')
+    expect(search.map((check) => [check.status, check.detail])).toEqual([
+      ['skipped', "not kept here: this board doesn't find threads that way"],
+      ['skipped', "not kept here: this board doesn't find threads that way"],
+    ])
+    expect(asked.length).toBeGreaterThan(0)
   })
 
   it('fails a board whose reads ignore text', async () => {
@@ -863,10 +893,10 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(ignoring))
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([
       {
-        group: 'core',
-        name: "matches text anywhere in a message's own, in any case, as it reads now",
+        group: 'search',
+        name: 'finds threads by text anywhere in a message of theirs, in any case, as it reads now',
         status: 'failed',
-        detail: expect.stringContaining('the messages "DEPLOY failed" finds: expected'),
+        detail: expect.stringContaining('the threads "DEPLOY failed" finds: expected'),
       },
     ])
   })

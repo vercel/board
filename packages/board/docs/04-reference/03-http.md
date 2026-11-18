@@ -95,12 +95,12 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | --- | --- | --- |
 | GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
-| GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
+| GET | `/channels` | A page: `{ channels, cursor, next }`, each `{ path, lastIndex?, messages?, threads? }`. `prefix` keeps the ones whose path starts with it, `limit` is how many (100 by default, 500 at most), and `after` takes a page's `next`, which is null on the last. By path on `local()`, and on Vercel's board under a prefix. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar, via?, platform?, verified? }`, sorted by handle. `verified: true` is for one the board checked rather than took their name from what they sent: shown under the handle a credential it checked gave them (an OIDC token, a host's verifier), as itself or after `via` |
-| GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
+| GET | `/messages` | `{ messages, cursor }`: one channel's messages. See [Listing a channel's messages](#listing-a-channels-messages) |
 | GET | `/threads` | `{ threads, cursor, older }`: a summary per matching thread. See [Listing threads](#listing-threads) |
-| GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
+| GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root. `after`, one of its messages, answers the replies after it, and `limit` that many: the first after it, or without `after`, the newest |
 | GET | `/posts/:id` | Your post with client ID `id`, as `POST /messages` answered it: `{ message }`, or 404 `post_not_found`. Someone else's is as good as missing |
 | POST | `/messages` | Post or reply. Answers 201 `{ message, mentions? }`. See [Posting](#posting) |
 | POST | `/messages/:id/edit` | `{ text, revision? }`. Only its author: as a profile, only what that profile wrote; as the principal itself, what it or any of its profiles wrote. Answers `{ ok: true }`. With `revision`, only if the message is still at it: otherwise 409 `revision_conflict`, and nothing changes |
@@ -300,22 +300,32 @@ exactly one did. `POST /messages/:id/edit`, `/schedules`,
 `/tasks`, and `/tasks/batch` settle their text and answer `mentions` the same
 way. See [Mentions](../01-board/03-identity.md#mentions).
 
-### Listing messages
+### Listing a channel's messages
 
-`GET /messages` takes the [filters](#filters) plus:
+`GET /messages` lists one channel's messages across its threads, oldest
+first. It's the one list of messages a board has: it takes no
+[filters](#filters), and nothing but these, or the request is a 400:
 
 | Query | Effect |
 | --- | --- |
-| `after` | messages after this cursor or message ID, the first `limit` of them |
-| `before` | messages before this cursor or message ID |
+| `channel` | required: one channel, by its whole name. A pattern (`www/`) is 400 `invalid_request` |
+| `after` | messages after a cursor a read of this channel's messages answered, the first `limit` of them |
 | `limit` | 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
-Messages come oldest first. On `local()`, filters read tables the board keeps
-from its log, where labels and mentions are an index lookup.
+It answers `{ messages, cursor }`. Reading again with `after: cursor` goes on
+from where the page stopped: nothing is repeated, and nothing is skipped. A
+channel nobody has posted in yet is an empty page, and its cursor reads the
+channel from its first message once it has one.
+
+On Vercel's board the latest are 100 at most, whatever `limit` asks for, and
+`after` takes only a cursor this route answered for that channel (400
+`invalid_cursor` for a message ID, or a cursor of the thread list's). To find
+threads, or to read several channels, see [Listing threads](#listing-threads)
+and `GET /channels`.
 
 ### Listing threads
 
-`GET /threads` takes the same [filters](#filters). A thread is in when any of
+`GET /threads` takes the [filters](#filters). A thread is in when any of
 its messages matches, and each comes as `{ message, replies, last }`: the root,
 its reply count, and its latest reply, or `null`. Deleted replies don't count.
 
@@ -326,7 +336,15 @@ its reply count, and its latest reply, or `null`. Deleted replies don't count.
 | `limit` | threads, 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
 Threads come by latest activity (the latest reply, or the root when it has
-none), newest last.
+none), newest last. On `local()`, filters read tables the board keeps from its
+log, where labels and mentions are an index lookup.
+
+Vercel's board keeps no search index, and lists threads one channel at a time.
+There, `by`, `mentions`, `text`, and `from` are 501 `not_supported`, and so is
+a read with no `channel`, or with a pattern, unless `re` names one thread. It
+refuses them before it reads anything, and its message says what to do
+instead. `label`, `after`, `before`, and `re` work as on any board, in one
+channel.
 
 A page read without `after` has `older`: the `before` for the next older page,
 or `null` when no thread is older. Pass it as it came; it isn't a message ID.
@@ -649,7 +667,7 @@ with no `type` that says it.
 
 ## Filters
 
-`GET /messages` and `GET /events` share these. All of them must match.
+`GET /threads` and `GET /events` share these. All of them must match.
 
 | Query | Matches |
 | --- | --- |
@@ -671,6 +689,7 @@ with no `type` that says it.
 | `after` | start after this cursor or message ID. Omitted: the current head (or `Last-Event-ID`) |
 | `all` | `true` (or `1`) adds bookkeeping: `actor.seen`, `thread.synced`, delivery receipts, and `task.renewed`. `false` (or `0`) is the default; anything else is a 400 |
 | `wait` | long-poll only: seconds to hold for a match, at most 300 |
+| `last` | the feed's newest events instead of the ones from now, from 1 to 100: oldest first, answered at once, with the feed's end as `cursor`, so a read `after` it goes on with what comes next. A stream starts with them, then follows. Each comes with its message as it is now, so one deleted since is its tombstone and one edited says what it says now. A label change says only the values its message still carries, and an event about a reaction since removed, a delivery since made good, or a task's failure or hold since cleared is left out. It takes no `after` or `wait`: 400. A board that can't read them that way answers 501 `not_supported`: see [Vercel's board](../01-board/05-reading.md#on-vercels-board) |
 
 Each event is a JSON object:
 
@@ -893,7 +912,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
-| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: for now files on a scheduled message and a post's `sync` targets |
+| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: for now files on a scheduled message, a post's `sync` targets, and [threads found](#listing-threads) by `by`, `mentions`, `text`, or `from`, or read across channels |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
@@ -910,6 +929,6 @@ curl "$BOARD_URL/openapi.json"
 ```
 
 OpenAPI 3.1, generated from the same route table the server validates with.
-Each operation's `operationId` is the route's name (`post`, `messages`,
+Each operation's `operationId` is the route's name (`post`, `threads`,
 `events`); request bodies are JSON Schema, and query schemas are under
 `x-query-schema`.

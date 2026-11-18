@@ -59,7 +59,7 @@ describe('a write-only source', () => {
     expect(posted).toMatchObject({ status: 201, body: { message: { text: 'checkout is slow', channel: 'feedback/front' } } })
     const id = posted.body.message.id
 
-    expect((await front('GET', '/messages')).body.messages).toEqual([])
+    expect((await front('GET', '/messages?channel=feedback/front')).body.messages).toEqual([])
     expect((await front('GET', '/threads')).body.threads).toEqual([])
     expect((await front('GET', '/channels')).body.channels).toEqual([])
     expect((await front('GET', '/events?after=0')).body.events).toEqual([])
@@ -141,7 +141,7 @@ describe('a write-only source', () => {
     expect(answers[1]).toEqual(answers[0])
     expect(answers[2]).toEqual(answers[0])
     // What it typed is kept as text, which a filter still finds for Julian.
-    expect((await julian('GET', '/messages?channel=feedback&mentions=me')).body.messages.map((m: { text: string }) => m.text)).toEqual(['thanks @julian!'])
+    expect((await julian('GET', '/threads?channel=feedback&mentions=me')).body.threads.map((t: { message: { text: string } }) => t.message.text)).toEqual(['thanks @julian!'])
   })
 
   it("tells a caller who it mentioned where it can't read what it wrote, and still shows it no ID there", async () => {
@@ -179,7 +179,7 @@ describe('a write-only source', () => {
     await caller(board.fetch, await personToken('u_sam'), {})('POST', '/messages', { channel: 'secret', text: 'hi' })
     for (const text of ['@u_sam can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]']) await julian('POST', '/messages', { channel: 'feedback', text })
     const texts = async (as: typeof julian, mentions: string) =>
-      ((await as('GET', `/messages?channel=feedback&mentions=${encodeURIComponent(mentions)}`)).body.messages as { text: string }[]).map((m) => m.text)
+      ((await as('GET', `/threads?channel=feedback&mentions=${encodeURIComponent(mentions)}`)).body.threads as { message: { text: string } }[]).map((t) => t.message.text)
     // Julian sees Sam, so his handle for him was stored as a mention of him; Sam's agent has never written, so its handle is text.
     expect(await texts(julian, 'vercel:user:u_sam')).toEqual(['@[vercel:user:u_sam] can you look?', 'over to @u_sam/claude', 'cc @[vercel:user:u_sam]'])
     // Front gets what it names, as written: no saying that vercel:user:u_sam goes by u_sam.
@@ -250,7 +250,8 @@ describe('x-board-can', () => {
     await julian('POST', '/messages', { channel: 'dev', text: 'in dev' })
     await julian('POST', '/messages', { channel: 'security', text: 'in security' })
     const pi = caller(board.fetch, await personToken(), { 'x-board-can': 'dev/=read,post' })
-    expect((await pi('GET', '/messages')).body.messages.map((m: { text: string }) => m.text)).toEqual(['in dev'])
+    expect((await pi('GET', '/threads')).body.threads.map((t: { message: { text: string } }) => t.message.text)).toEqual(['in dev'])
+    expect((await pi('GET', '/messages?channel=security')).body.messages).toEqual([])
     expect((await pi('GET', '/channels')).body.channels.map((c: { path: string }) => c.path)).toEqual(['dev'])
   })
 })
@@ -263,11 +264,11 @@ describe('a reader of some channels', () => {
     // A post to a new channel lands between the board's read of the channels and its read of the tables.
     const tables = {
       ...store.tables,
-      async messages(...args: Parameters<typeof store.tables.messages>) {
+      async threads(...args: Parameters<typeof store.tables.threads>) {
         const land = landInNew
         landInNew = null
         await land?.()
-        return store.tables.messages(...args)
+        return store.tables.threads(...args)
       },
     }
     board = testBoard({ store: { ...store, tables } })
@@ -275,8 +276,8 @@ describe('a reader of some channels', () => {
     await julian('POST', '/messages', { channel: 'dev', text: 'old' })
     const pi = caller(board.fetch, await personToken(), { 'x-board-can': 'dev/=read' })
     landInNew = () => julian('POST', '/messages', { channel: 'dev/new', text: 'fresh' })
-    const page = await pi('GET', '/messages')
-    const seen = page.body.messages.map((m: { text: string }) => m.text)
+    const page = await pi('GET', '/threads')
+    const seen = page.body.threads.map((t: { message: { text: string } }) => t.message.text)
     const tail = await pi('GET', `/events?after=${page.body.cursor}`)
     const later = tail.body.events.flatMap((e: { message?: { text: string } }) => (e.message ? [e.message.text] : []))
     expect([...seen, ...later]).toContain('fresh')
@@ -320,7 +321,7 @@ describe('links', () => {
 
     const open = caller(board.fetch, await personToken(), { 'x-board-can': 'open=read' })
     const hidden = { message: null, snapshot: null, unavailable: 'not_readable' }
-    const [message] = (await open('GET', '/messages')).body.messages
+    const [message] = (await open('GET', '/messages?channel=open')).body.messages
     expect(message.links[0], '/messages').toMatchObject(hidden)
     expect((await open('GET', '/threads')).body.threads[0].message.links[0], '/threads').toMatchObject(hidden)
     expect((await open('GET', `/messages/${message.id}`)).body.message.links[0], '/messages/:id').toMatchObject(hidden)
@@ -356,7 +357,7 @@ describe('sync', () => {
 
     await webhook({ type: 'message', threadId: 'slack:C1:100', id: '101', text: 'the secret reply', user: 'U_ADA' })
     await vi.waitFor(async () => expect((await julian('GET', `/messages/${root.id}`)).body.replies.map((r: { text: string }) => r.text)).toEqual(['the secret reply']))
-    expect((await ci('GET', '/messages?channel=ci/')).body.messages.map((m: { text: string }) => m.text)).toEqual(['tap'])
+    expect((await ci('GET', '/threads?channel=ci/')).body.threads.map((t: { message: { text: string } }) => t.message.text)).toEqual(['tap'])
   })
 
   it('doesn’t tell a caller that reads one channel where other threads sync', async () => {

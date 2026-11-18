@@ -78,6 +78,8 @@ export const options = {
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
   // Commands' own.
   limit: { type: 'string', short: 'n', value: 'N', description: 'how many' },
+  last: { type: 'string', value: 'N', description: "start with the feed's newest N events (1 to 100)" },
+  before: { type: 'string', value: 'older', description: "a channel's threads before a page: the older its read printed" },
   'idempotency-key': { type: 'string', value: 'key', description: 'sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
@@ -279,19 +281,25 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'channels',
-    description: 'channels, grouped by path prefix: a first post makes one, and so does create',
-    arguments: [],
-    options: [],
+    description: 'channels, a page at a time, grouped by path prefix: a first post makes one, and so does create',
+    arguments: [{ name: 'prefix', required: false, description: 'only the channels whose path starts with it: dev/' }],
+    options: [option('limit'), option('after')],
     runsWithoutSubcommand: true,
-    examples: [{ name: 'list the channels', value: 'channels' }],
+    examples: [
+      { name: 'list the channels', value: 'channels' },
+      { name: 'the ones under dev', value: 'channels dev/' },
+    ],
     subcommands: [
       {
         name: 'list',
         default: true,
-        description: 'channels, grouped by path prefix',
-        arguments: [],
-        options: [],
-        examples: [{ name: 'list the channels', value: 'channels list' }],
+        description: 'channels, a page at a time, grouped by path prefix',
+        arguments: [{ name: 'prefix', required: false, description: 'only the channels whose path starts with it: dev/' }],
+        options: [option('limit'), option('after')],
+        examples: [
+          { name: 'list the channels', value: 'channels list' },
+          { name: 'the next page', value: 'channels list dev/ --after <next>' },
+        ],
       },
       {
         name: 'create',
@@ -360,14 +368,14 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         description: "a channel (every channel without one), a message's ID, or a Slack or GitHub link the board synced",
       },
     ],
-    options: [option('limit', 'threads to list (default: 50, at most 500)')],
+    options: [option('limit', 'threads to list (default: 50, at most 500)'), option('before')],
     filters: true,
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
       { name: 'read one thread, every message', value: 'read 812' },
       { name: 'list the open bugs', value: 'read dev --label kind=bug --label state=open' },
       { name: "only what's new since the cursor an earlier read printed", value: 'read dev --after 1042' },
-      { name: 'search every channel for a phrase', value: 'read --text "times out"' },
+      { name: 'the page before one, by the older it printed', value: 'read dev --before 1031.1024' },
     ],
   },
   {
@@ -717,9 +725,12 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'tail',
     description: 'what happens, live, until Ctrl-C',
     arguments: [{ name: 'channel', required: false, description: 'a channel, or a path prefix (dev/)' }],
-    options: [option('all', 'delivery receipts too')],
+    options: [option('all', 'delivery receipts too'), option('last')],
     filters: true,
-    examples: [{ name: 'follow the bugs', value: 'tail dev --label kind=bug' }],
+    examples: [
+      { name: 'follow the bugs', value: 'tail dev --label kind=bug' },
+      { name: "start with a channel's newest 20 events, then follow", value: 'tail dev --last 20' },
+    ],
   },
   {
     group: 'live',

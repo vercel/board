@@ -191,6 +191,23 @@ describe('vb()', () => {
     expect(root.attachments).toMatchObject([{ name: 'shot.png', size: png.byteLength }])
     expect(await vb(team, ['download', root.attachments[0].id, '/work/copy.png'], files)).toMatchObject({ code: 0, stdout: '/work/copy.png\n' })
     expect(saved.get('/work/copy.png')).toEqual(png)
+    // Saved by the attachment's name, the host is told not to replace a file; given a path, it may.
+    const writes: { path: string; exclusive: boolean }[] = []
+    const host = {
+      writeFile: async (path: string, _data: Uint8Array, options?: { exclusive?: boolean }) =>
+        void writes.push({ path, exclusive: options?.exclusive === true }),
+    }
+    expect(await vb(team, ['download', root.attachments[0].id], host)).toMatchObject({ code: 0, stdout: 'shot.png\n' })
+    expect(await vb(team, ['download', root.attachments[0].id, '/work/copy.png'], host)).toMatchObject({ code: 0 })
+    expect(writes).toEqual([
+      { path: 'shot.png', exclusive: true },
+      { path: '/work/copy.png', exclusive: false },
+    ])
+    // A host that refuses as Node does, with EEXIST, gets the CLI's own answer.
+    const full = { writeFile: async () => Promise.reject(Object.assign(new Error('taken'), { code: 'EEXIST' })) }
+    const refused = await vb(team, ['download', root.attachments[0].id, '--json'], full)
+    expect(refused.code).toBe(2)
+    expect(JSON.parse(refused.stderr)).toMatchObject({ reason: 'file_exists' })
     const piped = await vb(team, ['post', 'dev', '-', '--no-sync'], { stdin: 'from stdin\n' })
     expect(JSON.parse((await vb(team, ['read', piped.stdout.trim(), '--json'])).stdout).message.text).toBe('from stdin')
     // --file reads through readFile too: the sandbox's files, not this machine's.

@@ -13,7 +13,7 @@ import { type Actor, type ExternalCopy, type Message } from '../contract/folds.t
 import { importedHandle, shownName, userIdOf } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
-import { INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, parseCan, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
@@ -22,7 +22,7 @@ import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, 
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, duplicateId, forbidden, HttpError, notFound, textTooLong, toErrorResponse } from './errors.ts'
-import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
+import { eventView, foldEvent, indexOf, lastFeed, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, verifiedRecord, view, viewedBy, viewLinkedIds, viaOfRecord } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { createTasks, taskLimits } from './tasks.ts'
@@ -484,13 +484,15 @@ function build(options: A2Options, binding: BoardBinding) {
       }
       return body
     },
-    async channels(caller) {
+    async channels(caller, { prefix, after, limit = CHANNELS_LIMIT_DEFAULT }) {
       const { principal } = (await identityOf(caller))
       const { state, index } = await session.state(channelsReducer)
-      const channels = Object.values(state)
-        .filter((channel) => principal.access.readable(channel.path))
-        .sort((a, b) => a.path.localeCompare(b.path))
-      return { channels, cursor: ref(index) }
+      // By path, and a page after the last path of the one before it.
+      const listed = Object.values(state)
+        .filter((channel) => principal.access.readable(channel.path) && (prefix === undefined || channel.path.startsWith(prefix)) && (after === undefined || channel.path > after))
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      const channels = listed.slice(0, limit)
+      return { channels, cursor: ref(index), next: listed.length > limit ? channels.at(-1)!.path : null }
     },
     async createChannel(caller, { path }) {
       return writeChannel(writes, { identity: await identityOf(caller), path })
@@ -515,17 +517,20 @@ function build(options: A2Options, binding: BoardBinding) {
         })
       return { actors, cursor: ref(index) }
     },
-    async messages(caller, query) {
-      const { principal, actor } = (await identityOf(caller))
+    async channelMessages(caller, query) {
+      const { principal } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
-      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }), principal.access)
+      const { filter, through } = await readable({ channel: { path: query.channel, subtree: false } }, principal.access)
+      const limit = query.limit ?? 50
       const { messages, position } = await reads.messages(filter, {
-        ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
-        limit: query.limit ?? 50,
+        limit,
       })
       const reader = await reads.reader(principal.access, messages)
-      return { messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(position, through)) }
+      // A page after a cursor that its limit cut short stops at its last message, so reading on from its cursor
+      // reaches the rest; any other has all there is, up to where the board is now.
+      const stopped = query.after !== undefined && messages.length === limit ? messages.at(-1)!.id : position
+      return { messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(stopped, through)) }
     },
     async threads(caller, query) {
       const { principal, actor } = (await identityOf(caller))
@@ -543,13 +548,18 @@ function build(options: A2Options, binding: BoardBinding) {
         ...(older !== undefined ? { older: older && olderRef(older) } : {}),
       }
     },
-    async message(caller, { id }, signal) {
+    async message(caller, { id, after, limit }, signal) {
       const { principal } = (await identityOf(caller))
       const at = messageAt(id)
       const message = await reads.message(at, signal)
       if (!message || !principal.access.readable(message.channel)) throw notFound(`message not found: #${at}`, 'message_not_found')
       const [{ messages, cursor }, { state: actors }] = await Promise.all([reads.thread(message.re ?? message.id, signal), session.state(actorsReducer)])
-      const [root, ...replies] = messages
+      const [root, ...all] = messages
+      // The replies after one of its messages, the first `limit` of them; or with no message, the newest.
+      const from = after === undefined ? 0 : messages.findIndex((each) => each.id === messageAt(after))
+      if (from === -1) throw new HttpError(400, 'invalid_request', `after: ${after} isn't a message of this thread`)
+      const rest = all.slice(from)
+      const replies = limit === undefined ? rest : after === undefined ? rest.slice(-limit) : rest.slice(0, limit)
       const reader = await reads.reader(principal.access, messages)
       return {
         message: view(root!, actors, reader),
@@ -806,7 +816,7 @@ function build(options: A2Options, binding: BoardBinding) {
       const after = query.after !== undefined ? cursorAt(query.after) : undefined
       const { state: actors } = await session.state(actorsReducer)
       const feed = { session, reads, after, filters: query, all: query.all ?? false, me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }
-      const { events, cursor } = await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
+      const { events, cursor } = query.last !== undefined ? await lastFeed(feed, query.last, signal) : await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
       return { events, cursor: ref(cursor) }
     },
 

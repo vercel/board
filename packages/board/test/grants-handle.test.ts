@@ -35,6 +35,42 @@ describe('a private channel, from the handle', () => {
     expect((await ops.createChannel('ops/keys', { private: true })).grants?.[0]?.principals).toEqual([{ kind: 'project', projectId: 'prj_ops', name: null, environments: ['production'], teamId: TEAM_ID }])
   })
 
+  it('refuses a path with a channel under it that the first page of the board\'s channels doesn\'t reach', async () => {
+    const team = testBoard()
+    const julian = handleAs(team.fetch, () => personToken())
+    for (let i = 0; i < 100; i++) await julian.post(`a/${String(i).padStart(3, '0')}`, { text: 'x' })
+    await julian.post('vault/keys', { text: 'already here' })
+    const before = await ids(team)
+
+    await expect(julian.createChannel('vault', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists', message: expect.stringContaining('vault/keys') })
+    expect(await ids(team)).toEqual(before)
+  })
+
+  it("reads two channels at most to see that a path is free, however many siblings start with its name", async () => {
+    const team = testBoard()
+    const asked: string[] = []
+    const julian = handleAs((request) => {
+      const url = new URL(request.url)
+      if (request.method === 'GET' && url.pathname.endsWith('/channels')) asked.push(url.search)
+      return team.fetch(request)
+    }, () => personToken())
+    for (let i = 0; i < 150; i++) await julian.post(`vault-${String(i).padStart(3, '0')}`, { text: 'beside it' })
+
+    expect(await julian.createChannel('vault', { private: true })).toMatchObject({ channel: { path: 'vault' }, created: true })
+    // The path itself, then the first channel under it: one channel each, and none of the 150 beside it read past the first.
+    expect(asked).toEqual(['?prefix=vault&limit=1', '?prefix=vault%2F&limit=1'])
+  })
+
+  it('refuses a path with a channel under it, whatever siblings start with its name', async () => {
+    const team = testBoard()
+    const julian = handleAs(team.fetch, () => personToken())
+    for (const channel of ['vault-old', 'vault2', 'vaultx/a', 'vault/keys']) await julian.post(channel, { text: 'here' })
+    const before = await ids(team)
+
+    await expect(julian.createChannel('vault', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists', message: expect.stringContaining('vault/keys') })
+    expect(await ids(team)).toEqual(before)
+  })
+
   it("refuses a path where it or a channel under it is there, and a caller no grant could name, before it writes anything", async () => {
     const team = testBoard()
     const julian = handleAs(team.fetch, () => personToken())
@@ -48,7 +84,7 @@ describe('a private channel, from the handle', () => {
     await expect(team.createChannel('mine', { private: true })).rejects.toMatchObject({ status: 400, code: 'no_own_principal', origin: 'handle' })
     await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
     await expect(handleAs(team.fetch, () => workflowToken()).createChannel('ci-secrets', { private: true })).rejects.toMatchObject({ status: 400, code: 'no_own_principal' })
-    expect((await team.channels()).map((channel) => channel.path)).toEqual(['dev', 'security/incidents'])
+    expect((await team.channels()).channels.map((channel) => channel.path)).toEqual(['dev', 'security/incidents'])
     expect((await ids(team)).length).toBe(before.length + 1)
   })
 
@@ -77,7 +113,7 @@ describe('a private channel, from the handle', () => {
     }
     await expect(handleAs(narrowed, () => personToken()).createChannel('lockbox', { private: true })).rejects.toMatchObject({ status: 403 })
     expect(await ids(team)).toEqual(before)
-    expect(await team.channels()).toEqual([])
+    expect((await team.channels()).channels).toEqual([])
   })
 
   it('leaves at most one way in when two make the same private channel at once', async () => {
@@ -116,7 +152,7 @@ describe('a private channel, from the handle', () => {
     expect([first, second].map((settled) => (settled.status === 'rejected' ? (settled.reason as { code: string }).code : 'made'))).toEqual(['channel_granted', 'channel_granted'])
     // Each took its own back: no one has a way in, and nothing is closed or made.
     expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
-    expect(await team.channels()).toEqual([])
+    expect((await team.channels()).channels).toEqual([])
   })
 
   it("takes its own grant back once another's lock has landed, though that's its last manage there", async () => {
@@ -177,7 +213,7 @@ describe('a private channel, from the handle', () => {
     expect(refused).toMatchObject({ status: 409, code: 'channel_granted', message: `${theirs} already grants in vault, so a private vault wouldn't be yours alone: nothing was made.` })
     // Hers is the only one left: the lock and the creator's own are both gone, and no channel was made.
     expect(await ids(team)).toEqual(['g1', 'g2', 'g3', theirs])
-    expect(await team.channels()).toEqual([])
+    expect((await team.channels()).channels).toEqual([])
   })
 
   it('takes its grants back, and makes nothing, when someone adds themselves to its own grant before its lock lands', async () => {
@@ -202,7 +238,7 @@ describe('a private channel, from the handle', () => {
       expect((refused as { hint?: string }).hint).toBeUndefined()
       // The grant she's on and the lock are both gone, and no channel was made.
       expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
-      expect(await team.channels()).toEqual([])
+      expect((await team.channels()).channels).toEqual([])
     }
   })
 
@@ -222,12 +258,12 @@ describe('a private channel, from the handle', () => {
     await expect(julian.createChannel('vault', { private: true })).rejects.toThrow()
     // Open, with a grant too many.
     expect((await team.grants()).slice(3).map((grant) => [grant.principals, grant.can])).toEqual([[[{ kind: 'user', userId: 'u_julian', email: null }], { 'vault/': 'all' }]])
-    expect((await team.channels()).map((channel) => channel.path)).toEqual([])
+    expect((await team.channels()).channels.map((channel) => channel.path)).toEqual([])
     expect((await ada('POST', '/messages', { channel: 'vault', text: 'still open' })).status).toBe(201)
     // Closed, and not made yet: its creator still gets in.
     channels = false
     await expect(julian.createChannel('lockbox', { private: true })).rejects.toThrow()
-    expect((await team.channels()).map((channel) => channel.path)).toEqual(['vault'])
+    expect((await team.channels()).channels.map((channel) => channel.path)).toEqual(['vault'])
     expect((await ada('POST', '/messages', { channel: 'lockbox', text: 'let me in' })).status).toBe(403)
     expect((await caller(team.fetch, await personToken())('POST', '/messages', { channel: 'lockbox', text: 'mine' })).status).toBe(201)
   })

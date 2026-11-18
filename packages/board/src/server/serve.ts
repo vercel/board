@@ -23,9 +23,10 @@ import {
   InboxQuery,
   LabelBody,
   MatchesQuery,
-  MessagesQuery,
   PostBody,
   ReactBody,
+  ChannelMessagesQuery,
+  ChannelsQuery,
   CreateChannelBody,
   Ref,
   RegisterBody,
@@ -46,6 +47,7 @@ import {
   SyncImportBody,
   UploadStartBody,
   SyncReceiptBody,
+  ThreadQuery,
   ThreadsQuery,
   TypingBody,
   type MessageView,
@@ -119,12 +121,14 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'discovery':
     case 'me':
     case 'channels':
+      return ChannelsQuery.parse(queryObject(url))
     case 'actors':
     case 'watchers':
     case 'grants':
     case 'schemas':
       return {}
     case 'message':
+      return { id, ...ThreadQuery.parse(queryObject(url)) }
     case 'posted':
     case 'synced':
     case 'cancelSchedule':
@@ -134,8 +138,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'attachment':
     case 'uploadFinish':
       return { id }
-    case 'messages':
-      return MessagesQuery.parse(queryObject(url))
+    case 'channelMessages':
+      return ChannelMessagesQuery.parse(queryObject(url))
     case 'threads':
       return ThreadsQuery.parse(queryObject(url))
     case 'schedules':
@@ -146,7 +150,11 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       const query = EventsQuery.parse(queryObject(url))
       // SSE's own resume header, when the client reconnects by itself.
       const last = request.headers.get('last-event-id')
-      if (query.after === undefined && last && Ref.safeParse(last).success) query.after = last
+      if (query.after === undefined && last && Ref.safeParse(last).success) {
+        query.after = last
+        // A stream that began with the feed's newest events goes on from where it was.
+        delete query.last
+      }
       return query
     }
     case 'post':
@@ -1081,7 +1089,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    */
   async function sse(caller: Caller, query: Protocol['events']['input'], request: Request, identify: (() => Promise<Caller>) | null): Promise<Response> {
     // The first page now, so a bad cursor or a refusal answers as an error instead of a stream.
-    const first = await backend.events(caller, { ...query, wait: 0 }, request.signal)
+    // The feed's newest events (`last`) are the stream's first page, and it goes on from their cursor.
+    const { last, ...following } = query
+    const first = await backend.events(caller, last !== undefined ? query : { ...query, wait: 0 }, request.signal)
     const encoder = new TextEncoder()
     const controller = new AbortController()
     const deadline = Date.now() + streamMaxMs
@@ -1105,7 +1115,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
             after = page.cursor
             const left = deadline - Date.now()
             if (signal.aborted || left <= 0) break
-            page = await backend.events(identify ? await identify() : caller, { ...query, after, wait: Math.min(300, left / 1000) }, signal)
+            page = await backend.events(identify ? await identify() : caller, { ...following, after, wait: Math.min(300, left / 1000) }, signal)
           }
         } catch (error) {
           if (!signal.aborted) console.error('[board] feed failed', error)
