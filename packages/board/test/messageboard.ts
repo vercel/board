@@ -278,6 +278,7 @@ type Shared = {
   threadsLimit: boolean
   /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
   feedReads: number
+  boardFeed: boolean
   matchMessages: boolean
   accounts: Accounts
   directory: Directory
@@ -319,6 +320,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     return posted.get(key) as T
   }
   const feeds = new Map<string, Change[]>()
+  /** Every channel's changes in the order they were made: the board's own feed. */
+  const log: Change[] = []
   /** How many changes in each channel could have made a task claimable: what wakes a claim-next that waits there. */
   const wakes = new Map<string, number>()
   const actors = new Map<string, ActorView>()
@@ -365,6 +368,42 @@ function fakeBoard(shared: Shared, boardId: string) {
     const position = Number(found[1])
     if (position > (feeds.get(channelId)?.length ?? 0)) throw new Refused(400, 'invalid_cursor', 'Cursor is ahead of this channel.')
     return position
+  }
+
+  /**
+   * The board's feed in one read: every channel's changes, or with `tree` (`dev/`) a channel's and those under it,
+   * for a caller that reads every channel. Its cursor is its own, and a tree's is that tree's. A read goes
+   * through one poll's worth of the feed, which may show none of it, and a wait holds through changes outside the tree.
+   */
+  async function boardChanges(url: URL, actor: Actor, tree: string | null) {
+    if (!(actor.can === undefined || compileAccess(actor.can as Parameters<typeof compileAccess>[0]).readsAll) || !channels.every((channel) => mayRead(actor, channel.id)))
+      throw new Refused(403, 'forbidden', "You can't read every channel of this board, so you can't read its feed across channels: read a channel's.")
+    shared.feedReads++
+    const scope = tree === null ? 'board' : `tree${createHash('sha256').update(tree).digest('hex').slice(0, 8)}`
+    const at = (position: number) => `c1.${position}.${scope}`
+    const cursor = url.searchParams.get('cursor')
+    if (cursor !== null && url.searchParams.get('from') !== null) throw new Refused(400, 'invalid_cursor')
+    let from = url.searchParams.get('from') === 'latest' ? log.length : 0
+    if (cursor !== null) {
+      const found = /^c1\.(\d+)\.(.+)$/.exec(cursor)
+      if (!found || Number(found[1]) > log.length) throw new Refused(400, 'invalid_cursor')
+      if (found[2] !== scope) throw new Refused(400, 'invalid_cursor', "Cursor belongs to another feed: a channel's, or the board's read with another `channel`.")
+      from = Number(found[1])
+    }
+    const within = (change: Change) => {
+      const name = channels.find((channel) => channel.id === change.channelId)?.name ?? ''
+      return tree === null || name === tree.slice(0, -1) || name.startsWith(tree)
+    }
+    const until = Date.now() + Math.min(Number(url.searchParams.get('wait') ?? 0), 25) * 1000
+    while (!log.slice(from).some(within) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
+    const include = url.searchParams.get('include') === 'message'
+    const taken = log.slice(from, from + 48)
+    const events = taken.flatMap((change, i) => {
+      if (!within(change)) return []
+      const message = include && change.messageId ? messageNamed(change.messageId) : undefined
+      return [{ ...change, cursor: at(from + i + 1), ...(message ? { currentMessage: show(message) } : {}) }]
+    })
+    return { events, cursor: at(from + taken.length), caughtUp: from + taken.length >= log.length }
   }
 
   /** A task as every answer shows it: never its claim's token, or the hash kept of it. */
@@ -419,6 +458,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     feeds.set(channelId, feed)
     const made = { id: `evt_${randomUUID()}`, channelId, actor, createdAt: now(), shard: 0, sequence: feed.length + 1, ...change } as Change
     feed.push(made)
+    log.push(made)
     // A change to a task, or to a first message's labels, wakes a claim-next that waits in the channel. A post, a
     // reply, a reaction, an edit, and a label on a reply wake nobody.
     const { type, message } = change as { type: string; message?: number }
@@ -2162,6 +2202,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       return { messages: taken.map(show), cursor: cursorAt(channelId, more ? taken.at(-1)!.feedSequence : head) }
     }
     if (method === 'GET' && rest === '/changes') {
+      const named = url.searchParams.get('channel')
+      if (url.searchParams.get('channelId') === null && (named === null || named.endsWith('/'))) {
+        if (shared.boardFeed) return boardChanges(url, actor, named)
+        // An API from before the board's feed reads one channel's changes, and takes none without it.
+        if (named === null) throw new Refused(400, 'bad_request', 'Invalid request: missing required property `channelId`.')
+      }
       const channelId = (channelRead(url, actor) ?? channelAt('')).id
       shared.feedReads++
       const feed = () => feeds.get(channelId) ?? []
@@ -2447,6 +2493,11 @@ export function fakeMessageboard(
     channelNames?: boolean
     /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
     inlineActors?: boolean
+    /**
+     * True for an API that reads the board's feed in one (`GET /changes` with no channel, or with a tree's name, `dev/`),
+     * for a caller that reads every channel. Vercel's doesn't yet: a read of changes that names no channel is 400 there.
+     */
+    boardFeed?: boolean
     /** False for an API that hands out matches without their message (`currentMessage`), as Vercel's does for a thread moved to a channel the registrant can't read. */
     matchMessages?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
@@ -2501,6 +2552,7 @@ export function fakeMessageboard(
     inlineThreadMessages: options.inlineThreadMessages ?? false,
     channelNames: options.channelNames ?? false,
     inlineActors: options.inlineActors ?? false,
+    boardFeed: options.boardFeed ?? false,
     threadsLimit: options.threadsLimit ?? true,
     feedReads: 0,
     matchMessages: options.matchMessages ?? true,
