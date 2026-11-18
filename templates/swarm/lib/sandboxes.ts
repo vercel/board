@@ -234,8 +234,10 @@ export async function startAgent(slug: string, n: number, runner: RunnerConfig, 
   const env = await boardEnv(boardUrl, profileOf(n));
   const sandbox = await Sandbox.fork({
     sourceSandbox: sourceName(slug),
-    // An agent that's started again gets a name of its own: the one before it may still be shutting down.
-    name: `${agentPrefix(slug)}${n}-${Date.now().toString(36)}`,
+    // Named for its slot and the window it starts in: two reconciles that start slot n at once fork
+    // the same name, and the second is refused, so a slot never gets two paid agents. One started
+    // again after its agent left is in a later window.
+    name: `${agentPrefix(slug)}${n}-${Math.floor(Date.now() / STARTING_MS).toString(36)}`,
     persistent: false,
     timeout: opts.timeoutMs,
     resources: { vcpus: 2 },

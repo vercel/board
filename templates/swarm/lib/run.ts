@@ -146,8 +146,9 @@ async function planOf(board: Board, task: Task, max: number) {
   const { replies } = await board.thread(task.id);
   // Only what this deployment's agents posted is the plan: anyone who may post in the channel could
   // reply with a plan of their own, which the project would then push and open pull requests for.
+  // And only as they posted it: agents share profiles, so one could edit another's reply.
   const self = await selfOf(board);
-  return planFrom(replies.filter((reply) => /^agent-\d+$/.test(profileOfSelf(reply.by, self) ?? "")).map((reply) => reply.text), max);
+  return planFrom(replies.filter((reply) => /^agent-\d+$/.test(profileOfSelf(reply.by, self) ?? "") && !reply.editedAt).map((reply) => reply.text), max);
 }
 
 /** Adds each finished plan's tasks to the queue, once: the batch's key makes a second try add none. */

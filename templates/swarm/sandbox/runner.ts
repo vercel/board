@@ -6,7 +6,7 @@
 // never hold one task, and one that stalls past its lease can't settle a task another has taken.
 
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -70,7 +70,37 @@ async function vb<T = unknown>(...args: string[]): Promise<T> {
   }
 }
 
-type Message = { id: string; text: string; labels: Record<string, string>; task?: { needs?: string[]; owner?: string }; by?: { actor?: string; principal?: string; profile?: string | null }; author?: { handle?: string } };
+type Message = { id: string; text: string; labels: Record<string, string>; task?: { needs?: string[]; owner?: string }; by?: { actor?: string; principal?: string; profile?: string | null }; author?: { handle?: string }; editedAt?: string | null };
+
+/**
+ * The claim's proof (its epoch and token), which `vb` keeps in a file between commands, held in this
+ * process instead: on disk only while a command of the claim's runs. Code a pipeline runs in the
+ * sandbox (a repo's tests) runs as the same user, and with the file it could settle the task.
+ */
+const CLAIMS = join(process.env.XDG_CONFIG_HOME ?? join(HOME, ".config"), "board", "claims");
+let held: Map<string, string> = new Map();
+
+/** Moves the claim files `vb` just wrote into memory. */
+async function stash(): Promise<void> {
+  const names = (await readdir(CLAIMS).catch(() => [] as string[])).filter((name) => name.endsWith(".json"));
+  for (const name of names) {
+    const file = join(CLAIMS, name);
+    held.set(name, await readFile(file, "utf8"));
+    await unlink(file).catch(() => {});
+  }
+}
+
+/** Runs one `vb` command of a claim with its file back on disk for it, then takes the file away again. */
+async function withClaim<T>(run: () => Promise<T>): Promise<T> {
+  await mkdir(CLAIMS, { recursive: true, mode: 0o700 });
+  for (const [name, content] of held) await writeFile(join(CLAIMS, name), content, { mode: 0o600 });
+  held = new Map();
+  try {
+    return await run();
+  } finally {
+    await stash();
+  }
+}
 
 /** A reply in a task's thread. It throws when the board refuses it: an output that didn't reach the board wasn't delivered. */
 const post = (id: string, text: string) => vb("reply", id, text.slice(0, REPLY_MAX));
@@ -88,7 +118,11 @@ const read = (id: string) => vb<{ message: Message; replies: Message[] }>("read"
  */
 async function runState(): Promise<{ phase: string | undefined; cost: number }> {
   // Only what the deployment wrote: the state is the control thread's own text, which no one else can edit.
-  const { message: control } = await read(config.control);
+  // From the channel's thread list, which holds each thread's root and its latest reply, not every
+  // reply: replies anyone posts on the control thread can't make the read too big to take.
+  const listed = await vb<{ threads: { message: Message }[] }>("read", config.channel, "--label", "control=yes", "-n", "20");
+  const control = listed.threads.find((thread) => thread.message.id === config.control)?.message;
+  if (!control) throw new Error("the run's control thread isn't in its channel");
   const state = profileOfSelf(control.by, config.owner) === null ? /```json control\n([\s\S]*?)\n```/.exec(control.text)?.[1] : undefined;
   if (!state) throw new Error("the run's control thread says nothing the deployment wrote");
   const { phase, cost } = JSON.parse(state) as { phase?: string; cost?: number };
@@ -99,7 +133,8 @@ async function runState(): Promise<{ phase: string | undefined; cost: number }> 
 async function output(id: string, role: Role): Promise<string | null> {
   const { replies } = await read(id);
   // Only one of the run's agents posts an output: a reply anyone else dresses up as one isn't.
-  const found = [...replies].reverse().find((reply) => reply.text.startsWith(OUTPUT[role]) && /^agent-\d+$/.test(profileOfSelf(reply.by, config.owner) ?? ""));
+  // And only as it was posted: agents share profiles, so one could edit another's output.
+  const found = [...replies].reverse().find((reply) => reply.text.startsWith(OUTPUT[role]) && /^agent-\d+$/.test(profileOfSelf(reply.by, config.owner) ?? "") && !reply.editedAt);
   return found ? found.text.slice(OUTPUT[role].length).trim() : null;
 }
 
@@ -514,7 +549,7 @@ while (Date.now() < config.deadline) {
   let task: Message;
   try {
     // The oldest ready task of the run's, or none within the wait. The owner is named: a claim takes another owner's tasks only then.
-    ({ task } = await vb<{ task: Message }>("tasks", "claim", "--ready", config.channel, "--from", config.owner, "--wait", "45s", "--lease", LEASE));
+    ({ task } = await withClaim(() => vb<{ task: Message }>("tasks", "claim", "--ready", config.channel, "--from", config.owner, "--wait", "45s", "--lease", LEASE)));
   } catch (error) {
     const reason = (error as Failure).reason;
     if (reason === "timeout" || reason === "nothing_ready") {
@@ -543,7 +578,7 @@ while (Date.now() < config.deadline) {
   const lost = new AbortController();
   const renewing = setInterval(() => {
     void (async () => {
-      await vb("tasks", "renew", task.id, "--lease", LEASE).catch((error: unknown) => {
+      await withClaim(() => vb("tasks", "renew", task.id, "--lease", LEASE)).catch((error: unknown) => {
         if (claimOver(error)) lost.abort("the claim on this task was lost");
       });
       await label().catch(() => {});
@@ -571,11 +606,11 @@ while (Date.now() < config.deadline) {
   try {
     if (lost.signal.aborted && String(lost.signal.reason).includes("lost")) throw Object.assign(new Error("lost"), { reason: "claim_lost" });
     // A run that's stopping gives its task back rather than failing it: it's still worth doing.
-    if (lost.signal.aborted) await vb("tasks", "release", task.id);
-    else if (outcome.state === "completed") await vb("tasks", "complete", task.id, outcome.result);
+    if (lost.signal.aborted) await withClaim(() => vb("tasks", "release", task.id));
+    else if (outcome.state === "completed") await withClaim(() => vb("tasks", "complete", task.id, outcome.result));
     else {
       await note(task.id, `[risk] ${config.worker} gave up: ${outcome.reason}`);
-      await vb("tasks", "fail", task.id, outcome.reason);
+      await withClaim(() => vb("tasks", "fail", task.id, outcome.reason));
     }
     log({ type: outcome.state, task: task.id, cost: spend.cost - before });
   } catch (error) {

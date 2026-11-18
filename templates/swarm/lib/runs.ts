@@ -93,8 +93,9 @@ export function selfOf(board: Board): Promise<string> {
  */
 function toRun(message: MessageView, replies: MessageView[], self: string): Run | null {
   if (!ownWrite(message.by, self)) return null;
-  // Which run it is comes from its text, which only the deployment wrote; the label only finds it.
-  const slug = readSlug(message.text);
+  // Which run it is comes from its text, which only the deployment wrote; the label only finds it. A
+  // run started before the text named it is still read by its label, so an upgrade doesn't lose it.
+  const slug = readSlug(message.text) ?? (/\nRun r[a-z0-9]{4,16}$/.test(message.text) ? null : (message.labels.run ?? null));
   const config = readConfig(message.text);
   if (!slug || !config) return null;
   let prepared: Prepared | null = null;
@@ -185,7 +186,10 @@ export function readControl(text: string): Control | null {
  * and only the deployment can edit what it wrote.
  */
 export const openControl = async (board: Board, slug: string) =>
-  (await board.post(runChannel(slug), { text: controlText({ phase: "running", cost: 0 }), id: `control-${slug}` })).id;
+  (await board.post(runChannel(slug), { text: controlText({ phase: "running", cost: 0 }), labels: { [CONTROL_LABEL]: "yes" }, id: `control-${slug}` })).id;
+
+/** The label the control thread is found by in its channel's thread list, which reads its root and not every reply. Only where to look: its text is the state. */
+export const CONTROL_LABEL = "control";
 
 /** Says a run's phase or spend on its control thread. Best effort: an agent that can't read it stops at its deadline. */
 export async function mirror(board: Board, run: Pick<Run, "prepared">, change: Partial<Control>): Promise<void> {
@@ -195,7 +199,11 @@ export async function mirror(board: Board, run: Pick<Run, "prepared">, change: P
     const now = readControl((await board.thread(id)).message.text) ?? { phase: "running", cost: 0 };
     // A run that has ended stays ended: a spend refresh read before a Stop mustn't write "running" back.
     const next = { phase: now.phase !== "running" ? now.phase : (change.phase ?? now.phase), cost: Math.max(now.cost, change.cost ?? now.cost) };
-    if (next.phase !== now.phase || next.cost !== now.cost) await board.edit(id, controlText(next));
+    if (next.phase !== now.phase || next.cost !== now.cost) {
+      await board.edit(id, controlText(next));
+      // Workers from before the state was in the text read it from labels: they get it there too.
+      await board.label(id, { set: { phase: next.phase, cost: next.cost.toFixed(4) } });
+    }
   } catch (error) {
     console.error(`[swarm] couldn't update the control thread ${id}:`, error instanceof Error ? error.message.slice(0, 200) : error);
   }
@@ -229,7 +237,7 @@ export async function runs(board: Board = team(), limit = 50, label?: Record<str
 export async function run(slug: string, board: Board = team()): Promise<Run | null> {
   const { threads } = await board.threads({ channel: RUNS, label: { run: slug }, limit: 5 }).catch(() => ({ threads: [] as ThreadSummaryView[] }));
   const self = await selfOf(board);
-  const root = threads.find(({ message }) => readSlug(message.text) === slug && ownWrite(message.by, self))?.message;
+  const root = threads.find(({ message }) => (readSlug(message.text) ?? message.labels.run) === slug && ownWrite(message.by, self))?.message;
   if (!root) return null;
   const { message, replies } = await board.thread(root.id);
   return toRun(message, replies, self);
