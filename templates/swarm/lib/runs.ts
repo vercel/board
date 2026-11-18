@@ -98,9 +98,12 @@ function toRun(message: MessageView, replies: MessageView[], self: string): Run 
   // Which run it is comes from its text, which only the deployment wrote; the label only finds it.
   // A run from before the text named it is known by its label, which anyone may write, so it's only
   // ever wound down (`legacy`): its sandboxes stopped, never started or handed credentials.
+  // Its label counts only when the time the slug encodes (newSlug) is when the thread was posted: a
+  // label moved over from another run names another moment, so it can't aim the teardown elsewhere.
   const named = readSlug(message.text);
   const legacy = named === null;
-  const slug = named ?? (legacy ? (message.labels.run ?? null) : null);
+  const labeled = message.labels.run;
+  const slug = named ?? (labeled && slugMatches(labeled, message.createdAt) ? labeled : null);
   const config = readConfig(message.text);
   if (!slug || !config) return null;
   let prepared: Prepared | null = null;
@@ -129,6 +132,12 @@ function toRun(message: MessageView, replies: MessageView[], self: string): Run 
     prepared,
     createdAt: message.createdAt,
   };
+}
+
+/** Whether `slug` is one newSlug made within a minute of `at`: the moment a run's thread was posted. */
+export function slugMatches(slug: string, at: string): boolean {
+  const made = SLUG.test(slug) ? parseInt(slug.slice(1), 36) : NaN;
+  return Number.isFinite(made) && Math.abs(made - Date.parse(at)) < 60_000;
 }
 
 /** A slug for a new run: short, sortable by when it was made, and a channel name the board takes. */

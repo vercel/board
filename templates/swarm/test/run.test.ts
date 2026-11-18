@@ -12,7 +12,7 @@ import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Co
 /** A run thread's text as versions before the slug line wrote it. */
 const readConfigText = (config: Config) => runText(config, "rx0000").replace(/\n\nRun rx0000$/, "");
 import { ask, begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
-import { mirror, readControl, run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
+import { mirror, newSlug, readControl, run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
 import { areas, expand, seed } from "../lib/scenarios.ts";
 import { canRun, setup, type Deps } from "../lib/setup.ts";
@@ -500,13 +500,20 @@ test("a run from an earlier version, known only by its label, is wound down and 
   const board = fresh();
   const { boxes, notes } = fakeBoxes();
   // As an earlier version posted a run: its config, and no line naming it.
-  const legacy = await board.post("swarm/runs", { text: readConfigText(config({ agents: 2 })), labels: { run: "rlegacy1", phase: "running", torn: "no" } });
-  await reconcile("rlegacy1", board, boxes, { force: true });
-  const after = (await readRun("rlegacy1", board))!;
+  const slug = newSlug();
+  const legacy = await board.post("swarm/runs", { text: readConfigText(config({ agents: 2 })), labels: { run: slug, phase: "running", torn: "no" } });
+  await reconcile(slug, board, boxes, { force: true });
+  const after = (await readRun(slug, board))!;
   assert.equal(after.id, legacy.id);
   assert.equal(after.legacy, true);
   assert.equal(after.phase, "stopped");
   assert.equal(after.torn, true);
   assert.equal(notes.started.length, 0);
-  await assert.rejects(ask("rlegacy1", "Do one more thing please", board, boxes), /earlier version/);
+  await assert.rejects(ask(slug, "Do one more thing please", board, boxes), /earlier version/);
+
+  // A legacy run's label moved to another run's slug names another moment: it's no run at all.
+  const other = newSlug(Date.now() - 10 * 60_000);
+  const moved = await board.post("swarm/runs", { text: readConfigText(config({ agents: 1 })), labels: { run: other, phase: "running", torn: "no" } });
+  assert.equal(await readRun(other, board), null);
+  assert.equal((await listRuns(board)).some((run) => run.id === moved.id), false);
 });
