@@ -53,6 +53,9 @@ export const brief = (text: string) => text.trim().slice(0, 900);
 /** A path as one shell word, whatever is in it: `app/(dashboard)/page.tsx` stays one file. */
 export const quoted = (path: string) => `'${path.replaceAll("'", `'\\''`)}'`;
 
+/** A campaign's verify command for a task's files: `{files}` is each of them, as one shell word. */
+export const verifyCommand = (verify: string, files: string[]) => verify.replaceAll("{files}", files.map(quoted).join(" "));
+
 /** Where the runner and its config are in a sandbox, and where the checkout is. */
 export const SANDBOX = {
   dir: "/vercel/sandbox/campaign",

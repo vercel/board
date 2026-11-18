@@ -11,7 +11,7 @@ import { cancel, claimNext, unblock } from "../lib/queue.ts";
 import { DEFAULTS, parseConfig, plan, type Config } from "../lib/config.ts";
 import { begin, change, launch, reconcile, scale, type Sandboxes } from "../lib/run.ts";
 import { RUNTIME } from "../lib/sandboxes.ts";
-import { blocked, quoted, verdict } from "../sandbox/shared.ts";
+import { blocked, verdict, verifyCommand } from "../sandbox/shared.ts";
 
 const fresh = (): Board => makeBoard({ backend: local({ memory: true }) });
 
@@ -168,8 +168,8 @@ test("a canceled task is nobody's: the agent that held it can't settle it", asyn
 });
 
 test("a path is one shell word in the verify command, whatever is in it", () => {
-  assert.equal(quoted("app/(dashboard)/page.tsx"), "'app/(dashboard)/page.tsx'");
-  assert.equal(quoted("it's.js"), `'it'\\''s.js'`);
+  assert.equal(verifyCommand("npx tsc --noEmit {files}", ["app/(dashboard)/page.tsx", "it's.js"]), `npx tsc --noEmit 'app/(dashboard)/page.tsx' 'it'\\''s.js'`);
+  assert.equal(verifyCommand("pnpm test", ["a.js"]), "pnpm test");
 });
 
 test("what agents spend is the campaign's cost, and a campaign over its budget stops and tears down", async () => {

@@ -25,7 +25,7 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { blocked, brief, costOf, LABEL, quoted, SANDBOX, taskFiles, verdict, type RunnerConfig } from "./shared.ts";
+import { blocked, brief, costOf, LABEL, SANDBOX, taskFiles, verdict, verifyCommand, type RunnerConfig } from "./shared.ts";
 
 const config = JSON.parse(await readFile(process.env.RUNNER_CONFIG ?? SANDBOX.config, "utf8")) as RunnerConfig;
 const HOME = join(SANDBOX.dir, "home");
@@ -212,7 +212,7 @@ ${notes ? `\n## What people said in this task's thread\n\n${notes}\n` : ""}
 - A file that needs no change is left as it is.
 - When you're done, answer with one or two plain sentences on what you changed.
 - If the task can't be done as the migration says, change nothing and answer with a first line \`BLOCKED: <why>\`: a person reads it.
-${config.verify ? `\nAfter you finish, the harness runs this, and it must exit 0:\n\n    ${command(files)}\n` : ""}`;
+${config.verify ? `\nAfter you finish, the harness runs this, and it must exit 0:\n\n    ${verifyCommand(config.verify, files)}\n` : ""}`;
 
 const REVIEWER = `You review one change of a codebase migration. You're given the migration's instructions and the diff of one task. You may read the repository, which has the change applied, and you can't change it.
 
@@ -220,16 +220,11 @@ Approve a diff that does what the migration says in the task's files and nothing
 
 Answer with a first line that is exactly APPROVE or CHANGES. After CHANGES, say what to fix, briefly, one item per line.`;
 
-/** The campaign's verify command for a task's files. */
-function command(files: string[]) {
-  return config.verify.replaceAll("{files}", files.map(quoted).join(" "));
-}
-
 /** Runs the verify command. Null when it passed, or the end of what it printed. */
 async function verify(files: string[]): Promise<string | null> {
   if (!config.verify) return null;
   try {
-    await exec("bash", ["-lc", command(files)], { cwd: config.repo, timeout: VERIFY_MS, maxBuffer: 64 * 1024 * 1024 });
+    await exec("bash", ["-lc", verifyCommand(config.verify, files)], { cwd: config.repo, timeout: VERIFY_MS, maxBuffer: 64 * 1024 * 1024 });
     return null;
   } catch (error) {
     const { stdout = "", stderr = "", killed } = error as { stdout?: string; stderr?: string; killed?: boolean };
