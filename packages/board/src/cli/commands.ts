@@ -298,7 +298,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         options: [option('limit'), option('after')],
         examples: [
           { name: 'list the channels', value: 'channels list' },
-          { name: 'the next page', value: 'channels list dev/ --after <next>' },
+          { name: 'the next page, from the cursor a page ends with', value: 'channels list dev/ --after c.8f2a.2' },
         ],
       },
       {

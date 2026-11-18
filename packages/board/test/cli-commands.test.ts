@@ -89,6 +89,8 @@ describe("the CLI's commands, as data", () => {
   it("parses every example, which lands on its own command's page", async () => {
     for (const path of every)
       for (const example of path.at(-1)!.examples) {
+        // An example runs as it's written, with sample values: a CLI that runs board shows it as one to copy, and refuses a `<…>` left to fill in.
+        expect(example.value, example.value).not.toMatch(/<[a-z][\w |.-]*>/i)
         // What follows `--` is the command `tasks run` starts, its own `--help` included: board's goes before it.
         const argv = words(example.value)
         const own = argv.includes('--') ? argv.indexOf('--') : argv.length
