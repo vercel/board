@@ -55,12 +55,12 @@ export async function launch(started: Run, board: Board = team(), boxes: Sandbox
     }
     await reconcile(slug, board, boxes, { force: true });
   } catch (error) {
-    console.error(`[swarm] launch of ${slug} failed:`, error);
     const why = message(error).split("\n", 1)[0]!.slice(0, 200);
+    console.error(`[swarm] launch of ${slug} failed: ${why}`);
     await setPhase(board, id, "failed", { note: why }).catch(() => {});
     await tell(`Couldn't start: ${why}`);
-    await boxes.teardown(slug).catch(() => {});
-    await board.label(id, { set: { torn: "yes" } }).catch(() => {});
+    // Torn down only once it is: a teardown that failed leaves the run for reconcile to try again.
+    if (await boxes.teardown(slug).then(() => true, () => false)) await board.label(id, { set: { torn: "yes" } }).catch(() => {});
   }
 }
 
@@ -189,7 +189,15 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
 
   // The budget and the deadline are checked before anything that could fail on what agents wrote:
   // a run past either ends, whatever its plans hold.
+  // A run's last totals are saved before it ends, so the page shows what it came to.
+  const totals = async () => {
+    const settled = now!.counts.completed + now!.counts.failed + now!.counts.canceled;
+    const cost = spent().toFixed(4);
+    await board.label(found.id, { set: { cost, settled: String(settled), total: String(now!.tasks.length) } });
+    await mirror(board, found, { cost: Number(cost) });
+  };
   const finish = async (end: { phase: "done" | "stopped"; why: string }) => {
+    await totals();
     if (await setPhase(board, found.id, end.phase, { from: "running", note: end.why })) {
       await mirror(board, found, { phase: end.phase });
       await say(board, found.id, end.why);
@@ -207,13 +215,9 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
   } catch (error) {
     console.error(`[swarm] adding the plan's tasks to ${slug} failed:`, message(error).slice(0, 300));
   }
-  const settled = now.counts.completed + now.counts.failed + now.counts.canceled;
-  const cost = spent().toFixed(4);
-  await board.label(found.id, { set: { cost, settled: String(settled), total: String(now.tasks.length) } });
-  await mirror(board, found, { cost });
-
   const end = ending({ ...now, cost: spent() });
   if (end) return finish(end);
+  await totals();
 
   const up = await boxes.agents(slug);
   const agents = found.config.agents;
@@ -255,7 +259,9 @@ export async function inBatches<T, R>(items: T[], size: number, forMs: number, w
 export async function reconcileAll(board: Board = team(), boxes: Sandboxes = sandboxes): Promise<{ slug: string; error?: string }[]> {
   // The ones that could have sandboxes, by the one label that says so: however many threads the runs
   // channel holds, none pushes an active run out of the list.
-  const all = await runs(board, 200, { torn: "no" });
+  // and the newest runs too, so a run whose label someone removed is still found while it's recent.
+  const [labeled, newest] = await Promise.all([runs(board, 200, { torn: "no" }), runs(board, 50)]);
+  const all = [...new Map([...labeled, ...newest].map((found) => [found.slug, found])).values()];
   const active = all.filter((found) => found.phase !== "preparing" && !found.torn);
   return Promise.all(
     active.map((found) =>

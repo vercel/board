@@ -84,8 +84,12 @@ const read = (id: string) => vb<{ message: Message; replies: Message[] }>("read"
  * each summing every task on every renewal would be most of the run's board reads.
  */
 async function runState(): Promise<{ phase: string | undefined; cost: number }> {
-  const { labels } = (await read(config.control)).message;
-  return { phase: labels.phase, cost: Number(labels[LABEL.cost]) || 0 };
+  // Only what the deployment wrote: the state is the control thread's own text, which no one else can edit.
+  const { message: control } = await read(config.control);
+  const state = profileOfSelf(control.by, config.owner) === null ? /```json control\n([\s\S]*?)\n```/.exec(control.text)?.[1] : undefined;
+  if (!state) throw new Error("the run's control thread says nothing the deployment wrote");
+  const { phase, cost } = JSON.parse(state) as { phase?: string; cost?: number };
+  return { phase, cost: typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : 0 };
 }
 
 /** The last reply in a thread that carries an agent's output of `role`, without its first word. */

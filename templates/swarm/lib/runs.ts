@@ -162,13 +162,42 @@ export const say = (board: Board, id: string, text: string) => board.reply(id, t
 export const savePrepared = (board: Board, id: string, prepared: Prepared) =>
   board.reply(id, `What the launch recorded.\n\n\`\`\`json state\n${JSON.stringify(prepared)}\n\`\`\``).then(() => undefined);
 
-/** Opens a run's control thread in its channel: its agents read the run's phase and spend there. */
-export const openControl = async (board: Board, slug: string) =>
-  (await board.post(runChannel(slug), { text: "This run's phase and spend, for its agents.", labels: { phase: "running", cost: "0" }, id: `control-${slug}` })).id;
+/** What a run's control thread says: its phase and spend, in its text, which only its author (the deployment) can edit. */
+export type Control = { phase: Phase; cost: number };
 
-/** Mirrors a run's phase or spend onto its control thread. Best effort: an agent that can't read it stops at its deadline. */
-export async function mirror(board: Board, run: Pick<Run, "prepared">, labels: Record<string, string>): Promise<void> {
-  if (run.prepared?.control) await board.label(run.prepared.control, { set: labels }).catch(() => {});
+const controlText = (control: Control) => `This run's phase and spend, for its agents.\n\n\`\`\`json control\n${JSON.stringify(control)}\n\`\`\``;
+
+/** The state a control thread's text holds, or null for text that holds none. */
+export function readControl(text: string): Control | null {
+  const match = /```json control\n([\s\S]*?)\n```/.exec(text);
+  try {
+    const parsed = match ? (JSON.parse(match[1]!) as Partial<Control>) : null;
+    return parsed && PHASES.includes(parsed.phase as Phase) && typeof parsed.cost === "number" && Number.isFinite(parsed.cost) ? { phase: parsed.phase as Phase, cost: parsed.cost } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opens a run's control thread in its channel: its agents read the run's phase and spend there, not
+ * in the runs channel, which holds every run's goal. The state is in the thread's text, not its
+ * labels: anyone who may label in the channel, the run's own agents included, could change a label,
+ * and only the deployment can edit what it wrote.
+ */
+export const openControl = async (board: Board, slug: string) =>
+  (await board.post(runChannel(slug), { text: controlText({ phase: "running", cost: 0 }), id: `control-${slug}` })).id;
+
+/** Says a run's phase or spend on its control thread. Best effort: an agent that can't read it stops at its deadline. */
+export async function mirror(board: Board, run: Pick<Run, "prepared">, change: Partial<Control>): Promise<void> {
+  const id = run.prepared?.control;
+  if (!id) return;
+  try {
+    const now = readControl((await board.thread(id)).message.text) ?? { phase: "running", cost: 0 };
+    const next = { ...now, ...change };
+    if (next.phase !== now.phase || next.cost !== now.cost) await board.edit(id, controlText(next));
+  } catch (error) {
+    console.error(`[swarm] couldn't update the control thread ${id}:`, error instanceof Error ? error.message.slice(0, 200) : error);
+  }
 }
 
 /** An actor's ID without its profile: `--from` takes the person, and that covers every profile of theirs. */

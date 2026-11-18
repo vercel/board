@@ -9,7 +9,7 @@ import { doing, LABEL, planFrom, planReplies, REPLY_MAX, type RunnerConfig, type
 import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
 import { ask, begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
-import { run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
+import { readControl, run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
 import { areas, expand, seed } from "../lib/scenarios.ts";
 import { canRun, setup, type Deps } from "../lib/setup.ts";
@@ -457,4 +457,22 @@ test("only what this deployment and its agents wrote steers a run: forged runs, 
   await mallory.label(started.id, { unset: ["run"] });
   assert.notEqual((await readRun(started.slug, board))?.id, other.id);
   assert.deepEqual((await listRuns(board)).map((run) => run.slug).sort(), [started.slug, other.slug].sort());
+});
+
+test("a run's control thread says its phase and spend in text only the deployment can change, and stopping the run says so there", async () => {
+  const board = fresh();
+  const { boxes } = fakeBoxes();
+  const started = await begin(config({ agents: 1 }), board);
+  await launch(started, board, boxes);
+  const control = (await readRun(started.slug, board))!.prepared!.control!;
+  assert.deepEqual(readControl((await board.thread(control)).message.text), { phase: "running", cost: 0 });
+
+  // Someone else can't edit it, and a label on it says nothing.
+  const mallory = board.as("mallory");
+  await assert.rejects(mallory.edit(control, "```json control\n" + JSON.stringify({ phase: "stopped", cost: 0 }) + "\n```"));
+  await mallory.label(control, { set: { phase: "stopped" } });
+  assert.equal(readControl((await board.thread(control)).message.text)!.phase, "running");
+
+  await stop(started.slug, board, boxes);
+  assert.equal(readControl((await board.thread(control)).message.text)!.phase, "stopped");
 });

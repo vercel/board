@@ -7,7 +7,8 @@ import { SHARED_MS, sharedSnapshot } from "@/lib/swarm";
 // The page's live feed, as server-sent events: a snapshot when it connects, and another after every
 // change under the swarm. The browser never talks to the board, so it never holds a credential.
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// The stream holds 50 seconds of it: the rest is for the reconcile it starts after the response.
+export const maxDuration = 300;
 
 /** A connection ends before the function would, and the browser's EventSource opens the next. */
 const ROTATE_MS = 50_000;

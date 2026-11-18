@@ -153,15 +153,15 @@ export async function prepare(slug: string, repo: string, base: string, say: (te
     const baseBranch = (await must(sandbox, "reading the branch", "git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: SANDBOX.repo })).trim();
     const files = (await must(sandbox, "listing the files", "git", ["ls-files"], { cwd: SANDBOX.repo })).split("\n").filter(Boolean);
     // A review reads the code and runs nothing, so it installs nothing. An install that fails costs
-    // the agents their tests, not the run: what it printed goes to the project's logs, never the
-    // board, where it's the repo's words in the app's thread.
+    // the agents their tests, not the run.
     let setup: string | null = null;
     if (opts.install ?? true) {
       const install = await sandbox.runCommand({ cmd: "bash", args: ["-c", INSTALL], cwd: SANDBOX.repo });
       const out = (await install.stdout()).trim().split("\n").pop() ?? "none";
       if (install.exitCode !== 0) {
-        console.error(`[swarm] the dependency install for ${slug} exited ${install.exitCode}:`, (await install.stderr()).trim().slice(-2_000));
-        setup = `The dependency install failed (exit ${install.exitCode}), so tests may not run: the project's logs have why.`;
+        // What it printed stays in the sandbox: it can name private packages and registries.
+        console.error(`[swarm] the dependency install for ${slug} exited ${install.exitCode}`);
+        setup = `The dependency install failed (exit ${install.exitCode}), so tests may not run.`;
       } else setup = ["pnpm", "yarn", "npm", "bun"].includes(out) ? `Dependencies installed with ${out}.` : null;
     }
     await sandbox.stop();
