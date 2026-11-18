@@ -189,6 +189,27 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
   };
 }
 
+/** How old a snapshot every viewer shares may be: a snapshot is about nine board reads, and the board takes 600 a minute from this project, agents included. */
+export const SHARED_MS = 5_000;
+
+let shared: { at: number; value: Promise<Snapshot> } | undefined;
+
+/**
+ * The swarm's snapshot, shared by everyone looking at it from this instance: one is read at most
+ * every `SHARED_MS`, however many tabs are open, so watching a busy run doesn't spend the board's
+ * rate limit that its agents need. A read that failed isn't kept.
+ */
+export function sharedSnapshot(maxAgeMs = SHARED_MS): Promise<Snapshot> {
+  if (shared && Date.now() - shared.at < maxAgeMs) return shared.value;
+  const value = snapshot();
+  const entry = { at: Date.now(), value };
+  shared = entry;
+  value.catch(() => {
+    if (shared === entry) shared = undefined;
+  });
+  return value;
+}
+
 /** One task's thread: its brief, its labels, and its work log. Only a thread under the swarm. */
 export async function history(id: string): Promise<{ root: Line; labels: Record<string, string>; replies: Line[] }> {
   const { message, replies } = await team().thread(id);

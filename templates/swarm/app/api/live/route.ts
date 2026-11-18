@@ -1,6 +1,6 @@
 import { SWARM, team } from "@/lib/board";
 import { OPEN, open } from "@/lib/gate";
-import { snapshot } from "@/lib/swarm";
+import { SHARED_MS, sharedSnapshot } from "@/lib/swarm";
 
 // The page's live feed, as server-sent events: a snapshot when it connects, and another after every
 // change under the swarm. The browser never talks to the board, so it never holds a credential.
@@ -10,8 +10,8 @@ export const maxDuration = 60;
 /** A connection ends before the function would, and the browser's EventSource opens the next. */
 const ROTATE_MS = 50_000;
 
-/** A busy swarm redraws the page this often at most: a snapshot is several board reads. */
-const REDRAW_MS = 3_000;
+/** A busy swarm redraws the page this often at most: a snapshot is several board reads, shared by every viewer (`sharedSnapshot`). */
+const REDRAW_MS = SHARED_MS;
 
 export async function GET(request: Request): Promise<Response> {
   // The feed is whatever the swarm writes: only for the team.
@@ -28,7 +28,7 @@ export async function GET(request: Request): Promise<Response> {
       try {
         // A rotated connection comes back in a second, not the browser's default three.
         controller.enqueue(encoder.encode("retry: 1000\n\n"));
-        const first = await snapshot();
+        const first = await sharedSnapshot();
         send("snapshot", first);
         let cursor = first.cursor;
         let drawn = Date.now();
@@ -45,7 +45,7 @@ export async function GET(request: Request): Promise<Response> {
           const wait = drawn + REDRAW_MS - Date.now();
           if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
           if (stop.signal.aborted) break;
-          send("snapshot", await snapshot());
+          send("snapshot", await sharedSnapshot());
           drawn = Date.now();
         }
       } catch (error) {

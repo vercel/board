@@ -351,58 +351,85 @@ const prName = (url: string) => url.replace(/^https:\/\/github\.com\/([^/]+\/[^/
 /** The pull requests a task opened: its `pr` label, or links in its result. */
 const prsOf = (task: Task) => [...new Set([...(task.pr ? [task.pr] : []), ...(task.note?.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/g) ?? [])])];
 
+/** How a task of a run ended, in words a person reads at a glance. */
+type Outcome = { kind: "pr" | "none" | "failed" | "canceled" | "done"; line: string };
+
+/** The first sentence or two of what an agent said, without its boilerplate. */
+const gist = (text: string | null, max = 220) => {
+  const plain = (text ?? "").replace(/https:\/\/github\.com\/\S+/g, "").replace(/\s+/g, " ").trim();
+  return plain.length > max ? `${plain.slice(0, max).replace(/\s\S*$/, "")}…` : plain;
+};
+
+function outcomeOf(task: Task, review: Task | undefined): Outcome {
+  const verdict = review && ENDED.includes(review.state) ? (review.state === "completed" ? "review approved" : `review asked for changes${review.note ? `: ${gist(review.note, 120)}` : ""}`) : review ? "review pending" : null;
+  if (task.state === "failed") return { kind: "failed", line: `Failed: ${gist(task.note) || "no reason given"}` };
+  if (task.state === "canceled") return { kind: "canceled", line: `Canceled${task.note ? `: ${gist(task.note)}` : ""}` };
+  const prs = prsOf(task);
+  if (prs.length) return { kind: "pr", line: [`Pull request ${prs.map(prName).join(", ")} opened`, verdict].filter(Boolean).join(" · ") };
+  if (task.role === "work") return { kind: "none", line: `No change made: ${gist(task.note) || "the agent found nothing to change"}` };
+  return { kind: "done", line: gist(task.note) || "Done" };
+}
+
 /**
- * What a run came to, in one place: the pull requests it opened, then how each of its tasks ended,
- * the planner's and the reviews' left out (a review shows on the work it reviewed). A review run's
- * report comes first: it's the run's result.
+ * What a run came to, in one place: a line that counts how its tasks ended, the pull requests it
+ * opened, then each task with how it ended in words (the planner's and the reviews' left out: a
+ * review shows as the verdict on the work it reviewed). A review run's report comes first.
  */
 function Results({ run, tasks, show }: { run: RunView; tasks: Task[]; show: (id: string) => void }) {
-  const ended = tasks.filter((task) => ENDED.includes(task.state));
-  const prs = [...new Set(ended.filter((task) => task.role === "work").flatMap(prsOf))];
   const reviews = new Map(tasks.filter((task) => task.role === "review").map((task) => [task.needs[0], task]));
-  const outcomes = ended.filter((task) => task.role !== "plan" && task.role !== "review" && task.role !== "verify");
+  const ended = tasks.filter((task) => ENDED.includes(task.state) && task.role !== "plan" && task.role !== "review" && task.role !== "verify");
   const report = ended.find((task) => task.role === "report" && task.state === "completed");
-  if (ended.length === 0) return null;
+  const outcomes = ended.filter((task) => task !== report).map((task) => ({ task, outcome: outcomeOf(task, reviews.get(task.id)) }));
+  const prs = [...new Set(outcomes.flatMap(({ task }) => prsOf(task)))];
+  const counts = { pr: 0, none: 0, failed: 0, canceled: 0, done: 0 };
+  for (const { outcome } of outcomes) counts[outcome.kind]++;
+  const working = tasks.filter((task) => !ENDED.includes(task.state) && task.role !== "review" && task.role !== "verify").length;
+  const over = run.phase !== "running" && run.phase !== "preparing";
+
+  const headline = [
+    counts.pr && `${counts.pr} ${counts.pr === 1 ? "pull request" : "pull requests"} opened`,
+    counts.none && `${counts.none} with no change needed`,
+    counts.done && `${counts.done} done`,
+    counts.failed && `${counts.failed} failed`,
+    counts.canceled && `${counts.canceled} canceled`,
+    !over && working && `${working} still going`,
+  ].filter(Boolean);
+
   return (
     <div className="results">
-      <h3>Results</h3>
+      <h3>{over ? "Result" : "Results so far"}</h3>
+      {outcomes.length === 0 && !report ? (
+        <p className="faint">{over ? `Nothing came of it: ${run.note ?? "the run ended before it had any tasks."}` : "Nothing finished yet. Each task's outcome shows here as it ends."}</p>
+      ) : (
+        <p className="headline">{headline.join(" · ")}</p>
+      )}
       {report?.note && (
         <button type="button" className="report" onClick={() => show(report.id)}>
-          {report.note.slice(0, 600)}
+          {report.note.slice(0, 1_200)}
         </button>
       )}
       {prs.length > 0 && (
-        <p>
-          <span className="faint">{prs.length === 1 ? "Pull request" : `${prs.length} pull requests`}</span>{" "}
-          {prs.map((url, i) => (
-            <span key={url}>
-              {i > 0 && ", "}
-              <a href={url} target="_blank" rel="noreferrer">
-                {prName(url)}
-              </a>
-            </span>
+        <p className="prs">
+          {prs.map((url) => (
+            <a key={url} href={url} target="_blank" rel="noreferrer">
+              {prName(url)}
+            </a>
           ))}
         </p>
       )}
       <ul>
-        {outcomes.map((task) => {
-          const review = reviews.get(task.id);
-          const verdict = review && ENDED.includes(review.state) ? (review.state === "completed" ? "approved" : "changes asked") : null;
-          return (
-            <li key={task.id}>
-              <button type="button" onClick={() => show(task.id)} title={task.note ?? task.title}>
-                <i data-state={task.state === "completed" ? "done" : task.state} aria-hidden />
+        {outcomes.map(({ task, outcome }) => (
+          <li key={task.id}>
+            <button type="button" onClick={() => show(task.id)} title="Open its work log">
+              <i data-outcome={outcome.kind} aria-hidden />
+              <span className="what">
                 <span className="text">{task.title}</span>
-                <span className="faint">
-                  {prsOf(task).map(prName).join(", ") || (task.state === "completed" ? firstLine(task.note ?? "done").slice(0, 80) : task.state)}
-                  {verdict ? ` · ${verdict}` : ""}
-                </span>
-              </button>
-            </li>
-          );
-        })}
+                <span className={outcome.kind === "failed" ? "bad" : "faint"}>{outcome.line}</span>
+              </span>
+            </button>
+          </li>
+        ))}
       </ul>
-      {run.phase !== "running" && run.phase !== "preparing" && outcomes.length === 0 && !report && <p className="faint">No work tasks finished: {run.note ?? "the run ended before its plan had any."}</p>}
     </div>
   );
 }

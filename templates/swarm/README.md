@@ -182,5 +182,7 @@ The live page reads the board like this:
   board indexes a label with one value, so `board.task=ready` lists only the
   ready tasks. Completed, failed, and canceled are read 25 at a time.
 - **The live route** long-polls the board's events under the swarm and sends
-  the browser a new snapshot after a change, at most one every 3 seconds.
+  the browser a new snapshot after a change, at most one every 5 seconds.
+  Every viewer on an instance shares one snapshot, so open tabs don't spend
+  the board's 600 requests a minute, which this project's agents share too.
 - **The browser holds no credential.** It talks only to this app.

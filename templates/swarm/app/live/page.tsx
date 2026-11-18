@@ -2,7 +2,7 @@ import { headers } from "next/headers";
 import { Swarm } from "./swarm";
 import { SWARM, NAME } from "@/lib/board";
 import { OPEN, open } from "@/lib/gate";
-import { snapshot } from "@/lib/swarm";
+import { sharedSnapshot } from "@/lib/swarm";
 import "./live.css";
 
 // Every load reads the board: the queue is the swarm's, not this build's.
@@ -23,7 +23,10 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
     );
   }
   const query = await searchParams;
-  const first = await snapshot().catch((error: unknown) => (error as Error).message);
+  // A rate-limited read is tried once more: it's usually the board catching its breath.
+  const first = await sharedSnapshot()
+    .catch(() => new Promise((resolve) => setTimeout(resolve, 2_000)).then(() => sharedSnapshot()))
+    .catch((error: unknown) => (error as Error).message);
   if (typeof first === "string") {
     return (
       <div className="live">

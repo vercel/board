@@ -122,7 +122,8 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   indexes only that, and pages through every thread in the swarm for
   `a|b` or a bare key. Nothing is kept between snapshots.
   `app/api/live` long-polls the swarm's events and sends a snapshot over
-  server-sent events after a change, at most one every 3 seconds. The browser
+  server-sent events after a change, at most one every 5 seconds, from a
+  snapshot every viewer on the instance shares (`sharedSnapshot`). The browser
   holds no credential.
 - `pnpm seed` makes sample tasks, one plan per channel, a review that waits for
   its fix among them. `pnpm worker <name>` is a stand-in agent that claims,
