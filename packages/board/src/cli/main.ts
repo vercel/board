@@ -868,6 +868,9 @@ function failureOf(error: unknown): Failure {
         return own('platform', 'no_project')
       case 'no_token':
         return own('auth', 'token_unavailable')
+      case 'no_team_board':
+        // A deployment the API won't let make its team's board: the handle's hint says who does.
+        return own('not_found', 'board_not_found')
       case 'no_board':
         // A person's named board that isn't there, or that they can't see: this command again makes it.
         return own('not_found', 'board_not_found', [{ instruction: 'Check the name, or make it', argv: rerun('--ensure') }])

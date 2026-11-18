@@ -1151,18 +1151,56 @@ describe('vercel()', () => {
     expect(latest.messages.map((m) => m.text)).toEqual([...Array.from({ length: 100 }, (_, i) => `m${i + 31}`), 'quiet after'])
   }, 30_000)
 
-  it("makes the team's board the first time a person uses it, and tells a project it needs a grant", async () => {
-    const pong = handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production')
-    await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({
-      status: 403,
-      code: 'board_not_granted',
-      message: "this project has no access to the team's board (prj_pong, production).",
-      hint: "Grant it: vb grants create --project prj_pong --environment production --can '*=read,post,react,label'",
-    })
+  it("makes the team's board the first time a person or a deployment uses it", async () => {
     const api = fakeMessageboard({ boardId: null })
     await handleOn(api).post('dev', { text: 'hello' })
     expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
+    // A production deployment's first call makes it, as board({ name }) makes its own; a preview's finds it.
+    const fresh = fakeMessageboard({ boardId: null })
+    await handleOn(fresh, 'project:prj_pong:production').post('dev', { text: 'from production' })
+    await handleOn(fresh, 'project:prj_pong:preview').post('dev', { text: 'from a preview' })
+    expect((await handleOn(fresh).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from production', 'from a preview'])
+  })
+
+  it("tells a deployment the API won't let make the team's board that someone on the team opens it once", async () => {
+    const refused = {
+      status: 404,
+      code: 'no_team_board',
+      hint: 'Someone on the team opens it once: vb whoami --scope team_test',
+    }
+    // An API from before deployments could make it, and an environment that can't.
+    const before = fakeMessageboard({ boardId: null, projectsCantMakeDefault: true })
+    await expect(handleOn(before, 'project:prj_pong:production').post('dev', { text: 'hello' })).rejects.toMatchObject({
+      ...refused,
+      message: "this project can't make the team's board (prj_pong, production), and nobody on the team has opened it yet.",
+    })
+    // However it refuses, short of a conflict: nobody has seen what that API says to a project's token.
+    const unsupported = fakeMessageboard({ boardId: null, projectsCantMakeDefault: { status: 400, code: 'unsupported_principal' } })
+    await expect(handleOn(unsupported, 'project:prj_pong:production').post('dev', { text: 'hello' })).rejects.toMatchObject({
+      ...refused,
+      message: "this project can't make the team's board (prj_pong, production), and nobody on the team has opened it yet.",
+    })
+    // Credentials, a timeout, or a rate limit say nothing of the board: they're the API's own.
+    for (const [status, code] of [[401, 'invalid_token'], [408, 'timeout'], [409, 'conflict']] as const) {
+      const failing = fakeMessageboard({ boardId: null, projectsCantMakeDefault: { status, code } })
+      await expect(handleOn(failing, 'project:prj_pong:production').post('dev', { text: 'hello' })).rejects.toMatchObject({ status, code })
+    }
+    await expect(handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:development').post('dev', { text: 'hello' })).rejects.toMatchObject({
+      ...refused,
+      message: "this project can't make the team's board (prj_pong, development), and nobody on the team has opened it yet.",
+    })
+  })
+
+  it("tells a deployment the team's board's grants keep out the grant that lets it in", async () => {
+    const api = fakeMessageboard({ defaultGranted: ['prj_ping:production'] })
+    await expect(handleOn(api, 'project:prj_pong:production').post('dev', { text: 'hello' })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_not_granted',
+      message: "this project has no access to the team's board (prj_pong, production).",
+      hint: "Grant it: vb grants create --project prj_pong --environment production --can '*=read,post,react,label,sync'",
+    })
+    await handleOn(api, 'project:prj_ping:production').post('dev', { text: 'let in' })
   })
 
   it('says what the API says its credentials may do, and until when, and what any it lets in may when it says neither', async () => {
@@ -1213,7 +1251,7 @@ describe('vercel()', () => {
     const api = fakeMessageboard()
     await handleOn(api, 'user:u_jb').me()
     expect(api.requests.filter((request) => request.endsWith('/me'))).toEqual(['GET /boards/brd_test/me'])
-    await expect(handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production').me()).rejects.toMatchObject({ status: 403, code: 'board_not_granted' })
+    await expect(handleOn(fakeMessageboard({ defaultGranted: [] }), 'project:prj_pong:production').me()).rejects.toMatchObject({ status: 403, code: 'board_not_granted' })
   })
 
   it("never sends VERCEL_TOKEN: a deployment sends its own OIDC token, so its watchers register as its project, and anyone else BOARD_TOKEN or their login", async () => {
@@ -1278,7 +1316,7 @@ describe('vercel()', () => {
         code: 'board_not_granted',
         origin: 'handle',
         message: 'this project has no access to board security (prj_pong, preview).',
-        hint: "Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'",
+        hint: "Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label,sync'",
       })
     })
 
@@ -3250,6 +3288,14 @@ describe('a request the API puts off', () => {
     const { id } = await posting
     const { threads } = await julian.threads({ channel: 'dev' })
     expect(threads.map((thread) => thread.message.id)).toEqual([id])
+  })
+
+  it("gives a deployment the API's rate limit, not a missing board, when making the team's board is put off", async () => {
+    timers()
+    const api = fakeMessageboard({ boardId: null, projectsCantMakeDefault: { status: 429, code: 'rate_limited' } })
+    const posting = handleOn(api, 'project:prj_pong:production').post('dev', { text: 'hi' }).catch((error: unknown) => error)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await posting).toMatchObject({ status: 429, code: 'rate_limited' })
   })
 
   it("gives up with the API's own error after five tries", async () => {

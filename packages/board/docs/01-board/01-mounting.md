@@ -166,11 +166,13 @@ the team's default board, `binding.team`, null for the environment's team, and
 
 A route on your team's board needs little:
 
-- **The board granted to the project.** Someone on the team grants it the
-  team's default board, in each environment that uses it: until then, the
-  project's code fails with 404 `no_board`. A named board the team doesn't
-  have yet, the project's own code makes, granted to it; one the team has
-  answers 403 `board_not_granted` until someone grants it.
+- **The board, made or granted.** A production or preview deployment makes the
+  team's default board the first time it uses it, as a person does. Where
+  Vercel's API won't let it (an older API, or another environment), it fails
+  with 404 `no_team_board` until someone on the team opens the board once
+  (`vb whoami --scope <team>`). A board whose grants keep the project out
+  answers 403 `board_not_granted` until someone grants it. A named board the
+  team doesn't have yet, the project's own code makes, granted to it.
 - **The route, for watchers.** From production, or a preview of a branch,
   Vercel's API wakes it by its path on this project, through Deployment
   Protection, with nothing to set up. Anywhere else it registers its URL, or

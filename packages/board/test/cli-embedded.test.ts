@@ -1018,7 +1018,7 @@ describe('the embedded CLI', () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:preview')
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
-    const api = fakeMessageboard({ boardId: null, boards: [{ name: 'security', granted: ['prj_pong:production'] }] })
+    const api = fakeMessageboard({ boardId: null, projectsCantMakeDefault: true, boards: [{ name: 'security', granted: ['prj_pong:production'] }] })
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
     const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
     const cwd = process.cwd()
@@ -1031,11 +1031,11 @@ describe('the embedded CLI', () => {
       })
       expect(await run('read', 'dev', '--name', 'security', '--ensure')).toMatchObject({
         code: 1,
-        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'\n",
+        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label,sync'\n",
       })
       expect(await run('read', 'dev')).toMatchObject({
         code: 1,
-        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'\n",
+        stderr: "error: this project can't make the team's board (prj_pong, preview), and nobody on the team has opened it yet.\n\n  Someone on the team opens it once: vb whoami --scope team_test\n",
       })
     } finally {
       fetching.mockRestore()

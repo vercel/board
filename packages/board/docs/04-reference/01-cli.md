@@ -195,18 +195,20 @@ itself.
   ```
 
   With `--ensure`, a board a project has no access to fails with
-  `board_not_granted`, and so does the team's default board, either way:
+  `board_not_granted`, and so does the team's default board where its grants
+  keep the project out. A team with no board yet gets one from a production or
+  preview deployment; where Vercel's API won't let it make one, it says who can:
 
   ```text
   $ vb read dev --name security --ensure
   error: this project has no access to board security (prj_pong, preview).
 
-    Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'
+    Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label,sync'
 
   $ vb read dev
-  error: this project has no access to the team's board (prj_pong, preview).
+  error: this project can't make the team's board (prj_pong, preview), and nobody on the team has opened it yet.
 
-    Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'
+    Someone on the team opens it once: vb whoami --scope team_test
   ```
 - **A team's board has a URL too:** the one `whoami` prints for it
   (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`), which

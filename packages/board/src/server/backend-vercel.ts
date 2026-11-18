@@ -813,14 +813,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * A project a board's grants don't let in, the one `name`s or the team's (null): they were narrowed,
    * since every project on the team gets in by default. Its way out is the grant that lets it back in,
-   * naming the project by ID, since `/me` carries no name.
+   * with what a new board's g2 gives every project, naming the project by ID, since `/me` carries no name.
    */
   const notLetIn = (name: string | null, principal: ApiPrincipal) => {
     const board = name === null ? "the team's board" : `board ${name}`
     if (principal.type !== 'project') return new HttpError(403, 'board_not_granted', `this project has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
-    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${name}`} --can '*=read,post,react,label'`
-    return new HttpError(403, 'board_not_granted', `this project has no access to ${board} (${principal.projectId}, ${principal.environment}).`, {
-      hint: `Grant it: ${grant}`,
+    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${name}`} --can '*=read,post,react,label,sync'`
+    return new HttpError(403, 'board_not_granted', `this project has no access to ${board} (${principal.projectId}, ${principal.environment}).`, { hint: `Grant it: ${grant}`, origin: 'handle' })
+  }
+
+  /**
+   * A project the API won't let make the team's board: an API from before deployments could, or an
+   * environment other than production and preview. A person makes it by using it once.
+   */
+  const notMade = async (who: Who, principal: Extract<ApiPrincipal, { type: 'project' }>) => {
+    const team = (await teamId()) ?? (await self(who)).teamId
+    return new HttpError(404, 'no_team_board', `this project can't make the team's board (${principal.projectId}, ${principal.environment}), and nobody on the team has opened it yet.`, {
+      hint: `Someone on the team opens it once: vb whoami --scope ${team}`,
       origin: 'handle',
     })
   }
@@ -829,8 +838,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * The board's ID: the one given, the one `board({ name })` names, or the team's, which the API
    * names only to those it lets in. A team with none gets one the first time a person uses it, as
-   * the API asks of its clients; a project can't make it, and needs a person to grant it the board
-   * anyway. Each is asked for once.
+   * the API asks of its clients. A production or preview deployment asks too, and is told what to do
+   * where the API refuses it. Each is asked for once.
    */
   const boardId = (who: Who) =>
     (board ??= options.board
@@ -839,10 +848,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ? boardNamed(who, boardName()!)
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
-            const { principal } = (await self(who)).actor
-            if (principal.type === 'project') throw notLetIn(null, principal)
-            const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
-            return made.id
+            // A project asks for it as a person does, as board({ name }) ensures its board. The API makes
+            // or finds it, says the board's there and its grants keep the project out, or won't let it.
+            try {
+              const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
+              return made.id
+            } catch (error) {
+              // Any refusal, whatever an API from before deployments could make it says to one: not a conflict,
+              // or credentials, a timeout, or a rate limit, which say nothing of the board.
+              if (!(error instanceof HttpError && error.status >= 400 && error.status < 500 && ![401, 408, 409, 429].includes(error.status))) throw error
+              const { principal } = (await self(who)).actor
+              if (principal.type !== 'project') throw error
+              throw error.code === 'board_not_granted' ? notLetIn(null, principal) : await notMade(who, principal)
+            }
           })).catch((error: unknown) => {
       board = null
       throw error

@@ -2435,6 +2435,10 @@ export function fakeMessageboard(
     repositories?: Record<string, string>
     me?: Record<string, MeSays> | false
     notDefault?: boolean
+    /** The projects the team's board lets in, as `prj_…:<environment>`, where its grants were narrowed: every one unless this says. */
+    defaultGranted?: string[]
+    /** A project's `POST /boards/default` is refused whatever its environment, as Vercel's API did before deployments could make the team's board: 403 `forbidden`, or the status and code given. */
+    projectsCantMakeDefault?: boolean | { status: number; code: string }
     /** True for an API that lists threads with their first and newest messages (`include=messages`). Vercel's doesn't yet: `include` is 400 there. */
     inlineThreadMessages?: boolean
     /** `false`: an API from before its thread list took `limit`, which is 400 there, and every page is 25 threads. Vercel's takes 1 to 100. */
@@ -2519,7 +2523,7 @@ export function fakeMessageboard(
 
   const kept = (id: string, name: string, granted: Kept['granted'], members: Kept['members'] = null): Kept => ({ id, name, granted, members, data: fakeBoard(shared, id) })
   // The default board is kept from the start, so what a test reads of it holds once a person makes it.
-  const general = kept(options.boardId === undefined ? 'brd_test' : (options.boardId ?? 'brd_default'), 'General', 'all')
+  const general = kept(options.boardId === undefined ? 'brd_test' : (options.boardId ?? 'brd_default'), 'General', options.defaultGranted ? new Set(options.defaultGranted) : 'all')
   let made = options.boardId !== null
   const others = (options.boards ?? []).map((board) => kept(board.id ?? `brd_${randomUUID()}`, board.name, new Set(board.granted ?? []), board.members ? new Set(board.members) : null))
   const boards = () => [...(made ? [general] : []), ...others]
@@ -2590,7 +2594,12 @@ export function fakeMessageboard(
     if (actor.narrowed && method === 'POST' && (path === '/boards/default' || path === '/boards/ensure')) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's boards: that's its principal's job.")
     if (method === 'POST' && path === '/boards/default') {
       // Board creates record a person's event, so project tokens can't.
-      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
+      // A production or preview deployment makes it, or finds it, as a person does, unless its grants keep it out. Other environments can't.
+      if (actor.principal.type === 'project') {
+        if (typeof options.projectsCantMakeDefault === 'object') throw new Refused(options.projectsCantMakeDefault.status, options.projectsCantMakeDefault.code)
+        if (options.projectsCantMakeDefault || !['production', 'preview'].includes(actor.principal.environment)) throw new Refused(403, 'forbidden')
+        if (made && !mayUse(actor, general)) throw new Refused(403, 'board_not_granted', "This project isn't granted the team's board.")
+      }
       if (!made && named(general.name)) throw new Refused(409, 'board_name_taken')
       made = true
       return { board: show(general) }
