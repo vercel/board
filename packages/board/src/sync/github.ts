@@ -115,7 +115,7 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
       case 'synchronize':
         if (!sha) return null
         // The last commit's CI results aren't this one's.
-        return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.synchronized', labels: head, reply: null, createRoot: false, owns: ['ci.'] } }
+        return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.synchronized', labels: head, reply: null, createRoot: false, owns: [ciPrefix((body.repository as { full_name: string }).full_name, pr.number)] } }
       case 'ready_for_review':
         return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.ready', labels: { ...pr_label, state: 'open' }, reply: null, createRoot: true } }
       case 'converted_to_draft':
@@ -184,6 +184,12 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
   return null
 }
 
+/**
+ * A PR's CI labels, `ci.board-12.`: a board thread can join several PRs, even in other repos, and
+ * each PR's results and pushes touch only its own.
+ */
+const ciPrefix = (repo: string, number: number) => `ci.${slug(repo.slice(repo.indexOf('/') + 1))}-${number}.`
+
 /** Conclusions that mean a workflow failed. `cancelled` usually means a newer push superseded it. */
 const FAILED = ['failure', 'timed_out', 'startup_failure']
 /** Who CI results are posted as: GitHub Actions' bot, so they don't read as the person who pushed. */
@@ -201,7 +207,7 @@ type WorkflowRun = {
 
 /**
  * Maps a completed `workflow_run` to a lifecycle event on each PR it ran for, at the commit the PR
- * is at: a failure replies and sets `ci.<workflow file>=<conclusion>`, a pass unsets it. A fork's PRs
+ * is at: a failure replies and sets `ci.<repo>-<number>.<workflow file>=<conclusion>`, a pass unsets it. A fork's PRs
  * aren't in `pull_requests`, so their runs reach no thread.
  */
 function workflowRun(body: Record<string, unknown>): { lifecycle: Lifecycle; number: number; user: User }[] {
@@ -210,25 +216,28 @@ function workflowRun(body: Record<string, unknown>): { lifecycle: Lifecycle; num
   const repo = (body.repository as { full_name?: string } | undefined)?.full_name
   if (!run?.name || !run.path || !run.head_sha || !run.conclusion || !repo) return []
   const file = run.path.slice(run.path.lastIndexOf('/') + 1).replace(/\.ya?ml$/, '')
-  const key = `ci.${slug(file)}`.slice(0, 64)
-  if (key === 'ci.') return []
+  if (!slug(file)) return []
   const failed = FAILED.includes(run.conclusion)
   if (!failed && run.conclusion !== 'success') return []
   return (run.pull_requests ?? [])
     .filter((pr) => pr.head?.sha === run.head_sha)
-    .map((pr) => ({
-      number: pr.number,
-      user: ACTIONS,
-      lifecycle: {
-        type: failed ? 'ci.failed' : 'ci.passed',
-        title: `PR #${pr.number}`,
-        url: `https://github.com/${repo}/pull/${pr.number}`,
-        labels: failed ? { [key]: run.conclusion! } : {},
-        unset: failed ? [] : [key],
-        reply: failed ? `${run.name} ${run.conclusion === 'failure' ? 'failed' : run.conclusion!.replace('_', ' ')} on ${run.head_sha!.slice(0, 7)}${run.html_url ? `: ${run.html_url}` : ''}` : null,
-        createRoot: false,
-      },
-    }))
+    .map((pr) => {
+      const key = `${ciPrefix(repo, pr.number)}${slug(file)}`.slice(0, 64)
+      const verdict = run.conclusion === 'failure' ? 'failed' : run.conclusion!.replace('_', ' ')
+      return {
+        number: pr.number,
+        user: ACTIONS,
+        lifecycle: {
+          type: failed ? 'ci.failed' : 'ci.passed',
+          title: `PR #${pr.number}`,
+          url: `https://github.com/${repo}/pull/${pr.number}`,
+          labels: failed ? { [key]: run.conclusion! } : {},
+          unset: failed ? [] : [key],
+          reply: failed ? `${run.name} ${verdict} on ${repo.slice(repo.indexOf('/') + 1)}#${pr.number} at ${run.head_sha!.slice(0, 7)}${run.html_url ? `: ${run.html_url}` : ''}` : null,
+          createRoot: false,
+        },
+      }
+    })
 }
 
 const GitHubSubject = z.object({ type: z.enum(['pull_request', 'issue']), repo: z.string(), number: z.number().int().positive() })
