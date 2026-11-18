@@ -1,7 +1,7 @@
 import { BoardError, createTasksInChunks, type Board, type MessageView, type TaskInBatch, type ThreadSummaryView } from "@vercel/board";
 import { LABEL, PHASES, STATES, type Phase, type Role, type State } from "../sandbox/shared.ts";
 import { RUNS, runChannel, team } from "./board.ts";
-import { readConfig, runText, type Config } from "./config.ts";
+import { readConfig, readSlug, runText, type Config } from "./config.ts";
 
 // A run on the board. Its thread, in RUNS, carries its config as text and where it stands as
 // labels: its phase, what it has spent, and how far its tasks are. Its tasks are threads in a
@@ -93,7 +93,8 @@ export function selfOf(board: Board): Promise<string> {
  */
 function toRun(message: MessageView, replies: MessageView[], self: string): Run | null {
   if (!ownWrite(message.by, self)) return null;
-  const slug = message.labels.run;
+  // Which run it is comes from its text, which only the deployment wrote; the label only finds it.
+  const slug = readSlug(message.text);
   const config = readConfig(message.text);
   if (!slug || !config) return null;
   let prepared: Prepared | null = null;
@@ -132,7 +133,7 @@ export const SLUG = /^r[a-z0-9]{4,16}$/;
 /** Starts a run's thread, in `preparing`. The same `slug` again answers the thread that's there. */
 export async function create(board: Board, config: Config, slug: string): Promise<Run> {
   // `torn=no` until its sandboxes are gone: reconcile finds the runs that may have sandboxes by that one label.
-  const message = await board.post(RUNS, { text: runText(config), labels: { run: slug, phase: "preparing", torn: "no" }, id: `run-${slug}` });
+  const message = await board.post(RUNS, { text: runText(config, slug), labels: { run: slug, phase: "preparing", torn: "no" }, id: `run-${slug}` });
   return toRun(message, [], await selfOf(board))!;
 }
 
@@ -198,7 +199,7 @@ export async function runs(board: Board = team(), limit = 50, label?: Record<str
 export async function run(slug: string, board: Board = team()): Promise<Run | null> {
   const { threads } = await board.threads({ channel: RUNS, label: { run: slug }, limit: 5 }).catch(() => ({ threads: [] as ThreadSummaryView[] }));
   const self = await selfOf(board);
-  const root = threads.find(({ message }) => message.labels.run === slug && ownWrite(message.by, self))?.message;
+  const root = threads.find(({ message }) => readSlug(message.text) === slug && ownWrite(message.by, self))?.message;
   if (!root) return null;
   const { message, replies } = await board.thread(root.id);
   return toRun(message, replies, self);

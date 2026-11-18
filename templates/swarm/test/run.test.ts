@@ -78,7 +78,7 @@ test("a budget needs a model with a price, and a run thread reads back the confi
   assert.match(priced(priceless, [])!, /no price/);
   assert.equal(priced({ ...priceless, budgetUsd: null }, []), null);
   assert.equal(priced(priceless, [{ id: "acme/unlisted", name: "x", context: 1, price: { input: 1, output: 1, cacheRead: 1 } }]), null);
-  assert.deepEqual(readConfig(runText(priceless)), priceless);
+  assert.deepEqual(readConfig(runText(priceless, "r1a2b3c")), priceless);
 });
 
 // ─── scenarios ──────────────────────────────────────────────────────────────
@@ -450,4 +450,11 @@ test("only what this deployment and its agents wrote steers a run: forged runs, 
   await reconcile(started.slug, board, boxes, { force: true });
   assert.equal((await snapshot(started.slug, board))!.tasks.some((task) => task.title.includes("cryptocurrency")), false);
   assert.equal(notes.started.length, started_before);
+
+  // A run's label moved onto another run's thread doesn't make that thread the run.
+  const other = await begin(config({ agents: 1, goal: "Another run on another repo entirely." }), board);
+  await mallory.label(other.id, { set: { run: started.slug } });
+  await mallory.label(started.id, { unset: ["run"] });
+  assert.notEqual((await readRun(started.slug, board))?.id, other.id);
+  assert.deepEqual((await listRuns(board)).map((run) => run.slug).sort(), [started.slug, other.slug].sort());
 });

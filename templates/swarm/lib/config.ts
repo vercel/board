@@ -121,7 +121,13 @@ export function priced(config: Config, models: Model[]): string | null {
 export const deadlineOf = (config: Config, start: number) => start + (config.minutes ?? MAX_MINUTES) * 60_000;
 
 /** A run thread's text: its title, then its config as the JSON `readConfig` reads back. */
-export const runText = (config: Config) => `${config.title}\n\n\`\`\`json\n${JSON.stringify(config, null, 2)}\n\`\`\``;
+export const runText = (config: Config, slug: string) => `${config.title}\n\n\`\`\`json\n${JSON.stringify(config, null, 2)}\n\`\`\`\n\nRun ${slug}`;
+
+/**
+ * The slug a run thread's text names: what the run is, its channel and its sandboxes. The text, not
+ * the \`run\` label, which anyone who may label can move from one run's thread to another's.
+ */
+export const readSlug = (threadText: string) => /\nRun (r[a-z0-9]{4,16})$/.exec(threadText)?.[1] ?? null;
 
 /** The config a run thread carries, or null for a thread that isn't one. */
 export function readConfig(threadText: string): Config | null {
