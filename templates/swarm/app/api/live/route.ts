@@ -1,4 +1,5 @@
 import { SWARM, team } from "@/lib/board";
+import { OPEN, open } from "@/lib/gate";
 import { snapshot } from "@/lib/swarm";
 
 // The page's live feed, as server-sent events: a snapshot when it connects, and another after every
@@ -13,6 +14,8 @@ const ROTATE_MS = 50_000;
 const REDRAW_MS = 3_000;
 
 export async function GET(request: Request): Promise<Response> {
+  // The feed is whatever the swarm writes: only for the team.
+  if (await open(request.headers.get("host"))) return new Response(OPEN, { status: 403 });
   const stop = new AbortController();
   request.signal.addEventListener("abort", () => stop.abort());
   const timer = setTimeout(() => stop.abort(), ROTATE_MS);

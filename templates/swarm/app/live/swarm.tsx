@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { thread } from "./actions";
+import { thread } from "@/app/actions";
 import type { Line, Snapshot, Task } from "@/lib/swarm";
 
 /** What a task shows as: its state, with a claim split by whether its lease still holds. */

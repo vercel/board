@@ -1,385 +1,346 @@
-/* A dense live dashboard in grayscale, like pong's page: dark by default, light when the system asks.
-   Color is kept for task states. */
-:root {
-  color-scheme: light dark;
-  --bg: #040404;
-  --shade: #161616;
-  --line: #252525;
-  --faint: #7a7a7a;
-  --muted: #909090;
-  --ink: #dedede;
-  --bright: #fafafa;
-  --working: #4c9aff;
-  --ready: #3ecf8e;
-  --review: #f5a623;
-  --bad: #ff5f56;
+/* The live view: a dense dashboard in grayscale, dark by default, light when the system asks. Color
+   is kept for task states. Everything is scoped to .live, so the launcher's styles and these never meet. */
+.live {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  font-size: 81.25%;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #fafafa;
-    --shade: #f0f0f0;
-    --line: #e0e0e0;
-    --faint: #6e6e6e;
-    --muted: #525252;
-    --ink: #1c1c1c;
-    --bright: #000000;
-    --working: #0068d6;
-    --ready: #1a7f4e;
-    --review: #a35200;
-    --bad: #c5221f;
-  }
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--muted);
+  font-size: 0.93rem;
   line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-}
 
-h1,
-h2,
-h3,
-p,
-ul {
-  margin: 0;
-}
+  h1,
+  h2,
+  h3,
+  p,
+  ul {
+    margin: 0;
+  }
 
-ul {
-  padding: 0;
-  list-style: none;
-}
+  ul {
+    padding: 0;
+    list-style: none;
+  }
 
-code,
-time,
-.who,
-.ch,
-.chip,
-.counts,
-.state {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-}
+  code,
+  time,
+  .who,
+  .ch,
+  .chip,
+  .counts,
+  .state {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+  }
 
-code,
-.who {
-  color: var(--ink);
-}
+  code,
+  .who {
+    color: var(--ink);
+  }
 
-button {
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
+  button {
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
 
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--working);
-  outline-offset: -2px;
-}
+  button:focus-visible,
+  a:focus-visible {
+    outline: 2px solid var(--working);
+    outline-offset: -2px;
+  }
 
-a {
-  color: var(--ink);
-}
+  a {
+    color: var(--ink);
+  }
 
-.faint {
-  color: var(--faint);
-}
+  .faint {
+    color: var(--faint);
+  }
 
-.bad {
-  color: var(--bad);
-}
+  .bad {
+    color: var(--bad);
+  }
 
-.pad {
-  padding: 0.5rem 0.75rem;
-}
+  .pad {
+    padding: 0.5rem 0.75rem;
+  }
 
-/* One header bar and three panes that scroll on their own. */
-.shell {
-  display: grid;
-  grid-template: auto minmax(0, 1fr) / 16rem minmax(0, 1fr) minmax(20rem, 30rem);
-  gap: 0.75rem;
-  height: 100dvh;
-  min-height: 30rem;
-  padding: 0.75rem;
-}
-
-header {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 1.25rem;
-}
-
-h1 {
-  color: var(--bright);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.state {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.state i,
-h3 i,
-.state-chip i {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--faint);
-  flex: none;
-}
-
-.state[data-live="live"] i {
-  background: var(--ready);
-}
-
-.state[data-live="down"] {
-  color: var(--bad);
-}
-
-.state[data-live="down"] i {
-  background: var(--bad);
-}
-
-.counts b {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.counts b.bad {
-  color: var(--bad);
-}
-
-.join {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.join button,
-.head button {
-  padding: 0.25rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--shade);
-  color: var(--ink);
-}
-
-.join button:hover,
-.head button:hover {
-  border-color: var(--faint);
-}
-
-.pane {
-  min-height: 0;
-  overflow-y: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-h2 {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--bright);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-nav h2:not(:first-child) {
-  border-top: 1px solid var(--line);
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding-block: 0.3rem;
-}
-
-h3 {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.6rem 0.75rem 0.2rem;
-  color: var(--ink);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-i[data-state="working"] {
-  background: var(--working);
-}
-
-i[data-state="ready"] {
-  background: var(--ready);
-}
-
-i[data-state="held"] {
-  background: var(--review);
-}
-
-i[data-state="failed"] {
-  background: var(--bad);
-}
-
-i[data-state="stalled"] {
-  background: var(--bad);
-}
-
-/* Rows are one line each, on a fixed height, so a list reads like a table. */
-nav button,
-.rows button,
-.agent {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  width: 100%;
-  height: 1.9rem;
-  padding: 0 0.75rem;
-  line-height: 1.9rem;
-  white-space: nowrap;
-}
-
-nav button,
-.agent {
-  justify-content: space-between;
-}
-
-nav button:hover,
-.rows button:hover,
-nav button[aria-pressed="true"] {
-  background: var(--shade);
-}
-
-nav button[aria-pressed="true"] {
-  color: var(--bright);
-}
-
-.agent .who,
-nav button span:first-child,
-.text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.text {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--ink);
-}
-
-.rows time {
-  flex: none;
-  width: 2.2rem;
-  color: var(--faint);
-}
-
-.rows .ch {
-  flex: none;
-  width: 5.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.rows .who {
-  flex: none;
-  max-width: 11rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chip {
-  flex: none;
-}
-
-.thread {
-  padding: 0.75rem;
-}
-
-.thread h3 {
-  padding: 1rem 0 0.4rem;
-}
-
-.note {
-  margin-bottom: 12px;
-  color: var(--ink);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.3rem 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.state-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--ink);
-}
-
-article {
-  padding: 0.5rem 0;
-  border-top: 1px solid var(--line);
-}
-
-article:first-of-type {
-  border-top: 0;
-}
-
-.by time {
-  color: var(--faint);
-}
-
-.body {
-  color: var(--ink);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.lost {
-  max-width: 40rem;
-  margin: 0 auto;
-  padding: 3rem 1rem;
-}
-
-.lost p {
-  margin-top: 0.75rem;
-}
-
-/* A phone gets the same three panes, stacked, with the page scrolling. */
-@media (max-width: 60rem) {
+  /* One header bar and three panes that scroll on their own. */
   .shell {
-    grid-template: auto / minmax(0, 1fr);
-    height: auto;
+    display: grid;
+    grid-template: auto minmax(0, 1fr) / 16rem minmax(0, 1fr) minmax(20rem, 30rem);
+    gap: 0.75rem;
+    height: calc(100dvh - var(--header));
+    min-height: 30rem;
+    padding: 0.75rem;
+  }
+
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 1.25rem;
+  }
+
+  h1 {
+    color: var(--bright);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .state i,
+  h3 i,
+  .state-chip i {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--faint);
+    flex: none;
+  }
+
+  .state[data-live="live"] i {
+    background: var(--ready);
+  }
+
+  .state[data-live="down"] {
+    color: var(--bad);
+  }
+
+  .state[data-live="down"] i {
+    background: var(--bad);
+  }
+
+  .counts b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .counts b.bad {
+    color: var(--bad);
+  }
+
+  .join {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .join button,
+  .head button {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--shade);
+    color: var(--ink);
+  }
+
+  .join button:hover,
+  .head button:hover {
+    border-color: var(--faint);
   }
 
   .pane {
-    max-height: 70dvh;
+    min-height: 0;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  h2 {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--bright);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  nav h2:not(:first-child) {
+    border-top: 1px solid var(--line);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding-block: 0.3rem;
+  }
+
+  h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem 0.75rem 0.2rem;
+    color: var(--ink);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  i[data-state="working"] {
+    background: var(--working);
+  }
+
+  i[data-state="ready"] {
+    background: var(--ready);
+  }
+
+  i[data-state="held"] {
+    background: var(--review);
+  }
+
+  i[data-state="failed"] {
+    background: var(--bad);
+  }
+
+  i[data-state="stalled"] {
+    background: var(--bad);
+  }
+
+  /* Rows are one line each, on a fixed height, so a list reads like a table. */
+  nav button,
+  .rows button,
+  .agent {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    width: 100%;
+    height: 1.9rem;
+    padding: 0 0.75rem;
+    line-height: 1.9rem;
+    white-space: nowrap;
+  }
+
+  nav button,
+  .agent {
+    justify-content: space-between;
+  }
+
+  nav button:hover,
+  .rows button:hover,
+  nav button[aria-pressed="true"] {
+    background: var(--shade);
+  }
+
+  nav button[aria-pressed="true"] {
+    color: var(--bright);
+  }
+
+  .agent .who,
+  nav button span:first-child,
+  .text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .text {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--ink);
+  }
+
+  .rows time {
+    flex: none;
+    width: 2.2rem;
+    color: var(--faint);
+  }
+
+  .rows .ch {
+    flex: none;
+    width: 5.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rows .who {
+    flex: none;
+    max-width: 11rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chip {
+    flex: none;
+  }
+
+  .thread {
+    padding: 0.75rem;
+  }
+
+  .thread h3 {
+    padding: 1rem 0 0.4rem;
+  }
+
+  .note {
+    margin-bottom: 12px;
+    color: var(--ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .state-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--ink);
+  }
+
+  article {
+    padding: 0.5rem 0;
+    border-top: 1px solid var(--line);
+  }
+
+  article:first-of-type {
+    border-top: 0;
+  }
+
+  .by time {
+    color: var(--faint);
+  }
+
+  .body {
+    color: var(--ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .lost {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 3rem 1rem;
+  }
+
+  .lost p {
+    margin-top: 0.75rem;
+  }
+
+  /* A phone gets the same three panes, stacked, with the page scrolling. */
+  @media (max-width: 60rem) {
+    .shell {
+      grid-template: auto / minmax(0, 1fr);
+      height: auto;
+    }
+
+    .pane {
+      max-height: 70dvh;
+    }
   }
 }
