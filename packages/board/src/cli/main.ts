@@ -386,7 +386,7 @@ export type Io = {
   error(chunk: string): void
   /** A file's bytes, for `--attach`; null when there's no such file. */
   readFile(path: string): Promise<Uint8Array | null>
-  /** Saves a file, for `download`; with `exclusive`, fails rather than replace one that's there. */
+  /** Saves a file, for `download`; with `exclusive`, fails with `EEXIST` rather than replace one that's there. */
   writeFile(path: string, data: Uint8Array, options?: { exclusive?: boolean }): Promise<void>
   /** What `-` reads. */
   stdin(): Promise<string>
@@ -409,14 +409,7 @@ const TERMINAL: Io = {
     if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw tooLarge(path)
     return new Uint8Array(await readFile(path))
   },
-  async writeFile(path, data, { exclusive = false } = {}) {
-    try {
-      await writeFile(path, data, { flag: exclusive ? 'wx' : 'w' })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw exists(path)
-      throw error
-    }
-  },
+  writeFile: (path, data, { exclusive = false } = {}) => writeFile(path, data, { flag: exclusive ? 'wx' : 'w' }),
   stdin: readStdin,
   tty: process.stdout.isTTY === true,
 }
@@ -436,6 +429,9 @@ function messageId(value: string | undefined, what = 'message ID'): string {
   if (!/^[^\s/]+$/.test(id)) throw usage(`${value} isn't a ${what}.`)
   return id
 }
+
+/** Characters that change how a name reads without showing: bidi controls and zero-width marks. */
+const INVISIBLE = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g
 
 /** A download that would replace a file, which only a path given to download may. */
 const exists = (path: string) =>
@@ -1777,9 +1773,18 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const disposition = response.headers.get('content-disposition') ?? ''
       const filename = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
       // Whoever posted the file chose its name: saved by it, it never lands as a dotfile or replaces a file.
-      const saveAs = basename(filename ? decodeURIComponent(filename) : id).replace(/^\.+/, '')
+      const saveAs = basename(filename ? decodeURIComponent(filename) : id)
+        .replace(INVISIBLE, '')
+        .replace(/^\.+/, '')
       const path = args[1] ?? (saveAs || id)
-      await io.writeFile(path, data, { exclusive: args[1] === undefined })
+      try {
+        await io.writeFile(path, data, { exclusive: args[1] === undefined })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          throw exists(path)
+        }
+        throw error
+      }
       if (flags.json) result({ attachment: { id }, path, outcome: 'downloaded' })
       else out(path)
       return 0

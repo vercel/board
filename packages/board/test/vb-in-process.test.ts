@@ -203,6 +203,11 @@ describe('vb()', () => {
       { path: 'shot.png', exclusive: true },
       { path: '/work/copy.png', exclusive: false },
     ])
+    // A host that refuses as Node does, with EEXIST, gets the CLI's own answer.
+    const full = { writeFile: async () => Promise.reject(Object.assign(new Error('taken'), { code: 'EEXIST' })) }
+    const refused = await vb(team, ['download', root.attachments[0].id, '--json'], full)
+    expect(refused.code).toBe(2)
+    expect(JSON.parse(refused.stderr)).toMatchObject({ reason: 'file_exists' })
     const piped = await vb(team, ['post', 'dev', '-', '--no-sync'], { stdin: 'from stdin\n' })
     expect(JSON.parse((await vb(team, ['read', piped.stdout.trim(), '--json'])).stdout).message.text).toBe('from stdin')
     // --file reads through readFile too: the sandbox's files, not this machine's.

@@ -64,7 +64,7 @@ export type VbOptions = {
   readFile?: (path: string) => Promise<Uint8Array | null> | PromiseLike<Uint8Array | null>
   /**
    * Saves a file, for `download`. With `exclusive`, the name came from the attachment, so
-   * fail rather than replace a file that's there.
+   * throw an error whose `code` is `EEXIST` rather than replace a file that's there.
    */
   writeFile?: (path: string, data: Uint8Array, options?: { exclusive?: boolean }) => Promise<void> | PromiseLike<void>
   /** The text `-` reads, as stdin would hold it. */

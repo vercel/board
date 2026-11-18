@@ -755,7 +755,8 @@ describe('cli', () => {
   it("saves a download by its name only as a new file that isn't hidden", async () => {
     const files = await serve(async (request) => {
       const id = new URL(request.url).pathname.split('/').at(-1)
-      const name = id === 'dotfile' ? '.npmrc' : 'run.log'
+      const names: Record<string, string> = { dotfile: '.npmrc', hidden: '\u200b.envrc', reversed: '\u202egol.sh' }
+      const name = names[id!] ?? 'run.log'
       return new Response(`bytes of ${name}`, {
         headers: { 'content-type': 'text/plain', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}` },
       })
@@ -766,6 +767,9 @@ describe('cli', () => {
       expect(await vb(['download', 'dotfile', '--url', board], {}, undefined, dir)).toEqual({ code: 0, stdout: 'npmrc\n', stderr: '' })
       expect(await readFile(join(dir, 'npmrc'), 'utf8')).toBe('bytes of .npmrc')
       await expect(readFile(join(dir, '.npmrc'))).rejects.toMatchObject({ code: 'ENOENT' })
+      // Invisible characters go too: a zero-width space can't hide a leading dot, nor a bidi override what a name ends in.
+      expect(await vb(['download', 'hidden', '--url', board], {}, undefined, dir)).toMatchObject({ code: 0, stdout: 'envrc\n' })
+      expect(await vb(['download', 'reversed', '--url', board], {}, undefined, dir)).toMatchObject({ code: 0, stdout: 'gol.sh\n' })
 
       await writeFile(join(dir, 'run.log'), 'mine')
       const kept = await vb(['download', 'replaces', '--url', board], {}, undefined, dir)
