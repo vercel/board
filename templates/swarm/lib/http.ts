@@ -1,3 +1,4 @@
+import { OPEN, open } from "./gate.ts";
 import type { Result } from "./operations.ts";
 
 // What every route in app/api does around an operation: who may ask, and the answer as JSON.
@@ -32,8 +33,40 @@ export const elsewhere = () => answer({ ok: false, problem: "This only takes req
 /** The domain a request came in on, which Deployment Protection is checked for. */
 export const hostOf = (request: Request) => request.headers.get("host");
 
-/** A request's JSON body, or an empty object: an operation checks what it was sent. */
+/** The most a request's body holds: a launch's config, or a task's brief, is a few kilobytes. */
+const BODY_MAX = 64 * 1024;
+
+/**
+ * What a write is refused for before its body is read, or null: from anywhere but this deployment's
+ * own pages, or while strangers can reach it. Nothing is read from a request no one may make.
+ */
+export async function refused(request: Request): Promise<Response | null> {
+  if (!sameOrigin(request)) return elsewhere();
+  if (await open(hostOf(request))) return answer({ ok: false, problem: OPEN });
+  return null;
+}
+
+/** A request's JSON body, or an empty object: an operation checks what it was sent. A body past BODY_MAX isn't read. */
 export const body = async (request: Request): Promise<Record<string, unknown>> => {
-  const parsed = (await request.json().catch(() => null)) as unknown;
-  return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  if (Number(request.headers.get("content-length") ?? 0) > BODY_MAX) return {};
+  const reader = request.body?.getReader();
+  if (!reader) return {};
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > BODY_MAX) {
+      await reader.cancel().catch(() => {});
+      return {};
+    }
+    chunks.push(value);
+  }
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks))) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 };

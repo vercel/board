@@ -193,7 +193,8 @@ export async function mirror(board: Board, run: Pick<Run, "prepared">, change: P
   if (!id) return;
   try {
     const now = readControl((await board.thread(id)).message.text) ?? { phase: "running", cost: 0 };
-    const next = { ...now, ...change };
+    // A run that has ended stays ended: a spend refresh read before a Stop mustn't write "running" back.
+    const next = { phase: now.phase !== "running" ? now.phase : (change.phase ?? now.phase), cost: Math.max(now.cost, change.cost ?? now.cost) };
     if (next.phase !== now.phase || next.cost !== now.cost) await board.edit(id, controlText(next));
   } catch (error) {
     console.error(`[swarm] couldn't update the control thread ${id}:`, error instanceof Error ? error.message.slice(0, 200) : error);

@@ -9,7 +9,7 @@ import { doing, LABEL, planFrom, planReplies, REPLY_MAX, type RunnerConfig, type
 import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
 import { ask, begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
-import { readControl, run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
+import { mirror, readControl, run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
 import { areas, expand, seed } from "../lib/scenarios.ts";
 import { canRun, setup, type Deps } from "../lib/setup.ts";
@@ -476,6 +476,12 @@ test("a run's control thread says its phase and spend in text only the deploymen
 
   await stop(started.slug, board, boxes);
   assert.equal(readControl((await board.thread(control)).message.text)!.phase, "stopped");
+
+  // A spend refresh read before the Stop doesn't write "running" back, and spend never goes down.
+  const run = (await readRun(started.slug, board))!;
+  await mirror(board, run, { phase: "running", cost: 1.5 });
+  await mirror(board, run, { cost: 0.5 });
+  assert.deepEqual(readControl((await board.thread(control)).message.text), { phase: "stopped", cost: 1.5 });
 });
 
 test("a write is taken only from the deployment's own pages", () => {
