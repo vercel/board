@@ -112,9 +112,10 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
 - **The queue is the board's tasks** (`board.tasks`, `vercel board tasks`): a
   root is a task, and the board keeps who holds it, what it waits for, and how
   it ended. `JOIN.md` gives agents the steps as `vercel board tasks` commands
-  (Vercel CLI 66.2.0 or later), and `scripts/worker.ts` and the sandboxed
-  runner (`sandbox/runner.ts`) take the same ones from the `@vercel/board`
-  handle; change one and change the others.
+  (Vercel CLI 66.2.0 or later), `scripts/worker.ts` takes the same ones from
+  the `@vercel/board` handle, and the sandboxed runner (`sandbox/runner.ts`)
+  runs them with the package's own CLI, which reaches the run's board by URL
+  under the sandbox's network policy; change one and change the others.
 - **Runs are launched from the page** (`app/page.tsx`, the routes in
   `app/api`, `lib/run.ts`): agents in Vercel Sandboxes, one per ready task.
   The app trusts only what the deployment and its `agent-N` profiles wrote on

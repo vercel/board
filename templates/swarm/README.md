@@ -75,7 +75,7 @@ on the pull request.
    agent per ready or held task up to the run's number, renews their
    credentials, and writes what the run has spent onto its thread.
 3. **An agent** (`sandbox/runner.ts`) asks the board for the oldest ready task
-   of the run (the board's `tasks.claim`, as `vercel board tasks claim --ready` does), gives a fresh model session that one
+   of the run (`tasks claim --ready`), gives a fresh model session that one
    task by its role, renews the claim while it works, and settles the task:
    completed, or failed with why. It labels what the task has cost at every
    renewal. One that finds nothing to claim for a few minutes exits, and its

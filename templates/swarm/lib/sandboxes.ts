@@ -9,7 +9,7 @@ import { githubToken } from "./credentials.ts";
 
 // The sandboxes a run works in. Three kinds, each forked from the one before:
 //
-//   base      Node, pi, @vercel/board, and the runner. Built once per version of the runner, then only forked.
+//   base      Node, pi, @vercel/board (its CLI), and the runner. Built once per version of the runner, then only forked.
 //   source    The base plus the repo, cloned and set up once per run.
 //   agent     The source, one per agent, running sandbox/runner.ts.
 //
@@ -96,7 +96,7 @@ export async function baseSandbox(say: (text: string) => Promise<void> = async (
       { path: `${SANDBOX.dir}/package.json`, content: JSON.stringify({ name: "swarm-runner", private: true, type: "module", dependencies: RUNTIME }) },
     ]);
     await must(base, "installing the runner", "npm", ["install", "--no-audit", "--no-fund", "--silent"], { cwd: SANDBOX.dir });
-    await must(base, "checking @vercel/board", "node", ["--input-type=module", "-e", "await import('@vercel/board')"], { cwd: SANDBOX.dir });
+    await must(base, "checking the board's CLI", "node", ["node_modules/.bin/vb", "--version"], { cwd: SANDBOX.dir });
     // What the runner writes (its config, its process ID, the agent's home) lives apart from it.
     await must(base, "making the runner's state directory", "mkdir", ["-p", `${SANDBOX.state}/home`]);
     // The last thing a build does: a base without it was cut short, and `prepare` builds it again.
@@ -211,14 +211,14 @@ async function agentPolicy(n: number, scope: Scope): Promise<{ policy: NetworkPo
   return { policy, boardUrl: url };
 }
 
-/** An unsigned token with the real one's claims a client reads (its expiry, its team) and no signature: the board's handle wants one to send, and the policy replaces it. */
+/** An unsigned token with the real one's claims a client reads (its expiry, its team) and no signature: the board's CLI wants one to send, and the policy replaces it. */
 function standIn(token: string): string {
   const claims = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
   const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   return `${part({ alg: "none", typ: "JWT" })}.${part({ exp: claims.exp, iat: claims.iat, owner_id: claims.owner_id, project_id: claims.project_id, sub: "stand-in" })}.stand-in`;
 }
 
-/** What the board's handle in a sandbox needs to find the board: where it is, who it writes as, and something to send where the policy puts the credential. */
+/** What the board's CLI in a sandbox needs to find the board: where it is, who it writes as, and something to send where the policy puts the credential. */
 async function boardEnv(url: string, profile: string): Promise<Record<string, string>> {
   const at = new URL(url);
   if (at.hostname === "localhost" || at.hostname === "127.0.0.1") throw new Error("A sandbox can't reach a board on your machine. Unset BOARD_URL to use your team's board.");
@@ -244,9 +244,10 @@ export async function startAgent(slug: string, n: number, runner: RunnerConfig, 
   });
   await sandbox.writeFiles([{ path: SANDBOX.config, content: JSON.stringify(runner) }]);
   const home = `${SANDBOX.state}/home`;
+  // What the runner prints goes to a file in the sandbox too, for whoever needs to see why an agent stopped.
   await sandbox.runCommand({
-    cmd: "node",
-    args: ["runner.ts"],
+    cmd: "sh",
+    args: ["-c", `node runner.ts >> ${SANDBOX.state}/runner.log 2>&1`],
     cwd: SANDBOX.dir,
     env: { ...env, AI_GATEWAY_API_KEY: PLACEHOLDER, HOME: home, XDG_CONFIG_HOME: `${home}/.config`, NODE_NO_WARNINGS: "1" },
     detached: true,
