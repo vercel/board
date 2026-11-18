@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
@@ -968,10 +968,61 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const found = await channelNamed(who, filter)
       return found ? [found] : []
     }
+    if (filter !== undefined && channelPages) {
+      // The API lists the ones under it by their names' prefix, a page at a time, and finds the tree's own by its name.
+      const under: ApiChannel[] = []
+      let next: string | undefined
+      do {
+        const page = await channelsPage(who, { prefix: filter, after: next, limit: CHANNELS_LIMIT_MAX })
+        under.push(...page.channels)
+        next = page.next ?? undefined
+      } while (next && channelPages)
+      if (channelPages) {
+        const own = await channelNamed(who, filter.slice(0, -1))
+        return [...(own ? [own] : []), ...under]
+      }
+    }
     const listed = await loadChannels(who, true)
     if (filter === undefined) return listed
     const path = filter.slice(0, -1)
     return listed.filter((channel) => channel.name === path || channel.name.startsWith(filter))
+  }
+
+  /** Whether the API pages its channel list by `limit` and lists it by a name's `prefix`: until it refuses one, it's asked. */
+  let channelPages = true
+  /**
+   * A page of the board's channels: `limit` of them whose names start with `prefix`, after a page's `next`. The API
+   * pages them, 100 a request at most, by name under a prefix and in its own order without one. One from before
+   * that lists them all, 50 a request, and they're cut here, by name: its pages' `next` is the last name, and the
+   * API's is its own cursor, so neither reads on the other's.
+   */
+  async function channelsPage(who: Who, { prefix, after, limit }: { prefix?: string | undefined; after?: string | undefined; limit: number }, signal?: AbortSignal): Promise<{ channels: ApiChannel[]; next: string | null }> {
+    const refused = () => new HttpError(400, 'invalid_cursor', `after: ${after} isn't a page of this board's channels: pass a page's next as it came`)
+    if (channelPages) {
+      if (after !== undefined && !after.startsWith('c.')) throw refused()
+      const path = await onBoard(who, '/channels')
+      const found: ApiChannel[] = []
+      let cursor = after?.slice(2)
+      try {
+        do {
+          const page = await api<{ channels: ApiChannel[]; cursor: string | null }>(who, 'GET', path, { query: { prefix, limit: String(Math.min(PAGE_MAX, limit - found.length)), cursor }, ...(signal ? { signal } : {}) })
+          found.push(...page.channels)
+          cursor = page.cursor ?? undefined
+        } while (cursor && found.length < limit)
+        for (const channel of found) learn(channel)
+        return { channels: found, next: cursor ? `c.${cursor}` : null }
+      } catch (error) {
+        if (!unknownParameter(error, 'prefix') && !unknownParameter(error, 'limit')) throw error
+        channelPages = false
+      }
+    }
+    if (after !== undefined && !after.startsWith('n.')) throw refused()
+    const last = after === undefined ? undefined : decodeURIComponent(after.slice(2))
+    const listed = (await loadChannels(who, true))
+      .filter((channel) => (prefix === undefined || channel.name.startsWith(prefix)) && (last === undefined || channel.name > last))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    const channels = listed.slice(0, limit)
+    return { channels, next: listed.length > limit ? `n.${encodeURIComponent(channels.at(-1)!.name)}` : null }
   }
 
   async function messageById(who: Who, id: string, signal?: AbortSignal, include?: 'channel'): Promise<{ thread: ApiThread; message: ApiMessage; channel?: ApiChannel }> {
@@ -2922,13 +2973,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         can: canOf(found.can),
       }
     },
-    async channels(caller) {
-      const who = whoOf(caller)
+    async channels(caller, { prefix, after, limit = CHANNELS_LIMIT_DEFAULT }, signal) {
+      const page = await channelsPage(whoOf(caller), { prefix, after, limit }, signal)
       // The API counts neither messages nor threads in a channel, so a view says nothing of them.
-      const listed: ChannelView[] = (await channelsFor(who, undefined))
-        .map((channel) => ({ path: channel.name }))
-        .sort((a, b) => a.path.localeCompare(b.path))
-      return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
+      return { channels: page.channels.map((channel): ChannelView => ({ path: channel.name })), cursor: cursorOf({ t: Date.now(), feeds: {} }), next: page.next }
     },
     async createChannel(caller, { path }) {
       const { created } = await ensureChannel(whoOf(caller), path)

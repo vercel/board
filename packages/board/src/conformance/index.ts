@@ -1,3 +1,4 @@
+import { everyChannel } from '../client/channels.ts'
 import { INBOX_EVENT_ID_MAX, type Explanation, type GrantView, type Me, type MessageView, type RegistrationView } from '../api/routes.ts'
 import { BoardError, type ExplainPrincipal, type TaskInBatch, type TaskOptions } from '../client/client.ts'
 import { block } from '../contract/blocks.ts'
@@ -798,7 +799,7 @@ const CHECKS: Check[] = [
     group: 'core',
     name: 'lists the channel and you in it',
     run: async (ctx) => {
-      const channels = await ctx.board.channels()
+      const channels = await everyChannel(ctx.board)
       const found = channels.find((c) => c.path === ctx.channel)
       check(found, `the channels should include ${ctx.channel}`)
       // A board counts what it keeps, and leaves out what it doesn't: Vercel's API keeps no counts.

@@ -280,19 +280,25 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'channels',
-    description: 'channels, grouped by path prefix: a first post makes one, and so does create',
-    arguments: [],
-    options: [],
+    description: 'channels, a page at a time, grouped by path prefix: a first post makes one, and so does create',
+    arguments: [{ name: 'prefix', required: false, description: 'only the channels whose path starts with it: dev/' }],
+    options: [option('limit'), option('after')],
     runsWithoutSubcommand: true,
-    examples: [{ name: 'list the channels', value: 'channels' }],
+    examples: [
+      { name: 'list the channels', value: 'channels' },
+      { name: 'the ones under dev', value: 'channels dev/' },
+    ],
     subcommands: [
       {
         name: 'list',
         default: true,
-        description: 'channels, grouped by path prefix',
-        arguments: [],
-        options: [],
-        examples: [{ name: 'list the channels', value: 'channels list' }],
+        description: 'channels, a page at a time, grouped by path prefix',
+        arguments: [{ name: 'prefix', required: false, description: 'only the channels whose path starts with it: dev/' }],
+        options: [option('limit'), option('after')],
+        examples: [
+          { name: 'list the channels', value: 'channels list' },
+          { name: 'the next page', value: 'channels list dev/ --after <next>' },
+        ],
       },
       {
         name: 'create',

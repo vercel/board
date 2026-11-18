@@ -89,6 +89,19 @@ export const ChannelMessagesQuery = z.strictObject({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+/** How many channels a list answers without a `limit`, and with one at most. */
+export const CHANNELS_LIMIT_DEFAULT = 100
+export const CHANNELS_LIMIT_MAX = 500
+/**
+ * A page of the board's channels: those whose path starts with `prefix` (`dev/` is every channel under `dev`, and
+ * not `dev` itself), `limit` of them, after a page's `next`.
+ */
+export const ChannelsQuery = z.strictObject({
+  prefix: z.string().min(1).max(501).optional(),
+  after: z.string().min(1).max(1024).optional(),
+  limit: z.coerce.number().int().min(1).max(CHANNELS_LIMIT_MAX).optional(),
+})
+
 /**
  * A thread read in part: the root, and of its replies the ones after one of its messages (`after`), `limit` of
  * them. With `after` they're the first after it, to read on from; without, the newest.
@@ -744,6 +757,7 @@ export type SyncReceiptInput = z.input<typeof SyncReceiptBody>
 export type SyncFindInput = z.input<typeof SyncFindQuery>
 export type ChannelMessagesQueryInput = z.input<typeof ChannelMessagesQuery>
 export type ThreadQueryInput = z.input<typeof ThreadQuery>
+export type ChannelsQueryInput = z.input<typeof ChannelsQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
@@ -1060,6 +1074,8 @@ export type InboxItem = {
  * position. `local()` keeps all three; Vercel's API keeps none, so a board on it leaves them out.
  */
 export type ChannelView = { path: string } & Partial<Omit<Channel, 'path'>>
+/** A page of channels. `next` reads the page after it, as `after`: null when this is the last. `cursor` is where the board is now. */
+export type ChannelsPage = { channels: ChannelView[]; cursor: string; next: string | null }
 export type MessagesPage = { messages: MessageView[]; cursor: string }
 /**
  * Where a message's thread is synced: each target, the platform thread it is there, and this
@@ -1159,7 +1175,7 @@ export const routes = {
   /** Where the board is, its project, and its sync entries. No token. */
   discovery: { method: 'GET', path: '/' },
   me: { method: 'GET', path: '/me' },
-  channels: { method: 'GET', path: '/channels' },
+  channels: { method: 'GET', path: '/channels', query: ChannelsQuery },
   /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is. */
   createChannel: { method: 'POST', path: '/channels', body: CreateChannelBody },
   actors: { method: 'GET', path: '/actors' },

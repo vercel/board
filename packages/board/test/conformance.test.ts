@@ -736,7 +736,7 @@ describe('the conformance kit', () => {
     expect(report.ok).toBe(true)
     expect(patterns.length).toBeGreaterThan(20)
     expect(patterns.filter((pattern) => !pattern.startsWith('conformance/grants/'))).toEqual([])
-    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance', 'conformance/tasks'])
+    expect((await board.channels()).channels.map((channel) => channel.path)).toEqual(['conformance', 'conformance/tasks'])
   })
 
   it('refuses principals that are its own before it writes anything, which the checks would change under it', async () => {

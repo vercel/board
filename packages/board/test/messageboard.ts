@@ -280,6 +280,7 @@ type Shared = {
   feedReads: number
   boardFeed: boolean
   threadRanges: boolean
+  channelPages: boolean
   matchMessages: boolean
   accounts: Accounts
   directory: Directory
@@ -2055,7 +2056,24 @@ function fakeBoard(shared: Shared, boardId: string) {
       const name = url.searchParams.get('name')
       // It lists only the channels the caller may read.
       const readable = channels.filter((c) => mayRead(actor, c.id))
-      return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
+      const prefix = url.searchParams.get('prefix')
+      const limit = url.searchParams.get('limit')
+      if (prefix === null && limit === null) return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
+      // An API from before pages and prefixes takes neither parameter, as it takes no other it doesn't know.
+      if (!shared.channelPages) throw new Refused(400, 'bad_request', `Invalid request: should NOT have additional property \`${prefix !== null ? 'prefix' : 'limit'}\`.`)
+      if (name !== null) throw new Refused(400, 'invalid_request', 'Look a channel up by name or page through channels, not both.')
+      const size = Number(limit ?? 50)
+      if (!Number.isInteger(size) || size < 1 || size > 100) throw new Refused(400, 'invalid_request', 'A page holds 1 to 100 channels.')
+      // Under a prefix, by name with `/` before any other character: a channel right before the ones under it.
+      const byName = (c: { name: string }) => c.name.replaceAll('/', '\u0000')
+      const listed = prefix === null ? readable : readable.filter((c) => c.name.startsWith(prefix)).sort((a, b) => (byName(a) < byName(b) ? -1 : 1))
+      // A cursor reads on only the list that answered it: the one of its prefix, or the one with none.
+      const scope = prefix === null ? 'all' : createHash('sha256').update(prefix).digest('hex').slice(0, 8)
+      const cursor = url.searchParams.get('cursor')
+      const found = cursor === null ? null : /^(\w+)\.(\d+)$/.exec(cursor)
+      if (cursor !== null && found?.[1] !== scope) throw new Refused(400, 'invalid_cursor')
+      const from = found ? Number(found[2]) : 0
+      return { channels: listed.slice(from, from + size), cursor: from + size < listed.length ? `${scope}.${from + size}` : null }
     }
     if (method === 'GET' && (found = /^\/channels\/([^/]+)$/.exec(rest))) {
       // One channel by its ID, to a caller who may read it: to anyone else it isn't there.
@@ -2502,6 +2520,8 @@ export function fakeMessageboard(
     channelNames?: boolean
     /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
     inlineActors?: boolean
+    /** True for an API that pages its channel list by `limit` and lists it by a name's `prefix`. Vercel's doesn't yet: each is 400 there, and it lists every channel. */
+    channelPages?: boolean
     /** True for an API that reads a thread's messages in a range (`after`, `limit`, `order`). Vercel's doesn't yet: each is 400 there. */
     threadRanges?: boolean
     /**
@@ -2565,6 +2585,7 @@ export function fakeMessageboard(
     inlineActors: options.inlineActors ?? false,
     boardFeed: options.boardFeed ?? false,
     threadRanges: options.threadRanges ?? false,
+    channelPages: options.channelPages ?? false,
     threadsLimit: options.threadsLimit ?? true,
     feedReads: 0,
     matchMessages: options.matchMessages ?? true,

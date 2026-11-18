@@ -354,7 +354,7 @@ describe('the audience a handle mints a token for, in Node', () => {
     }) as typeof globalThis.fetch
     const handle = against(flaky)
     await expect(handle.channels()).rejects.toMatchObject({ code: 'no_board' })
-    await expect(handle.channels()).resolves.toEqual([])
+    await expect(handle.channels()).resolves.toMatchObject({ channels: [] })
     expect(asked).toEqual([EVIL])
     expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
   })

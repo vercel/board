@@ -13,7 +13,7 @@ import { type Actor, type ExternalCopy, type Message } from '../contract/folds.t
 import { importedHandle, shownName, userIdOf } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
-import { INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, parseCan, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
@@ -484,13 +484,15 @@ function build(options: A2Options, binding: BoardBinding) {
       }
       return body
     },
-    async channels(caller) {
+    async channels(caller, { prefix, after, limit = CHANNELS_LIMIT_DEFAULT }) {
       const { principal } = (await identityOf(caller))
       const { state, index } = await session.state(channelsReducer)
-      const channels = Object.values(state)
-        .filter((channel) => principal.access.readable(channel.path))
-        .sort((a, b) => a.path.localeCompare(b.path))
-      return { channels, cursor: ref(index) }
+      // By path, and a page after the last path of the one before it.
+      const listed = Object.values(state)
+        .filter((channel) => principal.access.readable(channel.path) && (prefix === undefined || channel.path.startsWith(prefix)) && (after === undefined || channel.path > after))
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      const channels = listed.slice(0, limit)
+      return { channels, cursor: ref(index), next: listed.length > limit ? channels.at(-1)!.path : null }
     },
     async createChannel(caller, { path }) {
       return writeChannel(writes, { identity: await identityOf(caller), path })

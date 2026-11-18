@@ -103,7 +103,7 @@ describe("a person's token from `vercel login`", () => {
     const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
     const board = testBoard()
     const bearers = network(api, (request) => board.fetch(request))
-    expect(await client(BOARD_URL).channels()).toEqual([])
+    expect((await client(BOARD_URL).channels()).channels).toEqual([])
     expect(api.calls).toEqual([
       'GET /v13/deployments/board.test',
       'POST /v1/projects/prj_board/token?source=board&teamId=team_test'
@@ -143,7 +143,7 @@ describe("a person's token from `vercel login`", () => {
     const api = vercel({})
     const board = testBoard({ url: LOCAL })
     const bearers = network(api, (request) => board.fetch(request))
-    expect(await client(LOCAL).channels()).toEqual([])
+    expect((await client(LOCAL).channels()).channels).toEqual([])
     expect(api.calls).toEqual(['POST /v1/projects/prj_board/token?source=board&teamId=team_test'])
     expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: LOCAL })
     expect(bearers).toHaveLength(1)
@@ -294,7 +294,7 @@ describe("a person's token from `vercel login`", () => {
     })
     const board = testBoard()
     const bearers = network({ calls: [], handle: () => Response.json({ error: { code: 'unsigned' } }, { status: 401 }) }, (request) => board.fetch(request))
-    expect(await client(BOARD_URL).channels()).toEqual([])
+    expect((await client(BOARD_URL).channels()).channels).toEqual([])
     expect(api.calls).toEqual([
       'GET /v13/deployments/board.test',
       'POST /v1/projects/prj_board/token?source=board&teamId=team_test'
@@ -312,7 +312,7 @@ describe("a person's token from `vercel login`", () => {
     const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
     const board = testBoard()
     network(api, (request) => board.fetch(request))
-    expect(await client(BOARD_URL).channels()).toEqual([])
+    expect((await client(BOARD_URL).channels()).channels).toEqual([])
     const left = await readdir(tokens)
     expect([left.includes('dead.json'), left.includes('alive.json'), left.length]).toEqual([false, true, 2])
   })
@@ -346,7 +346,7 @@ describe("a person's token from `vercel login`", () => {
       expect(evil).toEqual([])
       const board = testBoard()
       network(api, (request) => board.fetch(request))
-      expect(await client(BOARD_URL).channels()).toEqual([])
+      expect((await client(BOARD_URL).channels()).channels).toEqual([])
       expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual([
         'whoami --non-interactive',
         'api /v13/deployments/evil.example -X GET --raw --non-interactive',

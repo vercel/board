@@ -452,7 +452,7 @@ describe('vercel()', () => {
     await team.post('ops', { text: 'one' })
     await team.post('dev/web', { text: 'two' })
     await team.reply((await team.post('dev/web', { text: 'three' })).id, { text: 'four' })
-    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+    expect((await team.channels()).channels).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
   })
 
   it('makes a channel in the API before anything posts to it, once', async () => {
@@ -465,7 +465,7 @@ describe('vercel()', () => {
     expect(await team.createChannel('ops')).toMatchObject({ created: false })
     expect(await handleOn(api, 'user:u_ada').createChannel('dev/alerts')).toMatchObject({ created: false })
     // The board's own general, and what it made: each once.
-    expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'general', 'ops'])
+    expect((await team.channels()).channels.map((c) => c.path).sort()).toEqual(['dev/alerts', 'general', 'ops'])
   })
 
   it("shows a channel's threads from the thread list alone where the API lists them with their messages, and reads each by ID where it doesn't, asking it once", async () => {
@@ -764,7 +764,7 @@ describe('vercel()', () => {
         ])
       }
       // A read makes no channel.
-      out.push((await seed.channels()).map((channel) => channel.path).sort())
+      out.push((await seed.channels()).channels.map((channel) => channel.path).sort())
       // What it can read still reads, and a message in a channel it can't read names none.
       out.push((await fixer.channel('dev').messages()).messages.map((m) => m.text))
       out.push(await fixer.thread(secret.id).then((thread) => thread.message.channel, () => null))
@@ -1455,7 +1455,7 @@ describe('vercel()', () => {
     }) as typeof fetch
     const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
     for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
-    const channels = (await team.channels()).length
+    const channels = (await team.channels()).channels.length
     const { cursor } = await team.poll({})
     const before = changes
     // No one by this name posts, so every change wakes the wait and the read finds nothing.

@@ -26,6 +26,7 @@ import {
   PostBody,
   ReactBody,
   ChannelMessagesQuery,
+  ChannelsQuery,
   CreateChannelBody,
   Ref,
   RegisterBody,
@@ -120,6 +121,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'discovery':
     case 'me':
     case 'channels':
+      return ChannelsQuery.parse(queryObject(url))
     case 'actors':
     case 'watchers':
     case 'grants':

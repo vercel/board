@@ -20,6 +20,8 @@ import type {
   PrincipalInput,
   MatchView,
   ChannelMessagesQueryInput,
+  ChannelsPage,
+  ChannelsQueryInput,
   MessagesPage,
   MessageView,
   RegisterInput,
@@ -502,7 +504,15 @@ export function createBoardClient(options: ClientOptions) {
       }),
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
-    channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
+    /**
+     * A page of the board's channels: `prefix` keeps the ones whose path starts with it (`dev/`), `limit` is how many
+     * (100 unless it says, 500 at most), and `after` takes a page's `next`, which is null on the last.
+     */
+    channels: async (query: ChannelsQueryInput = {}) => {
+      const page = await call<Omit<ChannelsPage, 'next'> & { next?: string | null }>('GET', `/channels${queryString(query)}`)
+      // A board from before pages answers them all, and no `next`.
+      return { ...page, next: page.next ?? null }
+    },
     /**
      * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
      * there. `created` is false when it was there already; it's left as it is.

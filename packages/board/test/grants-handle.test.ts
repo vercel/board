@@ -48,7 +48,7 @@ describe('a private channel, from the handle', () => {
     await expect(team.createChannel('mine', { private: true })).rejects.toMatchObject({ status: 400, code: 'no_own_principal', origin: 'handle' })
     await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
     await expect(handleAs(team.fetch, () => workflowToken()).createChannel('ci-secrets', { private: true })).rejects.toMatchObject({ status: 400, code: 'no_own_principal' })
-    expect((await team.channels()).map((channel) => channel.path)).toEqual(['dev', 'security/incidents'])
+    expect((await team.channels()).channels.map((channel) => channel.path)).toEqual(['dev', 'security/incidents'])
     expect((await ids(team)).length).toBe(before.length + 1)
   })
 
@@ -77,7 +77,7 @@ describe('a private channel, from the handle', () => {
     }
     await expect(handleAs(narrowed, () => personToken()).createChannel('lockbox', { private: true })).rejects.toMatchObject({ status: 403 })
     expect(await ids(team)).toEqual(before)
-    expect(await team.channels()).toEqual([])
+    expect((await team.channels()).channels).toEqual([])
   })
 
   it('leaves at most one way in when two make the same private channel at once', async () => {
@@ -116,7 +116,7 @@ describe('a private channel, from the handle', () => {
     expect([first, second].map((settled) => (settled.status === 'rejected' ? (settled.reason as { code: string }).code : 'made'))).toEqual(['channel_granted', 'channel_granted'])
     // Each took its own back: no one has a way in, and nothing is closed or made.
     expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
-    expect(await team.channels()).toEqual([])
+    expect((await team.channels()).channels).toEqual([])
   })
 
   it("takes its own grant back once another's lock has landed, though that's its last manage there", async () => {
@@ -177,7 +177,7 @@ describe('a private channel, from the handle', () => {
     expect(refused).toMatchObject({ status: 409, code: 'channel_granted', message: `${theirs} already grants in vault, so a private vault wouldn't be yours alone: nothing was made.` })
     // Hers is the only one left: the lock and the creator's own are both gone, and no channel was made.
     expect(await ids(team)).toEqual(['g1', 'g2', 'g3', theirs])
-    expect(await team.channels()).toEqual([])
+    expect((await team.channels()).channels).toEqual([])
   })
 
   it('takes its grants back, and makes nothing, when someone adds themselves to its own grant before its lock lands', async () => {
@@ -202,7 +202,7 @@ describe('a private channel, from the handle', () => {
       expect((refused as { hint?: string }).hint).toBeUndefined()
       // The grant she's on and the lock are both gone, and no channel was made.
       expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
-      expect(await team.channels()).toEqual([])
+      expect((await team.channels()).channels).toEqual([])
     }
   })
 
@@ -222,12 +222,12 @@ describe('a private channel, from the handle', () => {
     await expect(julian.createChannel('vault', { private: true })).rejects.toThrow()
     // Open, with a grant too many.
     expect((await team.grants()).slice(3).map((grant) => [grant.principals, grant.can])).toEqual([[[{ kind: 'user', userId: 'u_julian', email: null }], { 'vault/': 'all' }]])
-    expect((await team.channels()).map((channel) => channel.path)).toEqual([])
+    expect((await team.channels()).channels.map((channel) => channel.path)).toEqual([])
     expect((await ada('POST', '/messages', { channel: 'vault', text: 'still open' })).status).toBe(201)
     // Closed, and not made yet: its creator still gets in.
     channels = false
     await expect(julian.createChannel('lockbox', { private: true })).rejects.toThrow()
-    expect((await team.channels()).map((channel) => channel.path)).toEqual(['vault'])
+    expect((await team.channels()).channels.map((channel) => channel.path)).toEqual(['vault'])
     expect((await ada('POST', '/messages', { channel: 'lockbox', text: 'let me in' })).status).toBe(403)
     expect((await caller(team.fetch, await personToken())('POST', '/messages', { channel: 'lockbox', text: 'mine' })).status).toBe(201)
   })

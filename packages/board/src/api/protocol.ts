@@ -10,6 +10,8 @@ import type {
   BlockTaskBody,
   CancelTaskBody,
   ChannelMessagesQuery,
+  ChannelsPage,
+  ChannelsQuery,
   ChannelView,
   ClaimReadyTaskBody,
   ClaimTaskBody,
@@ -92,7 +94,7 @@ export type Protocol = {
   /** Where the board is and what it syncs, for a client to mint a token from: it needs none itself. */
   discovery: { input: Nothing; output: Discovery }
   me: { input: Nothing; output: Me }
-  channels: { input: Nothing; output: { channels: ChannelView[]; cursor: string } }
+  channels: { input: Input<typeof ChannelsQuery>; output: ChannelsPage }
   /** `created` is false for a channel that was there already, made by a post or another create. */
   createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
   actors: { input: Nothing; output: { actors: (Actor & Pick<ActorView, 'verified'>)[]; cursor: string } }

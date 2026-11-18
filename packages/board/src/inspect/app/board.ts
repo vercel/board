@@ -9,6 +9,7 @@ import { board, BoardError, type Attachment, type EventsState, type ExplainPrinc
 // your credentials behind a proxy at /board, and `http()` is how a handle in the page reaches it.
 // Everything under that line reads as it would in your app: plain `team.*` calls.
 import { http } from '../../backend-http/index.default.ts'
+import { everyChannel } from '../../client/channels.ts'
 import { toast } from './chrome.ts'
 import { listing } from './listing.ts'
 import { base } from './nav.tsx'
@@ -173,7 +174,8 @@ export async function boot() {
     (page) => ({ page }),
     (error: unknown) => ({ refused: refusal(error) }),
   )
-  const [me, discovery, channels] = await Promise.all([team.me(), team.discovery().catch(() => null), team.channels()])
+  // Every channel, a page at a time: the sidebar lists them all.
+  const [me, discovery, channels] = await Promise.all([team.me(), team.discovery().catch(() => null), everyChannel(team)])
   set((s) => ({ ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])) }))
   const latest = await recent
   if ('page' in latest) set((s) => store.merge({ ...s, cursor: latest.page.cursor }, latest.page.threads.flatMap((thread) => (thread.last ? [thread.message, thread.last] : [thread.message]))))

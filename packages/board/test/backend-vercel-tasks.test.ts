@@ -436,7 +436,7 @@ describe("vercel()'s tasks", () => {
     // None of them wrote anything.
     expect((await julian.thread(root.id)).message).toMatchObject({ text: 'a thread', labels: {}, deleted: false })
     expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'ready', epoch: 0 })
-    expect((await julian.channels()).map((channel) => channel.path)).toEqual(['general', 'work'])
+    expect((await julian.channels()).channels.map((channel) => channel.path)).toEqual(['general', 'work'])
     // A retry finds its receipt for 8 days, however old its ID has grown: then the ID is past the 7 a new write may be.
     const kept = operationAt()
     const landed = await post(kept)
@@ -487,7 +487,7 @@ describe("vercel()'s tasks", () => {
       await expect(julian.tasks.createMany('plans', tasks), what).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringMatching(/\d+ items/) })
     // Nothing of any of them, and not the channel they named.
     expect((await julian.tasks.list({ channel: 'plans', state: 'all' })).tasks).toEqual([])
-    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
+    expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('plans')
     const fits = {
       '15 plain tasks': plain(15),
       'a chain of 13': chain(13),
@@ -506,7 +506,7 @@ describe("vercel()'s tasks", () => {
     julian.sent.length = 0
     await expect(julian.tasks.createMany('long', long(7))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('bytes') })
     expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
-    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('long')
+    expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('long')
     expect(await julian.tasks.createMany('long', long(6))).toHaveLength(6)
     // More than any batch makes is board()'s own to say: the API is never asked.
     julian.sent.length = 0
@@ -563,7 +563,7 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [thread] }] }, 'plans=read,post')).toEqual([400, 'invalid_needs'])
     expect(await ask({ tasks: [{ text: 'x', needs: [`thr_${crypto.randomUUID()}`] }, { text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([400, 'invalid_needs'])
     // None of it left a task, or the channel it named.
-    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('plans')
+    expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('plans')
     // A key of the caller's own: 1 to 512 characters of anything. The same request under it, a field left out being its
     // empty value, makes nothing more; a channel named another way is another request.
     expect(await ask({ idempotencyKey: '', tasks: plain(1) })).toEqual([400, 'bad_request'])
@@ -583,7 +583,7 @@ describe("vercel()'s tasks", () => {
     expect((await julian.tasks.list({ channel: 'keyed', state: 'all' })).tasks).toHaveLength(3)
     // A file is looked at last, once the channel a batch names is made, as for one task: a batch refused for one leaves the channel, and no task.
     expect(await ask({ channel: 'filed', tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
-    expect((await julian.channels()).map((channel) => channel.path)).toContain('filed')
+    expect((await julian.channels()).channels.map((channel) => channel.path)).toContain('filed')
     expect((await julian.tasks.list({ channel: 'filed', state: 'all' })).tasks).toEqual([])
     expect(await ask({ tasks: plain(15) })).toEqual([200, null])
   })
@@ -672,13 +672,13 @@ describe("vercel()'s tasks", () => {
     }
     expect(await ask('/v2/messageboard/boards/brd_test/tasks', { channel: 'reverts', text: wrong })).toEqual([400, 'invalid_block'])
     expect(await ask('/v1/messageboard/boards/brd_test/threads', { channel: 'reverts', text: wrong })).toEqual([400, 'invalid_block'])
-    expect((await julian.channels()).map((channel) => channel.path)).not.toContain('reverts')
+    expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('reverts')
     expect((await julian.tasks.list({ state: 'all' })).tasks).toEqual([])
     // One that fits is a task, by either way in, and its root shows the block.
     const fits = `revert this\n\n${block('git-commit@1', { sha, title: 'ship the index' })}`
     expect(await ask('/v2/messageboard/boards/brd_test/tasks', { channel: 'reverts', text: fits })).toEqual([200, null])
     expect((await julian.tasks.create('reverts', { text: fits })).task).toMatchObject({ task: { state: 'ready' }, blocks: [{ schema: 'git-commit', version: 1, data: { sha, title: 'ship the index' } }] })
-    expect((await julian.channels()).map((channel) => channel.path)).toContain('reverts')
+    expect((await julian.channels()).channels.map((channel) => channel.path)).toContain('reverts')
   })
 
   it("sends a new task's files with it, as a post's go, and shows them on its root", async () => {

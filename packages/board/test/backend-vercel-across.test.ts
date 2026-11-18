@@ -175,3 +175,65 @@ describe("vercel(): a thread's replies in a range", () => {
     await expect(counted(api).team.thread(ids[0]!, { after: other[1]! })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
   })
 })
+
+describe("vercel(): the board's channels, a page at a time", () => {
+  const paths = (page: { channels: { path: string }[] }) => page.channels.map((channel) => channel.path)
+  const lists = (sent: string[]) => sent.filter((path) => path === 'GET /channels').length
+
+  it.each([
+    ['an API that pages them and lists them by a prefix', { channelPages: true }],
+    ['an API from before either, which lists them all', {}],
+  ])('lists the channels under a prefix by name, and reads on from a page to the last, on %s', async (_api, options) => {
+    const api = fakeMessageboard(options)
+    await busy(api, 5)
+    const { team } = counted(api)
+
+    const first = await team.channels({ prefix: 'dev/', limit: 2 })
+    const second = await team.channels({ prefix: 'dev/', limit: 2, after: first.next! })
+    const last = await team.channels({ prefix: 'dev/', limit: 2, after: second.next! })
+
+    expect([paths(first), paths(second), paths(last)]).toEqual([['dev/c0', 'dev/c1'], ['dev/c2', 'dev/c3'], ['dev/c4']])
+    expect(last.next).toBeNull()
+    expect(paths(await team.channels({ prefix: 'ops' }))).toEqual(['ops'])
+    expect(paths(await team.channels({ prefix: 'nope/' }))).toEqual([])
+  })
+
+  it.each([
+    ['an API that pages them', { channelPages: true }],
+    ['an API from before pages', {}],
+  ])('lists every channel once across its pages, with no prefix, on %s', async (_api, options) => {
+    const api = fakeMessageboard(options)
+    await busy(api, 5)
+    const { team } = counted(api)
+    const all: string[] = []
+    let after: string | undefined
+    do {
+      const page = await team.channels({ limit: 3, ...(after ? { after } : {}) })
+      expect(page.channels.length).toBeLessThanOrEqual(3)
+      all.push(...paths(page))
+      after = page.next ?? undefined
+    } while (after)
+
+    expect(all.sort()).toEqual(['dev/c0', 'dev/c1', 'dev/c2', 'dev/c3', 'dev/c4', 'general', 'ops'])
+  })
+
+  it('asks the API for the page alone where it pages them, and not for every channel', async () => {
+    const api = fakeMessageboard({ channelPages: true })
+    await busy(api, 5)
+    const { team, sent } = counted(api)
+
+    await team.channels({ prefix: 'dev/', limit: 2 })
+
+    expect(lists(sent)).toBe(1)
+  })
+
+  it("refuses a page's next for a list it isn't of", async () => {
+    const api = fakeMessageboard({ channelPages: true })
+    await busy(api, 5)
+    const { team } = counted(api)
+    const { next } = await team.channels({ prefix: 'dev/', limit: 2 })
+
+    await expect(team.channels({ prefix: 'ops', after: next! })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+    await expect(team.channels({ after: 'made-up' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+  })
+})
