@@ -114,14 +114,15 @@ export type Checkout = { base: string; baseBranch: string; files: string[]; setu
 /**
  * The install a repo's lockfile asks for, so the agents can run its tests: their sandboxes reach no
  * registry, and fork from this one, so pnpm or yarn is installed globally here, at the version the
- * repo's `packageManager` pins or the latest. Not through corepack, whose signature check fails on
- * releases newer than its keys.
+ * repo's `packageManager` pins or the latest. Dependencies' build scripts don't run: this sandbox
+ * holds the repo's GitHub token in its policy, and a package's scripts are anyone's code. pnpm 11 and
+ * later fail the install over the scripts they skip, so that's turned off.
  */
 const INSTALL = `set -e
 pinned() { node -p "const m = (require('./package.json').packageManager || '').split('+')[0]; m.startsWith('$1@') ? m : '$1@latest'" 2>/dev/null || echo "$1@latest"; }
 global() { sudo -n npm i -g --no-audit --no-fund --silent "$1" 2>/dev/null || npm i -g --no-audit --no-fund --silent "$1"; }
 export COREPACK_ENABLE_STRICT=0
-if [ -f pnpm-lock.yaml ]; then global "$(pinned pnpm)"; pnpm install --frozen-lockfile; echo pnpm
+if [ -f pnpm-lock.yaml ]; then global "$(pinned pnpm)"; pnpm install --frozen-lockfile --config.strict-dep-builds=false; echo pnpm
 elif [ -f yarn.lock ]; then global "$(pinned yarn)"; yarn install --frozen-lockfile; echo yarn
 elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; echo npm
 elif [ -f bun.lock ] || [ -f bun.lockb ]; then global bun; bun install --frozen-lockfile; echo bun

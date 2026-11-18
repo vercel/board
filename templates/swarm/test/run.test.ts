@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
-import { doing, LABEL, planReply, type RunnerConfig, type State } from "../sandbox/shared.ts";
+import { doing, LABEL, planFrom, planReplies, REPLY_MAX, type RunnerConfig, type State } from "../sandbox/shared.ts";
 import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
 import { begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
@@ -205,10 +205,11 @@ test("a pipeline launches with its plan and one agent, and adds the plan's tasks
   // The planner finishes, as the runner would.
   const agent = board.as("agent-1");
   const claim = (await agent.tasks.claim({ channel: runChannel(started.slug), from: [now.run.prepared!.owner], lease: 300 }))!;
-  await agent.reply(claim.task.id, planReply([
+  for (const reply of planReplies([
     { title: "Validate /users", brief: "zod" },
     { title: "Validate /orders", brief: "zod" },
-  ]));
+  ]))
+    await agent.reply(claim.task.id, reply);
   await claim.complete("Planned 2 tasks.");
   up.clear();
 
@@ -379,4 +380,16 @@ test("an agent's progress says what it's doing in words, from the tool it called
   assert.equal(doing("grep", { pattern: "waitForDep" }), "searching for `waitForDep`");
   assert.equal(doing("bash", { command: "x".repeat(500) })!.length, "running ``".length + 140);
   assert.equal(doing("something_else", {}), null);
+});
+
+test("a plan of long briefs reaches the app whole, in replies the board takes, and only once all of it is posted", () => {
+  const plan = Array.from({ length: 5 }, (_, i) => ({ title: `Task ${i + 1} ${"t".repeat(150)}`, brief: "b".repeat(4_000) }));
+  const replies = planReplies(plan);
+  assert.ok(plan.map((task) => task.brief.length).reduce((a, b) => a + b) > REPLY_MAX, "the plan is longer than one reply holds");
+  for (const reply of replies) assert.ok(reply.length <= REPLY_MAX, `a reply of ${reply.length} characters`);
+  assert.deepEqual(planFrom(replies, 120), plan);
+  assert.deepEqual(planFrom(replies.slice(0, -1), 120), [], "a plan missing its last task isn't read");
+  assert.equal(planFrom(replies, 3).length, 3);
+  const many = planReplies(Array.from({ length: 120 }, (_, i) => ({ title: `${i} ${"x".repeat(190)}`, brief: "b" })));
+  assert.ok(many[0]!.length <= REPLY_MAX && many[0]!.includes("more"));
 });

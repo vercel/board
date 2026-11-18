@@ -139,9 +139,52 @@ export function parsePlan(answer: string, max: number): Planned[] {
     .slice(0, max);
 }
 
-/** The plan as a reply carries it: a list a person reads, then the JSON the app reads back. */
-export const planReply = (tasks: Planned[]) =>
-  `${OUTPUT.plan} ${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}:\n${tasks.map((task) => `- ${task.title}`).join("\n")}\n\n\`\`\`json plan\n${JSON.stringify(tasks)}\n\`\`\``;
+/** The most a reply the runner posts holds: the board takes 10,000 characters a message. */
+export const REPLY_MAX = 9_500;
+
+/**
+ * The plan as the planner's replies carry it: one that lists the titles for a person, then one per
+ * task with its JSON, which the app reads back. One reply per task, since a plan of a few detailed
+ * briefs runs past what one message holds, and a plan cut off there reads as no plan at all.
+ */
+export function planReplies(tasks: Planned[]): string[] {
+  const head = `${OUTPUT.plan} ${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}:`;
+  const lines: string[] = [];
+  let size = head.length;
+  for (const task of tasks) {
+    const line = `\n- ${task.title}`;
+    if (size + line.length > REPLY_MAX - 40) {
+      lines.push(`\n- and ${tasks.length - lines.length} more`);
+      break;
+    }
+    lines.push(line);
+    size += line.length;
+  }
+  return [
+    head + lines.join(""),
+    ...tasks.map((task, i) => `[plan] task ${i + 1} of ${tasks.length}: ${task.title}\n\n\`\`\`json plan-task\n${JSON.stringify({ n: i + 1, of: tasks.length, ...task })}\n\`\`\``),
+  ];
+}
+
+/** The plan in a planner's replies, in order: one task per `plan-task` block. Empty until every task of it is there. */
+export function planFrom(replies: string[], max: number): Planned[] {
+  const found = new Map<number, Planned>();
+  let of = 0;
+  for (const text of replies) {
+    const block = /\`\`\`json plan-task\n([\s\S]*?)\n\`\`\`/.exec(text)?.[1];
+    if (!block) continue;
+    try {
+      const item = JSON.parse(block) as { n?: unknown; of?: unknown; title?: unknown; brief?: unknown };
+      if (typeof item.n !== "number" || typeof item.of !== "number" || typeof item.title !== "string" || typeof item.brief !== "string") continue;
+      found.set(item.n, { title: item.title, brief: item.brief });
+      of = item.of;
+    } catch {
+      continue;
+    }
+  }
+  if (of === 0 || found.size < of) return [];
+  return Array.from({ length: of }, (_, i) => found.get(i + 1)!).slice(0, max);
+}
 
 /** The first line a reviewer's answer must start with, and what each means. Anything that isn't a clear approval asks for changes. */
 export function verdict(answer: string): { approved: boolean; notes: string } {

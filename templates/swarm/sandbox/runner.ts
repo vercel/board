@@ -24,7 +24,7 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { blocked, brief, costOf, doing, LABEL, OUTPUT, parsePlan, planReply, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
+import { blocked, brief, costOf, doing, LABEL, OUTPUT, parsePlan, planReplies, REPLY_MAX, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
 
 const config = JSON.parse(await readFile(process.env.RUNNER_CONFIG ?? SANDBOX.config, "utf8")) as RunnerConfig;
 const HOME = join(SANDBOX.dir, "home");
@@ -70,7 +70,7 @@ async function vb<T = unknown>(...args: string[]): Promise<T> {
 type Message = { id: string; text: string; labels: Record<string, string>; task?: { needs?: string[] }; by?: { actor?: string }; author?: { handle?: string } };
 
 /** A reply in a task's thread. It throws when the board refuses it: an output that didn't reach the board wasn't delivered. */
-const post = (id: string, text: string) => vb("reply", id, text.slice(0, 9_500));
+const post = (id: string, text: string) => vb("reply", id, text.slice(0, REPLY_MAX));
 
 /** A note the task doesn't depend on: one that fails is logged, and the work goes on. */
 const note = (id: string, text: string) => post(id, text).catch((error) => log({ type: "error", message: message(error) }));
@@ -316,7 +316,7 @@ ${UNTRUSTED}`,
     tasks = parsePlan(answer, config.maxTasks);
   }
   if (tasks.length === 0) return { state: "failed", reason: "The planner's answer had no tasks in it." };
-  await post(task.id, planReply(tasks));
+  for (const reply of planReplies(tasks)) await post(task.id, reply);
   return { state: "completed", result: `Planned ${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}.` };
 }
 

@@ -1,5 +1,5 @@
 import type { Board } from "@vercel/board";
-import { LABEL, parsePlan, type RunnerConfig, type State } from "../sandbox/shared.ts";
+import { LABEL, planFrom, type RunnerConfig, type State } from "../sandbox/shared.ts";
 import { agentName, runChannel, team } from "./board.ts";
 import { deadlineOf, taskCap, type Config } from "./config.ts";
 import { models } from "./models.ts";
@@ -123,11 +123,7 @@ export function ending(now: Pick<Snapshot, "counts" | "cost" | "tasks"> & { run:
 /** The plan a completed plan task's thread carries, as the planner posted it. */
 async function planOf(board: Board, task: Task, max: number) {
   const { replies } = await board.thread(task.id);
-  for (const reply of [...replies].reverse()) {
-    const plan = parsePlan(/```json plan\n[\s\S]*?\n```/.exec(reply.text)?.[0] ?? "", max);
-    if (plan.length) return plan;
-  }
-  return [];
+  return planFrom(replies.map((reply) => reply.text), max);
 }
 
 /** Adds each finished plan's tasks to the queue, once: the batch's key makes a second try add none. */
@@ -220,7 +216,11 @@ export async function reconcileAll(board: Board = team(), boxes: Sandboxes = san
     active.map((found) =>
       reconcile(found.slug, board, boxes).then(
         () => ({ slug: found.slug }),
-        (error: unknown) => ({ slug: found.slug, error: message(error) }),
+        (error: unknown) => {
+          // Said where the project's logs show it: a run whose reconcile fails stops moving, and this is why.
+          console.error(`[swarm] reconcile of ${found.slug} failed:`, error);
+          return { slug: found.slug, error: message(error) };
+        },
       ),
     ),
   );

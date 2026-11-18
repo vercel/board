@@ -37,6 +37,6 @@ export async function check(host: string | null): Promise<Launcher> {
   const [listed, recent] = await Promise.all([models(), runs(board, 20).catch(() => [])]);
   // Whoever has the page open keeps the runs going too, after the page is sent: a reconcile is a turn
   // each run takes at most every half minute, whoever asks.
-  if (progress(result.steps).ready && recent.some((run) => run.phase === "running" || (run.phase !== "preparing" && !run.torn))) after(() => reconcileAll().catch(() => {}));
+  if (progress(result.steps).ready && recent.some((run) => run.phase === "running" || (run.phase !== "preparing" && !run.torn))) after(() => reconcileAll().catch((error: unknown) => console.error("[swarm] reconcile failed:", error)));
   return { ...base, models: listed, runs: recent };
 }
