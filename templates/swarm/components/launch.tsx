@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { start } from "@/app/actions";
 import { ABOUT_SCENARIO, DEFAULTS, MAX_AGENTS, MAX_MINUTES, SCENARIOS, type Scenario } from "@/lib/config";
@@ -17,6 +17,34 @@ function providers(models: Model[]): [string, Model[]][] {
   return [...by];
 }
 
+/** Where the form keeps what was last filled in, in this browser: a reload or the next run starts from it. */
+const SAVED = "swarm.launch";
+/** The fields the form keeps by name; the scenario and the model are kept from its state. */
+const KEPT = ["repo", "goal", "agents", "budgetUsd", "minutes"] as const;
+
+type Saved = Partial<Record<(typeof KEPT)[number] | "scenario" | "model", string>>;
+
+/** What was saved, or nothing: storage can be blocked or hold something else. */
+function load(): Saved {
+  try {
+    const value = JSON.parse(localStorage.getItem(SAVED) ?? "{}") as unknown;
+    return value && typeof value === "object" ? (value as Saved) : {};
+  } catch {
+    return {};
+  }
+}
+
+function save(form: HTMLFormElement, scenario: Scenario, model: string) {
+  const data = new FormData(form);
+  const saved: Saved = { scenario, model };
+  for (const name of KEPT) saved[name] = String(data.get(name) ?? "");
+  try {
+    localStorage.setItem(SAVED, JSON.stringify(saved));
+  } catch {
+    // Storage is blocked: the form still works, it just starts over next time.
+  }
+}
+
 /** The form that launches a run: a repo the GitHub app is on, a goal, a scenario, a model, how many agents, and when to stop. */
 export function Launch({ repos, models, install }: { repos: string[]; models: Model[]; install: string | null }): ReactNode {
   const router = useRouter();
@@ -25,10 +53,35 @@ export function Launch({ repos, models, install }: { repos: string[]; models: Mo
   const [model, setModel] = useState(models.some((entry) => entry.id === DEFAULTS.model) ? DEFAULTS.model : (models[0]?.id ?? DEFAULTS.model));
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const price = useMemo(() => models.find((entry) => entry.id === model)?.price ?? null, [models, model]);
+  const form = useRef<HTMLFormElement>(null);
+  const [restored, setRestored] = useState(false);
+
+  // What was filled in last time, once the page is in the browser: the server renders the defaults.
+  // A saved repo or model that's no longer offered is left at the default.
+  useEffect(() => {
+    const saved = load();
+    if (saved.scenario && SCENARIOS.includes(saved.scenario as Scenario)) setScenario(saved.scenario as Scenario);
+    if (saved.model && (models.length === 0 || models.some((entry) => entry.id === saved.model))) setModel(saved.model);
+    const fields = form.current?.elements;
+    for (const name of KEPT) {
+      const field = fields?.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+      const value = saved[name];
+      if (!field || value === undefined || (name === "repo" && !repos.includes(value))) continue;
+      field.value = value;
+    }
+    setRestored(true);
+  }, [models, repos]);
+
+  // The scenario and the model are state, so they're saved once they change, after the restore.
+  useEffect(() => {
+    if (restored && form.current) save(form.current, scenario, model);
+  }, [restored, scenario, model]);
 
   return (
     <form
+      ref={form}
       className="launch"
+      onChange={(event) => restored && save(event.currentTarget, scenario, model)}
       onSubmit={(event) => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(event.currentTarget));
