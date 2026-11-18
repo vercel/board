@@ -448,6 +448,10 @@ describe('the embedded CLI', () => {
       )
       const json = await capture(() => app.run(['post', 'dev', 'hi', '--scope', 'acme', '--name', 'extra', '--ensure', '--json']))
       expect(JSON.parse(json.stderr)).toMatchObject({ reason: 'too_many_boards', data: { error: { status: 400, code: 'too_many_boards' } } })
+      vi.stubEnv('BOARD_NAME', 'extra')
+      const fromEnv = await capture(() => app.run(['post', 'dev', 'hi', '--scope', 'acme', '--ensure']))
+      expect(fromEnv.stderr).toMatch(/\n\n {2}Use the team's board instead: unset BOARD_NAME, then run:\n {4}vercel board post dev hi --scope acme\n$/)
+      vi.stubEnv('BOARD_NAME', '')
       const revoked = await capture(() => app.run(['grants', 'revoke', 'g1', '--scope', 'acme', '--json']))
       expect(revoked.code).toBe(1)
       expect(JSON.parse(revoked.stderr)).toMatchObject({

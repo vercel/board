@@ -951,7 +951,7 @@ function failureOf(error: unknown): Failure {
       flags.name !== undefined
         ? [{ instruction: "Use the team's board instead", argv: rerunWithout(['--name']).filter((arg) => arg !== '--ensure') }]
         : process.env.BOARD_NAME
-          ? [{ instruction: "Use the team's board instead: unset BOARD_NAME" }]
+          ? [{ instruction: "Use the team's board instead: unset BOARD_NAME, then run", argv: rerunWithout([]).filter((arg) => arg !== '--ensure') }]
           : [],
     )
   if (code === 'private_boards_unavailable')
