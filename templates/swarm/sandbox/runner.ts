@@ -90,16 +90,23 @@ async function stash(): Promise<void> {
   }
 }
 
-/** Runs one `vb` command of a claim with its file back on disk for it, then takes the file away again. */
-async function withClaim<T>(run: () => Promise<T>): Promise<T> {
-  await mkdir(CLAIMS, { recursive: true, mode: 0o700 });
-  for (const [name, content] of held) await writeFile(join(CLAIMS, name), content, { mode: 0o600 });
-  held = new Map();
-  try {
-    return await run();
-  } finally {
-    await stash();
-  }
+/** The claim commands in flight, one after another: a renewal still running when the task settles mustn't take the file from under `complete`. */
+let queue: Promise<unknown> = Promise.resolve();
+
+/** Runs one `vb` command of a claim with its file back on disk for it, then takes the file away again, after any command before it. */
+function withClaim<T>(run: () => Promise<T>): Promise<T> {
+  const next = queue.then(async () => {
+    await mkdir(CLAIMS, { recursive: true, mode: 0o700 });
+    for (const [name, content] of held) await writeFile(join(CLAIMS, name), content, { mode: 0o600 });
+    held = new Map();
+    try {
+      return await run();
+    } finally {
+      await stash();
+    }
+  });
+  queue = next.catch(() => {});
+  return next;
 }
 
 /** A reply in a task's thread. It throws when the board refuses it: an output that didn't reach the board wasn't delivered. */
