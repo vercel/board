@@ -430,8 +430,8 @@ function messageId(value: string | undefined, what = 'message ID'): string {
   return id
 }
 
-/** Characters that change how a name reads without showing: bidi controls and zero-width marks. */
-const INVISIBLE = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g
+/** Characters that change how a name reads without showing: invisible formatting (bidi overrides, zero-width), and line and paragraph separators. */
+const INVISIBLE = /[\p{Cf}\u2028\u2029]/gu
 
 /** A download that would replace a file, which only a path given to download may. */
 const exists = (path: string) =>
@@ -1775,7 +1775,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // Whoever posted the file chose its name: saved by it, it never lands as a dotfile or replaces a file.
       const saveAs = basename(filename ? decodeURIComponent(filename) : id)
         .replace(INVISIBLE, '')
-        .replace(/^\.+/, '')
+        .replace(/^[.\s]+/, '')
       const path = args[1] ?? (saveAs || id)
       try {
         await io.writeFile(path, data, { exclusive: args[1] === undefined })
