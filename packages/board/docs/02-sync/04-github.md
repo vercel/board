@@ -105,8 +105,8 @@ issue. Resolving review conversations isn't synced.
 | `pr.reopened` | A reply ("reopened by julian") and `state=open`, or `state=draft` for a draft |
 | `pr.synchronized` | New commits: sets `head` to the PR's latest commit and unsets `ci.*`, with no reply |
 | `pr.closed` | A reply ("merged by julian" or "closed by julian") and `state=merged` or `state=closed` |
-| `ci.failed` | A GitHub Actions workflow failed, timed out, or didn't start on the PR's latest commit: a reply from `github-actions[bot]` ("check failed on a1b2c3d: <run link>") and `ci.<workflow>=<conclusion>` |
-| `ci.passed` | That workflow passed on the PR's latest commit: unsets `ci.<workflow>`, with no reply |
+| `ci.failed` | A GitHub Actions workflow failed, timed out, or didn't start on the PR's latest commit: a reply from `github-actions[bot]` ("check failed on a1b2c3d: <run link>") and `ci.<workflow file>=<conclusion>` |
+| `ci.passed` | That workflow passed on the PR's latest commit: unsets `ci.<workflow file>`, with no reply |
 | `review.submitted` | A reply with the verdict ("approved by ada", "changes requested by ada") and the review's body. Approvals and change requests set `review` |
 | `review.dismissed` | Unsets `review` |
 | `issue.opened` | A root labeled `issue=owner/repo#45` and `state=open` |
@@ -126,7 +126,7 @@ without polling it:
 
 | Root | Labels |
 | --- | --- |
-| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested`, `head=<sha>` (the commit the PR is at), `ci.<workflow>=failure\|timed_out\|startup_failure` per workflow failing on it |
+| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested`, `head=<sha>` (the commit the PR is at), `ci.<workflow file>=failure\|timed_out\|startup_failure` per workflow failing on it |
 | Issue | `state=open\|closed` |
 | Both | `tag.<label>=<name>` per GitHub label, `assignee.<login>=<login>` per assignee |
 

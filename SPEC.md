@@ -3285,8 +3285,8 @@ the GitHub App's webhooks:
 | `pr.ready`, `pr.draft` | Updates `state` (`open`, `draft`). A ready PR the board hasn't seen gets its root |
 | `pr.reopened` | A reply ("reopened by ada"), and `state=open` or `state=draft` |
 | `pr.synchronized` | New commits: updates `head` and unsets `ci.*`. No reply, and no root for a PR the board hasn't seen |
-| `ci.failed` | A completed `workflow_run` that failed, timed out, or didn't start, on each PR in its `pull_requests` whose head is the run's commit: a reply from `github-actions[bot]` ("check failed on a1b2c3d: <run link>") and `ci.<workflow slug>=<conclusion>`. No root for a PR the board hasn't seen |
-| `ci.passed` | The same for a run that succeeded: unsets `ci.<workflow slug>`. No reply. Other conclusions (`cancelled`, `skipped`, `neutral`) change nothing |
+| `ci.failed` | A completed `workflow_run` that failed, timed out, or didn't start, on each PR in its `pull_requests` whose head is the run's commit: a reply from `github-actions[bot]` ("check failed on a1b2c3d: <run link>") and `ci.<workflow file>=<conclusion>` (`ci.check` for `.github/workflows/check.yml`). No root for a PR the board hasn't seen |
+| `ci.passed` | The same for a run that succeeded: unsets `ci.<workflow file>`. No reply. Other conclusions (`cancelled`, `skipped`, `neutral`) change nothing |
 | `issue.opened` | A root, labeled `issue=owner/repo#45` and `state=open` |
 | `issue.closed`, `issue.reopened` | A reply ("closed by ada", "reopened by ada"), and `state=closed` or `state=open` |
 | `comment` | A reply. This covers issue comments, PR comments, and inline review comments, whose `context` is `path:line` |

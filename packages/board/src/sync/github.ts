@@ -191,6 +191,8 @@ const ACTIONS: User = { login: 'github-actions[bot]', id: 41898282, type: 'Bot' 
 
 type WorkflowRun = {
   name?: string
+  /** `.github/workflows/check.yml`: unique in its repo, where two workflows' names needn't be. */
+  path?: string
   conclusion?: string | null
   head_sha?: string
   html_url?: string
@@ -199,15 +201,16 @@ type WorkflowRun = {
 
 /**
  * Maps a completed `workflow_run` to a lifecycle event on each PR it ran for, at the commit the PR
- * is at: a failure replies and sets `ci.<workflow>=<conclusion>`, a pass unsets it. A fork's PRs
+ * is at: a failure replies and sets `ci.<workflow file>=<conclusion>`, a pass unsets it. A fork's PRs
  * aren't in `pull_requests`, so their runs reach no thread.
  */
 function workflowRun(body: Record<string, unknown>): { lifecycle: Lifecycle; number: number; user: User }[] {
   if (body.action !== 'completed') return []
   const run = body.workflow_run as WorkflowRun | undefined
   const repo = (body.repository as { full_name?: string } | undefined)?.full_name
-  if (!run?.name || !run.head_sha || !run.conclusion || !repo) return []
-  const key = `ci.${slug(run.name)}`.slice(0, 64)
+  if (!run?.name || !run.path || !run.head_sha || !run.conclusion || !repo) return []
+  const file = run.path.slice(run.path.lastIndexOf('/') + 1).replace(/\.ya?ml$/, '')
+  const key = `ci.${slug(file)}`.slice(0, 64)
   if (key === 'ci.') return []
   const failed = FAILED.includes(run.conclusion)
   if (!failed && run.conclusion !== 'success') return []
@@ -248,7 +251,7 @@ const issueLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
 })
 const ciLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
   type: z.literal(type), subject: GitHubSubject.extend({ type: z.literal('pull_request') }),
-  raw: z.looseObject({ action: z.string().optional(), workflow_run: z.looseObject({ name: z.string(), conclusion: z.string(), head_sha: z.string(), html_url: z.string().optional() }) }),
+  raw: z.looseObject({ action: z.string().optional(), workflow_run: z.looseObject({ name: z.string(), path: z.string(), conclusion: z.string(), head_sha: z.string(), html_url: z.string().optional() }) }),
 })
 export const GitHubEvent = z.discriminatedUnion('type', [
   messageEvent.extend(githubFields), editedEvent.extend(githubFields), deletedEvent.extend(githubFields), reactionEvent.extend(githubFields),

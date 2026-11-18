@@ -856,9 +856,9 @@ describe('sync', () => {
       action, repository, sender,
       pull_request: { number: 7, title: 'Add sync', html_url: 'https://github.com/vercel/board/pull/7', draft: false, merged: false, head: { sha } },
     })
-    const run = (conclusion: string, sha: string, name = 'check', at = sha) => ({
+    const run = (conclusion: string, sha: string, name = 'check', at = sha, path = '.github/workflows/check.yml') => ({
       action: 'completed', repository, sender,
-      workflow_run: { id: 1, name, conclusion, head_sha: sha, html_url: 'https://github.com/vercel/board/actions/runs/1', pull_requests: [{ number: 7, head: { sha: at } }] },
+      workflow_run: { id: 1, name, path, conclusion, head_sha: sha, html_url: 'https://github.com/vercel/board/actions/runs/1', pull_requests: [{ number: 7, head: { sha: at } }] },
     })
     const send = (event: string, body: unknown, delivery: string) => webhook('github', body, { 'x-github-event': event, 'x-github-delivery': delivery })
     const thread = async () => {
@@ -879,16 +879,19 @@ describe('sync', () => {
       expect(replies[0]!.by.actor).toBe('github:user:41898282')
     })
 
+    // Another workflow with the same name passing doesn't clear this one: each is its file.
+    await send('workflow_run', run('success', 'aaaaaaa1', 'check', 'aaaaaaa1', '.github/workflows/lint.yml'), 'ci-other-passed')
+    await vi.waitFor(async () => expect((await thread()).message.labels['ci.check']).toBe('failure'))
     await send('workflow_run', run('success', 'aaaaaaa1'), 'ci-passed')
     await vi.waitFor(async () => expect((await thread()).message.labels).not.toHaveProperty('ci.check'))
 
-    await send('workflow_run', run('timed_out', 'aaaaaaa1', 'E2E tests'), 'ci-timed-out')
-    await vi.waitFor(async () => expect((await thread()).message.labels['ci.e2e-tests']).toBe('timed_out'))
+    await send('workflow_run', run('timed_out', 'aaaaaaa1', 'E2E tests', 'aaaaaaa1', '.github/workflows/e2e.yaml'), 'ci-timed-out')
+    await vi.waitFor(async () => expect((await thread()).message.labels['ci.e2e']).toBe('timed_out'))
     await send('pull_request', pr('synchronize', 'bbbbbbb2'), 'ci-pushed')
     await vi.waitFor(async () => {
       const { message, replies } = await thread()
       expect(message.labels).toMatchObject({ head: 'bbbbbbb2' })
-      expect(message.labels).not.toHaveProperty('ci.e2e-tests')
+      expect(message.labels).not.toHaveProperty('ci.e2e')
       expect(replies.map((m) => m.text)).toEqual([
         'check failed on aaaaaaa: https://github.com/vercel/board/actions/runs/1',
         'E2E tests timed out on aaaaaaa: https://github.com/vercel/board/actions/runs/1',
