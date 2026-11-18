@@ -159,18 +159,25 @@ function once(key: string, load: () => Promise<void>): Promise<void> {
 
 // --- reading -----------------------------------------------------------------------
 
+/** How many threads the activity view asks the board for: each comes with its root and its latest reply. */
+const RECENT = 100
+
 /**
- * The page shows once it knows who you are and the channels; the latest across them, the slowest
- * read on a big board, fills the activity view when it lands, and the feed goes on from its cursor.
+ * The page shows once it knows who you are and the channels. The latest threads across them fill the
+ * activity view when the board lists them, and the feed goes on from that read's cursor. A board that
+ * lists threads a channel at a time says so: its words show there, and the feed starts from now.
  */
 export async function boot() {
-  const recent = team.messages({ limit: 200 })
-  // Awaited after the rest: a failure then is the boot's, not an unhandled one.
-  recent.catch(() => {})
+  // Settled either way: a refusal is what the view shows, not a failed boot.
+  const recent = team.threads({ limit: RECENT }).then(
+    (page) => ({ page }),
+    (error: unknown) => ({ refused: refusal(error) }),
+  )
   const [me, discovery, channels] = await Promise.all([team.me(), team.discovery().catch(() => null), team.channels()])
   set((s) => ({ ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])) }))
-  const page = await recent
-  set((s) => store.merge({ ...s, cursor: page.cursor }, page.messages))
+  const latest = await recent
+  if ('page' in latest) set((s) => store.merge({ ...s, cursor: latest.page.cursor }, latest.page.threads.flatMap((thread) => (thread.last ? [thread.message, thread.last] : [thread.message]))))
+  else set((s) => ({ ...s, activityRefused: latest.refused }))
   // A burst of events is one render: they're folded in a frame at a time.
   let queue: BoardEventView[] = []
   const flush = () => {
@@ -181,7 +188,7 @@ export async function boot() {
     if (events.some((event) => event.message?.schedule !== undefined)) void loadSchedules()
   }
   follow(
-    page.cursor,
+    'page' in latest ? latest.page.cursor : undefined,
     (event) => {
       if (queue.push(event) === 1) requestAnimationFrame(flush)
     },
@@ -196,20 +203,21 @@ export async function boot() {
 
 // #region guide inspector/live.ts
 /**
- * Follows the board's feed from `after`: every event since, as it happens. `onState` hears whether
- * it's connected, `live` or `retrying`, each time that changes. The handle retries a dropped
- * connection itself; this throws only when the board refuses the feed (a token that ran out, say).
+ * Follows the board's feed from `after`, a read's cursor, or from now without one: every event since,
+ * as it happens. `onState` hears whether it's connected, `live` or `retrying`, each time that changes.
+ * The handle retries a dropped connection itself; this throws only when the board refuses the feed (a
+ * token that ran out, say).
  */
-async function follow(after: string, each: (event: BoardEventView) => void, onState: (state: EventsState) => void) {
-  for await (const event of team.events({ all: true, after }, { onState })) each(event)
+async function follow(after: string | undefined, each: (event: BoardEventView) => void, onState: (state: EventsState) => void) {
+  for await (const event of team.events({ all: true, ...(after !== undefined ? { after } : {}) }, { onState })) each(event)
 }
 // #endregion
 
 // #region guide inspector/read.ts
 const PAGE = 200
 
-/** A channel's newest messages, roots and replies alike; with `before`, the ones older than that message, to page back. */
-const readChannel = (channel: string, before?: string) => team.messages({ channel, limit: PAGE, ...(before ? { before } : {}) })
+/** One channel's newest messages across its threads, roots and replies alike, oldest first. */
+const readChannel = (channel: string) => team.channel(channel).messages({ limit: PAGE })
 
 /** A thread: its root, its replies oldest first, and the cursor to follow it from. */
 const readThread = (id: string) => team.thread(id)
@@ -220,7 +228,7 @@ const readThread = (id: string) => team.thread(id)
  * whichever handle you post as now.
  */
 const listed = listing(
-  { threads: (query) => team.threads(query), messages: ({ channel, before }) => readChannel(channel, before) },
+  { threads: (query) => team.threads(query), messages: (channel) => readChannel(channel) },
   () => state,
   set,
 )
@@ -244,24 +252,39 @@ export const loadThread = (id: string) =>
 
 export const loadInbox = (key: string): Promise<InboxEntry[]> => team.inbox(key, { limit: 100 })
 
+/** Threads a filtered view asks the board for, and how many of them it reads whole. */
+const FILTERED = 50
+const FILTERED_WHOLE = 30
+
+/** The kinds of filtered read the board refused, each asked once: where, and by what. */
+const unsupported = new Set<string>()
+
 /**
- * History that matches a view's filters, from the board, so a filter finds
- * older messages too; the feed keeps it current. Replies come with their
- * thread's root, which the page needs to show them and to match its labels.
+ * History that matches a view's filters, from the board, so a filter finds older messages too; the
+ * feed keeps it current. The board lists the threads with a match, and each longer one is read whole,
+ * since the match may be any message of it. A board that can't find threads that way says so once,
+ * and the filter then shows what matches among what's loaded.
  */
-export const loadFiltered = (channel: string | undefined, filter: store.Filter) =>
-  once(`filtered:${channel ?? '*'}:${JSON.stringify(filter)}`, async () => {
-    const page = await team.messages({
-      ...(channel ? { channel } : {}),
-      ...(filter.from ? { from: filter.from } : {}),
-      ...(filter.text ? { text: filter.text } : {}),
-      ...(filter.label.length > 0 ? { label: filter.label } : {}),
-      limit: PAGE,
-    })
-    set((s) => store.merge(s, page.messages))
-    const missing = [...new Set(page.messages.flatMap((m) => (m.re !== null && !state.messages[m.re] ? [m.re] : [])))].slice(0, 30)
-    await Promise.all(missing.map((id) => loadThread(id)))
+export const loadFiltered = (channel: string | undefined, filter: store.Filter) => {
+  const kind = `${channel ? 'channel' : 'board'}:${filter.from ? 'from' : ''}:${filter.text ? 'text' : ''}:${filter.label.length > 0 ? 'label' : ''}`
+  if (unsupported.has(kind)) return Promise.resolve()
+  return once(`filtered:${channel ?? '*'}:${JSON.stringify(filter)}`, async () => {
+    const page = await team
+      .threads({
+        ...(channel ? { channel } : {}),
+        ...(filter.from ? { from: filter.from } : {}),
+        ...(filter.text ? { text: filter.text } : {}),
+        ...(filter.label.length > 0 ? { label: filter.label } : {}),
+        limit: FILTERED,
+      })
+      .catch((error: unknown) => {
+        if ((error as { status?: unknown } | null)?.status === 501) unsupported.add(kind)
+        throw error
+      })
+    set((s) => store.merge(s, page.threads.flatMap((thread) => (thread.last ? [thread.message, thread.last] : [thread.message]))))
+    await Promise.all(page.threads.filter((thread) => thread.replies > 1).slice(0, FILTERED_WHOLE).map((thread) => loadThread(thread.message.id)))
   })
+}
 
 // --- writing -----------------------------------------------------------------------
 

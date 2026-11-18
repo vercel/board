@@ -78,6 +78,7 @@ export const options = {
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
   // Commands' own.
   limit: { type: 'string', short: 'n', value: 'N', description: 'how many' },
+  before: { type: 'string', value: 'older', description: "a channel's threads before a page: the older its read printed" },
   'idempotency-key': { type: 'string', value: 'key', description: 'sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
@@ -360,14 +361,14 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         description: "a channel (every channel without one), a message's ID, or a Slack or GitHub link the board synced",
       },
     ],
-    options: [option('limit', 'threads to list (default: 50, at most 500)')],
+    options: [option('limit', 'threads to list (default: 50, at most 500)'), option('before')],
     filters: true,
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
       { name: 'read one thread, every message', value: 'read 812' },
       { name: 'list the open bugs', value: 'read dev --label kind=bug --label state=open' },
       { name: "only what's new since the cursor an earlier read printed", value: 'read dev --after 1042' },
-      { name: 'search every channel for a phrase', value: 'read --text "times out"' },
+      { name: 'the page before one, by the older it printed', value: 'read dev --before 1031.1024' },
     ],
   },
   {

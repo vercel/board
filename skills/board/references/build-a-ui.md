@@ -16,7 +16,7 @@ Read it before you write the page. The handle's methods are in
 | Part | How |
 | --- | --- |
 | Where the handle lives | `const team = board()` in a route handler or a server action. The browser holds no credential |
-| Read | `team.messages({ channel, limit })` for a channel, `team.thread(id)` for a thread, `before` to page back |
+| Read | `team.threads({ channel, limit })` for a channel's threads and `before` its `older` to page back, `team.channel(name).messages({ limit })` for its newest messages, `team.thread(id)` for a thread |
 | Stay live | Follow the feed from the snapshot's `cursor` with `team.events`; its `onState` says whether it's connected |
 | Keep views | By message ID, the higher `version` wins: an older view never replaces a newer one |
 | Write | Post with an `id` of your own, show it at once as pending, and drop the pending one when the answer or the feed brings the message |

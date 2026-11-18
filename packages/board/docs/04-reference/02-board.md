@@ -712,35 +712,33 @@ See [Schemas](./03-http.md#schemas) for what a definition may use.
 
 ## Reading
 
-### messages
+### channel
 
 ```ts
-messages(query?: Filters & { after?: string; before?: string; limit?: number }): Promise<MessagesPage>
+channel(name: string): { messages(query?: { after?: string; limit?: number }): Promise<MessagesPage> }
 ```
 
-Returns `{ messages, cursor }`: matching messages, oldest first, and the
-cursor the read reflects. Without `after`, it's the latest `limit` (50 by
-default, at most 500); with `after`, the first `limit` after it. `before`
-pages back. Both take a cursor or a message ID.
+One channel, by its whole name. Its `messages()` returns `{ messages, cursor }`:
+the channel's messages across its threads, oldest first. Without `after`, it's
+the latest `limit` (50 by default, at most 500); with `after`, a cursor a read
+of this channel's messages answered, the first `limit` posted since. Reading
+on from a page's `cursor` repeats nothing and skips nothing. A channel nobody
+has posted in yet answers an empty page, and its cursor reads the channel from
+its first message.
 
-A team board in Vercel's API lists a channel's newest 100 and no further back.
-Up to a `limit` of 100, the latest across channels is exactly the latest
-`limit`. Past that, it stops where the busiest channel's 100 do, so it can be
-fewer than `limit`, but it never skips a message newer than its oldest.
+It's the one list of messages a board has: a channel at a time, with no
+filters and no page back. To find threads, use [`threads`](#threads); to read
+a thread, [`thread`](#thread); to read several channels, list them with
+`channels()` and read each.
 
 ```ts
-const page = await team.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 100 })
+const page = await team.channel('errors-www').messages({ limit: 100 })
+const since = await team.channel('errors-www').messages({ after: page.cursor })
 ```
 
-| `Filters` | Matches |
-| --- | --- |
-| `channel` | a channel, or a subtree with a trailing slash: `'www/'` |
-| `re` | the thread rooted at that ID |
-| `by` | an actor, by handle or actor ID |
-| `mentions` | `'me'`, a handle, an actor ID, or an email, as the text mentions them |
-| `label` | `{ status: 'open' }`, or `['status=open', 'pr']`; a value may be `a\|b`. Matches the message or its root |
-| `from` | a sync key (`'slack'`), or `'board'`. On Vercel's board, another project's key is `'www/slack'`, by its name or its ID |
-| `text` | a case-insensitive substring |
+A team board in Vercel's API lists a channel's newest 100 at most, whatever
+`limit` asks for, and reads on from a cursor this read answered for that
+channel: a message ID, or a cursor from `threads`, is 400 `invalid_cursor`.
 
 ### threads
 
@@ -754,6 +752,23 @@ root, its reply count, and its latest reply (`null` when it has none).
 Deleted replies don't count. `limit` counts threads (50 by default, at most
 500), so a thread's root is there however many replies it has; `after` is the
 first `limit` threads active after that cursor.
+
+| `Filters` | Matches |
+| --- | --- |
+| `channel` | a channel, or a subtree with a trailing slash: `'www/'` |
+| `re` | the thread rooted at that ID |
+| `by` | an actor, by handle or actor ID |
+| `mentions` | `'me'`, a handle, an actor ID, or an email, as the text mentions them |
+| `label` | `{ status: 'open' }`, or `['status=open', 'pr']`; a value may be `a\|b`. Matches the message or its root |
+| `from` | a sync key (`'slack'`), or `'board'`. On Vercel's board, another project's key is `'www/slack'`, by its name or its ID |
+| `text` | a case-insensitive substring |
+
+A team board in Vercel's API keeps no search index, and lists threads one
+channel at a time: `by`, `mentions`, `text`, and `from` there are 501
+`not_supported`, and so is a read with no `channel` or with a subtree, unless
+`re` names one thread. It reads nothing before it refuses, and its message
+says what to do instead. [`events`](#events) and [`wait`](#wait) take every
+filter there.
 
 `older` is the `before` for the threads last active before the page's, or
 `null` when none are: pass it back to page back through every thread once. A

@@ -85,7 +85,7 @@ describe('inspect', () => {
       by: { actor: 'vercel:user:u_julian' },
     })
     expect(thread.replies[0]).toMatchObject({ deleted: true, noSync: true })
-    expect((await ui.messages({ channel: 'ops' })).messages.map((m) => m.id)).toContain(root.id)
+    expect((await ui.channel('ops').messages()).messages.map((m) => m.id)).toContain(root.id)
   })
 
   it('acts as the profile the page picks, with the avatar it gives it', async () => {

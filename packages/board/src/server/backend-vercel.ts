@@ -349,15 +349,16 @@ const API_ONLY_CODES = new Set([
   'too_many_targets',
 ])
 const BOARD_CODES: Record<number, string> = { 400: 'invalid_request', 403: 'forbidden', 404: 'not_found', 409: 'conflict', 413: 'too_large' }
-/** Pages a filtered read of one channel scans for matches before it answers with what it found. */
-const SCAN_PAGES = 10
+/** Pages a read of one channel after a cursor takes before it answers with what it has: 500 messages, and a few its caller's access left short. */
+const AFTER_PAGES = 10
 /** How long after it couldn't tell who its credentials are a board waits to ask again. */
 const WHO_AGAIN_MS = 10_000
 
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
-const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
+/** What Vercel's boards don't do, and with `instead`, what to do there. */
+const notSupported = (what: string, instead?: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet${instead ? `: ${instead}` : ''}`)
 
 /** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
 const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
@@ -664,7 +665,7 @@ function labelsBefore(after: Labels, changed: ApiChange['labels'] = {}): Labels 
 const originOf = (origin: ApiMessage['origin']): Origin | null =>
   origin ? { ...(origin.channel !== undefined ? { channel: origin.channel } : {}), thread: origin.thread, subthread: origin.subthread ?? null, message: origin.message, context: origin.context ?? null } : null
 
-type Filters = Protocol['messages']['input']
+type Filters = Protocol['threads']['input']
 
 /**
  * Vercel's board for your team, in Vercel's API: this deployment keeps nothing and reads and writes
@@ -950,6 +951,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
   /** A channel to post in, made the first time something posts to it, as on any board. */
   const channelToPost = async (who: Who, name: string): Promise<ApiChannel> => (await ensureChannel(who, name)).channel
+  /** Whether the channel `name` is the one a filter names, or for a pattern (`dev/`), it or one under it. */
+  const inPattern = (name: string, filter: string) => (filter.endsWith('/') ? name === filter.slice(0, -1) || name.startsWith(filter) : name === filter)
   /** The channels a filter names: one, a channel and those under it (`dev/`), or every one. */
   async function channelsFor(who: Who, filter: string | undefined): Promise<ApiChannel[]> {
     if (filter !== undefined && !filter.endsWith('/')) {
@@ -1619,33 +1622,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return first && (first[1] === null ? first[0] : `${first[0]}=${first[1][0]}`)
   }
 
-  /** Every thread of a channel, each with its first and newest message where the API sends them (`threadPage`). */
-  async function threadsOf(who: Who, channel: ApiChannel, filters: Filters, signal: AbortSignal): Promise<ApiThread[]> {
-    const label = indexed(filters)
-    const path = await onBoard(who, '/threads')
-    const out: ApiThread[] = []
-    let cursor: string | undefined
-    do {
-      const page = await threadPage(who, path, { channelId: channel.id, label, cursor, limit: THREAD_PAGE_MAX }, signal)
-      out.push(...page.threads)
-      cursor = page.cursor ?? undefined
-    } while (cursor)
-    return out
-  }
-
-  /**
-   * A thread's messages when its list brought them all: its first, and its newest when that's its
-   * second. Most threads are a post or a post and a reply, and reading one of those costs nothing
-   * more. Null for a longer one, or from an API that lists threads without their messages.
-   */
-  function whole(thread: ApiThread): ApiMessage[] | null {
-    const root = thread.rootMessage
-    if (!root || root.sequence !== 1) return null
-    if (thread.messageCount === 1) return [root]
-    const latest = thread.latestMessage
-    return thread.messageCount === 2 && latest?.sequence === 2 ? [root, latest] : null
-  }
-
   /** Whether the API lists threads with their first and newest messages (`include=messages`): until it refuses the parameter, it's asked. */
   let threadsWithMessages = true
   /** Whether the API takes how many threads a page holds (`limit`): until it refuses the parameter, it's asked. */
@@ -1849,77 +1825,29 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
   const clientIdOf = async (id: string) => (CLIENT_ID.test(id) ? id : `h.${(await sha256(id)).slice(0, 64)}`)
 
-  /** Messages a read covers, newest last: every thread's in the channels it names, or one thread's. */
-  async function collect(who: Who, filters: Filters, signal: AbortSignal) {
-    let listed: ApiChannel[]
-    let threads: { thread: ApiThread; channel: ApiChannel }[]
-    let feeds: Record<string, Feed>
-    if (filters.re !== undefined) {
-      const found = await messageIn(who, filters.re, signal).catch((error: unknown) => {
-        if (error instanceof HttpError && error.status === 404) return null
-        throw error
-      })
-      if (!found) return { messages: [], feeds: {}, newest: 0 }
-      const { channel } = found
-      if (filters.channel !== undefined && !(await channelsFor(who, filters.channel)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
-      listed = [channel]
-      threads = [{ thread: found.thread, channel }]
-      feeds = await heads(who, listed)
-    } else {
-      listed = await channelsFor(who, filters.channel)
-      // Before the threads are listed: a list brings some threads whole, so what's posted while it's read
-      // has to come after the cursor this answers with, or it would be in neither.
-      feeds = await heads(who, listed)
-      threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
-    }
-    const narrow = await narrowOf(who, filters)
-    const read: { thread: ApiThread; channel: ApiChannel; all: ApiMessage[] }[] = []
-    for (const { thread, channel } of threads) read.push({ thread, channel, all: whole(thread) ?? (await threadMessages(who, thread.id, signal)) })
-    narrow.mentions?.ahead(read.flatMap(({ all }) => all.map((message) => message.text)))
+  /**
+   * The messages of the thread `re` names, by any of its messages, that match a read's filters, oldest first, with its
+   * channel's feed now. None for a thread that isn't here, or isn't in the channel the read names.
+   */
+  async function threadMatching(who: Who, re: string, filters: Filters, signal: AbortSignal) {
+    const none = { messages: [], feeds: {}, newest: 0 }
+    const found = await messageIn(who, re, signal).catch((error: unknown) => {
+      if (error instanceof HttpError && error.status === 404) return null
+      throw error
+    })
+    if (!found) return none
+    const { thread, channel } = found
+    if (filters.channel !== undefined && !inPattern(channel.name, filters.channel)) return none
+    const feeds = await heads(who, [channel])
+    const all = await threadMessages(who, thread.id, signal)
+    const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
     let newest = 0
     const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
-    for (const { thread, channel, all } of read) {
-      const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
-      for (const message of all) {
-        newest = Math.max(newest, message.createdAt)
-        if (await matches(filters, message, labeled, narrow)) messages.push({ message, thread, channel })
-      }
+    for (const message of all) {
+      newest = Math.max(newest, message.createdAt)
+      if (await matches({ ...filters, re }, message, labeled, {})) messages.push({ message, thread, channel })
     }
-    messages.sort(byTime)
     return { messages, feeds, newest }
-  }
-
-  /** A thread's messages in order; across threads, by time, as a person reads a channel. */
-  const byTime = (a: { message: ApiMessage }, b: { message: ApiMessage }) =>
-    a.message.createdAt - b.message.createdAt || a.message.threadId.localeCompare(b.message.threadId) || a.message.sequence - b.message.sequence
-
-  /**
-   * The latest `limit` in `listed`, unfiltered: each channel's latest page from the API's message
-   * list, all at once, never a thread at a time. The list goes back one page, so a full page cuts the
-   * answer off at its oldest message: every message newer than the oldest it answers with is in it,
-   * even when that's fewer than `limit`. Each page's cursor is its channel's feed then, which the
-   * read's cursor goes on from.
-   */
-  async function latest(who: Who, listed: ApiChannel[], limit: number, signal: AbortSignal) {
-    const path = await onBoard(who, '/messages')
-    const asked = Math.min(limit, PAGE_MAX)
-    const pages = await Promise.all(
-      listed.map(async (channel) => ({
-        channel,
-        ...(await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { channelId: channel.id, limit: String(asked) }, signal })),
-      })),
-    )
-    const full = pages.filter((page) => page.messages.length === asked)
-    const cutoff = Math.max(-Infinity, ...full.map((page) => Math.min(...page.messages.map((message) => message.createdAt))))
-    const messages = pages
-      .flatMap(({ channel, messages }) => messages.map((message) => ({ message, channel })))
-      .filter(({ message }) => message.createdAt >= cutoff)
-      .sort(byTime)
-    return {
-      messages: messages.slice(-limit),
-      feeds: Object.fromEntries(pages.map((page): [string, Feed] => [page.channel.id, { at: page.cursor, skip: 0 }])),
-      newest: Math.max(0, ...pages.flatMap((page) => page.messages.map((message) => message.createdAt))),
-    }
   }
 
   /** A change in the API's feed as a board event, with the message as it is now. Null for what's neither a message's nor a task's. */
@@ -2068,40 +1996,55 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
-  /** Whether a read filters on what messages say, who wrote them, or their labels: what the API can't narrow by. */
-  const filtered = (filters: Filters) =>
-    filters.by !== undefined || filters.mentions !== undefined || filters.text !== undefined || filters.from !== undefined || (filters.label?.length ?? 0) > 0
-
   /**
-   * One channel's messages, from the API's message list: the latest `limit`, or those after one of
-   * its cursors. A filtered read checks each page here, and asks only for as many as it still needs,
-   * so the cursor it answers with never passes a match it left out.
+   * One channel's messages, from the API's message list: the latest `limit`, of which the API lists 100 at most, or
+   * those after one of its cursors, a page of the API's at a time until it has `limit` or the channel has no more.
    */
-  async function channelMessages(who: Who, channel: ChannelRef, query: Filters & { after?: string; limit?: number }, signal: AbortSignal) {
+  async function channelMessages(who: Who, channel: ChannelRef, query: { after?: string | undefined; limit?: number | undefined }, signal: AbortSignal) {
+    type Page = { messages: ApiMessage[]; cursor: string; caughtUp?: boolean }
     const path = await onBoard(who, '/messages')
     const limit = query.limit ?? 50
-    const thread = threadReader(who, signal)
-    const narrowed = filtered(query)
-    const narrow = narrowed ? await narrowOf(who, query) : {}
-    const keep = async (message: ApiMessage) =>
-      !narrowed || (await matches(query, message, query.label?.length ? await thread(message.threadId) : ({ id: message.threadId } as ApiThread), narrow))
-    const kept: ApiMessage[] = []
     if (query.after === undefined) {
-      // Without a cursor, the newest: a filtered read looks among the channel's latest page.
-      const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { ...inChannel(channel), limit: String(narrowed ? PAGE_MAX : Math.min(limit, PAGE_MAX)) }, signal })
-      narrow.mentions?.ahead(page.messages.map((message) => message.text))
-      for (const message of page.messages) if (await keep(message)) kept.push(message)
-      return { messages: kept.slice(-limit), cursor: page.cursor }
+      const page = await reading<Page>(who, path, { query: { ...inChannel(channel), limit: String(Math.min(limit, PAGE_MAX)) }, signal })
+      return { messages: page.messages, cursor: page.cursor }
     }
+    const read: ApiMessage[] = []
     let cursor = query.after
-    for (let pages = 0; pages < SCAN_PAGES && kept.length < limit; pages++) {
-      const page = await reading<{ messages: ApiMessage[]; cursor: string }>(who, path, { query: { ...inChannel(channel), after: cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
+    for (let pages = 0; pages < AFTER_PAGES && read.length < limit; pages++) {
+      const page = await reading<Page>(who, path, { query: { ...inChannel(channel), after: cursor, limit: String(Math.min(limit - read.length, PAGE_MAX)) }, signal })
       cursor = page.cursor
-      narrow.mentions?.ahead(page.messages.map((message) => message.text))
-      for (const message of page.messages) if (await keep(message)) kept.push(message)
-      if (page.messages.length === 0) break
+      read.push(...page.messages)
+      // A page the caller's access left short may still have more after it: only the API says it has none.
+      if (page.caughtUp ?? page.messages.length === 0) break
     }
-    return { messages: kept, cursor }
+    return { messages: read, cursor }
+  }
+
+  /**
+   * One channel's messages from the first its feed still keeps, for a read that goes on from before the channel had
+   * any. The API's message list reads on from one of the channel's cursors and from nowhere else, and its feed, read
+   * from its oldest change, hands out the cursor after each post: so the posts are read from there, up to `limit`, and
+   * the cursor answered is the feed's right after the last, which the message list goes on from.
+   */
+  async function channelMessagesFromStart(who: Who, channel: ChannelRef, limit: number, signal: AbortSignal) {
+    const path = await onBoard(who, '/changes')
+    const read: ApiMessage[] = []
+    let cursor: string | undefined
+    for (let pages = 0; pages < AFTER_PAGES; pages++) {
+      const page = await reading<{ events: ApiChange[]; cursor: string; caughtUp?: boolean }>(who, path, {
+        query: { ...inChannel(channel), include: 'message', ...(cursor !== undefined ? { cursor } : {}) },
+        signal,
+      })
+      for (const change of page.events) {
+        if (change.type !== 'message.posted' || !change.currentMessage) continue
+        read.push(change.currentMessage)
+        // Each change carries the feed's cursor right after it, so the read stops at its last message, not its page's end.
+        if (read.length >= limit && change.cursor !== undefined) return { messages: read, cursor: change.cursor }
+      }
+      cursor = page.cursor
+      if (read.length >= limit || (page.caughtUp ?? page.events.length === 0)) break
+    }
+    return cursor === undefined ? null : { messages: read, cursor }
   }
 
   /** One channel's events, from the API's feed after one of its cursors, or from now: a long-poll holds there, not here. */
@@ -2920,44 +2863,41 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       return { actors: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
-    async messages(caller, query, signal) {
+    async channelMessages(caller, query, signal) {
       const who = whoOf(caller)
-      const name = query.before === undefined ? oneChannel(query) : null
-      const direct = name === null ? null : await inNamed(who, name, (channel) => channelMessages(who, channel, query, signal))
-      if (name !== null && direct) return { messages: await Promise.all(direct.messages.map((message) => view(who, message, name))), cursor: direct.cursor }
-      if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
-      const limit = query.limit ?? 50
-      // The latest across channels, as the inspector's first read asks: each channel's page at once.
-      if (query.re === undefined && query.after === undefined && query.before === undefined && !filtered(query)) {
-        const { messages, feeds, newest } = await latest(who, await channelsFor(who, query.channel), limit, signal)
-        return {
-          messages: await Promise.all(messages.map(({ message, channel }) => view(who, message, channel.name))),
-          cursor: cursorOf({ t: newest, feeds }),
-        }
-      }
-      const { messages, feeds, newest } = await collect(who, query, signal)
-      const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
-      const before = query.before !== undefined ? await timeOf(who, query.before) : undefined
-      const bounded = messages.filter(({ message }) => (after === undefined || message.createdAt > after) && (before === undefined || message.createdAt < before))
-      const page = after !== undefined ? bounded.slice(0, limit) : bounded.slice(-limit)
-      return {
-        messages: await Promise.all(page.map(({ message, channel }) => view(who, message, channel.name))),
-        cursor: cursorOf({ t: newest, feeds }),
-      }
+      const name = query.channel
+      // The API reads a channel on from its own cursor, which its message list and its feed share. The one other
+      // cursor a read of the channel answers is the one from before it was there, which reads it from its first message.
+      const fromStart = query.after !== undefined && !API_CURSOR.test(query.after)
+      if (fromStart && (locate(query.after!) || positionOf(query.after!).t !== 0))
+        throw new HttpError(400, 'invalid_cursor', `after: ${query.after} isn't a cursor of #${name}'s messages: pass the cursor a read of this channel's messages answered`)
+      const page = await inNamed(who, name, (channel) => (fromStart ? channelMessagesFromStart(who, channel, query.limit ?? 50, signal) : channelMessages(who, channel, query, signal)))
+      // A channel that isn't there yet has no messages, and no cursor of its own: the one it answers is from before it had any.
+      if (!page && query.after !== undefined && !fromStart)
+        throw new HttpError(400, 'invalid_cursor', `after: ${query.after} isn't a cursor of #${name}'s messages: pass the cursor a read of this channel's messages answered`)
+      if (!page) return { messages: [], cursor: cursorOf({ t: 0, feeds: {} }) }
+      return { messages: await Promise.all(page.messages.map((message) => view(who, message, name))), cursor: page.cursor }
     },
     async threads(caller, query, signal) {
       const who = whoOf(caller)
+      // What the API keeps no index for: answering either would read every thread of every channel it names, a request each.
+      const unindexed = [query.by !== undefined && 'author', query.mentions !== undefined && 'mention', query.text !== undefined && 'text', query.from !== undefined && 'source'].filter((name) => name !== false)
+      if (unindexed.length > 0)
+        throw notSupported(`reading threads by ${unindexed.join(', ')}`, "they keep no search index. Read one channel's threads, or one thread, and look through what it answers")
+      if (query.re === undefined && (query.channel === undefined || query.channel.endsWith('/')))
+        throw notSupported(
+          query.channel === undefined ? 'reading every channel at once' : `reading every channel under ${query.channel} at once`,
+          'name one channel, and read the others one at a time. The channel list has their names',
+        )
       const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
       const limit = query.limit ?? 50
       const pick = <T extends { at: number }>(found: T[]) => {
         const ordered = found.filter(({ at }) => after === undefined || at > after).sort((a, b) => a.at - b.at)
         return after !== undefined ? ordered.slice(0, limit) : ordered.slice(-limit)
       }
-      // A filter on what a message says, or who wrote it, reads every message in the channel.
-      const byMessage = query.re !== undefined || query.by !== undefined || query.mentions !== undefined || query.text !== undefined || query.from !== undefined
       // One channel's threads, as the API lists them, page for page.
-      if (query.channel !== undefined && !query.channel.endsWith('/') && !byMessage && !query.label?.length && after === undefined) {
-        const name = query.channel
+      if (query.re === undefined && !query.label?.length && after === undefined) {
+        const name = query.channel!
         const read = await inNamed(who, name, async (channel) => {
           // The head first: the cursor is then at or behind what the page saw, and a poll after it misses nothing.
           const feed = await head(who, channel)
@@ -2977,12 +2917,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         }
       }
       if (query.before !== undefined) throw new HttpError(400, 'invalid_request', "before: this board pages one channel's threads, with no filters")
-      if (byMessage) {
-        const { messages, feeds, newest } = await collect(who, query, signal)
-        // Each thread with a matching message, by its latest.
-        const latest = new Map<string, { thread: ApiThread; channel: ApiChannel; at: number }>()
-        for (const { message, thread, channel } of messages) latest.set(thread.id, { thread, channel, at: Math.max(latest.get(thread.id)?.at ?? 0, message.createdAt) })
-        const threads = await summaries(who, pick([...latest.values()]), signal)
+      if (query.re !== undefined) {
+        const { messages, feeds, newest } = await threadMatching(who, query.re, query, signal)
+        // The thread, when a message of it matches, by the latest that does.
+        const latest = messages.at(-1)
+        const threads = latest ? await summaries(who, pick([{ thread: latest.thread, channel: latest.channel, at: Math.max(...messages.map(({ message }) => message.createdAt)) }]), signal) : []
         return { threads, cursor: cursorOf({ t: newest, feeds }) }
       }
       // Otherwise the threads say enough: a label is matched on the root, whose labels the API

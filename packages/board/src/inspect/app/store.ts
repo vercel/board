@@ -61,6 +61,8 @@ export type State = {
   actors: Record<string, ActorView>
   /** The stream's position: the last event's cursor, to resume from. */
   cursor: string | null
+  /** What the board answered instead of its latest threads across channels, when it refused: the activity view says it. */
+  activityRefused: string | null
   live: 'connecting' | 'live' | 'reconnecting'
   /** The claims this tab made, by task: which ones the board still shows as live. */
   claims: Record<string, Claim>
@@ -90,6 +92,7 @@ export const initialState: State = {
   pending: [],
   actors: {},
   cursor: null,
+  activityRefused: null,
   live: 'connecting',
   claims: {},
   tasksCounted: false,

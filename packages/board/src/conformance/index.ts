@@ -8,14 +8,15 @@ import type { Board } from '../server/board.ts'
 /**
  * Checks that a board speaks the protocol, through a handle on it (`conformance(board())`), as
  * `vb` and agents use it: every board answers all of it. A board may keep no schedules, tasks, or
- * files, and says so with a 501, which the kit reports as not kept here. It writes to one channel
+ * files, or no index to find threads by what their messages say or who wrote them, and says so with a
+ * 501, which the kit reports as not kept here. It writes to one channel
  * (`conformance` by default), and for the tasks checks that need two, to `tasks` under it, keeps
  * every post on the board, and deletes what it posted. The one
  * schema it registers, `conformance@1`, stays: a schema version is never removed.
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'paging' | 'schedules' | 'tasks' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'paging' | 'search' | 'schedules' | 'tasks' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -167,9 +168,11 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
  * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
  * `no_scheduler`, and without a blob store `no_files`; one that keeps no tasks answers `no_tasks`,
  * a backend of one's own that keeps no grants `no_grants`, and one that keeps no schemas
- * `no_schemas`. A board that's meant to keep something and doesn't yet answers otherwise, and fails.
+ * `no_schemas`. `search` is finding threads by what their messages say, and reading every channel
+ * under a pattern at once: a board with no index for either, as Vercel's has none, answers
+ * `not_supported`. A board that's meant to keep something and doesn't yet answers otherwise, and fails.
  */
-const OPTIONAL = new Set<CheckGroup>(['schedules', 'tasks', 'grants', 'schemas', 'attachments'])
+const OPTIONAL = new Set<CheckGroup>(['search', 'schedules', 'tasks', 'grants', 'schemas', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
@@ -599,25 +602,35 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
-    name: "matches a label on the message or its thread's root",
+    name: "reads one channel's messages after a cursor of its own, oldest first, and on from where it stopped",
     run: async (ctx) => {
-      const { reply } = needRoot(ctx)
-      const { messages } = await ctx.board.messages({ channel: ctx.channel, label: ctx.labels })
-      check(messages.some((m) => m.id === reply.id), "a reply should match its root's label")
+      const { root, reply } = needRoot(ctx)
+      const channel = ctx.board.channel(ctx.channel)
+      const page = await channel.messages({ after: ctx.start, limit: 500 })
+      isRef(page.cursor, "a read's cursor")
+      const ids = page.messages.map((m) => m.id)
+      check(ids.indexOf(root.id) !== -1 && ids.indexOf(root.id) < ids.indexOf(reply.id), `the root should come before its reply, got ${show(ids)}`)
+      check(page.messages.every((m) => m.channel === ctx.channel), `a channel's messages should all be in it, got ${show([...new Set(page.messages.map((m) => m.channel))])}`)
+      const one = await channel.messages({ after: ctx.start, limit: 1 })
+      same(one.messages.length, 1, 'how many messages a read with a limit of 1 lists')
+      const rest = await channel.messages({ after: one.cursor, limit: 500 })
+      const twice = rest.messages.filter((m) => one.messages.some((first) => first.id === m.id))
+      check(twice.length === 0, `reading on from a page's cursor should repeat none of it, got ${show(twice.map((m) => m.id))} again`)
+      const all = [...one.messages, ...rest.messages].map((m) => m.id)
+      check(all.includes(root.id) && all.includes(reply.id), `reading on from a page's cursor should reach what came after it, got ${show(all)}`)
     },
   },
   {
     group: 'core',
-    name: 'reads a channel after a cursor or a message ID, oldest first',
+    name: "reads one channel's newest messages, as many as it's asked for",
     run: async (ctx) => {
-      const { root, reply } = needRoot(ctx)
-      const page = await ctx.board.messages({ channel: ctx.channel, label: ctx.labels, after: ctx.start })
-      isRef(page.cursor, "a read's cursor")
-      const ids = page.messages.map((m) => m.id)
-      check(ids.indexOf(root.id) !== -1 && ids.indexOf(root.id) < ids.indexOf(reply.id), `the root should come before its reply, got ${show(ids)}`)
-      const later = await ctx.board.messages({ channel: ctx.channel, label: ctx.labels, after: root.id })
-      check(!later.messages.some((m) => m.id === root.id), 'reading after a message should leave it out')
-      check(later.messages.some((m) => m.id === reply.id), 'reading after a message should include what came after it')
+      needRoot(ctx)
+      const latest = await post(ctx, 'conformance: the newest message of the channel, for now')
+      const page = await ctx.board.channel(ctx.channel).messages({ limit: 2 })
+      check(page.messages.length <= 2, `a read with a limit of 2 should list 2 at most, got ${page.messages.length}`)
+      // Another run may post here too: this one's newest is among the newest, or after them.
+      const after = await ctx.board.channel(ctx.channel).messages({ after: page.cursor, limit: 500 })
+      check([...page.messages, ...after.messages].some((m) => m.id === latest.id), `the newest messages, and what came after them, should include ${latest.id}`)
     },
   },
   {
@@ -683,25 +696,32 @@ const CHECKS: Check[] = [
     },
   },
   {
-    group: 'core',
-    name: "matches text anywhere in a message's own, in any case, as it reads now",
+    group: 'search',
+    name: "finds threads by text anywhere in a message of theirs, in any case, as it reads now",
     run: async (ctx) => {
       // Roots of its own: the second matches the first's searches only where % or _ is a wildcard.
       const literal = await post(ctx, 'conformance: Deploy FAILED at 100% on a_b')
       const lookalike = await post(ctx, 'conformance: deploy failed at 1000 on axb')
-      const under = await reply(ctx, lookalike.id, 'conformance: a reply that says Crème Brûlée')
-      const found = async (text: string) => (await ctx.board.messages({ channel: ctx.channel, label: ctx.labels, after: ctx.start, text })).messages.map((m) => m.id)
-      alike(await found('DEPLOY failed'), [literal.id, lookalike.id], 'the messages "DEPLOY failed" finds')
-      alike(await found('100%'), [literal.id], 'the messages "100%" finds, % being a character')
-      alike(await found('a_b'), [literal.id], 'the messages "a_b" finds, _ being a character')
-      // A reply by its own text, not its root's, and its thread by the reply.
-      alike(await found('BRÛLÉE'), [under.id], 'the messages "BRÛLÉE" finds')
-      const { threads } = await ctx.board.threads({ channel: ctx.channel, label: ctx.labels, text: 'crème brûlée' })
-      alike(threads.map((t) => t.message.id), [lookalike.id], 'the threads "crème brûlée" finds')
+      await reply(ctx, lookalike.id, 'conformance: a reply that says Crème Brûlée')
+      const found = async (text: string) => (await ctx.board.threads({ channel: ctx.channel, label: ctx.labels, text })).threads.map((t) => t.message.id)
+      alike(await found('DEPLOY failed'), [literal.id, lookalike.id], 'the threads "DEPLOY failed" finds')
+      alike(await found('100%'), [literal.id], 'the threads "100%" finds, % being a character')
+      alike(await found('a_b'), [literal.id], 'the threads "a_b" finds, _ being a character')
+      // A thread by a reply's own text, in any case.
+      alike(await found('crème BRÛLÉE'), [lookalike.id], 'the threads "crème BRÛLÉE" finds')
       // An edit changes what finds it.
       await ctx.board.edit(lookalike.id, 'conformance: deploy fixed')
-      alike(await found('1000'), [], 'the messages "1000" finds, once the one that said it is edited')
-      alike(await found('deploy fixed'), [lookalike.id], 'the messages "deploy fixed" finds, once one is edited to say it')
+      alike(await found('1000'), [], 'the threads "1000" finds, once the message that said it is edited')
+      alike(await found('deploy fixed'), [lookalike.id], 'the threads "deploy fixed" finds, once a message is edited to say it')
+    },
+  },
+  {
+    group: 'search',
+    name: 'lists the threads of every channel under a pattern at once',
+    run: async (ctx) => {
+      const { root } = needRoot(ctx)
+      const { threads } = await ctx.board.threads({ channel: `${ctx.channel}/`, label: ctx.labels })
+      check(threads.some((t) => t.message.id === root.id), `the threads under ${ctx.channel}/ should include ${root.id}, in ${ctx.channel} itself`)
     },
   },
   {
@@ -748,19 +768,15 @@ const CHECKS: Check[] = [
       const label = { ...ctx.labels, tombstone: ctx.labels.conformance }
       const root = await ctx.board.post(ctx.channel, { text: 'conformance: a labeled root to delete', labels: label, noSync: true })
       ctx.posted.push(root.id)
-      const kept = await reply(ctx, root.id, 'conformance: a reply under it')
-      const found = async () => ({
-        threads: (await ctx.board.threads({ channel: ctx.channel, label })).threads.map((t) => t.message.id),
-        messages: (await ctx.board.messages({ channel: ctx.channel, label })).messages.map((m) => m.id),
-      })
+      await reply(ctx, root.id, 'conformance: a reply under it')
+      const found = async () => (await ctx.board.threads({ channel: ctx.channel, label })).threads.map((t) => t.message.id)
       const before = await found()
-      check(before.threads.includes(root.id) && before.messages.includes(kept.id), `its labels should find the root and its reply before the delete, got ${show(before)}`)
+      check(before.includes(root.id), `its labels should find the root's thread before the delete, got ${show(before)}`)
       await ctx.board.delete(root.id)
       const { labels } = (await ctx.board.thread(root.id)).message
       check(Object.keys(labels).length === 0, `a deleted message should keep no labels, got ${show(labels)}`)
       const after = await found()
-      check(!after.threads.includes(root.id), `a label read should leave out a deleted root's thread, got ${show(after.threads)}`)
-      check(!after.messages.includes(root.id) && !after.messages.includes(kept.id), `a deleted root's labels should find neither it nor its replies, got ${show(after.messages)}`)
+      check(!after.includes(root.id), `a label read should leave out a deleted root's thread, got ${show(after)}`)
     },
   },
   {
@@ -949,8 +965,8 @@ const CHECKS: Check[] = [
       const thread = await ctx.board.thread(root.id)
       same(thread.message.task?.state, 'ready', 'the task, read as its thread')
       check(thread.replies.some((m) => m.id === answer.id), "a reply should land in the task's thread")
-      const { messages } = await ctx.board.messages({ channel: ctx.channel, label: { ...ctx.labels, 'board.task': 'ready' } })
-      check(messages.some((m) => m.id === root.id), 'board.task=ready should find the task')
+      const { threads } = await ctx.board.threads({ channel: ctx.channel, label: { ...ctx.labels, 'board.task': 'ready' } })
+      check(threads.some((t) => t.message.id === root.id), 'board.task=ready should find the task')
       const listed = (await ctx.board.tasks.list({ channel: ctx.channel, label: ctx.labels })).tasks.find((t) => t.message.id === root.id)
       check(listed, `the tasks should include ${root.id}`)
       same(listed.replies, 1, "the listed task's reply count")
@@ -2408,7 +2424,7 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
     board,
     channel,
     labels: { conformance: label },
-    start: (await board.messages({ channel, limit: 1 })).cursor,
+    start: (await board.channel(channel).messages({ limit: 1 })).cursor,
     me,
     posted: [],
     ...(options.withCan ? { withCan: options.withCan } : options.withHeaders ? { withCan: (can: string) => options.withHeaders!({ 'x-board-can': can }) } : {}),

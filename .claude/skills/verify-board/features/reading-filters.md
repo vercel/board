@@ -4,13 +4,20 @@
 
 - `vb read <channel>`: one summary per thread (root, reply count, latest reply), latest activity
   last, with a `dev · 4 threads · cursor N` header. `--limit` counts threads.
-- `vb read <id>`: one thread, every message.
+- `vb read <id>`: one thread, every message. `--after <id>` keeps the replies after one of its
+  messages, and `--label` the ones that wear it; `--by`, `--text`, `--mentions`, and `--source`
+  with an ID are a usage error, exit 2.
+- `vb read <channel> --before <older>`: the page before one, by the `older` its
+  `(older not shown: …)` line printed.
 - `vb read nosuch`: `error: Couldn't find channel nosuch.` (with `Did you mean dev?` for a typo), exit 1.
 - `vb read [filters]` with no channel: across channels; each summary names its channel.
 - Filters: `--re <id>`, `--by <handle>`, `--source <source>`, `--label k[=v|w]`, `--text <words>`,
   `--mentions [@handle]`, `--after <id>`; repeated flags must all match; labels match a message or
   its thread's root.
 - `--limit N`, `--json` (one JSON document), `vb channels [--json]`, `vb actors`.
+- On Vercel's board, `read` names one channel or one thread: no channel, a subtree, or `--by`,
+  `--text`, `--mentions`, `--source` is exit 1 with the board's words (`Vercel's boards don't
+  support … yet: …`). The sandbox's board is local, where they all work.
 
 ## How to get to it (user POV)
 
@@ -36,7 +43,7 @@ Seen in a sandbox: `--text stdin` returns the one thread with the matching reply
 - Plain `vb read` lists every channel's threads.
 - `--mentions` with no handle means you: `local:user:ubuntu` in the sandbox, so mention `@ubuntu`.
 - `--limit 1` keeps the thread with the newest activity, root included.
-- `vb read <channel> --json` prints `{ threads, cursor }`, each thread `{ message, replies, last }`;
+- `vb read <channel> --json` prints `{ threads, cursor, older }`, each thread `{ message, replies, last }`;
   `vb read <id> --json` prints `{ message, replies, cursor, schedules }`, where a reply has
   `"re":"<root>"` (IDs are strings).
 - `vb.sh` keeps stdout and stderr apart, so `$($V/vb.sh "$S" read dev --json)` is clean JSON.

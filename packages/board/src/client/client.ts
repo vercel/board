@@ -19,8 +19,8 @@ import type {
   Me,
   PrincipalInput,
   MatchView,
+  ChannelMessagesQueryInput,
   MessagesPage,
-  MessagesQueryInput,
   MessageView,
   RegisterInput,
   RegistrationView,
@@ -588,8 +588,15 @@ export function createBoardClient(options: ClientOptions) {
     },
     actors: async () => (await call<{ actors: (Actor & Pick<ActorView, 'verified'>)[] }>('GET', '/actors')).actors,
 
-    messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
-      call<MessagesPage>('GET', `/messages${queryString(query)}`),
+    /**
+     * One channel, by its whole name: a board lists messages a channel at a time, never across channels. Its
+     * `messages()` are the channel's across its threads, oldest first: the newest `limit` (50 without one), or with
+     * `after`, a cursor a read of this channel answered, the ones posted since.
+     */
+    channel: (name: string) => ({
+      messages: (query: Omit<ChannelMessagesQueryInput, 'channel'> = {}) =>
+        call<MessagesPage>('GET', `/messages${queryString({ channel: name, ...query })}`),
+    }),
     thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
     /** Your own post with the client ID you gave it, as posting it answered: 404 `post_not_found` when there's none. */
     posted: async (id: string) => (await call<{ message: MessageView }>('GET', `/posts/${path(id)}`)).message,

@@ -382,12 +382,25 @@ describe('cli', () => {
     const ids: string[] = []
     for (const n of [1, 2, 3, 4, 5]) ids.push((await vb(['post', 'paged', `job ${n}`])).stdout.trim())
     const shown = (stdout: string) => [...stdout.matchAll(/^#(\S+) /gm)].map((match) => match[1]!)
-    // The newest two, and how to see older ones.
+    // The newest two, and how to see older ones: the page before, by the board's own `older`.
     const newest = await vb(['read', 'paged', '--limit', '2'])
     expect(shown(newest.stdout)).toEqual(ids.slice(3))
-    expect(newest.stdout).toContain('\n(older not shown: vb read paged --limit 4)\n')
+    expect(newest.stdout).toMatch(/\n\(older not shown: vb read paged --limit 2 --before \S+\)\n\nnew since then: /)
+    // Page by page, each line pasted as it says: every thread once, down to the first, which has none before it.
+    const back = shown(newest.stdout)
+    let older = /\n\(older not shown: vb (.+)\)\n/.exec(newest.stdout)
+    for (let page = 0; older && page < 5; page++) {
+      const { stdout } = await vb(older[1]!.split(' '))
+      back.unshift(...shown(stdout))
+      // A page back isn't where the board is now: it says nothing of what's new since.
+      expect(stdout).not.toContain('new since then')
+      older = /\n\(older not shown: vb (.+)\)\n/.exec(stdout)
+    }
+    expect(back).toEqual(ids)
     // As many as there are: nothing is left out, so it says nothing.
     expect((await vb(['read', 'paged', '--limit', '5'])).stdout).not.toContain('not shown')
+    // Back and forward at once is neither.
+    expect(await vb(['read', 'paged', '--before', 'x', '--after', start])).toMatchObject({ code: 2, stderr: expect.stringContaining("Can't use --before with --after") })
     // After a cursor, page by page, each line pasted as it says: every thread once, none skipped.
     const seen: string[] = []
     let command = ['read', 'paged', '--limit', '2', '--after', start]
@@ -555,12 +568,13 @@ describe('cli', () => {
   it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
     const second = (await vb(['post', 'open-work', 'docs typo'])).stdout.trim()
-    for (const n of [1, 2, 3]) expect((await vb(['reply', second, `note ${n}`, '--as', 'claude'])).code).toBe(0)
+    const notes: string[] = []
+    for (const n of [1, 2, 3]) notes.push((await vb(['reply', second, `note ${n}`, '--as', 'claude', ...(n === 3 ? ['--label', 'kind=last'] : [])])).stdout.trim())
     expect((await vb(['reply', first, 'still flaky'])).code).toBe(0)
 
     const read = await vb(['read', 'open-work', '--limit', '1'])
     expect(read).toMatchObject({ code: 0, stderr: '' })
-    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\n\\(older not shown: vb read open-work --limit 2\\)\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  u_julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ u_julian · \\d+s\n\n\\(older not shown: vb read open-work --limit 1 --before \\S+\\)\n\nnew since then: vb read open-work --limit 1 --after \\d+\n$`))
 
     const all = await vb(['read', 'open-work'])
     expect(all.stdout).toContain(`#${second}  u_julian`)
@@ -583,13 +597,25 @@ describe('cli', () => {
     const lone = (await vb(['post', 'lone-work', 'just me'])).stdout.trim()
     expect((await vb(['channels'])).stdout).toContain(`\nlone-work  1 thread · 1 message · last #${lone}\n`)
 
-    // Filters on a thread keep its root and the replies that match.
-    const narrowed = await vb(['read', second, '--by', '@u_julian/claude', '--text', 'note 2', '--json'])
-    const kept = JSON.parse(narrowed.stdout)
-    expect([kept.message, ...kept.replies].map((m: { text: string }) => m.text)).toEqual(['docs typo', 'note 2'])
-    const byLabel = await vb(['read', first, '--label', 'state=open', '--by', '@julian/claude'])
+    // On a thread, --after and --label keep its root and the replies they match, from the one read of it.
+    const texts = async (...flags: string[]) => {
+      const kept = JSON.parse((await vb(['read', second, ...flags, '--json'])).stdout)
+      return [kept.message, ...kept.replies].map((m: { text: string }) => m.text)
+    }
+    expect(await texts('--after', notes[0]!)).toEqual(['docs typo', 'note 2', 'note 3'])
+    expect(await texts('--after', `#${second}`)).toEqual(['docs typo', 'note 1', 'note 2', 'note 3'])
+    expect(await texts('--label', 'kind=last')).toEqual(['docs typo', 'note 3'])
+    expect(await texts('--label', 'kind=first|last', '--after', notes[0]!)).toEqual(['docs typo', 'note 3'])
+    expect(await texts('--label', 'kind=first')).toEqual(['docs typo'])
+    // A root's label reaches its replies.
+    const byLabel = await vb(['read', first, '--label', 'state=open'])
     expect(byLabel.stdout).toContain('flaky test in ci')
-    expect(byLabel.stdout).not.toContain('still flaky')
+    expect(byLabel.stdout).toContain('still flaky')
+    // A message that isn't the thread's is no place in it to read on from.
+    expect(await vb(['read', second, '--after', first])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringContaining(`--after ${first} isn't a message of this thread`) })
+    // What finds threads doesn't narrow one: it's read whole.
+    for (const flags of [['--by', '@u_julian/claude'], ['--text', 'note 2'], ['--mentions'], ['--source', 'board']])
+      expect(await vb(['read', second, ...flags]), flags[0]).toMatchObject({ code: 2, stdout: '', stderr: expect.stringContaining(`Can't use ${flags[0]} on one thread`) })
 
     // A reaction from someone who hasn't written in the thread shows their name, not their actor ID.
     expect((await vb(['react', first, 'eyes', '--as', 'codex'])).code).toBe(0)

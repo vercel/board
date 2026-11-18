@@ -23,9 +23,9 @@ import {
   InboxQuery,
   LabelBody,
   MatchesQuery,
-  MessagesQuery,
   PostBody,
   ReactBody,
+  ChannelMessagesQuery,
   CreateChannelBody,
   Ref,
   RegisterBody,
@@ -134,8 +134,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'attachment':
     case 'uploadFinish':
       return { id }
-    case 'messages':
-      return MessagesQuery.parse(queryObject(url))
+    case 'channelMessages':
+      return ChannelMessagesQuery.parse(queryObject(url))
     case 'threads':
       return ThreadsQuery.parse(queryObject(url))
     case 'schedules':

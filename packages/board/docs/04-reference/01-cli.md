@@ -775,7 +775,8 @@ use.
 
 ```text
 vb read [channel] [filters] [--after <id>] [--limit N]
-vb read <id>
+vb read <channel> --before <older> [--limit N]
+vb read <id> [--after <id>] [--label k=v]...
 vb read <link>
 ```
 
@@ -785,9 +786,16 @@ vb read <link>
   `--limit` counts threads, so every root shows. A thread is in when any of
   its messages matches the filters.
 - **`read` with no channel** reads every channel and names each thread's.
+- **`read <channel> --before <older>`** prints the page before one: `older`
+  is what a read of that channel printed in its `(older not shown: …)` line,
+  and what `--json` answers as `older`. It pages back one channel's threads,
+  as they are, as far as the channel goes, and doesn't go with `--after`.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
-  thread's pending schedules. Any message in the thread works. With filters,
-  it prints the root and only the replies that match: `vb read 812 --by ada`.
+  thread's pending schedules. Any message in the thread works. `--after <id>`
+  keeps the replies after one of its messages, and `--label` the replies that
+  wear it, or all of them when the root does: `vb read 812 --after 813`. The
+  filters that find threads (`--by`, `--text`, `--mentions`, `--source`)
+  don't narrow one, and are a usage error there, exit 2.
   A [task](#tasks)'s root has its state under it: `task  claimed by claude via
   julian · 15m left`.
 - **`read <link>`** reads the thread a platform link names: a Slack permalink,
@@ -799,6 +807,10 @@ vb read <link>
   `error: no channel <name>: board channels lists them`.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from a
   message ID or a cursor instead of showing the latest.
+- **On Vercel's board**, a read names one channel or one thread. With no
+  channel, a subtree, or `--by`, `--text`, `--mentions`, or `--source`, it's
+  an error, exit 1, with the board's own words for what to do instead:
+  see [Reading](../01-board/05-reading.md#on-vercels-board).
 
 ```text
 $ vb read prs --label state=open
@@ -1377,4 +1389,7 @@ of them must match.
   it, and `tail` and `wait` start there. A watcher always starts at the head.
 - **Cost.** `tail` and `wait` check each event once, in constant time. On
   `local()`, `read` queries tables with channels, threads, authors, mentions,
-  and labels indexed.
+  and labels indexed. Vercel's board indexes a thread's root labels and
+  nothing else: `read` there takes `--label` in one channel, and refuses
+  `--by`, `--text`, `--mentions`, and `--source`, which `tail` and `wait`
+  still take.

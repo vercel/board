@@ -64,7 +64,7 @@ it('posts the deploy', async () => {
   const team = board({ backend: local({ memory: true }) })
   await team.post('deploys', 'www@a1b2c3 is live')
   // await yourDeployHook(team)
-  const { messages } = await team.messages({ channel: 'deploys' })
+  const { messages } = await team.channel('deploys').messages()
   expect(messages.map((message) => message.text)).toEqual(['www@a1b2c3 is live'])
 })
 ```

@@ -443,6 +443,27 @@ const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value
 /** A message's ID as it's passed back: bare when it goes bare, `#<id>` when it could be a channel's name. */
 const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
 
+/**
+ * A thread's replies as `--after` and `--label` narrow them, from the replies its read answered: those after the
+ * message `--after` names, which is one of the thread's, and those that wear every `--label`, or whose root does.
+ */
+function narrowedReplies(thread: { message: MessageView; replies: MessageView[] }): MessageView[] {
+  let replies = thread.replies
+  if (flags.after !== undefined) {
+    const id = flags.after.replace(/^#/, '')
+    const at = [thread.message, ...replies].findIndex((message) => message.id === id)
+    if (at === -1) throw usage(`--after ${flags.after} isn't a message of this thread. On one thread, it takes one of its messages.`)
+    replies = replies.slice(at)
+  }
+  const labels = (flags.label ?? []).map((label) => {
+    const eq = label.indexOf('=')
+    return eq === -1 ? { key: label, values: null } : { key: label.slice(0, eq), values: label.slice(eq + 1).split('|') }
+  })
+  const wears = (message: MessageView, { key, values }: (typeof labels)[number]) =>
+    Object.hasOwn(message.labels, key) && (values === null || values.includes(message.labels[key]!))
+  return replies.filter((reply) => labels.every((label) => wears(reply, label) || wears(thread.message, label)))
+}
+
 /** `--if-revision N`, as an edit or a delete takes it. */
 function ifRevision(): { revision?: number } {
   const given = flags['if-revision']
@@ -1343,15 +1364,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       // A platform's link to a message (a Slack permalink, a GitHub comment) reads the board's thread it synced.
       const link = target !== undefined && /^https?:\/\//i.test(target)
       if (target && (link || isMessageRef(target))) {
+        // A thread is read whole: what finds threads doesn't narrow one, and it's said before anything is read.
+        const across = (['by', 'text', 'mentions', 'source', 're', 'before'] as const).find((name) => flags[name] !== undefined)
+        if (across !== undefined) throw usage(`Can't use --${across} on one thread. It's read whole: --after and --label narrow its replies.`)
         const thread = link ? await board.linked(target) : await board.thread(messageId(target))
         // A board older than this CLI answers /links with its discovery document. Its 404 stays: a
         // current board's means the link isn't one it synced.
         if (link && !Array.isArray((thread as { replies?: unknown }).replies)) throw outdated("This board can't read links.")
-        // With filters, the root and only the replies that match them.
-        const narrowed = Object.keys(filters()).length > 0
-        const replies = narrowed
-          ? (await board.messages({ ...filters(), re: thread.message.id, limit: 500 })).messages.filter((m) => m.re !== null)
-          : thread.replies
+        // What narrows it is narrowed here, from the replies it came with.
+        const narrowed = flags.after !== undefined || (flags.label?.length ?? 0) > 0
+        const replies = narrowed ? narrowedReplies(thread) : thread.replies
         if (flags.json) return result({ ...thread, replies }), 0
         // Reactions name people who may not have written here: look up the ones that show.
         const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
@@ -1367,11 +1389,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 0
       }
       const limit = flags.limit ? Number(flags.limit) : THREADS_LIMIT_DEFAULT
-      // One thread more than asked for, where a read lists that many, tells whether the page is all of them.
-      // Not for --json, which is the board's page as it answered, its `older` included: that pages back
-      // from the last thread the board listed, which would be the one more, never shown.
-      const peek = !flags.json && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
-      const query = { ...filters(target), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
+      if (flags.before !== undefined && flags.after !== undefined) throw usage("Can't use --before with --after. One pages back, the other reads forward.")
+      // A read of one channel's threads as they are is the one a board pages back, by the `older` its page answers:
+      // it's asked for the page as shown, so that `older` goes on from the last thread listed.
+      const paged = target !== undefined && !target.endsWith('/') && Object.keys(filters()).length === 0
+      // Otherwise one thread more than asked for, where a read lists that many, tells whether the page is all of
+      // them. Not for --json, which is the board's page as it answered.
+      const peek = !paged && !flags.json && flags.before === undefined && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
+      const query = { ...filters(target), ...(flags.before !== undefined ? { before: flags.before } : {}), ...(peek ? { limit: limit + 1 } : flags.limit ? { limit } : {}) }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
       const old = outdated("This board can't list threads.")
       // Only a board's own "no route" is one without the route: any other 404 says what it is.
@@ -1379,8 +1404,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         throw error instanceof BoardError && error.status === 404 && /^no route: /.test(error.message) ? old : error
       })
       if (!Array.isArray((listed as { threads?: unknown }).threads)) throw old
-      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest.
-      const more = listed.threads.length > limit || (!peek && listed.threads.length === limit)
+      // The latest activity comes last: the one more is the oldest, or after a cursor, the newest. A board that
+      // answers `older` says itself whether there are more.
+      const older = typeof listed.older === 'string' ? listed.older : undefined
+      const more = listed.older === null ? false : older !== undefined || listed.threads.length > limit || (!peek && listed.threads.length === limit)
       const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
       if (!page.threads.length && target) {
@@ -1407,8 +1434,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const handles = new Map(unnamed.length ? (await client().actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, a.handle]) : [])
         out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
       }
-      // A page that isn't all of them says where the rest are. Without --after, they're older: a bigger
-      // --limit reaches them. After a cursor, they're newer than the page, and its cursor is past them
+      // A page that isn't all of them says where the rest are. Without --after, they're older: --before the
+      // page's `older` reaches them where the board answered one, and a bigger --limit where it didn't. After
+      // a cursor, they're newer than the page, and its cursor is past them
       // too: what reads on is --after the newest message of the page's last thread, the latest active.
       // With a filter on messages, a board may place a thread by its newest match, which its summary
       // doesn't show (`last` is its latest reply, whoever wrote it), so nothing on the page says where
@@ -1418,15 +1446,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const byMessage = ['re', 'by', 'mentions', 'from', 'text'].some((key) => key in query)
         if (!byMessage) out(`\nmore since then: ${commandLine(rerunWithout(['--after'], '--after', (latest.last ?? latest.message).id))}`)
         else if (limit < THREADS_LIMIT_MAX) out(`\nmore since then: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))}`)
-        else out(`\n(more not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`)
+        else out(`\n(more not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label)`)
         return 0
       }
       if (more)
         out(
-          limit < THREADS_LIMIT_MAX
-            ? `\n(older not shown: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))})`
-            : `\n(older not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so narrow it with --label, --by, or --text)`,
+          older !== undefined
+            ? `\n(older not shown: ${commandLine(rerunWithout(['--before'], '--before', older))})`
+            : limit < THREADS_LIMIT_MAX
+              ? `\n(older not shown: ${commandLine(rerunWithout(['--limit', '-n'], '--limit', String(Math.min(THREADS_LIMIT_MAX, limit * 2))))})`
+              : `\n(older not shown: ${THREADS_LIMIT_MAX} is the most a read lists, so read one channel and page back with --before, or narrow it with --label)`,
         )
+      // A page back from one isn't where the board is now: only a read of the latest says what's new since.
+      if (flags.before !== undefined) return 0
       // The cursor is where this read stopped: the next command is the one that reads on from it.
       // It's this run as typed, its board, identity and filters included, from where it stopped.
       out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)

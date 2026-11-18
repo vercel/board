@@ -599,7 +599,7 @@ describe("an imported platform user's handle", () => {
     const julian = await julianOn(team.fetch)
     for (const text of ['@support/malte can you look?', 'cc @[vercel:project:prj_support:production+slack-eu:user:U_MALTE]', 'thanks @support', '@malte alone', '@supported'])
       await julian('POST', '/messages', { channel: 'dev', text })
-    const texts = async (mentions: string) => ((await julian('GET', `/messages?channel=dev&mentions=${encodeURIComponent(mentions)}`)).body.messages as Read[]).map((m) => m.text)
+    const texts = async (mentions: string) => ((await julian('GET', `/threads?channel=dev&mentions=${encodeURIComponent(mentions)}`)).body.threads as { message: Read }[]).map((t) => t.message.text)
     // A handle one actor has in full was stored as a mention of them: support's Malte, and support itself. `@malte` alone is no one's.
     const mentioned = '@[vercel:project:prj_support:production+slack-eu:user:U_MALTE]'
     expect(await texts('support/malte')).toEqual([`${mentioned} can you look?`, `cc ${mentioned}`])
@@ -610,7 +610,7 @@ describe("an imported platform user's handle", () => {
 describe('mentions, as sync posts them', () => {
   const webhook = (team: ReturnType<typeof testBoard>, body: object) =>
     team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', ...body }) }))
-  const texts = async (as: ReturnType<typeof caller>, query: string) => ((await as('GET', `/messages?${query}`)).body.messages as Read[]).map((m) => m.text)
+  const texts = async (as: ReturnType<typeof caller>, query: string) => ((await as('GET', `/threads?${query}`)).body.threads as { message: Read }[]).map((t) => t.message.text)
 
   it("are no one a sync granted one channel imported, for a handle they only have under its name", async () => {
     const s = fakePlatform('slack')

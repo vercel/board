@@ -162,3 +162,64 @@ describe("the inspector's page, working a task it claimed", () => {
     expect(posts('/tasks/70/complete')).toEqual([{ epoch: 1, token: 'secret-token', result: 'done' }])
   })
 })
+
+/** A message as the board answers one: a root in `channel`, or a reply to `re`. */
+const posted = (id: string, channel: string, text: string, re: string | null = null): MessageView => {
+  const { task: _task, ...message } = taskRoot({ channel, text })
+  return { ...message, id, version: Number(id), revision: Number(id), re, thread: `t${re ?? id}`, labels: {} } as MessageView
+}
+const gets = (path: string) => asked.filter((request) => request.method === 'GET' && request.path === path).map((request) => request.query)
+
+describe("the inspector's page, reading", () => {
+  it('fills its activity view with the latest threads the board lists across channels, and follows the feed from that read', async () => {
+    const root = posted('60', 'dev', 'osprey nests here')
+    const last = posted('62', 'dev', 'seen today', '60')
+    usual['GET /channels'] = () => Response.json({ channels: [{ path: 'dev' }], cursor: '62' })
+    usual['GET /threads'] = () => Response.json({ threads: [{ message: root, replies: 2, last }], cursor: '62', older: null })
+    asked.length = 0
+    await page.boot()
+    // One read of the threads, across channels, and no list of messages: each thread came with its root and its latest reply.
+    expect(gets('/threads')).toEqual([{ limit: '100' }])
+    expect(gets('/messages')).toEqual([])
+    expect(page.getState()).toMatchObject({ activityRefused: null, cursor: '62', messages: { 60: { text: 'osprey nests here' }, 62: { text: 'seen today' } } })
+    await vi.waitFor(() => expect(gets('/events')).toMatchObject([{ all: 'true', after: '62' }]))
+  })
+
+  it('says what a board that lists threads a channel at a time answered, where its latest would be, and follows the feed from now', async () => {
+    const words = "Vercel's boards don't support reading every channel at once yet: name one channel, and read the others one at a time. The channel list has their names"
+    next.set('GET /threads', [refuse(501, 'not_supported', words)])
+    asked.length = 0
+    await page.boot()
+    expect(page.getState().activityRefused).toBe(words)
+    // Nothing was read a channel at a time behind it: the page says so, and a channel loads when it's opened.
+    expect(gets('/threads')).toEqual([{ limit: '100' }])
+    expect(gets('/messages')).toEqual([])
+    await vi.waitFor(() => expect(gets('/events')).toMatchObject([{ all: 'true' }]))
+    // From now: it has no read's cursor to go on from.
+    expect(gets('/events')[0]).not.toHaveProperty('after')
+  })
+
+  it("asks the board for the threads a filter finds and reads the longer ones whole, and asks a board that can't find them that way once", async () => {
+    const root = posted('80', 'ops', 'falcon on the roof')
+    const last = posted('83', 'ops', 'gone again', '80')
+    usual['GET /threads'] = () => Response.json({ threads: [{ message: root, replies: 3, last }], cursor: '83', older: null })
+    usual['GET /messages/80'] = () => Response.json({ message: root, replies: [posted('81', 'ops', 'a falcon?', '80'), posted('82', 'ops', 'yes, a falcon', '80'), last], cursor: '83', schedules: [] })
+    asked.length = 0
+    await page.loadFiltered('ops', { text: 'falcon', label: [] })
+    // The threads with a match, in that channel, then the one longer than its summary: the match may be any message of it.
+    expect(gets('/threads')).toEqual([{ channel: 'ops', text: 'falcon', limit: '50' }])
+    expect(gets('/messages/80')).toEqual([{}])
+    expect(gets('/messages')).toEqual([])
+    expect(Object.keys(page.getState().messages)).toEqual(expect.arrayContaining(['80', '81', '82', '83']))
+
+    // A board with no index for it says so, and is asked once: the next filter of its kind shows what's loaded.
+    next.set('GET /threads', [refuse(501, 'not_supported', "Vercel's boards don't support reading threads by text yet")])
+    asked.length = 0
+    await page.loadFiltered('ops', { text: 'kestrel', label: [] })
+    await page.loadFiltered('ops', { text: 'merlin', label: [] })
+    expect(gets('/threads')).toEqual([{ channel: 'ops', text: 'kestrel', limit: '50' }])
+    // What it does find threads by is still asked: a label, there.
+    await page.loadFiltered('ops', { label: ['state=open'] })
+    expect(gets('/threads').at(-1)).toEqual({ channel: 'ops', label: 'state=open', limit: '50' })
+  })
+})

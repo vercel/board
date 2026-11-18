@@ -142,7 +142,7 @@ describe('what a grant lets in', () => {
     const ci = caller(fetch, await workflowToken({ repository: 'acme/www' }))
     expect((await ci('POST', '/messages', { channel: 'errors-www', text: 'deploy failed on abc', labels: { source: 'ci' }, id: 'deploy-abc' })).status).toBe(201)
     const id = (await ci('POST', '/messages', { channel: 'deploys', text: 'Ready to promote?' })).body.message.id
-    expect((await ci('GET', `/messages?re=${id}&after=${id}`)).status).toBe(200)
+    expect((await ci('GET', `/events?re=${id}&after=${id}`)).status).toBe(200)
   })
 })
 

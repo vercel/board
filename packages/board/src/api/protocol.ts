@@ -9,6 +9,7 @@ import type {
   TaskNeedsBody,
   BlockTaskBody,
   CancelTaskBody,
+  ChannelMessagesQuery,
   ChannelView,
   ClaimReadyTaskBody,
   ClaimTaskBody,
@@ -47,7 +48,6 @@ import type {
   MatchView,
   Me,
   MessagesPage,
-  MessagesQuery,
   MessageView,
   PostBody,
   ReactBody,
@@ -95,7 +95,8 @@ export type Protocol = {
   /** `created` is false for a channel that was there already, made by a post or another create. */
   createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
   actors: { input: Nothing; output: { actors: (Actor & Pick<ActorView, 'verified'>)[]; cursor: string } }
-  messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
+  /** One channel's messages across its threads, oldest first: the newest `limit`, or those after one of the channel's cursors. */
+  channelMessages: { input: Input<typeof ChannelMessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
   message: { input: Id; output: ThreadView }
   /** `mentions` says what became of each `@handle` the text typed, when it typed any: see `Mentioned`. A write that takes a text answers it the same way. */

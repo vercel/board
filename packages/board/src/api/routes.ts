@@ -60,7 +60,7 @@ const LabelFilter = z
 /** A sync target as the board that syncs it resolved it: a platform channel to start a thread in, or a thread to join. */
 export const ResolvedSyncTarget = z.object({ target: ExternalTarget, kind: z.enum(['channel', 'thread']) })
 
-/** Shared by `/messages` and `/events`. */
+/** Shared by `/threads` and `/events`. */
 export const Filters = z.object({
   channel: z.string().optional(),
   re: id.optional(),
@@ -78,9 +78,14 @@ export const Filters = z.object({
 /** The filters a query asks for, as the board parsed them. */
 export type ParsedFilters = z.output<typeof Filters>
 
-export const MessagesQuery = Filters.extend({
+/**
+ * One channel's messages across its threads, oldest first: the newest `limit`, or with `after`, a cursor a read of
+ * this channel answered, the ones posted since. The channel is one channel by its whole name, never a pattern: a board
+ * lists no messages across channels.
+ */
+export const ChannelMessagesQuery = z.strictObject({
+  channel: ChannelPath,
   after: Ref.optional(),
-  before: id.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
@@ -728,7 +733,7 @@ export type FiltersInput = z.input<typeof Filters>
 export type SyncImportInput = z.input<typeof SyncImportBody>
 export type SyncReceiptInput = z.input<typeof SyncReceiptBody>
 export type SyncFindInput = z.input<typeof SyncFindQuery>
-export type MessagesQueryInput = z.input<typeof MessagesQuery>
+export type ChannelMessagesQueryInput = z.input<typeof ChannelMessagesQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
@@ -1148,7 +1153,8 @@ export const routes = {
   /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is. */
   createChannel: { method: 'POST', path: '/channels', body: CreateChannelBody },
   actors: { method: 'GET', path: '/actors' },
-  messages: { method: 'GET', path: '/messages', query: MessagesQuery },
+  /** One channel's messages across its threads: the newest, or those after one of its cursors. */
+  channelMessages: { method: 'GET', path: '/messages', query: ChannelMessagesQuery },
   message: { method: 'GET', path: '/messages/:id' },
   /** Threads with a matching message, one summary each, by latest activity. `before` takes a page's `older`. */
   threads: { method: 'GET', path: '/threads', query: ThreadsQuery },

@@ -14,7 +14,7 @@ const team = board()
 // The browser calls your server, and your server calls the board.
 export async function GET(request: Request) {
   const channel = new URL(request.url).searchParams.get('channel') ?? 'dev'
-  return Response.json(await team.messages({ channel, limit: 200 }))
+  return Response.json(await team.channel(channel).messages({ limit: 200 }))
 }
 ```
 
@@ -36,16 +36,19 @@ const team = board()
 
 const PAGE = 200
 
-/** A channel's newest messages, roots and replies alike; with `before`, the ones older than that message, to page back. */
-const readChannel = (channel: string, before?: string) => team.messages({ channel, limit: PAGE, ...(before ? { before } : {}) })
+/** One channel's newest messages across its threads, roots and replies alike, oldest first. */
+const readChannel = (channel: string) => team.channel(channel).messages({ limit: PAGE })
 
 /** A thread: its root, its replies oldest first, and the cursor to follow it from. */
 const readThread = (id: string) => team.thread(id)
 ```
 
-`messages` answers `{ messages, cursor }`. A reply's `re` is its thread's
-root, so a page groups a channel's messages into threads by it. Keep the
-`cursor`: it's where the feed picks up.
+`channel(name).messages()` answers `{ messages, cursor }`. A reply's `re` is
+its thread's root, so a page groups a channel's messages into threads by it.
+Keep the `cursor`: it's where the feed picks up. It lists one channel, and
+its newest messages: to page back through a channel, read its
+[threads](../04-reference/02-board.md#threads) a page at a time, by each
+page's `older`.
 
 ## Stay live
 
@@ -55,12 +58,13 @@ import { board, type BoardEventView, type EventsState } from '@vercel/board'
 const team = board()
 
 /**
- * Follows the board's feed from `after`: every event since, as it happens. `onState` hears whether
- * it's connected, `live` or `retrying`, each time that changes. The handle retries a dropped
- * connection itself; this throws only when the board refuses the feed (a token that ran out, say).
+ * Follows the board's feed from `after`, a read's cursor, or from now without one: every event since,
+ * as it happens. `onState` hears whether it's connected, `live` or `retrying`, each time that changes.
+ * The handle retries a dropped connection itself; this throws only when the board refuses the feed (a
+ * token that ran out, say).
  */
-async function follow(after: string, each: (event: BoardEventView) => void, onState: (state: EventsState) => void) {
-  for await (const event of team.events({ all: true, after }, { onState })) each(event)
+async function follow(after: string | undefined, each: (event: BoardEventView) => void, onState: (state: EventsState) => void) {
+  for await (const event of team.events({ all: true, ...(after !== undefined ? { after } : {}) }, { onState })) each(event)
 }
 ```
 

@@ -239,7 +239,7 @@ describe("vercel()'s tasks", () => {
     ])
     // The API's list answers each task with its root: only a latest reply is read apart.
     expect(julian.sent.filter((request) => request.path.startsWith('/messages/')).map((request) => request.path)).toEqual([`/messages/${reply.id}`])
-    expect((await julian.messages({ channel: 'work', label: { 'board.task': 'waiting' } })).messages.map((message) => message.id)).toEqual([review.id])
+    expect((await julian.threads({ channel: 'work', label: { 'board.task': 'waiting' } })).threads.map((thread) => thread.message.id)).toEqual([review.id])
   })
 
   it("makes several tasks in one call to the API's batch route, which resolves their refs: in the order given, each as the board shows a task", async () => {

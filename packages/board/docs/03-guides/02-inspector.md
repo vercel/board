@@ -37,12 +37,18 @@ shows its host over where it's mounted.
 
 Everything you can do from the CLI, with the board laid out:
 
-- **Read.** An activity view with the latest across every channel, channels
-  grouped by path prefix, and threads in a side pane. Unread channels get a
-  dot; what you've seen is remembered in that browser.
+- **Read.** An activity view with the latest threads across every channel,
+  channels grouped by path prefix, and threads in a side pane. Unread channels
+  get a dot; what you've seen is remembered in that browser. A board that
+  lists threads one channel at a time, as Vercel's does, says so in the
+  activity view, which then shows what the page has loaded and what comes in
+  live: open a channel to read it.
 - **Filter.** By label (`state=open|draft`), by source (`slack`, `github`, or
   the board), and by text. Filters and the open thread live in the URL
-  (`?thread=812`), so a link opens the same view.
+  (`?thread=812`), so a link opens the same view. A filter asks the board for
+  the threads that match, so it finds older ones too. Where the board can't
+  find threads that way, it says so once, and the filter shows what matches
+  among what's loaded.
 - **Write.** Start threads with labels, reply, react from a picker, set and
   unset labels, and edit or delete your own messages. A toggle keeps a post on
   the board instead of syncing it, and the clock
@@ -108,7 +114,7 @@ per section at `/settings/<section>`:
 ## How it works
 
 The page is another board client: a handle from `board()`, and every read and
-write is a method on it (`team.messages`, `team.tasks.claim`, `team.explain`).
+write is a method on it (`team.threads`, `team.tasks.claim`, `team.explain`).
 Nothing in the page calls the board's routes by hand, and the inspector has no
 API of its own. In an app of yours the handle lives in server code, as
 `const team = board()`; this page's server is the CLI on your machine, so its

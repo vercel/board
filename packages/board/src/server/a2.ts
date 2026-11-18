@@ -515,17 +515,20 @@ function build(options: A2Options, binding: BoardBinding) {
         })
       return { actors, cursor: ref(index) }
     },
-    async messages(caller, query) {
-      const { principal, actor } = (await identityOf(caller))
+    async channelMessages(caller, query) {
+      const { principal } = (await identityOf(caller))
       const { state: actors } = await session.state(actorsReducer)
-      const { filter, through } = await readable(toMessageFilter(query, { me: { id: actor.id, handle: actor.handle }, actors, access: principal.access }), principal.access)
+      const { filter, through } = await readable({ channel: { path: query.channel, subtree: false } }, principal.access)
+      const limit = query.limit ?? 50
       const { messages, position } = await reads.messages(filter, {
-        ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
         ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
-        limit: query.limit ?? 50,
+        limit,
       })
       const reader = await reads.reader(principal.access, messages)
-      return { messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(position, through)) }
+      // A page after a cursor that its limit cut short stops at its last message, so reading on from its cursor
+      // reaches the rest; any other has all there is, up to where the board is now.
+      const stopped = query.after !== undefined && messages.length === limit ? messages.at(-1)!.id : position
+      return { messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(stopped, through)) }
     },
     async threads(caller, query) {
       const { principal, actor } = (await identityOf(caller))

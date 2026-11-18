@@ -72,7 +72,7 @@ describe('the inspector in a route handler', () => {
     expect(await (await ask('/board')).text()).toContain('<meta name="inspect-named" content="1">')
     await expect(page().post('ops', 'as the app')).rejects.toMatchObject({ status: 401, code: 'profile_required' })
     await expect(page().react('1', 'eyes')).rejects.toMatchObject({ status: 401, code: 'profile_required' })
-    expect((await client.messages({ channel: 'ops' })).messages.map((message) => message.text)).not.toContain('as the app')
+    expect((await client.channel('ops').messages()).messages.map((message) => message.text)).not.toContain('as the app')
   })
 
   it("won't write under its handle's own profile, the app's name, either", async () => {

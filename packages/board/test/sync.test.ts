@@ -89,7 +89,7 @@ describe('sync', () => {
 
     await webhook('slack', { type: 'message', threadId: 'slack:C1:500', id: '500', text: '@julian and @nobody, look', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(2))
-    const texts = async (query: string) => ((await julian('GET', `/messages?channel=firehose&${query}`)).body.messages as { text: string }[]).map((m) => m.text)
+    const texts = async (query: string) => ((await julian('GET', `/threads?channel=firehose&${query}`)).body.threads as { message: { text: string } }[]).map((t) => t.message.text)
     expect(await texts('from=slack')).toEqual(['@julian and @nobody, look'])
     expect(await texts('mentions=me')).toEqual(['@julian and @nobody, look'])
     expect(await texts('mentions=nobody')).toEqual(['@julian and @nobody, look'])
@@ -1379,7 +1379,7 @@ describe('sync', () => {
     const assigned = { ...pr, labels: [{ name: 'wip' }], assignees: [{ login: 'pi-bot[bot]' }] }
     await send('pull_request', { action: 'assigned', pull_request: assigned, assignee: { login: 'pi-bot[bot]' } })
     await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]!.labels['assignee.pi-bot-bot']).toBe('pi-bot[bot]'))
-    expect((await julian('GET', '/messages?label=tag.wip')).body.messages).toHaveLength(1)
+    expect((await julian('GET', '/threads?label=tag.wip')).body.threads).toHaveLength(1)
   })
 
   it("keeps a PR's head commit as its `head` label, through new commits", async () => {
@@ -1575,7 +1575,7 @@ describe('sync', () => {
     while (!streamed.includes('event: board')) streamed += new TextDecoder().decode((await reader.read()).value)
     controller.abort()
     expect(JSON.parse(streamed.match(/^data: (.*)$/m)![1]!).message.text).toBe('@[Ada@vercel.com] can you look?')
-    expect(((await julian('GET', '/messages?mentions=ada@vercel.com')).body.messages as { text: string }[]).map((m) => m.text)).toEqual(['@[Ada@vercel.com] can you look?'])
+    expect(((await julian('GET', '/threads?mentions=ada@vercel.com')).body.threads as { message: { text: string } }[]).map((t) => t.message.text)).toEqual(['@[Ada@vercel.com] can you look?'])
     expect(lookupByEmail).not.toHaveBeenCalled()
   })
 
