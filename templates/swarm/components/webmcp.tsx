@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { swarmRuns, thread } from "@/app/actions";
+import { runs as swarmRuns, thread } from "@/lib/client";
 import type { Snapshot, State } from "@/lib/swarm";
 
 /** The states the board keeps a task in, as lib/swarm.ts has them: repeated so the page doesn't bundle the board's server code. */

@@ -13,6 +13,7 @@ import { readControl, run as readRun, runs as listRuns, snapshot } from "../lib/
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
 import { areas, expand, seed } from "../lib/scenarios.ts";
 import { canRun, setup, type Deps } from "../lib/setup.ts";
+import { sameOrigin } from "../lib/http.ts";
 
 // No test reaches AI Gateway's list of models: it's empty here.
 globalThis.fetch = (async () => new Response(JSON.stringify({ data: [] }))) as typeof fetch;
@@ -475,4 +476,13 @@ test("a run's control thread says its phase and spend in text only the deploymen
 
   await stop(started.slug, board, boxes);
   assert.equal(readControl((await board.thread(control)).message.text)!.phase, "stopped");
+});
+
+test("a write is taken only from the deployment's own pages", () => {
+  const request = (headers: Record<string, string>) => new Request("https://swarm.example/api/runs", { method: "POST", headers });
+  assert.equal(sameOrigin(request({ host: "swarm.example", origin: "https://swarm.example", "sec-fetch-site": "same-origin" })), true);
+  assert.equal(sameOrigin(request({ host: "swarm.example", origin: "https://evil.example", "sec-fetch-site": "cross-site" })), false);
+  assert.equal(sameOrigin(request({ host: "swarm.example", origin: "https://evil.example" })), false);
+  assert.equal(sameOrigin(request({ host: "swarm.example" })), false, "no Origin, no write");
+  assert.equal(sameOrigin(request({ host: "swarm.example", origin: "https://swarm.example", "sec-fetch-site": "same-site" })), false);
 });

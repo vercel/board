@@ -177,7 +177,7 @@ notes.
 | Path | What it is |
 | --- | --- |
 | `app/page.tsx`, `lib/setup.ts`, `lib/launcher.ts` | The launcher and its checks |
-| `app/actions.ts` | Launch and Stop, each refused while strangers can open the deployment |
+| `app/api/runs`, `app/api/tasks`, `lib/operations.ts` | Launch, Stop, add a task, reply to one, and read: routes the pages call, each refused while strangers can open the deployment, and every write refused from anywhere but its own pages |
 | `lib/run.ts` | `launch`, `reconcile`, `ending`, and `stop` |
 | `lib/runs.ts` | Runs on the board: their threads, labels, and tasks |
 | `lib/sandboxes.ts` | The base, source, and agent sandboxes, and each agent's network policy |

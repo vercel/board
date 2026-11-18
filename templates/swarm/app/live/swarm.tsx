@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ask, say, stop, thread } from "@/app/actions";
+import { ask, say, stop, thread } from "@/lib/client";
 import type { Line, RunView, Snapshot, Task } from "@/lib/swarm";
 import { WebMcp } from "@/components/webmcp";
 

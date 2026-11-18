@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { stop } from "@/app/actions";
+import { stop } from "@/lib/client";
 import { ABOUT_SCENARIO } from "@/lib/config";
 import type { Run } from "@/lib/runs";
 
