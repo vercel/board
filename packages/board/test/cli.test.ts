@@ -558,6 +558,17 @@ describe('cli', () => {
       outcome: 'created',
     })
 
+    // A prefix lists the channels whose path starts with it, and a page that isn't the last prints the command for the next.
+    expect((await vb(['channels', 'made/'])).stdout).toBe((await vb(['channels', 'list', 'made/'])).stdout)
+    expect(JSON.parse((await vb(['channels', 'made/', '--json'])).stdout).channels.map((c: { path: string }) => c.path)).toEqual(['made/early', 'made/fresh', 'made/late'])
+    const page = await vb(['channels', 'made/', '--limit', '2'])
+    expect(page.stdout).toMatch(/^made\/\n {2}made\/early[^\n]*\n {2}made\/fresh[^\n]*\n\n\(more not shown: vb channels made\/ --limit 2 --after \S+\)\n$/)
+    const next = /--after (\S+)\)/.exec(page.stdout)![1]!
+    expect((await vb(['channels', 'made/', '--limit', '2', '--after', next])).stdout).toMatch(/^made\/\n {2}made\/late[^\n]*\n$/)
+    expect(await vb(['channels', 'nope/'])).toEqual({ code: 0, stdout: 'no channels under nope/\n', stderr: '' })
+    expect(await vb(['channels', 'list', 'made/', 'more'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: channels list takes one prefix: more is one too many\./) })
+    expect(await vb(['channels', '--limit', '0'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --limit takes 1 to 500 channels/) })
+
     expect(await vb(['channels', 'create'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Missing the channel to create/) })
     expect(await vb(['channels', 'archive', 'made/early'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown command archive for vb channels\./) })
     // The board refuses a path that isn't one, and makes nothing.

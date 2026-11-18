@@ -1329,9 +1329,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         } else out(created ? `created ${channel.path}` : `${channel.path} already exists`)
         return 0
       }
-      // What isn't `list` or `create` is the prefix of a list: `channels dev/`.
+      // What isn't `list` or `create` is the prefix of a list, `channels dev/`: with more after it, a command there isn't.
+      if (sub !== undefined && sub !== 'list' && rest.length > 0) throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
       const [prefix, extra] = sub === 'list' ? rest : args
-      if (extra !== undefined) throw usage(`channels takes one prefix: ${extra} is one too many.`)
+      if (extra !== undefined) throw usage(`channels list takes one prefix: ${extra} is one too many.`)
       if (flags.limit !== undefined && !(/^[1-9]\d*$/.test(flags.limit) && Number(flags.limit) <= CHANNELS_LIMIT_MAX)) throw usage(`--limit takes 1 to ${CHANNELS_LIMIT_MAX} channels, and ${flags.limit} isn't one.`)
       const listed = await client().channels({ ...(prefix !== undefined ? { prefix } : {}), ...(flags.limit !== undefined ? { limit: Number(flags.limit) } : {}), ...(flags.after !== undefined ? { after: flags.after } : {}) })
       if (flags.json) return result({ channels: listed.channels, next: listed.next }), 0

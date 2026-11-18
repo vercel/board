@@ -623,6 +623,24 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'lists channels a page at a time, and the ones under a prefix',
+    run: async (ctx) => {
+      const paths = (channels: { path: string }[]) => channels.map((channel) => channel.path)
+      const under = paths(await everyChannel(ctx.board, ctx.channel))
+      check(under.includes(ctx.channel) && under.every((path) => path.startsWith(ctx.channel)), `the channels under ${ctx.channel} should be it and the ones that start with it, got ${show(under)}`)
+      const seen: string[] = []
+      let after: string | undefined
+      do {
+        const page = await ctx.board.channels({ prefix: ctx.channel, limit: 1, ...(after !== undefined ? { after } : {}) })
+        check(page.channels.length <= 1, `a list with a limit of 1 should answer 1 channel at most, got ${show(paths(page.channels))}`)
+        seen.push(...paths(page.channels))
+        after = page.next ?? undefined
+      } while (after !== undefined && seen.length <= under.length)
+      same(show([...seen].sort()), show([...under].sort()), 'the channels under a prefix, read a page of 1 at a time')
+    },
+  },
+  {
+    group: 'core',
     name: "reads a thread's replies after one of its messages, and as many of its newest as it's asked for",
     run: async (ctx) => {
       const { root, reply } = needRoot(ctx)
