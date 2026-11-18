@@ -76,3 +76,40 @@ describe("a feed's newest events (`last`)", () => {
     expect(seen).toEqual(['two', 'three', 'four'])
   })
 })
+
+describe("a feed's newest events, each with its message as it is now", () => {
+  const texts = (events: { type: string; message?: { text: string } }[]) => events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)
+  const raw = async (team: ReturnType<typeof testBoard>) => (await team.request('/events?all=true&last=20')).text()
+  const posted = (body: string) => (JSON.parse(body) as { events: { type: string }[] }).events.find((event) => event.type === 'message.posted')
+
+  it('answers no text of a message deleted since: its tombstone, in the response itself', async () => {
+    const team = testBoard()
+    const { id } = await team.post('dev', { text: 'secret words' })
+    await team.delete(id)
+
+    const body = await raw(team)
+
+    expect(body).not.toContain('secret words')
+    expect(posted(body)).toMatchObject({ message: { id, deleted: true } })
+  })
+
+  it('answers what an edited message says now, and not what it said', async () => {
+    const team = testBoard()
+    const { id } = await team.post('dev', { text: 'first words' })
+    await team.edit(id, 'last words')
+
+    const body = await raw(team)
+
+    expect(body).not.toContain('first words')
+    expect(posted(body)).toMatchObject({ payload: { text: 'last words' }, message: { id, text: 'last words' } })
+  })
+
+  it('leaves out an event a filter on text found by what its message no longer says', async () => {
+    const team = testBoard()
+    const { id } = await team.post('dev', { text: 'the falcon landed' })
+    await team.post('dev', { text: 'a falcon again' })
+    await team.delete(id)
+
+    expect(texts((await team.poll({ text: 'falcon', last: 10 })).events)).toEqual(['a falcon again'])
+  })
+})

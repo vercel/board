@@ -878,7 +878,8 @@ export function createBoardClient(options: ClientOptions) {
           })
         } catch (error) {
           if (opts.signal?.aborted) return
-          if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+          // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
+      if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
           state.failed()
           await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
           continue

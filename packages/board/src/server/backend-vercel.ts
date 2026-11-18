@@ -919,13 +919,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     named.set(name, { id, name })
     byChannelId.set(id, Promise.resolve({ id, name }))
   }
-  async function channelById(who: Who, id: string): Promise<ApiChannel> {
+  async function channelById(who: Who, id: string, signal?: AbortSignal): Promise<ApiChannel> {
     const listed = channels ? (await loadChannels(who)).find((channel) => channel.id === id) : undefined
     if (listed) return listed
     let asked = byChannelId.get(id)
     if (!asked) {
       asked = onBoard(who, `/channels/${encodeURIComponent(id)}`)
-        .then((path) => api<{ channel: ApiChannel }>(who, 'GET', path))
+        .then((path) => api<{ channel: ApiChannel }>(who, 'GET', path, signal ? { signal } : {}))
         .then(({ channel }) => channel)
         .catch((error: unknown) => {
           byChannelId.delete(id)
@@ -940,14 +940,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
     return found
   }
+  /** How many channels a read of the board's feed asks for at once, to name them. */
+  const NAMING = 6
   /**
-   * Before the changes of a read of the board's feed are named: it says each one's channel by ID, and several it
-   * doesn't know yet are the channel list's to name, in one read of it, not a request each.
+   * Before the changes of a read of the board's feed are named: it says each one's channel by ID, and the ones not
+   * known yet are asked for by it, a few at once, under the read's own signal. The board's whole list is never read
+   * to name a few: it can be thousands of channels.
    */
-  async function namingChannels(who: Who, changes: ApiChange[]) {
+  async function namingChannels(who: Who, changes: ApiChange[], signal: AbortSignal) {
     if (channels) return
-    const unknown = new Set(changes.map((change) => change.channelId).filter((id) => !byChannelId.has(id)))
-    if (unknown.size > 1) await loadChannels(who)
+    const unknown = [...new Set(changes.map((change) => change.channelId).filter((id) => !byChannelId.has(id)))]
+    for (let i = 0; i < unknown.length; i += NAMING) await Promise.all(unknown.slice(i, i + NAMING).map((id) => channelById(who, id, signal)))
   }
   /** The channel by `name`, made if it isn't there: `created` says whether this made it. */
   async function ensureChannel(who: Who, name: string): Promise<{ channel: ApiChannel; created: boolean }> {
@@ -1007,7 +1010,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    */
   async function channelsPage(who: Who, { prefix, after, limit }: { prefix?: string | undefined; after?: string | undefined; limit: number }, signal?: AbortSignal): Promise<{ channels: ApiChannel[]; next: string | null }> {
     const refused = () => new HttpError(400, 'invalid_cursor', `after: ${after} isn't a page of this board's channels: pass a page's next as it came`)
-    if (channelPages) {
+    // A `next` that names where its page left off (`n.`) is one only an API without pages hands out, in any process: its list goes on from it.
+    if (channelPages && !after?.startsWith('n.')) {
       if (after !== undefined && !after.startsWith('c.')) throw refused()
       const path = await onBoard(who, '/channels')
       const found: ApiChannel[] = []
@@ -2092,7 +2096,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     narrow.mentions?.ahead(merged.flatMap(({ change }) => (change.currentMessage ? [change.currentMessage.text] : [])))
     // Where the read started stays with every position it hands out: a feed that hasn't caught up to it yet reads on from one.
     const start = { ...(position.past !== undefined ? { past: position.past } : {}), ...(position.floor !== undefined ? { floor: position.floor } : {}) }
-    if (listed.some((channel) => channel.id === ACROSS)) await namingChannels(who, merged.map(({ change }) => change))
+    if (listed.some((channel) => channel.id === ACROSS)) await namingChannels(who, merged.map(({ change }) => change), signal)
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
       const message = change.currentMessage
@@ -2269,7 +2273,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     narrow.mentions?.ahead(page.events.flatMap((change) => (change.currentMessage ? [change.currentMessage.text] : [])))
     const one = feed.id !== ACROSS
     const events: BoardEventView[] = []
-    if (!one) await namingChannels(who, page.events)
+    if (!one) await namingChannels(who, page.events, signal)
     for (const change of page.events) {
       const message = change.currentMessage
       const given = message && change.threadId ? { message, thread: query.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
@@ -2296,7 +2300,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const from = query.after === undefined ? undefined : locate(query.after) ? await afterMessage(who, query.after) : positionOf(query.after)
     // Several channels' events are one read of the board's feed where the API has it for this caller, unless the
     // read goes on from a position in each channel's own feed, which only they read on from.
-    const one = query.re === undefined && !(from && Object.keys(from.feeds).some((key) => key !== ACROSS)) && (await acrossFeed(who))
+    // And it's a tree's or every channel's, never one exact name's: a channel that isn't there yet has no events, as before.
+    const one = (query.channel === undefined || query.channel.endsWith('/')) && query.re === undefined && !(from && Object.keys(from.feeds).some((key) => key !== ACROSS)) && (await acrossFeed(who))
     try {
       return await followed(who, one ? [across(query.channel)] : query.re === undefined ? await channelsFor(who, query.channel) : await channelOfThread(who, query.re, query.channel, signal), from, query, signal)
     } catch (error) {

@@ -487,7 +487,8 @@ async function* events(
       page = await client.poll((after === undefined && last !== undefined ? { ...rest, last } : { ...rest, ...(after !== undefined ? { after } : {}), wait: answered ? EVENTS_WAIT_S : 0 }) as Parameters<BoardClient['poll']>[0], opts.signal)
     } catch (error) {
       if (opts.signal?.aborted) return
-      if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+      // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
+      if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
       answered = false
       state.failed()
       await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 500 * 2 ** failures++)))

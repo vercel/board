@@ -282,21 +282,41 @@ describe("vercel(): a feed's newest events (`last`)", () => {
     expect(reads).toEqual([4, 4])
   })
 
-  it("names the channels of the board's newest events from one list of them, not a request each", async () => {
-    const requests: number[] = []
-    for (const channels of [3, 30]) {
-      const api = fakeMessageboard({ boardFeed: true, feedLast: true, inlineActors: true, channelNames: true, channelPages: true })
-      await busy(api, channels)
-      const { team, sent } = counted(api)
+  it("names the channels of the board's newest events by ID, the ones it doesn't know, and never lists the board's", async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true, inlineActors: true, channelNames: true, channelPages: true })
+    await busy(api, 60)
+    const { team, sent } = counted(api)
+    const naming = () => ({ byId: sent.filter((path) => path.startsWith('GET /channels/')).length, lists: sent.filter((path) => path === 'GET /channels').length })
 
-      const { events } = await team.poll({ last: 100 })
+    const { events } = await team.poll({ last: 3 })
 
-      expect(new Set(events.map((event) => event.message?.channel)).size).toBe(channels + 1)
-      expect(sent.filter((path) => path.startsWith('GET /channels/'))).toEqual([])
-      requests.push(sent.length)
-    }
+    expect(new Set(events.map((event) => event.message?.channel)).size).toBe(3)
+    expect(naming()).toEqual({ byId: 3, lists: 0 })
+    // Known from then on: the same read names them without asking again.
+    const asked = sent.length
+    await team.poll({ last: 3 })
+    expect(sent.length - asked).toBe(1)
+  })
 
-    expect(requests[1]).toBe(requests[0])
+  it('answers no text of a message deleted since, in the response itself', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    const writer = await busy(api, 1)
+    const { id } = await writer.post('ops', { text: 'secret words' })
+    await writer.delete(id)
+    const { team } = counted(api)
+
+    for (const query of ['all=true&last=20', 'channel=ops&all=true&last=20']) expect(await (await team.request(`/events?${query}`)).text()).not.toContain('secret words')
+  })
+
+  it("ends a stream of them with the board's refusal, where it can't read them", async () => {
+    const api = fakeMessageboard({ boardFeed: true })
+    await busy(api, 1)
+    const { team } = counted(api)
+
+    const following = (async () => {
+      for await (const _ of team.events({ last: 5 })) break
+    })()
+    await expect(following).rejects.toMatchObject({ status: 501, code: 'not_supported', message: expect.stringContaining("Vercel's boards don't support") })
   })
 
   it('goes on from the cursor it answers, and from an event\'s own, with nothing missed or repeated', async () => {
@@ -452,5 +472,28 @@ describe("vercel(): the cursors of the board's feed", () => {
 
     expect((await ask('last=2&wait=0')).status).toBe(200)
     expect((await ask('last=2&wait=1')).status).toBe(400)
+  })
+})
+
+describe('vercel(): reads that name what an older API, or no channel yet, answers for', () => {
+  it("answers nothing for one exact channel that isn't there yet, and waits, with the board's feed or without", async () => {
+    for (const options of [{ channelNames: true }, { channelNames: true, boardFeed: true }]) {
+      const api = fakeMessageboard(options)
+      await busy(api, 1)
+      const { team } = counted(api)
+
+      await expect(team.poll({ channel: 'not-yet' })).resolves.toMatchObject({ events: [] })
+      await expect(team.poll({ channel: 'not-yet', wait: 1 })).resolves.toMatchObject({ events: [] })
+    }
+  })
+
+  it('goes on from a page of channels another process read, on an API that lists them all at once', async () => {
+    const api = fakeMessageboard()
+    await busy(api, 4)
+
+    const first = await counted(api).team.channels({ limit: 2 })
+    const second = await counted(api).team.channels({ limit: 2, after: first.next! })
+
+    expect([...first.channels, ...second.channels].map((channel) => channel.path)).toEqual(['dev/c0', 'dev/c1', 'dev/c2', 'dev/c3'])
   })
 })

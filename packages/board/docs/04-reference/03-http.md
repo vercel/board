@@ -689,7 +689,7 @@ with no `type` that says it.
 | `after` | start after this cursor or message ID. Omitted: the current head (or `Last-Event-ID`) |
 | `all` | `true` (or `1`) adds bookkeeping: `actor.seen`, `thread.synced`, delivery receipts, and `task.renewed`. `false` (or `0`) is the default; anything else is a 400 |
 | `wait` | long-poll only: seconds to hold for a match, at most 300 |
-| `last` | the feed's newest events instead of the ones from now, from 1 to 100: oldest first, answered at once, with the feed's end as `cursor`, so a read `after` it goes on with what comes next. A stream starts with them, then follows. It takes no `after` or `wait`: 400. A board that can't read them that way answers 501 `not_supported`: see [Vercel's board](../01-board/05-reading.md#on-vercels-board) |
+| `last` | the feed's newest events instead of the ones from now, from 1 to 100: oldest first, answered at once, with the feed's end as `cursor`, so a read `after` it goes on with what comes next. A stream starts with them, then follows. Each comes with its message as it is now, so one deleted since is its tombstone and one edited says what it says now. It takes no `after` or `wait`: 400. A board that can't read them that way answers 501 `not_supported`: see [Vercel's board](../01-board/05-reading.md#on-vercels-board) |
 
 Each event is a JSON object:
 
