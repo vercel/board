@@ -553,15 +553,12 @@ export function createBoardClient(options: ClientOptions) {
       }
       const before = await reaching()
       if (before.length > 0) throw granted(before)
-      // Channels come a page at a time, so the ones at or under it are asked for by its path, every page of them.
-      // A board from before pages answers them all at once, whatever it's asked.
-      let there: ChannelView | undefined
-      for (let after: string | undefined; ; ) {
-        const page = await call<{ channels: ChannelView[]; next?: string | null }>('GET', `/channels${queryString({ prefix: path, after })}`)
-        there = page.channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
-        if (there || !page.next) break
-        after = page.next
-      }
+      // Only what the lock would close is asked for, a channel each: the path itself, which lists first of the names
+      // that start with it, and the first channel under it. Its siblings (`vault-old` beside `vault`) are never read.
+      // A board from before pages answers every channel to either, and is searched the same.
+      const first = async (prefix: string) =>
+        (await call<{ channels: ChannelView[] }>('GET', `/channels${queryString({ prefix, limit: 1 })}`)).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      const there = (await first(path)) ?? (await first(pattern))
       if (there)
         throw new BoardError(
           'channel_exists',

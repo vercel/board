@@ -1,3 +1,4 @@
+import { carried } from './carried.ts'
 import type { z } from 'zod'
 import type { ActorView, Filters, LinkView, MessageView, BoardEventView, TaskView } from '../api/routes.ts'
 import type { ParsedFilters } from '../api/routes.ts'
@@ -549,7 +550,9 @@ async function asNow(options: FeedOptions, events: BoardEventView[], head: numbe
       // An event that kept its attachments by ID answers the IDs the message has now.
       payload[key] = key === 'attachments' && Array.isArray(was) && was.every((item) => typeof item === 'string') ? message.attachments.map((attachment) => attachment.id) : message[key]
     }
-    return [{ ...event, payload, message } as BoardEventView]
+    // And with nothing else the message no longer carries: a label's value, a reaction, a hold's reason.
+    const settled = carried({ ...event, payload, message } as BoardEventView)
+    return settled ? [settled] : []
   })
 }
 

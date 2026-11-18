@@ -113,3 +113,48 @@ describe("a feed's newest events, each with its message as it is now", () => {
     expect(texts((await team.poll({ text: 'falcon', last: 10 })).events)).toEqual(['a falcon again'])
   })
 })
+
+describe("a feed's newest events, with nothing their messages no longer carry", () => {
+  type Events = { events: { type: string; payload: Record<string, unknown> }[] }
+  const raw = async (team: ReturnType<typeof testBoard>) => (await team.request('/events?all=true&last=50')).text()
+  const send = (team: ReturnType<typeof testBoard>, path: string, body: object) =>
+    team.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify(body)) })
+
+  it('answers a label change with the values its message still carries, in the response itself', async () => {
+    const team = testBoard()
+    const { id } = await team.post('dev', { text: 'labelled' })
+    await team.label(id, { set: { stage: 'value-since-replaced', kind: 'value-since-removed' } })
+    await team.label(id, { set: { stage: 'value-it-has' } })
+    await team.label(id, { unset: ['kind'] })
+    const gone = await team.post('dev', { text: 'to delete' })
+    await team.label(gone.id, { set: { stage: 'value-of-a-deleted-message' } })
+    await team.delete(gone.id)
+
+    const body = await raw(team)
+
+    for (const value of ['value-since-replaced', 'value-since-removed', 'value-of-a-deleted-message']) expect(body).not.toContain(value)
+    expect((JSON.parse(body) as Events).events.filter((event) => event.type === 'labels.changed').map((event) => event.payload.set)).toEqual([{}, { stage: 'value-it-has' }, {}, {}])
+  })
+
+  it('leaves out a reaction since removed, and answers one that is there', async () => {
+    const team = testBoard()
+    const { id } = await team.post('dev', { text: 'reacted to' })
+    await team.react(id, 'eyes')
+    await team.react(id, 'eyes', { remove: true })
+    await team.react(id, 'tada')
+
+    const reactions = (JSON.parse(await raw(team)) as Events).events.filter((event) => event.type.startsWith('reaction.'))
+
+    expect(reactions.map((event) => event.type)).toEqual(['reaction.added'])
+  })
+
+  it("leaves out a task's hold once it's lifted, and its reason with it", async () => {
+    const team = testBoard()
+    const { task } = (await (await send(team, '/tasks', { channel: 'work', text: 'ship it' })).json()) as { task: { id: string } }
+    expect((await send(team, `/tasks/${task.id}/block`, { reason: 'reason-of-a-hold-since-lifted' })).ok).toBe(true)
+    expect(await raw(team)).toContain('reason-of-a-hold-since-lifted')
+    expect((await send(team, `/tasks/${task.id}/unblock`, {})).ok).toBe(true)
+
+    expect(await raw(team)).not.toContain('reason-of-a-hold-since-lifted')
+  })
+})

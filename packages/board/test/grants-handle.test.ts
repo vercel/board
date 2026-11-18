@@ -46,6 +46,31 @@ describe('a private channel, from the handle', () => {
     expect(await ids(team)).toEqual(before)
   })
 
+  it("reads two channels at most to see that a path is free, however many siblings start with its name", async () => {
+    const team = testBoard()
+    const asked: string[] = []
+    const julian = handleAs((request) => {
+      const url = new URL(request.url)
+      if (request.method === 'GET' && url.pathname.endsWith('/channels')) asked.push(url.search)
+      return team.fetch(request)
+    }, () => personToken())
+    for (let i = 0; i < 150; i++) await julian.post(`vault-${String(i).padStart(3, '0')}`, { text: 'beside it' })
+
+    expect(await julian.createChannel('vault', { private: true })).toMatchObject({ channel: { path: 'vault' }, created: true })
+    // The path itself, then the first channel under it: one channel each, and none of the 150 beside it read past the first.
+    expect(asked).toEqual(['?prefix=vault&limit=1', '?prefix=vault%2F&limit=1'])
+  })
+
+  it('refuses a path with a channel under it, whatever siblings start with its name', async () => {
+    const team = testBoard()
+    const julian = handleAs(team.fetch, () => personToken())
+    for (const channel of ['vault-old', 'vault2', 'vaultx/a', 'vault/keys']) await julian.post(channel, { text: 'here' })
+    const before = await ids(team)
+
+    await expect(julian.createChannel('vault', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists', message: expect.stringContaining('vault/keys') })
+    expect(await ids(team)).toEqual(before)
+  })
+
   it("refuses a path where it or a channel under it is there, and a caller no grant could name, before it writes anything", async () => {
     const team = testBoard()
     const julian = handleAs(team.fetch, () => personToken())

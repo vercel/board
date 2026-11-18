@@ -516,3 +516,36 @@ describe('vercel(): reads that name what an older API, or no channel yet, answer
     expect([...first.channels, ...second.channels].map((channel) => channel.path)).toEqual(['dev/c0', 'dev/c1', 'dev/c2', 'dev/c3'])
   })
 })
+
+describe('vercel(): callers of different access on one backend', () => {
+  /** What a caller narrowed to `dev/` is answered when it makes `secret/plans`, which is there: on the backend whose other caller listed the channels, or on one that has seen nothing. */
+  async function answered(listed: boolean) {
+    const api = fakeMessageboard({ channelPages: true, channelNames: true })
+    const { team } = counted(api)
+    await team.post('secret/plans', { text: 'ours' })
+    await team.post('dev/web', { text: 'for everyone' })
+    if (listed) await team.channels()
+    const fixer = (listed ? team : counted(api).team).as('fixer', { can: { 'dev/': ['read', 'post'] } })
+    return fixer.createChannel('secret/plans').then(
+      (made) => ({ made }),
+      (error: { status?: number; code?: string }) => ({ status: error.status, code: error.code }),
+    )
+  }
+
+  it("answers one that can't read a channel as the API does, whatever another caller of the backend has listed", async () => {
+    const [primed, unprimed] = [await answered(true), await answered(false)]
+
+    expect(primed).toEqual(unprimed)
+    expect(primed).not.toHaveProperty('made')
+  })
+
+  it('answers no label value a message no longer carries, in a read of the feed\'s newest', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    const { team } = counted(api)
+    const { id } = await team.post('ops', { text: 'labelled' })
+    await team.label(id, { set: { stage: 'value-since-replaced' } })
+    await team.label(id, { set: { stage: 'value-it-has' } })
+
+    for (const query of ['all=true&last=20', 'channel=ops&all=true&last=20']) expect(await (await team.request(`/events?${query}`)).text()).not.toContain('value-since-replaced')
+  })
+})

@@ -13,6 +13,7 @@ import { type Backend, type BackendRoute, type BoardBinding, type Caller, type P
 import { mediaType } from '../contract/files.ts'
 import { uploadName } from './file-names.ts'
 import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
+import { carried } from './carried.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
@@ -903,9 +904,25 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw error
     })
   }
+  /**
+   * The channels callers have been shown, by name, for the callers one `can` narrows alike. The API finds a name
+   * only for a caller that reads its channel, so what one caller was shown is never another's answer: one narrowed
+   * otherwise asks the API, which decides. The credential is this backend's, so `can` is all that tells callers apart.
+   */
+  const namedBy = new Map<string, Map<string, ApiChannel>>()
+  const namedTo = (who: Who): Map<string, ApiChannel> => {
+    const key = who.can ?? ''
+    let named = namedBy.get(key)
+    if (!named) {
+      // The newest few ways callers are narrowed: each is whatever a request's header says.
+      if (namedBy.size >= 200) namedBy.delete(namedBy.keys().next().value!)
+      namedBy.set(key, (named = new Map()))
+    }
+    return named
+  }
   /** The channel by `name`, which the API finds without listing the board's. */
-  const named = new Map<string, ApiChannel>()
   async function channelNamed(who: Who, name: string): Promise<ApiChannel | null> {
+    const named = namedTo(who)
     const known = named.get(name)
     if (known) return known
     const { channels: [found] } = await api<{ channels: ApiChannel[] }>(who, 'GET', await onBoard(who, '/channels'), { query: { name } })
@@ -930,7 +947,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * read's own by its ID.
    */
   async function inNamed<T>(who: Who, name: string, read: (channel: ChannelRef) => Promise<T>): Promise<T | null> {
-    if (readsByName && !named.has(name))
+    if (readsByName && !namedTo(who).has(name))
       try {
         return await read({ name })
       } catch (error) {
@@ -948,9 +965,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * already read answers first, and one the API won't show by ID is looked for in the list, as before.
    */
   const byChannelId = new Map<string, Promise<ApiChannel | null>>()
-  /** A channel an answer named by both its ID and its name: nothing in this process asks for it again. */
-  const learn = ({ id, name }: ApiChannel) => {
-    named.set(name, { id, name })
+  /** A channel an answer to `who` named by both its ID and its name: no caller narrowed as it is asks for it again, by name, and none by ID. */
+  const learn = (who: Who, { id, name }: ApiChannel) => {
+    namedTo(who).set(name, { id, name })
     byChannelId.set(id, Promise.resolve({ id, name }))
   }
   async function channelById(who: Who, id: string): Promise<ApiChannel> {
@@ -990,7 +1007,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     try {
       const { channel } = await api<{ channel: ApiChannel }>(who, 'POST', await onBoard(who, '/channels'), { body: { operationId: operationId(), name } })
       channels = null
-      named.set(name, channel)
+      namedTo(who).set(name, channel)
       return { channel, created: true }
     } catch (error) {
       // Someone made it first.
@@ -1053,7 +1070,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           found.push(...page.channels)
           cursor = page.cursor ?? undefined
         } while (cursor && found.length < limit)
-        for (const channel of found) learn(channel)
+        for (const channel of found) learn(who, channel)
         return { channels: found, next: cursor ? `c.${cursor}` : null }
       } catch (error) {
         if (!unknownParameter(error, 'prefix') && !unknownParameter(error, 'limit')) throw error
@@ -1090,7 +1107,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (messagesWithChannel)
       try {
         const { channel, ...found } = await messageById(who, id, signal, 'channel')
-        if (channel) learn(channel)
+        if (channel) learn(who, channel)
         return { ...found, channel: channel ? { id: channel.id, name: channel.name } : await channelById(who, found.thread.channelId) }
       } catch (error) {
         if (unknownParameter(error, 'include')) messagesWithChannel = false
@@ -2312,7 +2329,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const event = one
         ? await eventOf(who, change, feed.name, change.cursor ?? page.cursor, query, narrow, given)
         : await eventOf(who, change, channelOf(change), cursorOf({ t: change.createdAt, feeds: { [ACROSS]: { at: change.cursor ?? page.cursor, skip: 0 } } }), query, narrow, given, threads)
-      if (event) events.push(event)
+      // The API answers each with its message as it is now: what an event says that the message no longer carries isn't answered.
+      const settled = event && carried(event)
+      if (settled) events.push(settled)
     }
     if (one) return { events, cursor: page.cursor }
     const t = page.events.length > 0 ? Math.max(...page.events.map((change) => change.createdAt)) : Date.now()
@@ -3162,7 +3181,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           return { feed, found, id: channel.id ?? found.threads[0]?.channelId }
         })
         if (!read) return { threads: [], cursor: cursorOf({ t: 0, feeds: {} }), older: null }
-        if (read.id !== undefined) learn({ id: read.id, name })
+        if (read.id !== undefined) learn(who, { id: read.id, name })
         // A cursor keeps each feed by its channel's ID, which a page with no thread doesn't say: it's asked for.
         const id = read.id ?? (await channelNamed(who, name))?.id
         const page = read.found.threads.map((thread) => ({ thread, channel: { name }, at: thread.lastActivityAt })).reverse()
@@ -3457,7 +3476,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           : await inNamed(who, name, async (channel) => {
               const found = await all<ApiSchedule>(who, path, 'schedules', { ...filter, ...inChannel(channel) }, signal)
               // Each is in the channel the read named: showing it asks for no channel by its ID.
-              if (found[0]) learn({ id: found[0].channelId, name })
+              if (found[0]) learn(who, { id: found[0].channelId, name })
               return found
             })
       if (!listed) return { schedules: [] }
