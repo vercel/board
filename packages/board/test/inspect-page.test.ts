@@ -162,3 +162,26 @@ describe("the inspector's page, working a task it claimed", () => {
     expect(posts('/tasks/70/complete')).toEqual([{ epoch: 1, token: 'secret-token', result: 'done' }])
   })
 })
+
+describe("the inspector's page, granting access", () => {
+  it('shows what you may do as the board says after a grant changes it, and after a revoke', async () => {
+    const julian = { actor: 'local:user:julian', principal: 'local:user:julian', kind: 'person', handle: 'julian', name: 'julian', avatar: null, profile: null, expiresAt: null }
+    const grant = { id: 'g1', principals: [{ kind: 'everyone' }], can: { 'factory/': ['read'] }, by: 'local:user:julian', createdAt: '2026-10-01T10:00:00.000Z' }
+    await page.setProfile(null)
+    expect(page.getState().me?.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
+
+    // The grant narrows you under factory/: the board says so from then on.
+    next.set('POST /grants', [() => Response.json({ grant }, { status: 201 })])
+    next.set('GET /grants', [() => Response.json({ grants: [grant] })])
+    next.set('GET /me', [() => Response.json({ ...julian, can: { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'factory/': ['read'] } })])
+    expect(await page.createGrant({ principals: [{ kind: 'everyone' }], can: { 'factory/': ['read'] } })).toBeNull()
+
+    expect(page.getState().me?.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'factory/': ['read'] })
+    // Revoked, it gives you factory/ back: the page follows the board again.
+    next.set('POST /grants/g1/revoke', [() => Response.json({ revoked: true })])
+    next.set('GET /grants', [() => Response.json({ grants: [] })])
+    await page.revokeGrant('g1')
+    expect(page.getState().me?.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
+    expect(page.getState().grants).toEqual({ is: 'here', items: [] })
+  })
+})

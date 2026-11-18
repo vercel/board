@@ -548,15 +548,28 @@ export async function registerSchema(input: SchemaInput): Promise<string | null>
 
 // --- access: who is let in, and what each may do ---------------------------------------------
 
-/** The board's grants. Listing them needs `manage` at `*`: for anyone else the board says so, and the page shows that. */
+/**
+ * The board's grants, and what you may do under them: a grant can change that, so the page asks
+ * `me()` again with them. Listing grants needs `manage` at `*`: for anyone else the board says so,
+ * and the page shows that.
+ */
 export async function loadGrants() {
   set((s) => (s.grants.is === 'here' ? s : { ...s, grants: { is: 'loading' } }))
+  const handle = team
+  // A profile switched meanwhile learned its own `me`: this one is no longer who's looking.
+  const you = handle.me().then(
+    (me) => {
+      if (team === handle) set((s) => ({ ...s, me }))
+    },
+    () => {},
+  )
   try {
-    const grants = await team.grants()
+    const grants = await handle.grants()
     set((s) => ({ ...s, grants: { is: 'here', items: grants } }))
   } catch (error) {
     set((s) => ({ ...s, grants: { is: 'failed', why: said(error) } }))
   }
+  await you
 }
 
 /** Whether the board refused a grant change as one its caller couldn't take back: it takes their own `manage` where it reaches. */
