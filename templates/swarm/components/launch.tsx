@@ -7,6 +7,16 @@ import { start } from "@/app/actions";
 import { ABOUT_SCENARIO, DEFAULTS, MAX_AGENTS, MAX_MINUTES, SCENARIOS, type Scenario } from "@/lib/config";
 import { perMillion, type Model } from "@/lib/models";
 
+/** Models by provider, the part of the ID before its `/`, in the order they're listed. */
+function providers(models: Model[]): [string, Model[]][] {
+  const by = new Map<string, Model[]>();
+  for (const entry of models) {
+    const provider = entry.id.split("/")[0]!;
+    by.set(provider, [...(by.get(provider) ?? []), entry]);
+  }
+  return [...by];
+}
+
 /** The form that launches a run: a repo the GitHub app is on, a goal, a scenario, a model, how many agents, and when to stop. */
 export function Launch({ repos, models, install }: { repos: string[]; models: Model[]; install: string | null }): ReactNode {
   const router = useRouter();
@@ -73,14 +83,22 @@ export function Launch({ repos, models, install }: { repos: string[]; models: Mo
 
       <label className="row">
         <span>Model</span>
-        <input name="model-pick" list="models" value={model} onChange={(event) => setModel(event.target.value)} spellCheck={false} autoComplete="off" required />
-        <datalist id="models">
-          {models.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {perMillion(entry.price)}
-            </option>
-          ))}
-        </datalist>
+        {models.length ? (
+          // Every model AI Gateway lists, by provider. A datalist would show only the ones matching what's filled in.
+          <select name="model-pick" value={model} onChange={(event) => setModel(event.target.value)} required>
+            {providers(models).map(([provider, entries]) => (
+              <optgroup key={provider} label={provider}>
+                {entries.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.id.slice(provider.length + 1)} · {perMillion(entry.price)}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        ) : (
+          <input name="model-pick" value={model} onChange={(event) => setModel(event.target.value)} spellCheck={false} autoComplete="off" required />
+        )}
       </label>
       <p className="note row-note">{price ? perMillion(price) : models.length ? "No price listed for this model: give the run a time limit." : "Any AI Gateway model ID."}</p>
 
