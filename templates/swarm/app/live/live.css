@@ -452,8 +452,12 @@
     text-overflow: ellipsis;
   }
 
+  /* A row's chip keeps to its share: a long one is cut, and the title beside it stays. */
   .chip {
     flex: none;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .thread {

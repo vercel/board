@@ -480,7 +480,7 @@ function RunBar({ run, tasks, now, show }: { run: RunView; tasks: Task[]; now: n
 function chip(task: Task, key: Shown, now: number): string {
   if (key === "working" && task.lease) return `lease ${span(Date.parse(task.lease) - now)}`;
   if (key === "stalled" && task.lease) return `lease ended ${ago(task.lease, now)} ago`;
-  if (key === "waiting" && task.needs.length) return `needs ${task.needs.join(" ")}`;
+  if (key === "waiting" && task.needs.length) return `waits for ${task.needs.length} ${task.needs.length === 1 ? "task" : "tasks"}`;
   return ago(task.last?.at ?? task.createdAt, now);
 }
 
