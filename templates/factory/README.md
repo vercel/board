@@ -114,8 +114,9 @@ about no one repo goes in `project-<name>`.
 ## How it works with your team
 
 - **Each thread gets its own session and its own sandbox.** A thread from GitHub gets a GitHub
-  token for its repo alone, and any other thread one for the repos the board brings in. A fork's
-  pull requests stay off the board.
+  token for its repo alone, and any other thread one for the repos the board brings in. Whatever
+  a thread runs can use that token, a repo's own scripts included, so onboard only repos whose
+  writers you'd trust with the others. A fork's pull requests stay off the board.
 - **It comes back to what it leaves open:** a deploy, a CI run, or an approval it asked you for
   somewhere else. It checks on its own, and says when it's done.
 - **It says what would make the factory better:** what slowed it or you down, or a correction
