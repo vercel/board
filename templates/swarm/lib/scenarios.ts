@@ -100,3 +100,23 @@ export function expand(plan: Planned[]): TaskInBatch[] {
     { key: `review-${i}`, text: taskText(`Review: ${task.title}`, "Review the pull request of the task this waits for."), labels: role("review"), needs: [{ key: `work-${i}` }] },
   ]);
 }
+
+/**
+ * What someone asks a running run for, from the page, as tasks of that run: in a pipeline, a work
+ * task and a review that waits for it, as a plan's are; in a review, an area to review and its
+ * verify. The first line is its title, and all of it is the brief.
+ */
+export function asked(config: Pick<Config, "scenario">, prompt: string): TaskInBatch[] {
+  const text = prompt.trim();
+  const title = (text.split("\n", 1)[0] ?? "").slice(0, 120) || "A task from the page";
+  if (config.scenario === "pipeline") {
+    return [
+      { key: "work", text: taskText(title, text), labels: role("work") },
+      { key: "review", text: taskText(`Review: ${title}`, "Review the pull request of the task this waits for."), labels: role("review"), needs: [{ key: "work" }] },
+    ];
+  }
+  return [
+    { key: "find", text: taskText(`Review: ${title}`, text), labels: role("find") },
+    { key: "verify", text: taskText(`Verify the findings of: ${title}`, "Check each finding of the review this waits for against the code."), labels: role("verify"), needs: [{ key: "find" }] },
+  ];
+}

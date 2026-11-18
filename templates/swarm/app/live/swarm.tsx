@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { stop, thread } from "@/app/actions";
+import { ask, say, stop, thread } from "@/app/actions";
 import type { Line, RunView, Snapshot, Task } from "@/lib/swarm";
 import { WebMcp } from "@/components/webmcp";
 
@@ -292,6 +292,49 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
   );
 }
 
+/** A box to write to the board from the page: Cmd/Ctrl-Enter sends. It clears once the board took it. */
+function Composer({ placeholder, action, send, hint }: { placeholder: string; action: string; send: (text: string) => Promise<{ ok: true } | { ok: false; problem: string }>; hint: string }) {
+  const [text, setText] = useState("");
+  const [state, setState] = useState<{ busy: boolean; said: string | null; bad: boolean }>({ busy: false, said: null, bad: false });
+  async function submit() {
+    if (!text.trim() || state.busy) return;
+    setState({ busy: true, said: null, bad: false });
+    const result = await send(text);
+    if (result.ok) {
+      setText("");
+      setState({ busy: false, said: "Sent.", bad: false });
+    } else setState({ busy: false, said: result.problem, bad: true });
+  }
+  return (
+    <form
+      className="composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <textarea
+        value={text}
+        rows={2}
+        placeholder={placeholder}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void submit();
+          }
+        }}
+      />
+      <div className="composer-foot">
+        <span className={state.bad ? "bad" : "faint"}>{state.said ?? hint}</span>
+        <button type="submit" disabled={state.busy || !text.trim()}>
+          {state.busy ? "Sending" : action}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** The selected run: what it was asked, where it stands, and a way to stop it. */
 function RunBar({ run, now }: { run: RunView; now: number }) {
   const [stopping, setStopping] = useState<string | null>(null);
@@ -334,6 +377,14 @@ function RunBar({ run, now }: { run: RunView; now: number }) {
       </p>
       {run.note && <p className="faint">{run.note}</p>}
       {stopping && stopping !== "…" && <p className="bad">{stopping}</p>}
+      {run.phase === "running" && (
+        <Composer
+          placeholder={run.scenario === "pipeline" ? "Ask the swarm for more: add a CHANGELOG entry for each optimization…" : "Ask the swarm to look at something: check the retry logic in lib/fetch.ts…"}
+          action="Add task"
+          hint={run.scenario === "pipeline" ? "Becomes a task, and a review of it, that the next free agent takes." : "Becomes an area to review, and a check of it."}
+          send={(text) => ask(run.slug, text)}
+        />
+      )}
     </div>
   );
 }
@@ -398,6 +449,12 @@ function Panel({ id, task, now, onClose }: { id: string; task: Task | null; now:
           {history.replies.map((reply) => (
             <Entry key={reply.id} line={reply} now={now} />
           ))}
+          <Composer
+            placeholder="Steer this task: use the existing helper in lib/util.ts…"
+            action="Reply"
+            hint="Agents read people's replies when they take a task."
+            send={(text) => say(id, text)}
+          />
         </div>
       )}
     </>

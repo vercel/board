@@ -6,7 +6,8 @@ import { parseConfig, priced } from "@/lib/config";
 import { githubToken } from "@/lib/credentials";
 import { OPEN, open } from "@/lib/gate";
 import { models } from "@/lib/models";
-import { begin, launch, stop as stopRun } from "@/lib/run";
+import { ask as askRun, begin, launch, PROMPT_MAX, stop as stopRun } from "@/lib/run";
+import { LAUNCHER, SWARM, team } from "@/lib/board";
 import { runs, SLUG } from "@/lib/runs";
 import { history } from "@/lib/swarm";
 
@@ -90,4 +91,29 @@ export async function swarmRuns(limit = 20) {
     total: run.total,
     createdAt: run.createdAt,
   }));
+}
+
+/** Adds what someone typed on the live page to a running run, as its tasks: the swarm takes them like any other. */
+export async function ask(slug: string, prompt: string): Promise<Result<{ made: number }>> {
+  if (!SLUG.test(slug)) return { ok: false, problem: "not a run" };
+  if (typeof prompt !== "string") return { ok: false, problem: "nothing to ask" };
+  return guarded(() => askRun(slug, prompt));
+}
+
+/**
+ * Replies in a task's thread from the live page, under the launcher's profile. An agent reads people's
+ * replies when it takes the task (and a reviewer, the work's), so this steers a task that isn't
+ * started or will be tried again.
+ */
+export async function say(id: string, text: string): Promise<Result> {
+  if (!/^[\w.:-]{1,128}$/.test(id)) return { ok: false, problem: "not a message id" };
+  const said = typeof text === "string" ? text.trim().slice(0, PROMPT_MAX) : "";
+  if (!said) return { ok: false, problem: "nothing to say" };
+  return guarded(async () => {
+    const board = team();
+    const { message } = await board.thread(id);
+    if (!message.channel.startsWith(SWARM)) throw new Error(`${id} isn't in ${SWARM}`);
+    await board.as(LAUNCHER).reply(message.re ?? message.id, said);
+    return {};
+  });
 }

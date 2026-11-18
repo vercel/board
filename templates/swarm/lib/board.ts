@@ -40,3 +40,6 @@ let handle: Board | undefined;
  * to reach still builds.
  */
 export const team = (): Board => (handle ??= board(BOARD ? { name: BOARD } : {}));
+
+/** The profile what people write from the page goes under: \`launcher via <project>\`, so it reads as a person's, not the deployment's own log. */
+export const LAUNCHER = "launcher";

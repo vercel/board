@@ -5,7 +5,7 @@ import { deadlineOf, taskCap, type Config } from "./config.ts";
 import { models } from "./models.ts";
 import { addTasks, create, lostRace, newSlug, run as readRun, runs, savePrepared, say, setPhase, snapshot, type Run, type Snapshot, type Task } from "./runs.ts";
 import * as sandboxes from "./sandboxes.ts";
-import { expand, seed } from "./scenarios.ts";
+import { asked, expand, seed } from "./scenarios.ts";
 
 // Running a run: the launch, once, and then `reconcile`, again and again. Reconcile reads what the
 // board says the run should be (its phase, what's left to do, what it has spent) and makes the
@@ -234,4 +234,23 @@ export async function stop(slug: string, board: Board = team(), boxes: Sandboxes
   if (!(await setPhase(board, found.id, "stopped", { from: found.phase, note: "Stopped by hand." }))) return;
   await say(board, found.id, "Stopped.");
   await reconcile(slug, board, boxes, { force: true });
+}
+
+/** The longest a prompt from the page is: the brief of the task it becomes. */
+export const PROMPT_MAX = 4_000;
+
+/**
+ * Adds what someone asked from the page to a running run, as its tasks (`asked`), and starts an agent
+ * for it at once instead of at the next reconcile. The run's log says what was asked.
+ */
+export async function ask(slug: string, prompt: string, board: Board = team(), boxes: Sandboxes = sandboxes): Promise<{ made: number }> {
+  const text = prompt.trim().slice(0, PROMPT_MAX);
+  if (text.length < 5) throw new Error("Say a little more: it becomes a task's brief.");
+  const found = await readRun(slug, board);
+  if (!found) throw new Error(`no run ${slug}`);
+  if (found.phase !== "running") throw new Error(`The run is ${found.phase}: only a running run takes new tasks.`);
+  const { made } = await addTasks(board, slug, `ask-${Date.now().toString(36)}`, asked(found.config, text));
+  await say(board, found.id, `Asked from the page, now a task: ${text.split("\n", 1)[0]!.slice(0, 200)}`);
+  await reconcile(slug, board, boxes, { force: true });
+  return { made };
 }

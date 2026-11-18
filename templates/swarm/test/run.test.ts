@@ -8,7 +8,7 @@ import { local } from "@vercel/board/backend-local";
 import { doing, LABEL, planFrom, planReplies, REPLY_MAX, type RunnerConfig, type State } from "../sandbox/shared.ts";
 import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
-import { begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
+import { ask, begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
 import { run as readRun, snapshot } from "../lib/runs.ts";
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
 import { areas, expand, seed } from "../lib/scenarios.ts";
@@ -395,4 +395,25 @@ test("a plan of long briefs reaches the app whole, in replies the board takes, a
   assert.deepEqual(planFrom([whole.slice(0, -4)], 120), [], "a whole plan cut off is not");
   const many = planReplies(Array.from({ length: 120 }, (_, i) => ({ title: `${i} ${"x".repeat(190)}`, brief: "b" })));
   assert.ok(many[0]!.length <= REPLY_MAX && many[0]!.includes("more"));
+});
+
+test("what someone asks a running run for becomes its tasks, and an agent starts for it; a run that ended takes none", async () => {
+  const board = fresh();
+  const { boxes, notes } = fakeBoxes();
+  const started = await begin(config({ agents: 3 }), board);
+  await launch(started, board, boxes);
+  const before = notes.started.length;
+
+  await ask(started.slug, "Add a CHANGELOG entry for each change\nKeep it short.", board, boxes);
+  const now = (await snapshot(started.slug, board))!;
+  const added = now.tasks.filter((task) => task.title.includes("CHANGELOG"));
+  assert.deepEqual(added.map((task) => [task.role, task.state, task.title]), [
+    ["work", "ready", "Add a CHANGELOG entry for each change"],
+    ["review", "waiting", "Review: Add a CHANGELOG entry for each change"],
+  ]);
+  assert.ok(notes.started.length > before, "an agent starts for the new task at once");
+  assert.ok((await board.thread(now.run.id)).replies.some((reply) => reply.text.includes("Asked from the page")));
+
+  await stop(started.slug, board, boxes);
+  await assert.rejects(ask(started.slug, "One more thing to do please", board, boxes), /only a running run/);
 });
