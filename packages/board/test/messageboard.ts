@@ -1981,7 +1981,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
       if (method === 'GET' && found[2] === undefined) {
         const limit = Number(url.searchParams.get('limit') ?? 50)
-        return { events: [...inbox].reverse().slice(0, limit).map((entry) => ({ id: entry.eventId, thread: entry.thread, createdAt: new Date(entry.pushedAt).toISOString(), ...(entry.event !== undefined ? { event: entry.event } : {}), ...(entry.raw !== undefined ? { raw: entry.raw } : {}) })) }
+        return { events: [...inbox].reverse().slice(0, limit).map((entry) => ({ id: entry.eventId, thread: entry.thread, pushedAt: entry.pushedAt, ...(entry.event !== undefined ? { event: entry.event } : {}), ...(entry.raw !== undefined ? { raw: entry.raw } : {}) })) }
       }
     }
     return undefined

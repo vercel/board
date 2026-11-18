@@ -3665,13 +3665,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async inbox(caller, { key, channel, limit }, signal) {
       const who = whoOf(caller)
       const wanted = Math.min(limit ?? 50, INBOX_LIST_MAX)
-      type Listed = { events: { id: string; thread: string; createdAt: string; event?: InboxEntry['event']; raw?: unknown }[] }
+      type Listed = { events: { id: string; thread: string; pushedAt: number; event?: InboxEntry['event']; raw?: unknown }[] }
       // The API reads no event, so it can't filter by channel: this filters the most it lists, so a filtered read may come back short.
       const { events } = await throughKey<Listed>(key, () => ({ events: [] }), async () =>
         syncApi<Listed>(who, 'GET', await inboxPath(who, key), { query: { limit: String(channel === undefined ? wanted : INBOX_LIST_MAX) }, signal }),
       )
-      const entries = events.flatMap(({ id, createdAt, event, raw }) =>
-        event ? [{ id, channel: typeof event.channel === 'string' ? event.channel : '', createdAt, sync: key, event, raw: raw ?? null }] : [],
+      const entries = events.flatMap(({ id, pushedAt, event, raw }) =>
+        event ? [{ id, channel: typeof event.channel === 'string' ? event.channel : '', createdAt: iso(pushedAt), sync: key, event, raw: raw ?? null }] : [],
       )
       return { events: (channel === undefined ? entries : entries.filter((entry) => entry.channel === channel)).slice(0, wanted) }
     },

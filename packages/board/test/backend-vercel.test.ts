@@ -2635,6 +2635,18 @@ describe('vercel()', () => {
     expect((await pong.inbox('slack', { limit: 2 })).map((entry) => entry.id)).toEqual(['slack:C2/2', 'slack:C2/1'])
   })
 
+  it('says when an inbox event was pushed as an ISO time, from the milliseconds the API answers', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const before = Date.now()
+    await pong.inboxPush('slack', [{ id: 'e1', event: { kind: 'message' as const, channel: 'slack:C1', thread: 'slack:C1:1', subthread: null, message: '1', isRoot: true, text: 'hi', context: null, author }, raw: null }])
+    const [entry] = await pong.inbox('slack')
+    expect(entry!.createdAt).toBe(new Date(entry!.createdAt).toISOString())
+    expect(Date.parse(entry!.createdAt)).toBeGreaterThanOrEqual(before)
+  })
+
   it('hashes a registration with its sync entries, as a board on http() does', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
