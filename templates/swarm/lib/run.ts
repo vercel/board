@@ -179,6 +179,13 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
   const root = (await board.thread(found.id)).message;
   if (!(await turn(board, found.id, root.labels.tick, opts.force ?? false))) return;
 
+  // A legacy run is only wound down: whatever its label says, it gets no agent and no credential.
+  if (found.legacy) {
+    if (found.phase === "running") await setPhase(board, found.id, "stopped", { from: "running", note: "Stopped: started by an earlier version of this app." });
+    if (!found.torn && (await boxes.teardown(slug).then(() => true, () => false))) await board.label(found.id, { set: { torn: "yes" } });
+    return;
+  }
+
   if (found.phase !== "running") {
     if (!found.torn) {
       await mirror(board, found, { phase: found.phase });
@@ -304,7 +311,7 @@ export async function ask(slug: string, prompt: string, board: Board = team(), b
   if (text.length < 5) throw new Error("Say a little more: it becomes a task's brief.");
   const found = await readRun(slug, board);
   if (!found) throw new Error(`no run ${slug}`);
-  if (found.phase !== "running") throw new Error(`The run is ${found.phase}: only a running run takes new tasks.`);
+  if (found.phase !== "running" || found.legacy) throw new Error(`The run is ${found.legacy ? "from an earlier version of this app" : found.phase}: only a running run takes new tasks.`);
   const now = await snapshot(slug, board);
   if (now && now.tasks.length >= ASK_MAX_TASKS) throw new Error(`The run has ${now.tasks.length} tasks, as many as it keeps count of: start another run.`);
   const { made } = await addTasks(board, slug, `ask-${Date.now().toString(36)}`, asked(found.config, text));

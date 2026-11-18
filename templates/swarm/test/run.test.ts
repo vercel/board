@@ -8,6 +8,9 @@ import { local } from "@vercel/board/backend-local";
 import { doing, LABEL, planFrom, planReplies, REPLY_MAX, type RunnerConfig, type State } from "../sandbox/shared.ts";
 import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
+
+/** A run thread's text as versions before the slug line wrote it. */
+const readConfigText = (config: Config) => runText(config, "rx0000").replace(/\n\nRun rx0000$/, "");
 import { ask, begin, ending, inBatches, launch, reconcile, stop, type Sandboxes } from "../lib/run.ts";
 import { mirror, readControl, run as readRun, runs as listRuns, snapshot } from "../lib/runs.ts";
 import { agentCan, github, RUNTIME } from "../lib/sandboxes.ts";
@@ -491,4 +494,19 @@ test("a write is taken only from the deployment's own pages", () => {
   assert.equal(sameOrigin(request({ host: "swarm.example", origin: "https://evil.example" })), false);
   assert.equal(sameOrigin(request({ host: "swarm.example" })), false, "no Origin, no write");
   assert.equal(sameOrigin(request({ host: "swarm.example", origin: "https://swarm.example", "sec-fetch-site": "same-site" })), false);
+});
+
+test("a run from an earlier version, known only by its label, is wound down and never handed an agent", async () => {
+  const board = fresh();
+  const { boxes, notes } = fakeBoxes();
+  // As an earlier version posted a run: its config, and no line naming it.
+  const legacy = await board.post("swarm/runs", { text: readConfigText(config({ agents: 2 })), labels: { run: "rlegacy1", phase: "running", torn: "no" } });
+  await reconcile("rlegacy1", board, boxes, { force: true });
+  const after = (await readRun("rlegacy1", board))!;
+  assert.equal(after.id, legacy.id);
+  assert.equal(after.legacy, true);
+  assert.equal(after.phase, "stopped");
+  assert.equal(after.torn, true);
+  assert.equal(notes.started.length, 0);
+  await assert.rejects(ask("rlegacy1", "Do one more thing please", board, boxes), /earlier version/);
 });

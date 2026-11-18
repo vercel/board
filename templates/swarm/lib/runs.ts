@@ -40,6 +40,8 @@ export type Run = {
   total: number;
   /** How many of its agents are up, as its last reconcile counted them. */
   up: number;
+  /** Started by a version from before a run's text named it: known only by a label, so only wound down. */
+  legacy: boolean;
   /** Whether its sandboxes are gone: an ended run is reconciled until they are. */
   torn: boolean;
   prepared: Prepared | null;
@@ -94,8 +96,11 @@ export function selfOf(board: Board): Promise<string> {
 function toRun(message: MessageView, replies: MessageView[], self: string): Run | null {
   if (!ownWrite(message.by, self)) return null;
   // Which run it is comes from its text, which only the deployment wrote; the label only finds it.
-  // A thread whose text names no run isn't one: a label anyone may write never says which run it is.
-  const slug = readSlug(message.text);
+  // A run from before the text named it is known by its label, which anyone may write, so it's only
+  // ever wound down (`legacy`): its sandboxes stopped, never started or handed credentials.
+  const named = readSlug(message.text);
+  const legacy = named === null;
+  const slug = named ?? (legacy ? (message.labels.run ?? null) : null);
   const config = readConfig(message.text);
   if (!slug || !config) return null;
   let prepared: Prepared | null = null;
@@ -120,6 +125,7 @@ function toRun(message: MessageView, replies: MessageView[], self: string): Run 
     total: amount(message.labels.total),
     up: amount(message.labels.up),
     torn: message.labels.torn === "yes",
+    legacy,
     prepared,
     createdAt: message.createdAt,
   };
@@ -237,7 +243,9 @@ export async function runs(board: Board = team(), limit = 50, label?: Record<str
 export async function run(slug: string, board: Board = team()): Promise<Run | null> {
   const { threads } = await board.threads({ channel: RUNS, label: { run: slug }, limit: 5 }).catch(() => ({ threads: [] as ThreadSummaryView[] }));
   const self = await selfOf(board);
-  const root = threads.find(({ message }) => readSlug(message.text) === slug && ownWrite(message.by, self))?.message;
+  // A run its text names comes first; one known only by its label (a legacy run) after.
+  const ours = threads.filter(({ message }) => ownWrite(message.by, self));
+  const root = (ours.find(({ message }) => readSlug(message.text) === slug) ?? ours.find(({ message }) => readSlug(message.text) === null && message.labels.run === slug))?.message;
   if (!root) return null;
   const { message, replies } = await board.thread(root.id);
   return toRun(message, replies, self);
