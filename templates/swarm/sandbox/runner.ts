@@ -123,13 +123,16 @@ const read = (id: string) => vb<{ message: Message; replies: Message[] }>("read"
  * that reconcile writes there. One read, however many tasks the run has: with hundreds of agents,
  * each summing every task on every renewal would be most of the run's board reads.
  */
+/** What the control thread said the last time it was read: a run that's running, and spent nothing, until then. */
+let lastState: { phase: string | undefined; cost: number } = { phase: "running", cost: 0 };
+
 async function runState(): Promise<{ phase: string | undefined; cost: number }> {
   // Only what the deployment wrote: the state is the control thread's own text, which no one else can edit.
   // From the channel's thread list, which holds each thread's root and its latest reply, not every
   // reply: replies anyone posts on the control thread can't make the read too big to take.
-  const listed = await vb<{ threads: { message: Message }[] }>("read", config.channel, "--label", "control=yes", "-n", "20");
-  const control = listed.threads.find((thread) => thread.message.id === config.control)?.message;
-  if (!control) throw new Error("the run's control thread isn't in its channel");
+  // Its label only finds it, and anyone may remove a label: then it's read by its ID.
+  const listed = await vb<{ threads: { message: Message }[] }>("read", config.channel, "--label", "control=yes", "-n", "20").catch(() => ({ threads: [] }));
+  const control = listed.threads.find((thread) => thread.message.id === config.control)?.message ?? (await read(config.control)).message;
   const state = profileOfSelf(control.by, config.owner) === null ? /```json control\n([\s\S]*?)\n```/.exec(control.text)?.[1] : undefined;
   if (!state) throw new Error("the run's control thread says nothing the deployment wrote");
   const { phase, cost } = JSON.parse(state) as { phase?: string; cost?: number };
@@ -541,7 +544,12 @@ const claimOver = (error: unknown) => ["claim_lost", "claim_not_held", "task_fin
  * part of that twice, which stops a run a little early rather than late.
  */
 async function goOn(extra = 0): Promise<"running" | "stopped" | "spent"> {
-  const state = await runState().catch(() => ({ phase: "running", cost: 0 }));
+  // A read that fails keeps what the last one said: nothing anyone writes on the board can make a
+  // worker forget that its run stopped or what it spent. Reconcile stops a run's sandboxes anyway.
+  const state = await runState().then(
+    (read) => (lastState = read),
+    () => lastState,
+  );
   if (state.phase !== "running") return "stopped";
   if (config.budgetUsd !== null && state.cost + extra >= config.budgetUsd) return "spent";
   return "running";

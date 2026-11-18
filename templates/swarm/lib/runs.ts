@@ -93,9 +93,9 @@ export function selfOf(board: Board): Promise<string> {
  */
 function toRun(message: MessageView, replies: MessageView[], self: string): Run | null {
   if (!ownWrite(message.by, self)) return null;
-  // Which run it is comes from its text, which only the deployment wrote; the label only finds it. A
-  // run started before the text named it is still read by its label, so an upgrade doesn't lose it.
-  const slug = readSlug(message.text) ?? (/\nRun r[a-z0-9]{4,16}$/.test(message.text) ? null : (message.labels.run ?? null));
+  // Which run it is comes from its text, which only the deployment wrote; the label only finds it.
+  // A thread whose text names no run isn't one: a label anyone may write never says which run it is.
+  const slug = readSlug(message.text);
   const config = readConfig(message.text);
   if (!slug || !config) return null;
   let prepared: Prepared | null = null;
@@ -237,7 +237,7 @@ export async function runs(board: Board = team(), limit = 50, label?: Record<str
 export async function run(slug: string, board: Board = team()): Promise<Run | null> {
   const { threads } = await board.threads({ channel: RUNS, label: { run: slug }, limit: 5 }).catch(() => ({ threads: [] as ThreadSummaryView[] }));
   const self = await selfOf(board);
-  const root = threads.find(({ message }) => (readSlug(message.text) ?? message.labels.run) === slug && ownWrite(message.by, self))?.message;
+  const root = threads.find(({ message }) => readSlug(message.text) === slug && ownWrite(message.by, self))?.message;
   if (!root) return null;
   const { message, replies } = await board.thread(root.id);
   return toRun(message, replies, self);
