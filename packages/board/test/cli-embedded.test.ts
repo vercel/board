@@ -424,6 +424,44 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("says a team at its plan's boards is at a limit, not misusing the CLI, with the team's board as the way on", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    // The API's answers on a Hobby team: one board, and none private.
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const { pathname } = new URL(input instanceof Request ? input.url : String(input))
+      if (init?.method === 'POST' && pathname.endsWith('/boards/ensure'))
+        return Response.json({ error: { code: 'too_many_boards', message: "This team's plan allows 1 board." } }, { status: 400 })
+      if (init?.method === 'POST' && /\/grants\/[^/]+\/revoke$/.test(pathname))
+        return Response.json({ error: { code: 'private_boards_unavailable', message: "This team's plan doesn't include private boards: every board lets the whole team in." } }, { status: 403 })
+      return api.fetch(input, init)
+    })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const named = await capture(() => app.run(['post', 'dev', 'hi', '--scope', 'acme', '--name', 'extra', '--ensure']))
+      expect(named.code).toBe(1)
+      expect(named.stderr).toBe(
+        "error: Can't post to dev. The team has all the boards it can.\n  This team's plan allows 1 board.\n\n  Use the team's board instead:\n    vercel board post dev hi --scope acme\n",
+      )
+      const json = await capture(() => app.run(['post', 'dev', 'hi', '--scope', 'acme', '--name', 'extra', '--ensure', '--json']))
+      expect(JSON.parse(json.stderr)).toMatchObject({ reason: 'too_many_boards', data: { error: { status: 400, code: 'too_many_boards' } } })
+      const revoked = await capture(() => app.run(['grants', 'revoke', 'g1', '--scope', 'acme', '--json']))
+      expect(revoked.code).toBe(1)
+      expect(JSON.parse(revoked.stderr)).toMatchObject({
+        reason: 'private_boards_unavailable',
+        message: expect.stringMatching(/This team's plan has no private boards\.$/),
+        hint: 'Keep the board open to the whole team, or move the team to a plan with private boards',
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("says how long to wait when Vercel's API still rate-limits a command after its retries, and that the limit is the login's, not this agent's", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')

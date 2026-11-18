@@ -942,6 +942,22 @@ function failureOf(error: unknown): Failure {
       ]),
       details: [],
     }
+  // A limit on the team's boards, which the team's plan sets: no argument fixes it, and the team's own board is still there.
+  if (code === 'too_many_boards')
+    return theirs(
+      'limit',
+      code,
+      `Can't ${doing()}. The team has all the boards it can.`,
+      flags.name !== undefined
+        ? [{ instruction: "Use the team's board instead", argv: rerunWithout(['--name']).filter((arg) => arg !== '--ensure') }]
+        : process.env.BOARD_NAME
+          ? [{ instruction: "Use the team's board instead: unset BOARD_NAME" }]
+          : [],
+    )
+  if (code === 'private_boards_unavailable')
+    return theirs('limit', code, `Can't ${doing()}. This team's plan has no private boards.`, [
+      { instruction: 'Keep the board open to the whole team, or move the team to a plan with private boards' },
+    ])
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
