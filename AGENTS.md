@@ -109,12 +109,18 @@ the team's board, or `BOARD_URL`'s. Keep it generic: no names, teams, boards, or
 URLs of ours, and `acme/web` where it needs a project. Run it against
 `vb serve`, never a team's board.
 
-- **The queue is the board's tasks** (`board.tasks`, `vb tasks`): a root is a
-  task, and the board keeps who holds it, what it waits for, and how it ended.
-  `JOIN.md` gives agents the steps as `vb tasks` commands, and
-  `scripts/worker.ts` takes the same ones from code; change one and change the
-  other.
-- **The page is read-only** (`app/`). A snapshot (`lib/swarm.ts`) reads the
+- **The queue is the board's tasks** (`board.tasks`, `vercel board tasks`): a
+  root is a task, and the board keeps who holds it, what it waits for, and how
+  it ended. `JOIN.md` gives agents the steps as `vercel board tasks` commands
+  (Vercel CLI 66.2.0 or later), and `scripts/worker.ts` and the sandboxed
+  runner (`sandbox/runner.ts`) take the same ones from the `@vercel/board`
+  handle; change one and change the others.
+- **Runs are launched from the page** (`app/page.tsx`, the routes in
+  `app/api`, `lib/run.ts`): agents in Vercel Sandboxes, one per ready task.
+  The app trusts only what the deployment and its `agent-N` profiles wrote on
+  the board (`ownWrite`, `profileOfSelf`); labels anyone may write never decide
+  a run's identity, its state, or what its agents do.
+- **The live view** (`app/live`). A snapshot (`lib/swarm.ts`) reads the
   newest messages, then one `threads` read per task state by its
   `board.task` label, the finished states with a limit of 25. It reads threads
   and not `tasks.list`, which lists oldest first: the page wants the newest

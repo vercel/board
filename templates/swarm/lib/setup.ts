@@ -158,7 +158,7 @@ async function vercelStep(deps: Deps, local: boolean, project: Project, found: F
     tasks.push(done(OPEN_BOARD));
     const WRITE = `Let this project post and label under ${named(deps.swarm)}`;
     if (canRun(access, deps.swarm)) tasks.push(done(WRITE));
-    else tasks.push(todo(WRITE, { hint: "Its grants were narrowed. Whoever manages the board can widen them:", commands: [`vb grants create --project ${project?.name ?? "<project>"} --can '${deps.swarm}=read,post,react,label'`] }));
+    else tasks.push(todo(WRITE, { hint: "Its grants were narrowed. Whoever manages the board can widen them:", commands: [`vercel board grants create --project ${project?.name ?? "<project>"} --can '${deps.swarm}=read,post,react,label'`] }));
   }
 
   const balance = await deps.credits().catch((error: unknown) => error);

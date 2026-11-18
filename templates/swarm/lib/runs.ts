@@ -6,7 +6,7 @@ import { readConfig, readSlug, runText, type Config } from "./config.ts";
 // A run on the board. Its thread, in RUNS, carries its config as text and where it stands as
 // labels: its phase, what it has spent, and how far its tasks are. Its tasks are threads in a
 // channel of its own (runChannel), each a task the board keeps the state of. Nothing about a run is
-// kept anywhere else, so the page, the agents, and `vb` all read the same thing.
+// kept anywhere else, so the page, the agents, and `vercel board` all read the same thing.
 
 /** What the launch learned about the checkout, kept as a reply in the run's thread for the app to read back. */
 export type Prepared = {

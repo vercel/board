@@ -125,7 +125,7 @@ export const runText = (config: Config, slug: string) => `${config.title}\n\n\`\
 
 /**
  * The slug a run thread's text names: what the run is, its channel and its sandboxes. The text, not
- * the \`run\` label, which anyone who may label can move from one run's thread to another's.
+ * the `run` label, which anyone who may label can move from one run's thread to another's.
  */
 export const readSlug = (threadText: string) => /\nRun (r[a-z0-9]{4,16})$/.exec(threadText)?.[1] ?? null;
 

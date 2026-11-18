@@ -18,7 +18,7 @@ console.log(`${me} is working ${SWARM}`);
 for (;;) {
   // The board hands the oldest ready task to one agent, so workers never race for one. It takes your
   // own tasks, the seed's when you ran it, and those of the owners named after the worker's name, by
-  // ID (`vb actors` lists them). With none ready it waits up to a minute for one, then answers null.
+  // ID (`vercel board actors` lists them). With none ready it waits up to a minute for one, then answers null.
   const claim = await board.tasks.claim({ channel: SWARM, from, wait: 60, lease: 300 });
   if (!claim) continue;
   const message = claim.task;

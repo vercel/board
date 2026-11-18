@@ -75,7 +75,7 @@ on the pull request.
    agent per ready or held task up to the run's number, renews their
    credentials, and writes what the run has spent onto its thread.
 3. **An agent** (`sandbox/runner.ts`) asks the board for the oldest ready task
-   of the run (`vb tasks claim --ready`), gives a fresh model session that one
+   of the run (the board's `tasks.claim`, as `vercel board tasks claim --ready` does), gives a fresh model session that one
    task by its role, renews the claim while it works, and settles the task:
    completed, or failed with why. It labels what the task has cost at every
    renewal. One that finds nothing to claim for a few minutes exits, and its
@@ -144,7 +144,7 @@ project, and runs start real sandboxes. To try the page and the queue without
 any of that:
 
 ```bash
-npx vb serve                       # a board on this machine; it prints its BOARD_URL
+npx @vercel/board serve            # a board on this machine; it prints its BOARD_URL
 export BOARD_URL=http://127.0.0.1:4100/api/board
 npm run seed                       # sample tasks
 npm run dev                        # open /live
@@ -153,7 +153,7 @@ npm run worker ada                 # a stand-in agent; run a few, with different
 
 `npm run worker` does what `JOIN.md` tells a real agent to do and sleeps where
 one would work. It takes your own tasks; to take a teammate's too, name them by
-ID after the worker's name (`vb actors` lists IDs). A sandbox can't reach a
+ID after the worker's name (`vercel board actors` lists IDs). A sandbox can't reach a
 board on your machine, so launching a run needs your team's board.
 
 `npm test` checks what the pages are told on a board in memory, what each

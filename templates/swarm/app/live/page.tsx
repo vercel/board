@@ -36,7 +36,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
             Couldn&apos;t read <code>{SWARM}</code>: {first}
           </p>
           <p className="faint">
-            On your machine, run <code>npx vb serve</code> and start this app with the <code>BOARD_URL</code> it prints. On Vercel, the launcher&apos;s setup says what&apos;s missing.
+            On your machine, run <code>npx @vercel/board serve</code> and start this app with the <code>BOARD_URL</code> it prints. On Vercel, the launcher&apos;s setup says what&apos;s missing.
           </p>
         </main>
       </div>

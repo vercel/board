@@ -2,7 +2,7 @@
 // the board for the oldest ready task of the run, give a fresh agent that one task by its role,
 // deliver what it made, and settle the task. A model only decides what to do inside a task.
 //
-// A task is the board's: `vb tasks claim` holds one for a lease the board fences, so two agents
+// A task is the board's: `tasks.claim` holds one for a lease the board fences, so two agents
 // never hold one task, and one that stalls past its lease can't settle a task another has taken.
 
 import { execFile } from "node:child_process";
@@ -24,15 +24,15 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { board, BoardError } from "@vercel/board";
 import { blocked, brief, costOf, doing, LABEL, profileOfSelf, OUTPUT, parsePlan, planReplies, REPLY_MAX, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
 
 const config = JSON.parse(await readFile(process.env.RUNNER_CONFIG ?? SANDBOX.config, "utf8")) as RunnerConfig;
 const HOME = join(SANDBOX.state, "home");
-const VB = join(SANDBOX.dir, "node_modules", ".bin", "vb");
 const exec = promisify(execFile);
 
-/** How long a claim holds without a renewal. Vercel's board gives five minutes at most. */
-const LEASE = "5m";
+/** How long a claim holds without a renewal, in seconds. Vercel's board gives five minutes at most. */
+const LEASE = 300;
 /**
  * A claim is renewed this often, and what the task has cost is written then too, so the run's budget
  * sees it mid-task. Two minutes leaves three of the lease's five to spare, and keeps a big run under
@@ -49,33 +49,29 @@ const log = (event: Record<string, unknown>) => process.stdout.write(`${JSON.str
 const tail = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text);
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-// ─── the board, through vb ──────────────────────────────────────────────────
+// ─── the board ──────────────────────────────────────────────────────────────
 
 type Failure = Error & { reason?: string };
 
-/** One `vb` command, answering its JSON document. A failure carries the `reason` vb gave, to branch on. */
-async function vb<T = unknown>(...args: string[]): Promise<T> {
-  try {
-    const { stdout } = await exec(VB, [...args, "--json"], { env: process.env, maxBuffer: 16 * 1024 * 1024, timeout: 5 * 60_000 });
-    return (stdout.trim() ? JSON.parse(stdout) : {}) as T;
-  } catch (error) {
-    const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
-    const said = `${stderr}\n${stdout}`;
-    const failure: Failure = new Error(`vb ${args.slice(0, 3).join(" ")}: ${tail(said.trim() || message(error), 600)}`);
-    failure.reason = /"reason"\s*:\s*"([\w-]+)"/.exec(said)?.[1] ?? /"code"\s*:\s*"([\w-]+)"/.exec(said)?.[1];
-    throw failure;
-  }
-}
+/**
+ * The board, as this agent: the `@vercel/board` handle, in this process, with no CLI. It reads what
+ * the sandbox was given, as `vercel board` would: the board's URL, a stand-in token the network
+ * policy swaps for the real one, and `BOARD_PROFILE`, the agent's name.
+ */
+const team = board();
+
+/** What the board said went wrong, by its code: `claim_lost`, `task_finished`, … */
+const reasonOf = (error: unknown) => (error instanceof BoardError ? error.code : (error as Failure).reason);
 
 type Message = { id: string; text: string; labels: Record<string, string>; task?: { needs?: string[]; owner?: string }; by?: { actor?: string; principal?: string; profile?: string | null }; author?: { handle?: string } };
 
 /** A reply in a task's thread. It throws when the board refuses it: an output that didn't reach the board wasn't delivered. */
-const post = (id: string, text: string) => vb("reply", id, text.slice(0, REPLY_MAX));
+const post = (id: string, text: string) => team.reply(id, text.slice(0, REPLY_MAX));
 
 /** A note the task doesn't depend on: one that fails is logged, and the work goes on. */
 const note = (id: string, text: string) => post(id, text).catch((error) => log({ type: "error", message: message(error) }));
 
-const read = (id: string) => vb<{ message: Message; replies: Message[] }>("read", id);
+const read = (id: string) => team.thread(id) as Promise<{ message: Message; replies: Message[] }>;
 
 /** The run's phase, from its thread's root. Agents work only while it says `running`. */
 /**
@@ -359,7 +355,7 @@ ${UNTRUSTED}`,
   await git("-c", `user.name=${config.worker}`, "-c", `user.email=${config.worker}@users.noreply.github.com`, "commit", "-q", "-m", title, "-m", summary.slice(0, 3_000));
   await git("push", "-q", "-f", "origin", `HEAD:refs/heads/${branch}`);
   const url = await pullRequest(branch, title, `${summary}\n\n---\nOne task of a swarm run (\`${config.slug}\`), made by ${config.worker}. A review follows on the board.`);
-  await vb("label", task.id, `${LABEL.pr}=${url}`, `${LABEL.branch}=${branch}`);
+  await team.label(task.id, { set: { [LABEL.pr]: url, [LABEL.branch]: branch } });
   await post(task.id, `${OUTPUT.work} ${url}\n\n${summary}`);
   return { state: "completed", result: brief(`${url} ${summary}`) };
 }
@@ -486,8 +482,8 @@ const SCENARIO_ROLES: Record<RunnerConfig["scenario"], readonly Role[]> = { pipe
 
 // ─── the loop ───────────────────────────────────────────────────────────────
 
-/** Whether a failed `vb tasks` write says the claim is over: its lease ran out, or the task was released or canceled. */
-const claimOver = (error: unknown) => ["claim_lost", "claim_not_held", "task_finished"].includes((error as Failure).reason ?? "");
+/** Whether a failed claim's write says the claim is over: its lease ran out, or the task was released or canceled. */
+const claimOver = (error: unknown) => ["claim_lost", "claim_not_held", "task_finished"].includes(reasonOf(error) ?? "");
 
 /** Whether the run may spend more: under its budget, counting what this task has spent and not yet labeled. */
 /**
@@ -508,22 +504,23 @@ let errors = 0;
 let idle = 0;
 while (Date.now() < config.deadline) {
   if ((await goOn()) !== "running") break;
-  let task: Message;
+  let claim: Awaited<ReturnType<typeof team.tasks.claim>>;
   try {
     // The oldest ready task of the run's, or none within the wait. The owner is named: a claim takes another owner's tasks only then.
-    ({ task } = await vb<{ task: Message }>("tasks", "claim", "--ready", config.channel, "--from", config.owner, "--wait", "45s", "--lease", LEASE));
+    claim = await team.tasks.claim({ channel: config.channel, from: [config.owner], wait: 45, lease: LEASE });
   } catch (error) {
-    const reason = (error as Failure).reason;
-    if (reason === "timeout" || reason === "nothing_ready") {
-      // Nothing to claim for a few minutes: the queue is done, or what's left waits on other tasks. The app starts agents again when there's work.
-      if (++idle >= 4) break;
-      continue;
-    }
     log({ type: "error", message: message(error) });
     if (++errors >= 5) break;
     await new Promise((resolve) => setTimeout(resolve, 5_000));
     continue;
   }
+  if (!claim) {
+    // Nothing to claim for a few minutes: the queue is done, or what's left waits on other tasks. The app starts agents again when there's work.
+    if (++idle >= 4) break;
+    continue;
+  }
+  const held = claim;
+  const task = claim.task as Message;
   idle = 0;
   const role = (task.labels[LABEL.role] ?? "work") as Role;
   const { title, body } = splitTask(task.text);
@@ -534,13 +531,13 @@ while (Date.now() < config.deadline) {
   // What the task cost before this try counts too: a task that was given back and taken again has spent both.
   const spend: Spend = { tokens: Number(task.labels[LABEL.tokens]) || 0, cost: Number(task.labels[LABEL.cost]) || 0 };
   const before = spend.cost;
-  const label = () => vb("label", task.id, `${LABEL.cost}=${spend.cost.toFixed(4)}`, `${LABEL.tokens}=${spend.tokens}`, `${LABEL.worker}=${config.worker}`);
+  const label = () => team.label(task.id, { set: { [LABEL.cost]: spend.cost.toFixed(4), [LABEL.tokens]: String(spend.tokens), [LABEL.worker]: config.worker } });
   // The claim is renewed while the agent works, and what it has spent is written. Once the claim is
   // lost, the run stopped, or the budget is spent, the agent stops and settles nothing more.
   const lost = new AbortController();
   const renewing = setInterval(() => {
     void (async () => {
-      await vb("tasks", "renew", task.id, "--lease", LEASE).catch((error: unknown) => {
+      await held.renew(LEASE).catch((error: unknown) => {
         if (claimOver(error)) lost.abort("the claim on this task was lost");
       });
       await label().catch(() => {});
@@ -568,11 +565,11 @@ while (Date.now() < config.deadline) {
   try {
     if (lost.signal.aborted && String(lost.signal.reason).includes("lost")) throw Object.assign(new Error("lost"), { reason: "claim_lost" });
     // A run that's stopping gives its task back rather than failing it: it's still worth doing.
-    if (lost.signal.aborted) await vb("tasks", "release", task.id);
-    else if (outcome.state === "completed") await vb("tasks", "complete", task.id, outcome.result);
+    if (lost.signal.aborted) await held.release();
+    else if (outcome.state === "completed") await held.complete(outcome.result);
     else {
       await note(task.id, `[risk] ${config.worker} gave up: ${outcome.reason}`);
-      await vb("tasks", "fail", task.id, outcome.reason);
+      await held.fail(outcome.reason);
     }
     log({ type: outcome.state, task: task.id, cost: spend.cost - before });
   } catch (error) {

@@ -35,7 +35,7 @@ export const profileOf = (n: number) => `agent-${((n - 1) % PROFILES) + 1}`;
 let handle: Board | undefined;
 
 /**
- * The team's board in Vercel's API, or the one at BOARD_URL (`vb serve` prints it). On Vercel it
+ * The team's board in Vercel's API, or the one at BOARD_URL (`npx @vercel/board serve` prints it). On Vercel it
  * acts as this project, whoever is looking at the page. Made on first use, so a build with no board
  * to reach still builds.
  */
