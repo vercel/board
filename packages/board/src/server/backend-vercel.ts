@@ -940,6 +940,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
     return found
   }
+  /**
+   * Before the changes of a read of the board's feed are named: it says each one's channel by ID, and several it
+   * doesn't know yet are the channel list's to name, in one read of it, not a request each.
+   */
+  async function namingChannels(who: Who, changes: ApiChange[]) {
+    if (channels) return
+    const unknown = new Set(changes.map((change) => change.channelId).filter((id) => !byChannelId.has(id)))
+    if (unknown.size > 1) await loadChannels(who)
+  }
   /** The channel by `name`, made if it isn't there: `created` says whether this made it. */
   async function ensureChannel(who: Who, name: string): Promise<{ channel: ApiChannel; created: boolean }> {
     const found = await channelNamed(who, name)
@@ -2082,6 +2091,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     narrow.mentions?.ahead(merged.flatMap(({ change }) => (change.currentMessage ? [change.currentMessage.text] : [])))
     // Where the read started stays with every position it hands out: a feed that hasn't caught up to it yet reads on from one.
     const start = { ...(position.past !== undefined ? { past: position.past } : {}), ...(position.floor !== undefined ? { floor: position.floor } : {}) }
+    if (listed.some((channel) => channel.id === ACROSS)) await namingChannels(who, merged.map(({ change }) => change))
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
       const message = change.currentMessage
@@ -2269,6 +2279,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return page.events[i + 1]?.cursor !== own || before === undefined ? { at: own, skip: 0 } : { at: before, skip: i - first + 1 }
     }
     const events: BoardEventView[] = []
+    if (!one) await namingChannels(who, page.events)
     for (const [i, change] of page.events.entries()) {
       const message = change.currentMessage
       const given = message && change.threadId ? { message, thread: query.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined

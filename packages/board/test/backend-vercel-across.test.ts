@@ -282,6 +282,23 @@ describe("vercel(): a feed's newest events (`last`)", () => {
     expect(reads).toEqual([4, 4])
   })
 
+  it("names the channels of the board's newest events from one list of them, not a request each", async () => {
+    const requests: number[] = []
+    for (const channels of [3, 30]) {
+      const api = fakeMessageboard({ boardFeed: true, feedLast: true, inlineActors: true, channelNames: true, channelPages: true })
+      await busy(api, channels)
+      const { team, sent } = counted(api)
+
+      const { events } = await team.poll({ last: 100 })
+
+      expect(new Set(events.map((event) => event.message?.channel)).size).toBe(channels + 1)
+      expect(sent.filter((path) => path.startsWith('GET /channels/'))).toEqual([])
+      requests.push(sent.length)
+    }
+
+    expect(requests[1]).toBe(requests[0])
+  })
+
   it('goes on from the cursor it answers, and from an event\'s own, with nothing missed or repeated', async () => {
     const api = fakeMessageboard({ boardFeed: true, feedLast: true })
     const writer = await busy(api, 3)
