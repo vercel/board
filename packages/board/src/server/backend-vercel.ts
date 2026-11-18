@@ -2072,14 +2072,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         const from = position.feeds[channel.id]
         // A channel the position doesn't know reads from its oldest change kept, after the position's time.
         // Each change comes with its message as it is now, so showing one costs no read of its own.
-        const page = await reading<{ events: ApiChange[]; cursor: string }>(who, path, { query: { ...feedOf(channel), include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
+        const page = await reading<{ events: ApiChange[]; cursor: string; caughtUp?: boolean }>(who, path, { query: { ...feedOf(channel), include: 'message', ...(from?.at ? { cursor: from.at } : {}) }, signal })
         const skip = from?.skip ?? 0
         const events = page.events
           .map((change, i) => ({ change, i }))
           .slice(skip)
           .filter(({ change }) => from || change.createdAt > position.t)
           .filter(({ change }) => !(position.floor !== undefined && change.createdAt <= position.floor) && !(change.type === 'message.posted' && change.messageId === position.past))
-        return { channel, at: from?.at ?? null, next: page.cursor, events }
+        // The board's feed answers what it passed over, which for a tree may be others' events alone and short of its end.
+        return { channel, at: from?.at ?? null, next: page.cursor, events, behind: channel.id === ACROSS && page.caughtUp === false && page.cursor !== from?.at }
       }),
     )
     const narrow = await narrowOf(who, filters)
@@ -2104,7 +2105,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     const after: Record<string, Feed> = { ...position.feeds }
     for (const page of pages) after[page.channel.id] = { at: page.next, skip: 0 }
-    return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after, ...start } }
+    return { events, behind: pages.some((page) => page.behind), position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after, ...start } }
   }
 
   /**
@@ -2129,9 +2130,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         let pending = listed.length
         for (const channel of listed) {
           const at = position.feeds[channel.id]?.at
-          api<{ events: ApiChange[] }>(who, 'GET', path, { query: { ...feedOf(channel), ...(at ? { cursor: at } : { from: 'latest' }), wait: String(wait) }, signal: either })
+          api<{ events: ApiChange[]; caughtUp?: boolean }>(who, 'GET', path, { query: { ...feedOf(channel), ...(at ? { cursor: at } : { from: 'latest' }), wait: String(wait) }, signal: either })
             .then((page) => {
-              if (page.events.length > 0) resolve(true)
+              // The board's feed answers at once, with nothing, when what came is others' and there's more behind it: that's read on from too.
+              if (page.events.length > 0 || (channel.id === ACROSS && page.caughtUp === false)) resolve(true)
               else if (--pending === 0) resolve(false)
             })
             // One this let go is no failure; the caller's own stop is, as a read's would be.
@@ -2266,28 +2268,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     naming(who, page.events.flatMap((change) => [change.actor, ...(change.currentMessage ? [change.currentMessage.createdBy] : [])]))
     narrow.mentions?.ahead(page.events.flatMap((change) => (change.currentMessage ? [change.currentMessage.text] : [])))
     const one = feed.id !== ACROSS
-    /**
-     * Where the board's feed is right after its `i`th event here. The events of one write share the API's cursor,
-     * which is after them all: one before the write's last is that many into a read from the write before's.
-     */
-    const after = (i: number): Feed => {
-      const own = page.events[i]!.cursor
-      if (own === undefined) return { at: page.cursor, skip: 0 }
-      let first = i
-      while (first > 0 && page.events[first - 1]!.cursor === own) first--
-      const before = first > 0 ? page.events[first - 1]!.cursor : undefined
-      return page.events[i + 1]?.cursor !== own || before === undefined ? { at: own, skip: 0 } : { at: before, skip: i - first + 1 }
-    }
     const events: BoardEventView[] = []
     if (!one) await namingChannels(who, page.events)
-    for (const [i, change] of page.events.entries()) {
+    for (const change of page.events) {
       const message = change.currentMessage
       const given = message && change.threadId ? { message, thread: query.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
       // One channel's feed shows what concerns a message, under the API's own cursors, as a read after one of them does.
+      // Each event of the board's feed carries the cursor right after it too: a read from it goes on with exactly what follows.
       if (one && !given) continue
       const event = one
         ? await eventOf(who, change, feed.name, change.cursor ?? page.cursor, query, narrow, given)
-        : await eventOf(who, change, (await channelById(who, change.channelId)).name, cursorOf({ t: change.createdAt, feeds: { [ACROSS]: after(i) } }), query, narrow, given, threads)
+        : await eventOf(who, change, (await channelById(who, change.channelId)).name, cursorOf({ t: change.createdAt, feeds: { [ACROSS]: { at: change.cursor ?? page.cursor, skip: 0 } } }), query, narrow, given, threads)
       if (event) events.push(event)
     }
     if (one) return { events, cursor: page.cursor }
@@ -2331,6 +2322,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const page = await read(who, listed, position, query, signal)
       position = page.position
       if (page.events.length > 0 || Date.now() >= until || signal.aborted) return { events: page.events, cursor: cursorOf(position) }
+      // Short of the board's feed's end, there's more to read now, from where this read got to: nothing to wait for yet.
+      if (page.behind) continue
       if (!busy) busy = (await changed(who, listed, position, until, signal)) && Date.now() - started < 1000
       await pause(Math.min(started + 1000, until) - Date.now(), signal)
     }

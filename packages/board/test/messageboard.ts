@@ -280,6 +280,7 @@ type Shared = {
   feedReads: number
   boardFeed: boolean
   feedLast: boolean
+  feedStretch: number
   threadRanges: boolean
   channelPages: boolean
   matchMessages: boolean
@@ -374,16 +375,17 @@ function fakeBoard(shared: Shared, boardId: string) {
   }
 
   /** How far back the board's feed looks for its newest events: a tree with none in that stretch answers none. */
-  const FEED_STRETCH = 1000
+  const FEED_LOOKBACK = 1000
 
-  /** How many of a feed's newest events a read asks for (`last`), or null: it goes with no `cursor`, `from` or `wait`. */
+  /** How many of a feed's newest events a read asks for (`last`), or null: it goes with no `cursor` or `from`, and no `wait` above 0. */
   function lastOf(url: URL): number | null {
     const asked = url.searchParams.get('last')
     if (asked === null) return null
     if (!shared.feedLast) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `last`.')
     const last = Number(asked)
     if (!Number.isInteger(last) || last < 1 || last > 100) throw new Refused(400, 'bad_request', 'Invalid request: `last` should be an integer from 1 to 100.')
-    if (['cursor', 'from', 'wait'].some((name) => url.searchParams.get(name) !== null)) throw new Refused(400, 'invalid_request', "`last` reads a feed's newest events: it takes no `cursor`, `from` or `wait`.")
+    if (url.searchParams.get('cursor') !== null || url.searchParams.get('from') !== null || Number(url.searchParams.get('wait') ?? 0) > 0)
+      throw new Refused(400, 'invalid_request', "`last` reads a feed's newest events: it takes no `cursor` or `from`, and no `wait` above 0.")
     return last
   }
 
@@ -418,14 +420,16 @@ function fakeBoard(shared: Shared, boardId: string) {
       return tree === null || name === tree.slice(0, -1) || name.startsWith(tree)
     }
     if (last !== null) {
-      const start = Math.max(0, log.length - FEED_STRETCH)
+      const start = Math.max(0, log.length - FEED_LOOKBACK)
       const newest = log.slice(start).flatMap((change, i) => (within(change) ? [changeShown(url, change, at(start + i + 1))] : []))
       return { events: newest.slice(-last), cursor: at(log.length), caughtUp: true }
     }
+    // A read waits only at the feed's end, and for any change. Behind it, or woken by a change outside the tree, it
+    // answers what it passes over, a stretch at a time: that may show nothing and stop short of the end (`caughtUp: false`).
     const until = Date.now() + Math.min(Number(url.searchParams.get('wait') ?? 0), 25) * 1000
-    while (!log.slice(from).some(within) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
+    while (log.length <= from && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
     const include = url.searchParams.get('include') === 'message'
-    const taken = log.slice(from, from + 48)
+    const taken = log.slice(from, from + shared.feedStretch)
     const events = taken.flatMap((change, i) => {
       if (!within(change)) return []
       const message = include && change.messageId ? messageNamed(change.messageId) : undefined
@@ -2566,6 +2570,8 @@ export function fakeMessageboard(
      * parameter it doesn't know, and 400.
      */
     feedLast?: boolean
+    /** How many changes one read of the board's feed passes over, shown to the caller or not: 48 unless this says. */
+    feedStretch?: number
     /** False for an API that hands out matches without their message (`currentMessage`), as Vercel's does for a thread moved to a channel the registrant can't read. */
     matchMessages?: boolean
     /** Credentials the API takes, by their bearer, whatever it looks like: the principal each is, as `as()` names it. */
@@ -2622,6 +2628,7 @@ export function fakeMessageboard(
     inlineActors: options.inlineActors ?? false,
     boardFeed: options.boardFeed ?? false,
     feedLast: options.feedLast ?? false,
+    feedStretch: options.feedStretch ?? 48,
     threadRanges: options.threadRanges ?? false,
     channelPages: options.channelPages ?? false,
     threadsLimit: options.threadsLimit ?? true,

@@ -139,8 +139,8 @@ request too: a channel's, a tree's (`www/`), or the whole board's. Across
 channels they come from the board's feed alone, so a caller that reads only
 some channels gets `not_supported` and names one channel. There, `last`
 counts the events of what you name before `--by`, `--label` and the other
-filters apply, and a tree's or the board's come a whole write at a time, so it
-can answer a few more than you asked for, or fewer. The feed keeps 30 days.
+filters apply, so it can answer fewer than you asked for. The feed keeps 30
+days.
 
 ## Following live
 

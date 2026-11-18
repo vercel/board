@@ -373,3 +373,84 @@ describe("vercel(): a feed's newest events (`last`)", () => {
     await expect(team.poll({ channel: 'ops', last: 101 })).rejects.toMatchObject({ status: 400 })
   })
 })
+
+describe("vercel(): a tree's follower behind other channels' events", () => {
+  const texts = (events: { type: string; message?: { text: string } }[]) => events.filter((event) => event.type === 'message.posted').map((event) => event.message?.text)
+
+  /** A tree's follower at the feed's end, then 23 events in another channel and one in the tree, on an API that passes over 5 a read. */
+  async function behind() {
+    const api = fakeMessageboard({ boardFeed: true, feedStretch: 5, inlineActors: true, channelNames: true })
+    const writer = await busy(api, 2)
+    const follower = counted(api)
+    const { cursor } = await follower.team.poll({ channel: 'dev/' })
+    for (let i = 0; i < 23; i++) await writer.post('ops', { text: `elsewhere ${i}` })
+    await writer.post('dev/c1', { text: 'in the tree' })
+    return { ...follower, cursor }
+  }
+
+  it('reads on at once through the empty pages the API answers short of its end, to the event it waits for', async () => {
+    const { team, cursor, feedReads } = await behind()
+    const before = feedReads()
+    const started = Date.now()
+
+    const { events } = await team.poll({ channel: 'dev/', after: cursor, wait: 20 })
+
+    expect(texts(events)).toEqual(['in the tree'])
+    // 24 events at 5 a read: five reads, one after another, with no wait between them.
+    expect({ reads: feedReads() - before, withinASecond: Date.now() - started < 1000 }).toEqual({ reads: 5, withinASecond: true })
+  })
+
+  it('answers where it got to when it reads without a wait, so the next read goes on from there', async () => {
+    const { team, cursor } = await behind()
+    const seen: (string | undefined)[] = []
+    let after = cursor
+    let polls = 0
+
+    while (seen.length === 0 && polls++ < 10) {
+      const page = await team.poll({ channel: 'dev/', after })
+      expect(page.cursor).not.toBe(after)
+      after = page.cursor
+      seen.push(...texts(page.events))
+    }
+
+    expect({ seen, polls }).toEqual({ seen: ['in the tree'], polls: 5 })
+  })
+
+  it('wakes for an event in the tree that comes after others outside it', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedStretch: 5, inlineActors: true, channelNames: true })
+    const writer = await busy(api, 2)
+    const { team } = counted(api)
+
+    const { events } = await waited(team.poll({ channel: 'dev/', wait: 10 }), async () => {
+      for (let i = 0; i < 12; i++) await writer.post('ops', { text: `elsewhere ${i}` })
+      await writer.post('dev/c0', { text: 'in the tree' })
+    })
+
+    expect(texts(events)).toEqual(['in the tree'])
+  })
+})
+
+describe("vercel(): the cursors of the board's feed", () => {
+  it("reads on from any event's cursor with exactly the events after it", async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true, inlineActors: true, channelNames: true })
+    const writer = await busy(api, 2)
+    const { id } = await writer.post('dev/c0', { text: 'to edit' })
+    await writer.edit(id, 'edited')
+    const { team } = counted(api)
+    const named = (events: { type: string; message?: { id: string } }[]) => events.map((event) => `${event.type} ${event.message?.id}`)
+
+    const { events } = await team.poll({ all: true, last: 100 })
+
+    expect(new Set(events.map((event) => event.cursor)).size).toBe(events.length)
+    for (const [i, event] of events.entries()) expect(named((await team.poll({ all: true, after: event.cursor })).events)).toEqual(named(events.slice(i + 1)))
+  })
+
+  it('takes `wait=0` with `last` on the API, and no wait above it', async () => {
+    const api = fakeMessageboard({ boardFeed: true, feedLast: true })
+    await busy(api, 1)
+    const ask = (query: string) => as(api, 'user:u_jb')(`${API}/v1/messageboard/boards/brd_test/changes?teamId=team_test&${query}`)
+
+    expect((await ask('last=2&wait=0')).status).toBe(200)
+    expect((await ask('last=2&wait=1')).status).toBe(400)
+  })
+})
