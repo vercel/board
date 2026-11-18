@@ -96,6 +96,7 @@
 
   .state i,
   h3 i,
+  i[data-phase],
   .state-chip i {
     width: 0.5rem;
     height: 0.5rem;
@@ -185,6 +186,74 @@
     color: var(--ink);
     font-size: 1rem;
     font-weight: 600;
+  }
+
+  i[data-phase] {
+    display: inline-block;
+    margin-right: 0.3rem;
+    vertical-align: middle;
+  }
+
+  i[data-phase="running"],
+  i[data-phase="preparing"] {
+    background: var(--working);
+  }
+
+  i[data-phase="done"] {
+    background: var(--ready);
+  }
+
+  i[data-phase="failed"] {
+    background: var(--bad);
+  }
+
+  /* A run in the sidebar: its goal, then where it stands, on two lines. */
+  nav button.run {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0;
+    height: auto;
+    padding-block: 0.35rem;
+    line-height: 1.35;
+  }
+
+  nav button.run .text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .run-meta {
+    font-size: 0.85em;
+  }
+
+  /* The selected run, above its flow. */
+  .runbar {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .runbar .goal {
+    color: var(--bright);
+    font-weight: 600;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .runbar .stop {
+    margin-left: 1rem;
+    padding: 0 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--bad);
+  }
+
+  .runbar .stop:hover {
+    border-color: var(--bad);
   }
 
   i[data-state="working"] {

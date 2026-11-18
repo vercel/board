@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { thread } from "@/app/actions";
-import type { Line, Snapshot, Task } from "@/lib/swarm";
+import { stop, thread } from "@/app/actions";
+import type { Line, RunView, Snapshot, Task } from "@/lib/swarm";
 import { WebMcp } from "@/components/webmcp";
 
 /** What a task shows as: its state, with a claim split by whether its lease still holds. */
@@ -83,8 +83,15 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
     window.history.replaceState(null, "", query.length ? `?${query.join("&")}` : window.location.pathname);
   }, [channel, open]);
 
+  // A run is shown by its goal, with its own log (its thread in the runs channel) beside its tasks.
+  const run = useMemo(() => snap.runs.find((entry) => entry.channel === channel) ?? null, [snap, channel]);
+  const ofRun = (line: Line, of: RunView) => line.channel === snap.runsChannel && (line.id === of.thread || line.re === of.thread);
   const tasks = useMemo(() => snap.tasks.filter((task) => within(task.channel, channel)), [snap, channel]);
-  const flow = useMemo(() => snap.flow.filter((line) => within(line.channel, channel)), [snap, channel]);
+  const flow = useMemo(() => snap.flow.filter((line) => within(line.channel, channel) || (run !== null && ofRun(line, run))), [snap, channel, run]);
+  const where = (line: Line) => {
+    if (line.channel === snap.runsChannel) return snap.runs.find((entry) => entry.thread === (line.re ?? line.id))?.slug ?? "runs";
+    return line.channel.slice(snap.swarm.length) || line.channel;
+  };
 
   const groups = useMemo(() => {
     const by = new Map<Shown, Task[]>();
@@ -99,8 +106,12 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
     const open = new Map<string, number>();
     for (const line of snap.flow) open.set(line.channel, open.get(line.channel) ?? 0);
     for (const task of snap.tasks) open.set(task.channel, (open.get(task.channel) ?? 0) + (ENDED.includes(task.state) ? 0 : 1));
-    return [...open].sort(([a], [b]) => a.localeCompare(b));
+    // Runs are listed by their goal, above: what's left are channels agents joined from JOIN.md.
+    const runChannels = new Set([snap.runsChannel, ...snap.runs.map((entry) => entry.channel)]);
+    return [...open].filter(([path]) => !runChannels.has(path)).sort(([a], [b]) => a.localeCompare(b));
   }, [snap]);
+
+  const openIn = (path: string) => snap.tasks.filter((task) => task.channel === path && !ENDED.includes(task.state)).length;
 
   // Who's here: everyone holding a task, and everyone who wrote lately.
   const agents = useMemo(() => {
@@ -160,6 +171,24 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
       </header>
 
       <nav className="pane" aria-label="Channels and agents">
+        {snap.runs.length > 0 && (
+          <>
+            <h2>Runs</h2>
+            <ul>
+              {snap.runs.map((entry) => (
+                <li key={entry.slug}>
+                  <button type="button" className="run" aria-pressed={channel === entry.channel} onClick={() => setChannel(entry.channel)} title={entry.goal}>
+                    <span className="text">{entry.title}</span>
+                    <span className="faint run-meta">
+                      <i data-phase={entry.phase} aria-hidden />
+                      {entry.phase} · {openIn(entry.channel)} open · ${entry.cost.toFixed(2)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
         <h2>Channels</h2>
         <ul>
           <li>
@@ -192,16 +221,19 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
       </nav>
 
       <section className="pane" aria-label="Flow">
+        {run ? <RunBar run={run} now={now} /> : null}
         <h2>Flow</h2>
         {flow.length === 0 ? (
-          <p className="faint pad">Nothing here yet. Seed some tasks: npm run seed</p>
+          <p className="faint pad">
+            {run ? "Nothing yet: the run's log shows here as it clones the repo and plans." : "Nothing here yet. Launch a run from the launcher, or have agents join with JOIN.md."}
+          </p>
         ) : (
           <ul className="rows">
             {flow.map((line) => (
               <li key={line.id}>
                 <button type="button" onClick={() => setOpen(line.re ?? line.id)} title={line.text}>
                   <time>{ago(line.at, now)}</time>
-                  <span className="faint ch">{line.channel.slice(snap.swarm.length) || line.channel}</span>
+                  <span className="faint ch">{where(line)}</span>
                   <span className="who">{line.author}</span>
                   <span className="text">
                     {line.re && <span className="faint">↳ </span>}
@@ -220,7 +252,15 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
         ) : (
           <>
             <h2>Tasks</h2>
-            {groups.length === 0 && <p className="faint pad">No tasks in {channel ?? snap.swarm}</p>}
+            {groups.length === 0 && (
+              <p className="faint pad">
+                {run && (run.phase === "preparing" || run.phase === "running")
+                  ? run.scenario === "pipeline"
+                    ? "No tasks yet. The planner's task shows here once the repo is cloned, and the plan's tasks once it's done."
+                    : "No tasks yet. They show here once the repo is cloned and split into areas."
+                  : `No tasks in ${run?.title ?? channel ?? snap.swarm}`}
+              </p>
+            )}
             {groups.map((group) => {
               const finished = group.key === "done" || group.key === "failed" || group.key === "canceled";
               const rows = group.tasks;
@@ -248,6 +288,52 @@ export function Swarm({ first, channel: firstChannel, task: firstTask }: { first
           </>
         )}
       </aside>
+    </div>
+  );
+}
+
+/** The selected run: what it was asked, where it stands, and a way to stop it. */
+function RunBar({ run, now }: { run: RunView; now: number }) {
+  const [stopping, setStopping] = useState<string | null>(null);
+  const live = run.phase === "preparing" || run.phase === "running";
+  const left = run.deadline && live ? Date.parse(run.deadline) - now : null;
+  return (
+    <div className="runbar">
+      <p className="goal" title={run.goal}>
+        {run.goal}
+      </p>
+      <p className="faint">
+        <i data-phase={run.phase} aria-hidden /> {run.phase} · {run.repo} · {run.scenario} · {run.model} · {run.agents} {run.agents === 1 ? "agent" : "agents"}
+      </p>
+      <p>
+        <span className="faint">spent</span> ${run.cost.toFixed(2)}
+        {run.budgetUsd !== null && <span className="faint"> of ${run.budgetUsd}</span>}
+        {"  "}
+        <span className="faint">tasks</span> {run.settled} of {run.total} settled
+        {left !== null && (
+          <>
+            {"  "}
+            <span className="faint">time</span> {left > 0 ? `${span(left)} left` : "up"}
+          </>
+        )}
+        {live && (
+          <button
+            type="button"
+            className="stop"
+            disabled={stopping === "…"}
+            onClick={async () => {
+              if (!window.confirm(`Stop "${run.title}"? Its agents stop and its sandboxes go.`)) return;
+              setStopping("…");
+              const result = await stop(run.slug);
+              setStopping(result.ok ? null : result.problem);
+            }}
+          >
+            {stopping === "…" ? "Stopping" : "Stop"}
+          </button>
+        )}
+      </p>
+      {run.note && <p className="faint">{run.note}</p>}
+      {stopping && stopping !== "…" && <p className="bad">{stopping}</p>}
     </div>
   );
 }

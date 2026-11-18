@@ -1,5 +1,6 @@
 import type { Board, MessageView, ThreadSummaryView } from "@vercel/board";
-import { SWARM, NAME, team } from "./board.ts";
+import { SWARM, NAME, RUNS, team } from "./board.ts";
+import { runs } from "./runs.ts";
 
 /** The states the board keeps a task in. */
 export const STATES = ["waiting", "ready", "claimed", "blocked", "completed", "failed", "canceled"] as const;
@@ -40,6 +41,33 @@ export type Snapshot = {
   finishedCapped: boolean;
   /** The latest messages under the swarm, newest first. */
   flow: Line[];
+  /** The channel the deployment's runs are announced in, and its newest runs, newest first: the page shows a run by its goal, not its channel. */
+  runsChannel: string;
+  runs: RunView[];
+};
+
+/** A run as the live page shows it: what it was asked, how far it got, and what it spent. */
+export type RunView = {
+  slug: string;
+  /** Its tasks' channel. */
+  channel: string;
+  /** Its thread in the runs channel, where the deployment logs what it does for the run. */
+  thread: string;
+  title: string;
+  goal: string;
+  repo: string;
+  scenario: string;
+  model: string;
+  agents: number;
+  phase: string;
+  note: string | null;
+  cost: number;
+  budgetUsd: number | null;
+  settled: number;
+  total: number;
+  /** When it stops starting tasks, once it's prepared. */
+  deadline: string | null;
+  createdAt: string;
 };
 
 const author = (message: MessageView) => message.author?.handle ?? message.by.actor;
@@ -116,6 +144,8 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
     Promise.all(FINISHED.map((state) => read(state, FINISHED_LIMIT))),
   ]);
   const summaries = [...openRead.flat(), ...finishedRead.flat()];
+  // A swarm with no launched runs (agents joining from JOIN.md alone) has no runs channel: that's no runs.
+  const launched = await runs(board, 20).catch(() => []);
   const known = handles([...page.messages, ...summaries.flatMap(({ message, last }) => [message, last])]);
   const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known))));
   return {
@@ -127,6 +157,26 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
     tasks: [...open!.flat(), ...finished!.flat()],
     finishedCapped: finished!.some((tasks) => tasks.length >= FINISHED_LIMIT),
     flow: page.messages.map(line).reverse(),
+    runsChannel: RUNS,
+    runs: launched.map((run) => ({
+      slug: run.slug,
+      channel: `${swarm}${run.slug}`,
+      thread: run.id,
+      title: run.title,
+      goal: run.config.goal,
+      repo: run.config.repo,
+      scenario: run.config.scenario,
+      model: run.config.model,
+      agents: run.config.agents,
+      phase: run.phase,
+      note: run.note,
+      cost: run.cost,
+      budgetUsd: run.config.budgetUsd,
+      settled: run.settled,
+      total: run.total,
+      deadline: run.prepared ? new Date(run.prepared.deadline).toISOString() : null,
+      createdAt: run.createdAt,
+    })),
   };
 }
 
