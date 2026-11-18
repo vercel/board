@@ -1,5 +1,7 @@
 import { SWARM, team } from "@/lib/board";
 import { OPEN, open } from "@/lib/gate";
+import { after } from "next/server";
+import { reconcileAll } from "@/lib/run";
 import { SHARED_MS, sharedSnapshot } from "@/lib/swarm";
 
 // The page's live feed, as server-sent events: a snapshot when it connects, and another after every
@@ -16,6 +18,9 @@ const REDRAW_MS = SHARED_MS;
 export async function GET(request: Request): Promise<Response> {
   // The feed is whatever the swarm writes: only for the team.
   if (await open(request.headers.get("host"))) return new Response(OPEN, { status: 403 });
+  // Watching a run moves it, as the launcher does, cron or not: a reconcile takes a turn per run at
+  // most every 30 seconds, whoever asks, and each connection here lasts 50.
+  after(() => reconcileAll().catch((error: unknown) => console.error("[swarm] reconcile failed:", error instanceof Error ? error.message.slice(0, 300) : error)));
   const stop = new AbortController();
   request.signal.addEventListener("abort", () => stop.abort());
   const timer = setTimeout(() => stop.abort(), ROTATE_MS);

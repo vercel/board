@@ -24,10 +24,10 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { blocked, brief, costOf, doing, LABEL, OUTPUT, parsePlan, planReplies, REPLY_MAX, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
+import { blocked, brief, costOf, doing, LABEL, profileOfSelf, OUTPUT, parsePlan, planReplies, REPLY_MAX, SANDBOX, splitTask, taskPaths, verdict, type Role, type RunnerConfig } from "./shared.ts";
 
 const config = JSON.parse(await readFile(process.env.RUNNER_CONFIG ?? SANDBOX.config, "utf8")) as RunnerConfig;
-const HOME = join(SANDBOX.dir, "home");
+const HOME = join(SANDBOX.state, "home");
 const VB = join(SANDBOX.dir, "node_modules", ".bin", "vb");
 const exec = promisify(execFile);
 
@@ -67,7 +67,7 @@ async function vb<T = unknown>(...args: string[]): Promise<T> {
   }
 }
 
-type Message = { id: string; text: string; labels: Record<string, string>; task?: { needs?: string[] }; by?: { actor?: string }; author?: { handle?: string } };
+type Message = { id: string; text: string; labels: Record<string, string>; task?: { needs?: string[]; owner?: string }; by?: { actor?: string; principal?: string; profile?: string | null }; author?: { handle?: string } };
 
 /** A reply in a task's thread. It throws when the board refuses it: an output that didn't reach the board wasn't delivered. */
 const post = (id: string, text: string) => vb("reply", id, text.slice(0, REPLY_MAX));
@@ -84,23 +84,28 @@ const read = (id: string) => vb<{ message: Message; replies: Message[] }>("read"
  * each summing every task on every renewal would be most of the run's board reads.
  */
 async function runState(): Promise<{ phase: string | undefined; cost: number }> {
-  const { labels } = (await read(config.run)).message;
+  const { labels } = (await read(config.control)).message;
   return { phase: labels.phase, cost: Number(labels[LABEL.cost]) || 0 };
 }
 
 /** The last reply in a thread that carries an agent's output of `role`, without its first word. */
 async function output(id: string, role: Role): Promise<string | null> {
   const { replies } = await read(id);
-  const found = [...replies].reverse().find((reply) => reply.text.startsWith(OUTPUT[role]));
+  // Only one of the run's agents posts an output: a reply anyone else dresses up as one isn't.
+  const found = [...replies].reverse().find((reply) => reply.text.startsWith(OUTPUT[role]) && /^agent-\d+$/.test(profileOfSelf(reply.by, config.owner) ?? ""));
   return found ? found.text.slice(OUTPUT[role].length).trim() : null;
 }
 
-/** What people wrote in a task's thread, the agents' own replies left out: a task's owner can steer it there. */
+/**
+ * What people asked of a task from the swarm's page, which writes under the run owner's `launcher`
+ * profile. Nothing else in the thread steers an agent: anyone who may post in the channel can reply
+ * there, and an agent pushes code as the project.
+ */
 async function notes(id: string): Promise<string> {
   const { replies } = await read(id);
   return tail(
     replies
-      .filter((entry) => !/\+agent-\d+$/.test(entry.by?.actor ?? ""))
+      .filter((entry) => profileOfSelf(entry.by, config.owner) === "launcher")
       .slice(-5)
       .map((entry) => `${entry.author?.handle ?? "someone"}: ${entry.text.slice(0, 1_500)}`)
       .join("\n\n"),
@@ -360,8 +365,13 @@ async function review({ task, stop, spend }: Job): Promise<Outcome> {
   const workId = task.task?.needs?.[0];
   if (!workId) return { state: "failed", reason: "This review waits for no task." };
   const { message: workTask } = await read(workId);
-  const branch = workTask.labels[LABEL.branch];
-  const pr = workTask.labels[LABEL.pr];
+  // Only the run's own work, on a branch the run pushed, gets reviewed, and only the run's own pull
+  // request on its repo gets the review: a label anyone may write must not point the review elsewhere.
+  if (workTask.task?.owner !== config.owner || profileOfSelf(workTask.by, config.owner) !== null) return { state: "failed", reason: "The task this waits for isn't one of the run's." };
+  const labeled = workTask.labels[LABEL.branch];
+  const branch = labeled && labeled.startsWith(`${config.branches}/`) && /^[\w./-]+$/.test(labeled) ? labeled : undefined;
+  const linked = workTask.labels[LABEL.pr];
+  const pr = linked && new RegExp(`^https://github\\.com/${config.github.replace(/[.]/g, "\\.")}/pull/\\d+$`).test(linked) ? linked : undefined;
   if (!branch) {
     await post(task.id, `${OUTPUT.review} Nothing to review: the task made no change.`);
     return { state: "completed", result: "Nothing to review: no change." };
@@ -467,6 +477,9 @@ ${UNTRUSTED}`,
 
 const ROLE: Record<Role, (job: Job) => Promise<Outcome>> = { plan, work, review, find, verify, report };
 
+/** The roles each scenario's tasks have. */
+const SCENARIO_ROLES: Record<RunnerConfig["scenario"], readonly Role[]> = { pipeline: ["plan", "work", "review"], review: ["find", "verify", "report"] };
+
 // ─── the loop ───────────────────────────────────────────────────────────────
 
 /** Whether a failed `vb tasks` write says the claim is over: its lease ran out, or the task was released or canceled. */
@@ -534,6 +547,9 @@ while (Date.now() < config.deadline) {
   }, RENEW_MS);
   let outcome: Outcome;
   try {
+    // A role is a label, which anyone who may label can change: an agent takes only the roles of its
+    // run's scenario, so a review run's read-only agents never get a pipeline's tools.
+    if (!SCENARIO_ROLES[config.scenario].includes(role)) throw new Error(`a ${role} task isn't part of a ${config.scenario} run`);
     outcome = await ROLE[role]({ task, title, body, stop: lost.signal, spend });
     errors = 0;
   } catch (error) {

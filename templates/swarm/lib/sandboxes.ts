@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { Sandbox, type NetworkPolicy } from "@vercel/sandbox";
 import { SANDBOX, type RunnerConfig } from "../sandbox/shared.ts";
-import { profileOf, RUNS, runChannel, team } from "./board.ts";
+import { profileOf, runChannel, team } from "./board.ts";
 import { githubToken } from "./credentials.ts";
 
 // The sandboxes a run works in. Three kinds, each forked from the one before:
@@ -30,7 +30,7 @@ type Rules = NonNullable<Exclude<NetworkPolicy, string>["allow"]>;
 export type Allow = Exclude<Rules, string[]>;
 
 /** The file a finished base holds. A build that was cut short leaves a base without it. */
-const READY = `${SANDBOX.dir}/.ready`;
+const READY = `${SANDBOX.state}/.ready`;
 
 const sourceName = (slug: string) => `sw-${slug}-src`;
 const agentPrefix = (slug: string) => `sw-${slug}-a`;
@@ -97,6 +97,8 @@ export async function baseSandbox(say: (text: string) => Promise<void> = async (
     ]);
     await must(base, "installing the runner", "npm", ["install", "--no-audit", "--no-fund", "--silent"], { cwd: SANDBOX.dir });
     await must(base, "checking vb", "node", ["node_modules/.bin/vb", "--version"], { cwd: SANDBOX.dir });
+    // What the runner writes (its config, its process ID, the agent's home) lives apart from it.
+    await must(base, "making the runner's state directory", "mkdir", ["-p", `${SANDBOX.state}/home`]);
     // The last thing a build does: a base without it was cut short, and `prepare` builds it again.
     await base.writeFiles([{ path: READY, content: "ready" }]);
     // Stopping a persistent sandbox snapshots it, which is what forks start from.
@@ -114,18 +116,20 @@ export type Checkout = { base: string; baseBranch: string; files: string[]; setu
 /**
  * The install a repo's lockfile asks for, so the agents can run its tests: their sandboxes reach no
  * registry, and fork from this one, so pnpm or yarn is installed globally here, at the version the
- * repo's `packageManager` pins or the latest. Dependencies' build scripts don't run: this sandbox
- * holds the repo's GitHub token in its policy, and a package's scripts are anyone's code. pnpm 11 and
- * later fail the install over the scripts they skip, so that's turned off.
+ * repo's `packageManager` pins (a plain version only) or the latest. No install scripts run, the
+ * repo's own or its dependencies': this sandbox reaches the internet and holds the repo's GitHub
+ * token in its policy, and a package's scripts are anyone's code. pnpm 11 and later fail the
+ * install over the build scripts they skip, so that's turned off.
  */
 const INSTALL = `set -e
-pinned() { node -p "const m = (require('./package.json').packageManager || '').split('+')[0]; m.startsWith('$1@') ? m : '$1@latest'" 2>/dev/null || echo "$1@latest"; }
-global() { sudo -n npm i -g --no-audit --no-fund --silent "$1" 2>/dev/null || npm i -g --no-audit --no-fund --silent "$1"; }
+# Only a plain version the repo pins, like pnpm@9.15.0: anything else (an alias, a URL, a tag) is the latest.
+pinned() { node -p "const m = (require('./package.json').packageManager || '').split('+')[0]; /^$1@\\d+\\.\\d+\\.\\d+$/.test(m) ? m : '$1@latest'" 2>/dev/null || echo "$1@latest"; }
+global() { sudo -n npm i -g --ignore-scripts --no-audit --no-fund --silent "$1" 2>/dev/null || npm i -g --ignore-scripts --no-audit --no-fund --silent "$1"; }
 export COREPACK_ENABLE_STRICT=0
-if [ -f pnpm-lock.yaml ]; then global "$(pinned pnpm)"; pnpm install --frozen-lockfile --config.strict-dep-builds=false; echo pnpm
-elif [ -f yarn.lock ]; then global "$(pinned yarn)"; yarn install --frozen-lockfile; echo yarn
-elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; echo npm
-elif [ -f bun.lock ] || [ -f bun.lockb ]; then global bun; bun install --frozen-lockfile; echo bun
+if [ -f pnpm-lock.yaml ]; then global "$(pinned pnpm)"; pnpm install --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false; echo pnpm
+elif [ -f yarn.lock ]; then global "$(pinned yarn)"; yarn install --frozen-lockfile --ignore-scripts; echo yarn
+elif [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund; echo npm
+elif [ -f bun.lock ] || [ -f bun.lockb ]; then global bun; bun install --frozen-lockfile --ignore-scripts; echo bun
 else echo none; fi`;
 
 /**
@@ -134,7 +138,7 @@ else echo none; fi`;
  * internet while it sets up (an install wants its registries), with GitHub's token for the repo and
  * no other credential.
  */
-export async function prepare(slug: string, repo: string, base: string, say: (text: string) => Promise<void> = async () => {}): Promise<Checkout> {
+export async function prepare(slug: string, repo: string, base: string, say: (text: string) => Promise<void> = async () => {}, opts: { install?: boolean } = {}): Promise<Checkout> {
   const token = await githubToken(repo, false);
   let sandbox = await forkSource(slug, repo, token, base);
   if ((await sandbox.runCommand({ cmd: "test", args: ["-f", READY] })).exitCode !== 0) {
@@ -148,10 +152,18 @@ export async function prepare(slug: string, repo: string, base: string, say: (te
     const sha = (await must(sandbox, "reading the commit", "git", ["rev-parse", "HEAD"], { cwd: SANDBOX.repo })).trim();
     const baseBranch = (await must(sandbox, "reading the branch", "git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: SANDBOX.repo })).trim();
     const files = (await must(sandbox, "listing the files", "git", ["ls-files"], { cwd: SANDBOX.repo })).split("\n").filter(Boolean);
-    // An install that fails costs the agents their tests, not the run: they're told what happened.
-    const install = await sandbox.runCommand({ cmd: "bash", args: ["-c", INSTALL], cwd: SANDBOX.repo });
-    const out = (await install.stdout()).trim().split("\n").pop() ?? "none";
-    const setup = install.exitCode !== 0 ? `The dependency install failed, so tests may not run: ${(await install.stderr()).trim().slice(-300)}` : out === "none" ? null : `Dependencies installed with ${out}.`;
+    // A review reads the code and runs nothing, so it installs nothing. An install that fails costs
+    // the agents their tests, not the run: what it printed goes to the project's logs, never the
+    // board, where it's the repo's words in the app's thread.
+    let setup: string | null = null;
+    if (opts.install ?? true) {
+      const install = await sandbox.runCommand({ cmd: "bash", args: ["-c", INSTALL], cwd: SANDBOX.repo });
+      const out = (await install.stdout()).trim().split("\n").pop() ?? "none";
+      if (install.exitCode !== 0) {
+        console.error(`[swarm] the dependency install for ${slug} exited ${install.exitCode}:`, (await install.stderr()).trim().slice(-2_000));
+        setup = `The dependency install failed (exit ${install.exitCode}), so tests may not run: the project's logs have why.`;
+      } else setup = ["pnpm", "yarn", "npm", "bun"].includes(out) ? `Dependencies installed with ${out}.` : null;
+    }
     await sandbox.stop();
     return { base: sha, baseBranch, files, setup };
   } catch (error) {
@@ -176,7 +188,7 @@ function forkSource(slug: string, repo: string, token: string, base: string) {
 export type Scope = { slug: string; repo: string; write: boolean };
 
 /** What an agent may do on the board: read the runs, and work its own run's tasks. Nothing else, so it can't touch another run, or any run's phase. */
-export const agentCan = (slug: string) => `${RUNS}=read;${runChannel(slug)}=read,post,react,label`;
+export const agentCan = (slug: string) => `${runChannel(slug)}=read,post,react,label`;
 
 /**
  * An agent's network policy: the board as that agent, AI Gateway, and GitHub for the run's repo.
@@ -231,7 +243,7 @@ export async function startAgent(slug: string, n: number, runner: RunnerConfig, 
     tags: { app: TAG, run: slug, role: "agent" },
   });
   await sandbox.writeFiles([{ path: SANDBOX.config, content: JSON.stringify(runner) }]);
-  const home = `${SANDBOX.dir}/home`;
+  const home = `${SANDBOX.state}/home`;
   await sandbox.runCommand({
     cmd: "node",
     args: ["runner.ts"],

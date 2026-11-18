@@ -20,8 +20,8 @@ export type Role = (typeof ROLES)[number];
 /** What an agent's sandbox is told, as /vercel/sandbox/swarm/runner.json. It holds no credential: those are in the sandbox's network policy. */
 export type RunnerConfig = {
   slug: string;
-  /** The run's thread: its root's `phase` label says whether to keep working. */
-  run: string;
+  /** The run's control thread, in its own channel: its `phase` and `cost` labels say whether to keep working. */
+  control: string;
   /** The run's goal, in the words of whoever launched it. Every agent reads it. */
   goal: string;
   scenario: Scenario;
@@ -59,20 +59,28 @@ export type RunnerConfig = {
 /** What an agent is doing, in a few words, from the tool it just called: what its task's thread shows as it works. */
 export function doing(tool: string, args: unknown): string | null {
   const given = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
-  const said = (key: string) => (typeof given[key] === "string" ? (given[key] as string).replace(/\s+/g, " ").trim().slice(0, 140) : "");
+  const said = (key: string) => (typeof given[key] === "string" ? (given[key] as string).replace(/\s+/g, " ").trim() : "");
+  // A path in the repo, or a command's program, and never more: a command's arguments, or what an
+  // agent searches for, can hold what the board's readers shouldn't see.
+  const path = (key: string) => {
+    const value = said(key);
+    return /^[\w./@+-]{1,160}$/.test(value) ? value : "";
+  };
   switch (tool) {
-    case "bash":
-      return said("command") ? `running \`${said("command")}\`` : "running a command";
+    case "bash": {
+      const program = said("command").replace(/^(?:cd \S+ && |[A-Z_]+=\S+ )*/, "").split(" ", 1)[0] ?? "";
+      return /^[\w./-]{1,40}$/.test(program) ? `running \`${program}\`` : "running a command";
+    }
     case "read":
-      return `reading ${said("path") || "a file"}`;
+      return `reading ${path("path") || "a file"}`;
     case "edit":
     case "write":
-      return `editing ${said("path") || "a file"}`;
+      return `editing ${path("path") || "a file"}`;
     case "grep":
-      return said("pattern") ? `searching for \`${said("pattern")}\`` : "searching the code";
+      return "searching the code";
     case "find":
     case "ls":
-      return `looking around ${said("path") || "the repo"}`;
+      return `looking around ${path("path") || "the repo"}`;
     default:
       return null;
   }
@@ -91,10 +99,13 @@ export type Phase = (typeof PHASES)[number];
 
 /** Where the runner and its config are in a sandbox, and where the checkout is. */
 export const SANDBOX = {
+  /** The runner and its dependencies. */
   dir: "/vercel/sandbox/swarm",
-  config: "/vercel/sandbox/swarm/runner.json",
+  /** What the runner writes: its config, its process ID, and the agent's home. */
+  state: "/vercel/sandbox/state",
+  config: "/vercel/sandbox/state/runner.json",
   /** The runner's process ID, which it writes when it starts: how the app tells an agent that's working from a sandbox its agent has left. */
-  pid: "/vercel/sandbox/swarm/runner.pid",
+  pid: "/vercel/sandbox/state/runner.pid",
   repo: "/vercel/sandbox/repo",
 } as const;
 
@@ -213,3 +224,15 @@ export const taskPaths = (text: string) =>
     .split("\n")
     .slice(1)
     .flatMap((line) => (line.startsWith("- ") ? [line.slice(2).trim()] : []));
+
+/**
+ * Which of `self`'s profiles wrote something: null for `self` itself, undefined for someone else.
+ * Vercel's board says a profile beside its principal (`profile: "agent-3"`); a local board names it
+ * in the principal (`board:client:agent-3`).
+ */
+export function profileOfSelf(by: { principal?: string; profile?: string | null } | undefined, self: string): string | null | undefined {
+  if (!by?.principal) return undefined;
+  if (by.principal === self) return by.profile ?? null;
+  if (by.principal.startsWith(`${self}:`) && !by.profile) return by.principal.slice(self.length + 1);
+  return undefined;
+}

@@ -108,7 +108,18 @@ on the pull request.
   the run's repo alone. Code from the repo runs in the sandbox, so it can use
   them for those hosts, though it can't read them: launch runs only on repos
   whose code you'd run yourself. A review's GitHub token can't push.
-- **Without the cron, a run moves only while the page is open.** `vercel.json`
+- **The app trusts only what it wrote.** A run, what its launch recorded, its
+  tasks, and its agents' plans and outputs count only when this deployment or
+  its `agent-N` profiles wrote them, and an agent is steered only by replies
+  from the page (its `launcher` profile). Anyone else who may post or label in
+  the swarm's channels can't make work, move a deadline, or point a review
+  elsewhere. Labels stay writable, so a run's spend never goes down once
+  counted, and agents take only their scenario's roles.
+- **Installs run no scripts.** A pipeline's checkout installs its
+  dependencies with scripts off, at the package manager version the repo pins
+  (a plain version only); a review installs nothing. So no code from the repo
+  or its packages runs before an agent's runner has started.
+- **Without the cron, a run moves only while a page is open.** `vercel.json`
   calls `/api/tick` every five minutes, which needs a Pro team: on Hobby, crons
   run at most once a day, so change its schedule to daily, set a time limit,
   and keep the page open while a run goes. Sandboxes still stop at their own

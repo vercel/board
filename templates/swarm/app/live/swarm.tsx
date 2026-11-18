@@ -329,8 +329,11 @@ function Composer({ placeholder, action, send, hint }: { placeholder: string; ac
 /** A pull request's link as people say it: `acme/web#12`. */
 const prName = (url: string) => url.replace(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+).*$/, "$1#$2");
 
-/** The pull requests a task opened: its `pr` label, or links in its result. */
-const prsOf = (task: Task) => [...new Set([...(task.pr ? [task.pr] : []), ...(task.note?.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/g) ?? [])])];
+/** The pull requests a task opened on the run's repo: its `pr` label, or links in its result. A link anywhere else isn't one. */
+const prsOf = (task: Task, repo: string) => {
+  const ours = new RegExp(`^https://github\\.com/${repo.replace(/[.]/g, "\\.")}/pull/\\d+$`);
+  return [...new Set([...(task.pr ? [task.pr] : []), ...(task.note?.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/g) ?? [])])].filter((url) => ours.test(url));
+};
 
 /** How a task of a run ended, in words a person reads at a glance. */
 type Outcome = { kind: "pr" | "none" | "failed" | "canceled" | "done"; line: string };
@@ -341,11 +344,11 @@ const gist = (text: string | null, max = 220) => {
   return plain.length > max ? `${plain.slice(0, max).replace(/\s\S*$/, "")}…` : plain;
 };
 
-function outcomeOf(task: Task, review: Task | undefined): Outcome {
+function outcomeOf(task: Task, review: Task | undefined, repo: string): Outcome {
   const verdict = review && ENDED.includes(review.state) ? (review.state === "completed" ? "review approved" : `review asked for changes${review.note ? `: ${gist(review.note, 120)}` : ""}`) : review ? "review pending" : null;
   if (task.state === "failed") return { kind: "failed", line: `Failed: ${gist(task.note) || "no reason given"}` };
   if (task.state === "canceled") return { kind: "canceled", line: `Canceled${task.note ? `: ${gist(task.note)}` : ""}` };
-  const prs = prsOf(task);
+  const prs = prsOf(task, repo);
   if (prs.length) return { kind: "pr", line: [`Pull request ${prs.map(prName).join(", ")} opened`, verdict].filter(Boolean).join(" · ") };
   if (task.role === "work") return { kind: "none", line: `No change made: ${gist(task.note) || "the agent found nothing to change"}` };
   return { kind: "done", line: gist(task.note) || "Done" };
@@ -356,12 +359,15 @@ function outcomeOf(task: Task, review: Task | undefined): Outcome {
  * opened, then each task with how it ended in words (the planner's and the reviews' left out: a
  * review shows as the verdict on the work it reviewed). A review run's report comes first.
  */
-function Results({ run, tasks, show }: { run: RunView; tasks: Task[]; show: (id: string) => void }) {
+function Results({ run, tasks: all, show }: { run: RunView; tasks: Task[]; show: (id: string) => void }) {
+  // Only the run's own tasks, the ones the deployment made: anyone who may post in the channel can
+  // make a task, or label one a review or a report, and it mustn't read as the run's result.
+  const tasks = all.filter((task) => task.own);
   const reviews = new Map(tasks.filter((task) => task.role === "review").map((task) => [task.needs[0], task]));
   const ended = tasks.filter((task) => ENDED.includes(task.state) && task.role !== "plan" && task.role !== "review" && task.role !== "verify");
   const report = ended.find((task) => task.role === "report" && task.state === "completed");
-  const outcomes = ended.filter((task) => task !== report).map((task) => ({ task, outcome: outcomeOf(task, reviews.get(task.id)) }));
-  const prs = [...new Set(outcomes.flatMap(({ task }) => prsOf(task)))];
+  const outcomes = ended.filter((task) => task !== report).map((task) => ({ task, outcome: outcomeOf(task, reviews.get(task.id), run.repo) }));
+  const prs = [...new Set(outcomes.flatMap(({ task }) => prsOf(task, run.repo)))];
   const counts = { pr: 0, none: 0, failed: 0, canceled: 0, done: 0 };
   for (const { outcome } of outcomes) counts[outcome.kind]++;
   const working = tasks.filter((task) => !ENDED.includes(task.state) && task.role !== "review" && task.role !== "verify").length;

@@ -2,8 +2,12 @@
 // does that only where strangers can't reach it: on your machine, or on a deployment behind
 // Deployment Protection.
 
-/** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
-export const isLocal = (env: NodeJS.ProcessEnv = process.env) => !env.VERCEL_ENV || env.VERCEL_ENV === "development";
+/**
+ * Your machine: `next dev`, the one mode a deployment never runs in. Not what VERCEL_ENV says, which
+ * any server can leave unset or set to `development`: one reachable from elsewhere with live
+ * credentials would then skip every check.
+ */
+export const isLocal = (env: NodeJS.ProcessEnv = process.env) => env.NODE_ENV === "development";
 
 /**
  * Whether a request with no credentials is turned away at `host`: what Vercel Authentication does

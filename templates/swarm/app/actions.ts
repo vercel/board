@@ -7,7 +7,7 @@ import { githubToken } from "@/lib/credentials";
 import { OPEN, open } from "@/lib/gate";
 import { models } from "@/lib/models";
 import { ask as askRun, begin, launch, PROMPT_MAX, stop as stopRun } from "@/lib/run";
-import { LAUNCHER, SWARM, team } from "@/lib/board";
+import { LAUNCHER, RUNS, SWARM, team } from "@/lib/board";
 import { runs, SLUG } from "@/lib/runs";
 import { history } from "@/lib/swarm";
 
@@ -112,8 +112,10 @@ export async function say(id: string, text: string): Promise<Result> {
   return guarded(async () => {
     const board = team();
     const { message } = await board.thread(id);
-    if (!message.channel.startsWith(SWARM)) throw new Error(`${id} isn't in ${SWARM}`);
-    await board.as(LAUNCHER).reply(message.re ?? message.id, said);
+    // Only a task's thread in the swarm: never the runs channel, where the launch records what the
+    // run's agents start from, and never a thread that isn't a task.
+    if (!message.channel.startsWith(SWARM) || message.channel === RUNS || !message.task) throw new Error(`${id} isn't a task in ${SWARM}`);
+    await board.as(LAUNCHER).reply(message.id, said);
     return {};
   });
 }

@@ -1,6 +1,6 @@
 import type { Board, MessageView, ThreadSummaryView } from "@vercel/board";
 import { SWARM, NAME, RUNS, team } from "./board.ts";
-import { runs } from "./runs.ts";
+import { ownWrite, runs, selfOf } from "./runs.ts";
 
 /** The states the board keeps a task in. */
 export const STATES = ["waiting", "ready", "claimed", "blocked", "completed", "failed", "canceled"] as const;
@@ -27,6 +27,8 @@ export type Task = {
   role: string | null;
   /** The pull request it opened, from its `pr` label, when it opened one. */
   pr: string | null;
+  /** Whether this deployment made it: only such a task is one of a launched run's, whatever its channel or labels say. */
+  own: boolean;
   author: string;
   replies: number;
   last: Line | null;
@@ -109,7 +111,7 @@ function handles(messages: (MessageView | null)[]): Map<string, string> {
   return known;
 }
 
-function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string, string>): Task[] {
+function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string, string>, self: string | null): Task[] {
   const task = message.task;
   if (!task) return [];
   return [
@@ -124,6 +126,7 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
       note: task.blocked?.reason ?? task.result ?? task.reason ?? null,
       role: message.labels.role ?? null,
       pr: message.labels.pr ?? null,
+      own: self !== null && task.owner === self && ownWrite(message.by, self),
       author: author(message),
       replies,
       last: last ? line(last) : null,
@@ -151,11 +154,13 @@ export async function snapshot(board: Board = team(), swarm: string = SWARM): Pr
     Promise.all(OPEN.map((state) => read(state, OPEN_LIMIT))),
     Promise.all(FINISHED.map((state) => read(state, FINISHED_LIMIT))),
   ]);
+  const self = await selfOf(board).catch(() => null);
   const summaries = [...openRead.flat(), ...finishedRead.flat()];
   // A swarm with no launched runs (agents joining from JOIN.md alone) has no runs channel: that's no runs.
   const launched = await runs(board, 20).catch(() => []);
+
   const known = handles([...page.messages, ...summaries.flatMap(({ message, last }) => [message, last])]);
-  const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known))));
+  const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known, self))));
   return {
     name: NAME,
     swarm,

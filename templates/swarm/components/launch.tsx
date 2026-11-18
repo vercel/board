@@ -19,8 +19,11 @@ function providers(models: Model[]): [string, Model[]][] {
 
 /** Where the form keeps what was last filled in, in this browser: a reload or the next run starts from it. */
 const SAVED = "swarm.launch";
-/** The fields the form keeps by name; the scenario and the model are kept from its state. */
-const KEPT = ["repo", "goal", "agents", "budgetUsd", "minutes"] as const;
+/**
+ * The fields the form keeps by name; the scenario and the model are kept from its state. Not the
+ * goal: it can say what a private repo is about, and the next person on this browser would see it.
+ */
+const KEPT = ["repo", "agents", "budgetUsd", "minutes"] as const;
 
 type Saved = Partial<Record<(typeof KEPT)[number] | "scenario" | "model", string>>;
 

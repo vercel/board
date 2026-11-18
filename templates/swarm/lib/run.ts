@@ -1,9 +1,9 @@
 import type { Board } from "@vercel/board";
-import { LABEL, planFrom, type RunnerConfig, type State } from "../sandbox/shared.ts";
+import { LABEL, planFrom, profileOfSelf, type RunnerConfig, type State } from "../sandbox/shared.ts";
 import { agentName, runChannel, team } from "./board.ts";
 import { deadlineOf, taskCap, type Config } from "./config.ts";
 import { models } from "./models.ts";
-import { addTasks, create, lostRace, newSlug, run as readRun, runs, savePrepared, say, setPhase, snapshot, type Run, type Snapshot, type Task } from "./runs.ts";
+import { addTasks, create, lostRace, mirror, newSlug, openControl, run as readRun, runs, savePrepared, say, selfOf, setPhase, snapshot, type Run, type Snapshot, type Task } from "./runs.ts";
 import * as sandboxes from "./sandboxes.ts";
 import { asked, expand, seed } from "./scenarios.ts";
 
@@ -33,20 +33,34 @@ export async function launch(started: Run, board: Board = team(), boxes: Sandbox
   try {
     const base = await boxes.baseSandbox(tell);
     await tell(`Cloning ${config.repo}.`);
-    const checkout = await boxes.prepare(slug, config.repo, base, tell);
+    const checkout = await boxes.prepare(slug, config.repo, base, tell, { install: config.scenario === "pipeline" });
+    // Someone may have stopped it while it was preparing: then its checkout goes, and it stays stopped.
+    if ((await readRun(slug, board))?.phase !== "preparing") {
+      await boxes.teardown(slug);
+      await board.label(id, { set: { torn: "yes" } });
+      return;
+    }
     const first = seed(config, checkout.files);
     if (first.length === 0) throw new Error(`${config.repo} has no files to review.`);
     const { owner, made } = await addTasks(board, slug, `seed-${slug}`, first);
     const deadline = deadlineOf(config, Date.now());
+    const control = await openControl(board, slug);
     const what = config.scenario === "pipeline" ? "A planner splits the goal into tasks first." : `${(made - 1) / 2} areas to review, each checked, then one report.`;
-    await savePrepared(board, id, { base: checkout.base, baseBranch: checkout.baseBranch, owner, deadline }, `From ${checkout.baseBranch}@${checkout.base.slice(0, 7)}. ${what}${checkout.setup ? ` ${checkout.setup}` : ""}`);
-    // Someone may have stopped it while it was preparing: then it stays stopped.
-    if (!(await setPhase(board, id, "running", { from: "preparing" }))) return;
+    await tell(`From ${checkout.baseBranch}@${checkout.base.slice(0, 7)}. ${what}${checkout.setup ? ` ${checkout.setup}` : ""}`);
+    await savePrepared(board, id, { base: checkout.base, baseBranch: checkout.baseBranch, owner, deadline, control });
+    if (!(await setPhase(board, id, "running", { from: "preparing" }))) {
+      await boxes.teardown(slug);
+      await board.label(id, { set: { torn: "yes" } });
+      return;
+    }
     await reconcile(slug, board, boxes, { force: true });
   } catch (error) {
-    await setPhase(board, id, "failed", { note: message(error).split("\n", 1)[0] }).catch(() => {});
-    await tell(`Couldn't start: ${message(error)}`);
+    console.error(`[swarm] launch of ${slug} failed:`, error);
+    const why = message(error).split("\n", 1)[0]!.slice(0, 200);
+    await setPhase(board, id, "failed", { note: why }).catch(() => {});
+    await tell(`Couldn't start: ${why}`);
     await boxes.teardown(slug).catch(() => {});
+    await board.label(id, { set: { torn: "yes" } }).catch(() => {});
   }
 }
 
@@ -56,7 +70,7 @@ export async function runnerConfig(found: Run, n: number, listed = models()): Pr
   const model = (await listed).find((entry) => entry.id === config.model);
   return {
     slug,
-    run: found.id,
+    control: prepared!.control ?? "",
     goal: config.goal,
     scenario: config.scenario,
     channel: runChannel(slug),
@@ -88,7 +102,9 @@ const EVERY_MS = 30_000;
  * the turn.
  */
 async function turn(board: Board, id: string, last: string | undefined, force: boolean): Promise<boolean> {
-  if (!force && last && Date.now() - Date.parse(last) < EVERY_MS) return false;
+  // A tick from the future is no turn: a label anyone may write mustn't keep a run from reconciling.
+  const since = last ? Date.now() - Date.parse(last) : Infinity;
+  if (!force && since >= 0 && since < EVERY_MS) return false;
   try {
     await board.label(id, { set: { tick: new Date().toISOString() }, if: { tick: last ?? null } });
     return true;
@@ -109,12 +125,16 @@ export const live = (counts: Record<State, number>) => counts.ready + counts.cla
  * plan waits to be added: what's still waiting then waits on a task that failed, which nothing will
  * complete. Spend counts against the budget as soon as an agent labels it, mid-task included.
  */
-export function ending(now: Pick<Snapshot, "counts" | "cost" | "tasks"> & { run: Pick<Run, "config" | "prepared"> }, at = Date.now()): { phase: "done" | "stopped"; why: string } | null {
+export function ending(
+  now: Pick<Snapshot, "counts" | "cost" | "tasks"> & { run: Pick<Run, "config" | "prepared"> },
+  at = Date.now(),
+  opts: { plansPending?: boolean } = {},
+): { phase: "done" | "stopped"; why: string } | null {
   const { run, counts, cost, tasks } = now;
   const spent = `$${cost.toFixed(2)}`;
   if (run.config.budgetUsd !== null && cost >= run.config.budgetUsd) return { phase: "stopped", why: `Stopped at its budget: ${spent} of $${run.config.budgetUsd}.` };
   if (run.prepared && at >= run.prepared.deadline) return { phase: "stopped", why: `Stopped at its time limit, ${run.config.minutes ?? "its most"} minutes, for ${spent}.` };
-  if (tasks.length > 0 && live(counts) === 0 && unexpanded(tasks).length === 0) {
+  if (!opts.plansPending && tasks.length > 0 && live(counts) === 0 && unexpanded(tasks).length === 0) {
     const gaveUp = counts.failed + counts.canceled + counts.blocked + counts.waiting;
     return { phase: "done", why: `Done: ${counts.completed} completed${gaveUp ? `, ${gaveUp} not` : ""}, for ${spent}.` };
   }
@@ -124,7 +144,10 @@ export function ending(now: Pick<Snapshot, "counts" | "cost" | "tasks"> & { run:
 /** The plan a completed plan task's thread carries, as the planner posted it. */
 async function planOf(board: Board, task: Task, max: number) {
   const { replies } = await board.thread(task.id);
-  return planFrom(replies.map((reply) => reply.text), max);
+  // Only what this deployment's agents posted is the plan: anyone who may post in the channel could
+  // reply with a plan of their own, which the project would then push and open pull requests for.
+  const self = await selfOf(board);
+  return planFrom(replies.filter((reply) => /^agent-\d+$/.test(profileOfSelf(reply.by, self) ?? "")).map((reply) => reply.text), max);
 }
 
 /** Adds each finished plan's tasks to the queue, once: the batch's key makes a second try add none. */
@@ -157,25 +180,40 @@ export async function reconcile(slug: string, board: Board = team(), boxes: Sand
 
   if (found.phase !== "running") {
     if (!found.torn) {
+      await mirror(board, found, { phase: found.phase });
       await boxes.teardown(slug);
       await board.label(found.id, { set: { torn: "yes" } });
     }
     return;
   }
 
-  if (await expandPlans(board, found, now.tasks)) now = (await snapshot(slug, board))!;
-  const settled = now.counts.completed + now.counts.failed + now.counts.canceled;
-  await board.label(found.id, { set: { cost: now.cost.toFixed(4), settled: String(settled), total: String(now.tasks.length) } });
-
-  const end = ending(now);
-  if (end) {
+  // The budget and the deadline are checked before anything that could fail on what agents wrote:
+  // a run past either ends, whatever its plans hold.
+  const finish = async (end: { phase: "done" | "stopped"; why: string }) => {
     if (await setPhase(board, found.id, end.phase, { from: "running", note: end.why })) {
+      await mirror(board, found, { phase: end.phase });
       await say(board, found.id, end.why);
       await boxes.teardown(slug);
       await board.label(found.id, { set: { torn: "yes" } });
     }
-    return;
+  };
+  // What a run has spent never goes down: a cost label rewritten lower doesn't give the budget back.
+  const spent = () => Math.max(found.cost, now!.cost);
+  const early = ending({ ...now, cost: spent() }, Date.now(), { plansPending: true });
+  if (early) return finish(early);
+
+  try {
+    if (await expandPlans(board, found, now.tasks)) now = (await snapshot(slug, board))!;
+  } catch (error) {
+    console.error(`[swarm] adding the plan's tasks to ${slug} failed:`, message(error).slice(0, 300));
   }
+  const settled = now.counts.completed + now.counts.failed + now.counts.canceled;
+  const cost = spent().toFixed(4);
+  await board.label(found.id, { set: { cost, settled: String(settled), total: String(now.tasks.length) } });
+  await mirror(board, found, { cost });
+
+  const end = ending({ ...now, cost: spent() });
+  if (end) return finish(end);
 
   const up = await boxes.agents(slug);
   const agents = found.config.agents;
@@ -215,16 +253,17 @@ export async function inBatches<T, R>(items: T[], size: number, forMs: number, w
 
 /** Reconciles every run that could have sandboxes: what the cron runs, and the page while it's open. */
 export async function reconcileAll(board: Board = team(), boxes: Sandboxes = sandboxes): Promise<{ slug: string; error?: string }[]> {
-  const all = await runs(board);
-  // The ones that could have sandboxes: running, or ended with its sandboxes not yet seen gone.
-  const active = all.filter((found) => found.phase === "running" || (found.phase !== "preparing" && !found.torn));
+  // The ones that could have sandboxes, by the one label that says so: however many threads the runs
+  // channel holds, none pushes an active run out of the list.
+  const all = await runs(board, 200, { torn: "no" });
+  const active = all.filter((found) => found.phase !== "preparing" && !found.torn);
   return Promise.all(
     active.map((found) =>
       reconcile(found.slug, board, boxes).then(
         () => ({ slug: found.slug }),
         (error: unknown) => {
           // Said where the project's logs show it: a run whose reconcile fails stops moving, and this is why.
-          console.error(`[swarm] reconcile of ${found.slug} failed:`, error);
+          console.error(`[swarm] reconcile of ${found.slug} failed:`, message(error).slice(0, 300));
           return { slug: found.slug, error: message(error) };
         },
       ),
@@ -238,9 +277,13 @@ export async function stop(slug: string, board: Board = team(), boxes: Sandboxes
   if (!found) throw new Error(`no run ${slug}`);
   if (found.phase !== "preparing" && found.phase !== "running") throw new Error(`a ${found.phase} run can't be stopped`);
   if (!(await setPhase(board, found.id, "stopped", { from: found.phase, note: "Stopped by hand." }))) return;
+  await mirror(board, found, { phase: "stopped" });
   await say(board, found.id, "Stopped.");
   await reconcile(slug, board, boxes, { force: true });
 }
+
+/** The most tasks a run takes from the page: past this, reconcile's count of them (and their spend) would be cut short. */
+const ASK_MAX_TASKS = 500;
 
 /** The longest a prompt from the page is: the brief of the task it becomes. */
 export const PROMPT_MAX = 4_000;
@@ -255,8 +298,11 @@ export async function ask(slug: string, prompt: string, board: Board = team(), b
   const found = await readRun(slug, board);
   if (!found) throw new Error(`no run ${slug}`);
   if (found.phase !== "running") throw new Error(`The run is ${found.phase}: only a running run takes new tasks.`);
+  const now = await snapshot(slug, board);
+  if (now && now.tasks.length >= ASK_MAX_TASKS) throw new Error(`The run has ${now.tasks.length} tasks, as many as it keeps count of: start another run.`);
   const { made } = await addTasks(board, slug, `ask-${Date.now().toString(36)}`, asked(found.config, text));
-  await say(board, found.id, `Asked from the page, now a task: ${text.split("\n", 1)[0]!.slice(0, 200)}`);
+  // The runs channel is read more widely than the run's own: what was asked stays in the task.
+  await say(board, found.id, `A task was added from the page.`);
   await reconcile(slug, board, boxes, { force: true });
   return { made };
 }
