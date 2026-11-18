@@ -2082,6 +2082,22 @@ const CHECKS: Check[] = [
   },
   {
     group: 'attachments',
+    name: 'refuses a name that would download as a dotfile',
+    run: async (ctx) => {
+      const bytes = new TextEncoder().encode(`conformance ${ctx.labels.conformance}\n`)
+      try {
+        await ctx.board.upload({ data: bytes, name: '.conformance', type: 'text/plain' })
+      } catch (error) {
+        // A board that keeps no files says so first, and the kit reports its 501 as not kept here.
+        if (error instanceof BoardError && error.status === 501) throw error
+        if (error instanceof BoardError && error.status === 400 && error.code === 'invalid_attachment') return
+        throw new Mismatch(`a dotfile name: expected 400 invalid_attachment, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+      }
+      throw new Mismatch('a dotfile name: expected 400 invalid_attachment, and it succeeded')
+    },
+  },
+  {
+    group: 'attachments',
     name: 'starts a task with a file, which its root carries',
     run: async (ctx) => {
       // A board that keeps no tasks says so before anything is uploaded.

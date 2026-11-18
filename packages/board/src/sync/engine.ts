@@ -4,7 +4,7 @@ import { derivedId } from '../client/ids.ts'
 import type { Actor, ExternalCopy } from '../contract/folds.ts'
 import { externalMessageKey, isThreadTarget } from '../contract/external.ts'
 import type { ExternalAuthor, ExternalEvent, ExternalFile, ExternalLink, Origin } from '../contract/external.ts'
-import { fileSize, typeOf } from '../contract/files.ts'
+import { fileSize, importedFileName, typeOf } from '../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment } from '../contract/schemas.ts'
 import type { BoardEventView, InboxItem, LinkView, MessageView, SyncThreadView } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
@@ -520,7 +520,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         notes.push(fileNote(file, 'it was empty'))
         continue
       }
-      const name = file.name ?? `${file.type}`
+      const name = importedFileName(file.name ?? `${file.type}`)
       try {
         attachments.push((await call('upload', { data, name, type: file.mimeType || typeOf(name) })).attachment)
       } catch (error) {

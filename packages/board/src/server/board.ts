@@ -245,8 +245,8 @@ const BOARD_NAME = /^[^/]{1,64}$/
 /** A team, by its ID or its slug. */
 const TEAM = /^[^\s/]+$/
 
-/** Whether `name` is a board's name, such as `security`. */
-export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
+/** Whether `name` is a board's name, such as `security`, counted as Vercel's API counts it: trimmed and NFC-normalized. */
+export const isBoardName = (name: string): boolean => BOARD_NAME.test(name.trim().normalize('NFC'))
 
 /**
  * A board for this project, on `backend`: Vercel's board for the team by default, `local()` in this

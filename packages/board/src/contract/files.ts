@@ -53,6 +53,21 @@ export function fileName(name: string | null): string {
   return base.slice(0, 255) || 'file'
 }
 
+/** Characters a name can't hold: invisible formatting (bidi overrides, zero-width), and line and paragraph separators. */
+const INVISIBLE = /[\p{Cf}\u2028\u2029]/u
+
+/** Why a stored name can't be `name`, which `fileName` gave: a dotfile, or one that shows other than it reads. */
+export function fileNameProblem(name: string): string | undefined {
+  if (name.startsWith('.')) return `attachment names can't start with a dot: ${JSON.stringify(name)}`
+  if (INVISIBLE.test(name)) return `attachment names can't hold invisible formatting characters: ${JSON.stringify(name)}`
+  return undefined
+}
+
+/** A platform's file name as sync brings it over: without a leading dot or invisible characters, which no one is there to rename. */
+export function importedFileName(name: string): string {
+  return fileName(fileName(name).replace(new RegExp(INVISIBLE.source, 'gu'), '').replace(/^[.\s]+/, ''))
+}
+
 /** `image/png`, or `application/octet-stream` when the type isn't one. */
 export function mediaType(type: string | null): string {
   const value = (type ?? '').split(';')[0]!.trim().toLowerCase()

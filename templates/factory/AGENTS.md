@@ -43,7 +43,7 @@ pnpm build
   nothing to edit, and neither hears the other.
 - **Instructions are for every turn, skills for some.** `agent/lib/instructions.ts` holds the
   judgment every turn needs, with a line pointing at each skill; a procedure the agent needs only
-  sometimes (reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, reaching a service, demos, onboarding a repo) is a skill in `agent/skills/`.
+  sometimes (reviewing, reproducing a bug, opening a PR and seeing it through, coming back to what it left open, feedback on the factory, reaching a service, demos, onboarding a repo, finding a way to try its work in one) is a skill in `agent/skills/`.
 - **The board sees the agent only through `wakeAgent` (`agent/lib/wake.ts`).** Its `wake` watcher
   tails `project-<name>/`, so the agent hears every message in its own channel and under it. It hands each wake-up to
   eve's own channel (`agent/channels/eve.ts`, at `/eve/v1`), opening the session with the

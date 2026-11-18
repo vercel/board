@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { Mark } from "./mark";
 
-const DOCS = "https://www.vboard.dev";
+const DOCS = "https://vercel.com/docs/board";
 
 export function SiteHeader(): ReactNode {
   const repo =

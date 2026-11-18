@@ -381,9 +381,9 @@ function fakeBoard(shared: Shared, boardId: string) {
   function lastOf(url: URL): number | null {
     const asked = url.searchParams.get('last')
     if (asked === null) return null
-    if (!shared.feedLast) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `last`.')
+    if (!shared.feedLast) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `last`.')
     const last = Number(asked)
-    if (!Number.isInteger(last) || last < 1 || last > 100) throw new Refused(400, 'bad_request', 'Invalid request: `last` should be an integer from 1 to 100.')
+    if (!Number.isInteger(last) || last < 1 || last > 100) throw new Refused(400, 'invalid_request', 'Invalid request: `last` should be an integer from 1 to 100.')
     if (url.searchParams.get('cursor') !== null || url.searchParams.get('from') !== null || Number(url.searchParams.get('wait') ?? 0) > 0)
       throw new Refused(400, 'invalid_request', "`last` reads a feed's newest events: it takes no `cursor` or `from`, and no `wait` above 0.")
     return last
@@ -591,8 +591,8 @@ function fakeBoard(shared: Shared, boardId: string) {
     const id = url.searchParams.get('channelId')
     const name = url.searchParams.get('channel')
     if (name === null) return id === null ? null : channelAt(id)
-    if (!shared.channelNames) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `channel`.')
-    if (id !== null) throw new Refused(400, 'bad_request', 'Invalid request: should match exactly one schema in oneOf.')
+    if (!shared.channelNames) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `channel`.')
+    if (id !== null) throw new Refused(400, 'invalid_request', 'Invalid request: should match exactly one schema in oneOf.')
     const channel = channels.find((c) => c.name === name)
     if (!channel || !mayRead(actor, channel.id)) throw new Refused(404, 'channel_not_found')
     return channel
@@ -601,8 +601,8 @@ function fakeBoard(shared: Shared, boardId: string) {
   const withChannel = (url: URL, actor: Actor, channelId: string) => {
     const include = url.searchParams.get('include')
     if (include === null) return {}
-    if (!shared.channelNames) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
-    if (include !== 'channel') throw new Refused(400, 'bad_request')
+    if (!shared.channelNames) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `include`.')
+    if (include !== 'channel') throw new Refused(400, 'invalid_request')
     if (!mayRead(actor, channelId)) throw new Refused(404, 'channel_not_found')
     return { channel: channelAt(channelId) }
   }
@@ -781,7 +781,7 @@ function fakeBoard(shared: Shared, boardId: string) {
    */
   const assignedTo = (task: Task, actor: Actor) => task.for === actor.id && task.owner === principalId(actor.principal)
   const hashOf = (token: string) => createHash('sha256').update(token).digest('hex')
-  const bad = (message: string) => new Refused(400, 'bad_request', message)
+  const bad = (message: string) => new Refused(400, 'invalid_request', message)
   const finishedFor = (task: Task) => task.state === 'completed' || task.state === 'canceled'
   /** What a change of a finished task is refused with: one code, and words that say a failed one can be reopened. */
   const finishedTask = (task: Task) =>
@@ -1569,8 +1569,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const body = parsed as { path?: string; branch?: string; watch: Registration['watch']; tag?: string; sync?: Registration['sync'] }
       // A path on the caller's own project (a preview's with its branch), or none to pull, as api-messageboard checks one.
       // A deployment is woken by its path on its project, or pulls: never at a URL, and the API refuses any `url`, even null.
-      if ('url' in parsed) throw new Refused(400, 'bad_request', 'Watchers are woken by a path, not a url.')
-      if (body.branch !== undefined && body.path === undefined) throw new Refused(400, 'bad_request', 'A branch goes with a path.')
+      if ('url' in parsed) throw new Refused(400, 'invalid_request', 'Watchers are woken by a path, not a url.')
+      if (body.branch !== undefined && body.path === undefined) throw new Refused(400, 'invalid_request', 'A branch goes with a path.')
       const principal = actor.principal
       if (body.path !== undefined) {
         if (principal.type !== 'project') throw new Refused(403, 'not_a_project')
@@ -2076,8 +2076,8 @@ function fakeBoard(shared: Shared, boardId: string) {
 
     if (url.searchParams.has('with')) {
       // An API from before `with=actors` takes no `with`, as no route that names nobody does, and no other parameter it doesn't know.
-      if (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest)) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `with`.')
-      if (url.searchParams.get('with') !== 'actors') throw new Refused(400, 'bad_request')
+      if (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest)) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `with`.')
+      if (url.searchParams.get('with') !== 'actors') throw new Refused(400, 'invalid_request')
       const plain = new URL(url)
       plain.searchParams.delete('with')
       const read = (await route(method, rest, plain, body, actor, signal, version)) as Record<string, unknown>
@@ -2093,7 +2093,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const limit = url.searchParams.get('limit')
       if (prefix === null && limit === null) return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
       // An API from before pages and prefixes takes neither parameter, as it takes no other it doesn't know.
-      if (!shared.channelPages) throw new Refused(400, 'bad_request', `Invalid request: should NOT have additional property \`${prefix !== null ? 'prefix' : 'limit'}\`.`)
+      if (!shared.channelPages) throw new Refused(400, 'invalid_request', `Invalid request: should NOT have additional property \`${prefix !== null ? 'prefix' : 'limit'}\`.`)
       if (name !== null) throw new Refused(400, 'invalid_request', 'Look a channel up by name or page through channels, not both.')
       const size = Number(limit ?? 50)
       if (!Number.isInteger(size) || size < 1 || size > 100) throw new Refused(400, 'invalid_request', 'A page holds 1 to 100 channels.')
@@ -2129,7 +2129,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'GET' && rest === '/threads') {
       // A channel's threads: it takes nothing of tasks, and refuses what it doesn't know.
       const read = url.searchParams.has('task') ? null : channelRead(url, actor)
-      if (!read) throw new Refused(400, 'bad_request', 'List a channel\'s threads: channelId, and no task.')
+      if (!read) throw new Refused(400, 'invalid_request', 'List a channel\'s threads: channelId, and no task.')
       const channelId = read.id
       const label = url.searchParams.get('label')
       let listed = [...threads.values()].filter((t) => t.channelId === channelId)
@@ -2157,15 +2157,15 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
       // 25 a page, or `limit`, 1 to 100: an API from before it takes no `limit`, as it takes no other parameter it doesn't know.
       const asked = url.searchParams.get('limit')
-      if (asked !== null && !shared.threadsLimit) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `limit`.')
+      if (asked !== null && !shared.threadsLimit) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `limit`.')
       const size = asked === null ? 25 : Number(asked)
-      if (!/^\d+$/.test(asked ?? '25') || size < 1 || size > 100) throw new Refused(400, 'bad_request', 'A page holds 1 to 100 threads.')
+      if (!/^\d+$/.test(asked ?? '25') || size < 1 || size > 100) throw new Refused(400, 'invalid_request', 'A page holds 1 to 100 threads.')
       const { items, cursor: next } = page(listed, from, size)
       const cursor = next === null ? null : Buffer.from(JSON.stringify({ scope, value: next })).toString('base64url')
       const include = url.searchParams.get('include')
       // An API from before `include=messages` takes no `include`, as it takes no other parameter it doesn't know.
-      if (include !== null && !shared.inlineThreadMessages) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `include`.')
-      if (include !== null && include !== 'messages') throw new Refused(400, 'bad_request')
+      if (include !== null && !shared.inlineThreadMessages) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `include`.')
+      if (include !== null && include !== 'messages') throw new Refused(400, 'invalid_request')
       return {
         threads: items.map((t) => {
           if (include === null) return showThread(t)
@@ -2178,7 +2178,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     }
     if (method === 'POST' && rest === '/threads') {
       // A post is a post: what starts a thread as a task is the task routes' to take.
-      if (body.task !== undefined) throw new Refused(400, 'bad_request', 'A post takes no task.')
+      if (body.task !== undefined) throw new Refused(400, 'invalid_request', 'A post takes no task.')
       const again = repeat(actor, body.clientId)
       if (again) return again
       return once(actor, body.operationId, () => {
@@ -2236,8 +2236,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       const ids = url.searchParams.getAll('id')
       if (ids.length === 0) return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
       // An API from before actors by ID takes no `id`, as it takes no other parameter it doesn't know.
-      if (!shared.actorsById) throw new Refused(400, 'bad_request', 'Invalid request: should NOT have additional property `id`.')
-      if (ids.length > 100 || new Set(ids).size !== ids.length || url.searchParams.has('cursor')) throw new Refused(400, 'bad_request')
+      if (!shared.actorsById) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `id`.')
+      if (ids.length > 100 || new Set(ids).size !== ids.length || url.searchParams.has('cursor')) throw new Refused(400, 'invalid_request')
       return { actors: ids.flatMap((id) => actors.get(id) ?? []), cursor: null }
     }
     if (method === 'GET' && rest === '/messages') {
@@ -2246,12 +2246,14 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Refused(400, 'invalid_request')
       const head = feeds.get(channelId)?.length ?? 0
       const listed = [...threads.values()].filter((t) => t.channelId === channelId).flatMap((t) => t.messages).sort((a, b) => a.feedSequence - b.feedSequence)
-      const after = url.searchParams.get('after')
-      if (after === null) return { messages: listed.slice(-limit).map(show), cursor: cursorAt(channelId, head) }
+      // `after` is the old name of `cursor`, which it still takes.
+      if (url.searchParams.has('after') && url.searchParams.has('cursor')) throw new Refused(400, 'invalid_request', 'Read on with after or with cursor, not both.')
+      const after = url.searchParams.get('cursor') ?? url.searchParams.get('after')
+      if (after === null) return { messages: listed.slice(-limit).map(show), cursor: cursorAt(channelId, head), caughtUp: true }
       const from = positionOf(channelId, after)
       const taken = listed.filter((m) => m.feedSequence > from).slice(0, limit)
       const more = listed.filter((m) => m.feedSequence > from).length > limit
-      return { messages: taken.map(show), cursor: cursorAt(channelId, more ? taken.at(-1)!.feedSequence : head) }
+      return { messages: taken.map(show), cursor: cursorAt(channelId, more ? taken.at(-1)!.feedSequence : head), caughtUp: !more }
     }
     if (method === 'GET' && rest === '/changes') {
       const named = url.searchParams.get('channel')
@@ -2259,7 +2261,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (url.searchParams.get('channelId') === null && (named === null || named.endsWith('/'))) {
         if (shared.boardFeed) return boardChanges(url, actor, named, last)
         // An API from before the board's feed reads one channel's changes, and takes none without it.
-        if (named === null) throw new Refused(400, 'bad_request', 'Invalid request: missing required property `channelId`.')
+        if (named === null) throw new Refused(400, 'invalid_request', 'Invalid request: missing required property `channelId`.')
       }
       const channelId = (channelRead(url, actor) ?? channelAt('')).id
       shared.feedReads++
@@ -2292,10 +2294,10 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (method === 'GET') {
         // An API from before ranges takes none of their parameters, as it takes no other it doesn't know.
         const ranged = ['after', 'limit', 'order'].find((name) => url.searchParams.has(name))
-        if (ranged && !shared.threadRanges) throw new Refused(400, 'bad_request', `Invalid request: should NOT have additional property \`${ranged}\`.`)
+        if (ranged && !shared.threadRanges) throw new Refused(400, 'invalid_request', `Invalid request: should NOT have additional property \`${ranged}\`.`)
         const after = Number(url.searchParams.get('after') ?? 0)
         const size = Number(url.searchParams.get('limit') ?? 50)
-        if (!Number.isInteger(size) || size < 1 || size > 100) throw new Refused(400, 'bad_request', 'A page holds 1 to 100 messages.')
+        if (!Number.isInteger(size) || size < 1 || size > 100) throw new Refused(400, 'invalid_request', 'A page holds 1 to 100 messages.')
         const listed = thread.messages.filter((m) => m.sequence > after)
         if (url.searchParams.get('order') === 'desc') listed.reverse()
         const { items, cursor } = page(listed, url.searchParams.get('cursor'), size)
@@ -2410,6 +2412,8 @@ type Kept = {
 
 /** A name a board may have: 1 to 64 characters, no `/`. */
 const BOARD_NAME = /^[^/]{1,64}$/
+/** The reads answered with an `ETag`, and a 304 when it's sent back unchanged: a board's channels, one channel, and its actors. */
+const TAGGED = /^\/v1\/messageboard\/boards\/[^/]+\/(channels(\/[^/]+)?|actors)$/
 
 /** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
 type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
@@ -2491,7 +2495,7 @@ function fakeSchemas({ now, roles }: { now: () => number; roles: Record<string, 
       if (actor.principal.type === 'user' && (roles[actor.principal.userId] ?? 'member') === 'viewer') throw new Refused(403, 'forbidden')
       if (actor.narrowed) throw new Refused(403, 'forbidden', "A caller narrowed with x-board-can can't change the team's schemas: that's its principal's job.")
       const { operationId: _operationId, name, version, description, schema, ...unknown } = body
-      if (Object.keys(unknown).length > 0) throw new Refused(400, 'bad_request', `Unknown property ${Object.keys(unknown)[0]}.`)
+      if (Object.keys(unknown).length > 0) throw new Refused(400, 'invalid_request', `Unknown property ${Object.keys(unknown)[0]}.`)
       const id = `${name}@${version}`
       if (typeof name !== 'string' || !ID.test(id)) throw new Refused(400, 'invalid_schema_id', 'Schema names use lowercase letters, numbers, ".", "_" and "-", starting with a letter.')
       if (BUILT_IN_SCHEMAS.some((found) => found.name === name)) throw new Refused(409, 'reserved_schema', `${name} is a built-in schema and can't be registered.`)
@@ -2695,7 +2699,7 @@ export function fakeMessageboard(
       if (typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
       // Every write's operation ID is a UUIDv7, and its time is read: with no receipt to answer it, a write is refused
       // unless that time is within the last 7 days and at most 5 minutes ahead. A hash laid out as one is almost never.
-      if (!UUID_V7.test(body.operationId)) throw new Refused(400, 'bad_request', 'operationId is a UUIDv7.')
+      if (!UUID_V7.test(body.operationId)) throw new Refused(400, 'invalid_request', 'operationId is a UUIDv7.')
       const kept = receipts.get(`${principalId(actor.principal)}|${body.operationId}`)
       const answered = kept !== undefined && Date.now() - kept <= RECEIPT_KEPT_DAYS * DAY_MS
       const made = Number.parseInt(body.operationId.replaceAll('-', '').slice(0, 12), 16)
@@ -2712,9 +2716,9 @@ export function fakeMessageboard(
     }
     if (method === 'GET' && path === '/me') return me()
     if (method === 'GET' && path === '/boards') {
-      // `name` matches whatever its case, among the boards the caller may use, in one answer.
-      const name = url.searchParams.get('name')
-      if (name !== null && !BOARD_NAME.test(name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
+      // `name` matches whatever its case, among the boards the caller may use, in one answer: trimmed and NFC-normalized, as a name is kept.
+      const name = url.searchParams.get('name')?.trim().normalize('NFC') ?? null
+      if (name !== null && !BOARD_NAME.test(name)) throw new Refused(400, 'invalid_request', 'A board name is 1 to 64 characters with no /.')
       if (name !== null && url.searchParams.has('cursor')) throw new Refused(400, 'invalid_request', 'A name lookup takes no cursor.')
       const listed = boards().filter((board) => mayUse(actor, board) && (name === null || board.name.toLowerCase() === name.toLowerCase()))
       return { boards: listed.map(show), defaultBoardId: made && mayUse(actor, general) ? general.id : null, cursor: null }
@@ -2729,7 +2733,8 @@ export function fakeMessageboard(
       return { board: show(general) }
     }
     if (method === 'POST' && path === '/boards/ensure') {
-      if (typeof body.name !== 'string' || !BOARD_NAME.test(body.name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
+      if (typeof body.name === 'string') body.name = body.name.trim().normalize('NFC')
+      if (typeof body.name !== 'string' || !BOARD_NAME.test(body.name)) throw new Refused(400, 'invalid_request', 'A board name is 1 to 64 characters with no /.')
       // A retry with the same operation ID answers what the first did, as one that made nothing.
       const replayed = ensured.get(`${principalId(actor.principal)}|${body.operationId}`)
       if (replayed) return { board: show(replayed), created: false }
@@ -2811,7 +2816,12 @@ export function fakeMessageboard(
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       try {
-        return Response.json(await route(request))
+        const answer = await route(request)
+        if (request.method !== 'GET' || !TAGGED.test(new URL(request.url).pathname)) return Response.json(answer)
+        // A weak tag of what this caller gets, which it sends back to hear it holds.
+        const etag = `W/"${createHash('sha256').update(JSON.stringify(answer)).digest('base64url')}"`
+        if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers: { etag } })
+        return Response.json(answer, { headers: { etag } })
       } catch (error) {
         if (error instanceof Refused || error instanceof GrantRefused)
           return Response.json({ error: { code: error.code, message: error.message, ...(error instanceof Refused && error.reason !== undefined ? { reason: error.reason } : {}), ...(error instanceof Refused && error.until !== undefined ? { until: error.until } : {}), ...(error instanceof Refused ? error.more : {}) } }, { status: error.status })
