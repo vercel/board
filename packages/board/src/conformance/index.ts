@@ -765,6 +765,24 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    // A watcher tailing a label must learn its message is gone, though the tombstone wears none.
+    name: "tells a label's feed when a message it found is deleted",
+    run: async (ctx) => {
+      const label = { ...ctx.labels, deleting: ctx.labels.conformance }
+      const root = await ctx.board.post(ctx.channel, { text: 'conformance: a labeled root whose thread is deleted', labels: label, noSync: true })
+      ctx.posted.push(root.id)
+      const under = await reply(ctx, root.id, 'conformance: a reply its label finds')
+      const { cursor } = await ctx.board.poll({ channel: ctx.channel, label })
+      await ctx.board.delete(under.id)
+      await ctx.board.delete(root.id)
+      const { events } = await ctx.board.poll({ channel: ctx.channel, label, after: cursor })
+      const deleted = events.filter((event) => event.type === 'message.deleted').map((event) => event.message?.id)
+      check(deleted.includes(under.id), `a label's feed should get the deletion of a reply its root's label found, got ${show(events.map((event) => event.type))}`)
+      check(deleted.includes(root.id), `a label's feed should get the deletion of a message that wore the label, got ${show(events.map((event) => event.type))}`)
+    },
+  },
+  {
+    group: 'core',
     name: 'lists the channel and you in it',
     run: async (ctx) => {
       const channels = await ctx.board.channels()

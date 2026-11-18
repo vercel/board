@@ -1006,6 +1006,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return thread
     }
   }
+  /**
+   * Each thread's root as an event's labels match on it, read once: the thread, whose labels the API
+   * keeps, and its root, which says when it was deleted.
+   */
+  function rootReader(who: Who, signal?: AbortSignal) {
+    const read = new Map<string, Promise<{ thread: ApiThread; message: ApiMessage }>>()
+    return (id: string) => {
+      let root = read.get(id)
+      if (!root) read.set(id, (root = messageById(who, idAt(id, 1), signal)))
+      return root
+    }
+  }
+  /**
+   * A message and its thread as a change's labels match on them: as they were just before it. A message
+   * deleted by this change or since still wore the labels the API keeps on it, as a thread did whose root was.
+   */
+  function wornAt(change: ApiChange, message: ApiMessage, thread: ApiThread, root: ApiMessage | undefined) {
+    // Its own deletion is stamped apart from the change that says so, so that one's known by its type.
+    const wore = (m: ApiMessage) => m.deletedAt === undefined || m.deletedAt >= change.createdAt || (change.type === 'message.deleted' && change.messageId === m.id)
+    return { message: wore(message) ? { ...message, deletedAt: undefined } : message, thread: !root || wore(root) ? thread : labeledBy(thread, root) }
+  }
   /** A thread as its root's labels find it: the API keeps a deleted root's labels on its thread, and a deleted message has none. */
   const labeledBy = (thread: ApiThread, root: ApiMessage | undefined): ApiThread => {
     if (root?.deletedAt === undefined) return thread
@@ -1931,7 +1952,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     filters: Filters & { all?: boolean | undefined },
     narrow: Narrow,
     given?: { thread: ApiThread; message: ApiMessage },
-    threads: (id: string) => Promise<ApiThread> = threadReader(who),
+    roots: (id: string) => Promise<{ thread: ApiThread; message: ApiMessage }> = rootReader(who),
   ): Promise<BoardEventView | null> {
     if (change.type.startsWith('task.')) return taskEventOf(who, change, channel, cursor, filters, narrow, given)
     if (!change.messageId || !change.type.startsWith('message.')) return null
@@ -1941,10 +1962,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (error instanceof HttpError && error.status === 404) return null
         throw error
       }))
-    // A reply's read names its thread, not whether its root is deleted: a label filter reads the root.
-    if (found && !given && filters.label?.length)
-      found = { ...found, thread: found.message.sequence === 1 ? labeledBy(found.thread, found.message) : await threads(found.thread.id) }
-    if (!found || !(await matches(filters, found.message, found.thread, narrow))) return null
+    if (!found) return null
+    // A label matches on what the message and its root wore at the change: a reply's read names its thread, not
+    // whether its root is deleted, so a label filter reads the root.
+    let matched = found
+    if (filters.label?.length) {
+      const root = found.message.sequence === 1 ? found : await roots(found.thread.id)
+      matched = wornAt(change, found.message, root.thread, root.message)
+    }
+    if (!(await matches(filters, matched.message, matched.thread, narrow))) return null
     const message = await view(who, found.message, channel)
     const by = authorOf(change.actor)
     const from = await fromOf(who, change.from, change.actor)
@@ -2011,7 +2037,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }),
     )
     const narrow = await narrowOf(who, filters)
-    const threads = threadReader(who, signal)
+    const roots = rootReader(who, signal)
     const running: Record<string, Feed> = { ...position.feeds }
     const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
     const events: BoardEventView[] = []
@@ -2022,9 +2048,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     for (const { change, i, page } of merged) {
       running[page.channel.id] = { at: page.at, skip: i + 1 }
       const message = change.currentMessage
-      // A label matches on the root's, which only a read of the thread has: nothing else needs one.
-      const given = message && change.threadId ? { message, thread: filters.label?.length ? await threads(change.threadId) : ({ id: change.threadId } as ApiThread) } : undefined
-      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running }, ...start }), filters, narrow, given, threads)
+      // Each change comes with its message; a label filter reads its root, as `eventOf` does.
+      const given = message && change.threadId ? { message, thread: { id: change.threadId } as ApiThread } : undefined
+      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running }, ...start }), filters, narrow, given, roots)
       if (event) events.push(event)
     }
     const after: Record<string, Feed> = { ...position.feeds }
@@ -2107,7 +2133,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** One channel's events, from the API's feed after one of its cursors, or from now: a long-poll holds there, not here. */
   async function channelEvents(who: Who, channel: ChannelRef, query: Protocol['events']['input'], signal: AbortSignal) {
     const path = await onBoard(who, '/changes')
-    const thread = threadReader(who, signal)
+    const roots = rootReader(who, signal)
     const narrow = await narrowOf(who, query)
     const until = Date.now() + (query.wait ?? 0) * 1000
     let cursor = query.after
@@ -2123,9 +2149,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       narrow.mentions?.ahead(page.events.flatMap((change) => (change.currentMessage ? [change.currentMessage.text] : [])))
       for (const change of page.events) {
         const message = change.currentMessage
-        const found = message && change.threadId ? { message, thread: query.label?.length ? await thread(change.threadId) : ({ id: change.threadId } as ApiThread) } : null
+        const found = message && change.threadId ? { message, thread: { id: change.threadId } as ApiThread } : null
         if (!found) continue
-        const event = await eventOf(who, change, channel.name, change.cursor ?? page.cursor, query, narrow, found)
+        const event = await eventOf(who, change, channel.name, change.cursor ?? page.cursor, query, narrow, found, roots)
         if (event) events.push(event)
       }
       if (events.length > 0 || Date.now() >= until || signal.aborted) return { events, cursor }

@@ -88,6 +88,7 @@ describe('vercel()', () => {
       'core: raises the version with each edit, reaction, and label': 'passed',
       "core: matches a label on the message or its thread's root": 'passed',
       'core: drops a deleted message from what its labels find': 'passed',
+      "core: tells a label's feed when a message it found is deleted": 'passed',
       'core: reads a channel after a cursor or a message ID, oldest first': 'passed',
       'core: lists threads, each with its reply count and latest reply': 'passed',
       "core: matches text anywhere in a message's own, in any case, as it reads now": 'passed',
