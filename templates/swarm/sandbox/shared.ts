@@ -182,8 +182,14 @@ export function planFrom(replies: string[], max: number): Planned[] {
       continue;
     }
   }
-  if (of === 0 || found.size < of) return [];
-  return Array.from({ length: of }, (_, i) => found.get(i + 1)!).slice(0, max);
+  if (of > 0) return found.size < of ? [] : Array.from({ length: of }, (_, i) => found.get(i + 1)!).slice(0, max);
+  // A runner from before one reply per task posts its plan whole, in one `json plan` block: read when it isn't cut off.
+  for (const text of [...replies].reverse()) {
+    const whole = /\`\`\`json plan\n[\s\S]*?\n\`\`\`/.exec(text)?.[0];
+    const plan = whole ? parsePlan(whole, max) : [];
+    if (plan.length) return plan;
+  }
+  return [];
 }
 
 /** The first line a reviewer's answer must start with, and what each means. Anything that isn't a clear approval asks for changes. */

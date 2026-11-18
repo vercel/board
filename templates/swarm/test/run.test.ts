@@ -390,6 +390,9 @@ test("a plan of long briefs reaches the app whole, in replies the board takes, a
   assert.deepEqual(planFrom(replies, 120), plan);
   assert.deepEqual(planFrom(replies.slice(0, -1), 120), [], "a plan missing its last task isn't read");
   assert.equal(planFrom(replies, 3).length, 3);
+  const whole = "Plan: 1 task:\n- A\n\n```json plan\n" + JSON.stringify([{ title: "A", brief: "do a" }]) + "\n```";
+  assert.deepEqual(planFrom([whole], 120), [{ title: "A", brief: "do a" }], "a plan posted whole, as runners did before, is still read");
+  assert.deepEqual(planFrom([whole.slice(0, -4)], 120), [], "a whole plan cut off is not");
   const many = planReplies(Array.from({ length: 120 }, (_, i) => ({ title: `${i} ${"x".repeat(190)}`, brief: "b" })));
   assert.ok(many[0]!.length <= REPLY_MAX && many[0]!.includes("more"));
 });
