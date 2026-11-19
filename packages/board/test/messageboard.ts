@@ -2608,6 +2608,8 @@ export function fakeMessageboard(
     unscopedSync?: boolean
     /** `false`: an API that serves no task routes, as Vercel's did before its threads carried tasks. Each is its 404, as any route it doesn't have is. */
     tasks?: boolean
+    /** True for a team whose plan holds only its own board, as Hobby's does: making another is 400 `too_many_boards`. */
+    oneBoard?: boolean
   } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
@@ -2745,6 +2747,7 @@ export function fakeMessageboard(
         if (!mayUse(actor, found[0])) throw new Refused(403, 'board_not_granted', "This project isn't granted that board.")
         return { board: show(found[0]), created: false }
       }
+      if (options.oneBoard) throw new Refused(400, 'too_many_boards', "This team's plan includes only its General board: use General.")
       // A new team-visible board, granted to the project that made it, in its own environment.
       const board = kept(`brd_${randomUUID()}`, body.name, new Set(actor.principal.type === 'project' ? [grantOf(actor.principal)] : []))
       others.push(board)

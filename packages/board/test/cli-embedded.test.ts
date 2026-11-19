@@ -895,6 +895,35 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("says a board conformance couldn't open is an error, with ways out that check another board, not a failed check", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard({ oneBoard: true })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const said = await run('conformance', '--scope', 'test', '--name', 'scratch', '--ensure')
+      expect(said).toMatchObject({ code: 1, stdout: '' })
+      expect(said.stderr).toMatch(/^error: Can't check the board\. The team has all the boards it can\./)
+      expect(said.stderr).not.toContain('failed')
+      // The team's board is no way out here: conformance refuses it without a name.
+      expect(said.stderr).not.toMatch(/^    vb conformance( --scope test)?\n/m)
+      // A URL names its team, so --scope goes with --name.
+      expect(said.stderr).toContain('    vb conformance --url <URL>\n')
+      expect(said.stderr).toContain('    vb conformance --scope test --name General\n')
+      const json = await run('conformance', '--name', 'scratch', '--ensure', '--json')
+      expect(json).toMatchObject({ code: 1, stdout: '' })
+      expect(JSON.parse(json.stderr)).toMatchObject({ status: 'error', reason: 'too_many_boards' })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('tells a project it has no access to a board, and who fixes that', async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:preview')
