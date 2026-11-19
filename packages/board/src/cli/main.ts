@@ -2047,11 +2047,16 @@ function isNeed(need: unknown): boolean {
   return keys[0] === 'key' && typeof value === 'string'
 }
 
-/** A need as the board takes it: an ID as it is, or `{ "key": … }`. */
-function boardNeed(need: unknown): unknown {
+/** A need as the board takes it: an ID as it is, or `{ "key": … }`, which a bare string is when it's a key of the plan's own. */
+function boardNeed(need: unknown, keys: ReadonlySet<string>): unknown {
+  if (typeof need === 'string' && keys.has(need)) return { key: need }
+  return idNeed(need)
+}
+
+function idNeed(need: unknown): unknown {
   if (typeof need === 'string') return need.replace(/^#/, '')
   if (typeof need === 'number') return String(need)
-  if (typeof need === 'object' && need !== null && 'id' in need) return boardNeed(need.id)
+  if (typeof need === 'object' && need !== null && 'id' in need) return idNeed(need.id)
   return need
 }
 
@@ -2079,7 +2084,7 @@ function checkPlan(plan: Record<string, unknown>[], where: string): void {
     const odd = task.needs.find((need) => !isNeed(need))
     if (odd !== undefined) {
       const said = JSON.stringify(odd)
-      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. A need is a task's ID as vb prints it, {"id": "…"}, or {"key": "fix"} for a task of the plan's own.`, { next: [planHelp()] })
+      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. A need is a key of the plan's own, like "fix" or {"key": "fix"}, or a task's ID as vb prints it or as {"id": "…"}.`, { next: [planHelp()] })
     }
   }
 }
@@ -2108,9 +2113,10 @@ async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   // A profile's name is the caller's own profile, as --for takes one: an actor's ID goes as it is.
   const named = plan.some((task) => typeof task.for === 'string' && !task.for.includes(':'))
   const principal = named ? (await board.me()).principal : ''
+  const keys = new Set(plan.flatMap((task) => (typeof task.key === 'string' ? [task.key] : [])))
   return plan.map((task) => ({
     ...task,
-    ...(Array.isArray(task.needs) ? { needs: task.needs.map(boardNeed) } : {}),
+    ...(Array.isArray(task.needs) ? { needs: task.needs.map((need) => boardNeed(need, keys)) } : {}),
     ...(typeof task.for === 'string' && !task.for.includes(':') ? { for: profileActor(principal, task.for) } : {}),
   })) as TaskInBatch[]
 }

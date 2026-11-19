@@ -2,4 +2,4 @@
 '@vercel/board': patch
 ---
 
-`vb tasks create --file` takes a need for a task that's there as `{"id": "812"}` too, as well as `"812"`, and says what a need looks like when it refuses one.
+`vb tasks create --file` takes a need as a bare key of the plan's own, `"fix"`, and a task that's there as `{"id": "812"}` too, and says what a need looks like when it refuses one.
