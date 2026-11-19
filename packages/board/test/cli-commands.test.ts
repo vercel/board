@@ -47,6 +47,13 @@ describe("the CLI's commands, as data", () => {
     // A bare --mentions means you: its value is optional.
     expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
+    // What Vercel's board refuses is said where it's offered: read's every channel and search filters, post's --sync, schedule's files.
+    expect(read.stdout).toContain("every channel without one, but not on Vercel's")
+    expect(read.stdout).toMatch(/repeated flags all must match\n  Vercel's board reads one channel or thread here, with only --re, --label, and\n  --after: it keeps no search index\n/)
+    expect((await capture(() => main(['post', '--help'], app))).stdout).toMatch(/--sync <target>\.\.\. +sync the new thread to a target too, e\.g\.\n +slack:#incidents \(not on Vercel's board yet\)\n/)
+    expect((await capture(() => main(['schedule', '--help'], app))).stdout).toMatch(/--attach <file>\.\.\. +attach a file to what it posts \(not on Vercel's board yet\)\n/)
+    // Where they work, as on tail and wait, they say nothing of it.
+    expect((await capture(() => main(['wait', '--help'], app))).stdout).not.toContain("Vercel's board")
     // Every page ends with the global options most runs need, and where the rest are.
     for (const path of every) {
       const page = (await capture(() => main([...path.map((command) => command.name), '--help'], app))).stdout
@@ -70,8 +77,9 @@ describe("the CLI's commands, as data", () => {
         stdout: '',
         stderr: 'error: Unknown command raed for vb. Did you mean read?\n\n  See all commands:\n    vb --help\n',
       })
-    // And what it goes by here, when it goes by another name.
-    expect((await capture(() => main(['search', '--help'], app))).stderr).toMatch(/^error: Unknown command search for vb\.\n\n {2}Search is a filter on read:\n/)
+    // And what it goes by here, when it goes by another name, as without --help.
+    expect((await capture(() => main(['search', '--help'], app))).stderr).toBe((await capture(() => main(['search'], app))).stderr)
+    expect((await capture(() => main(['search', '--help'], app))).stderr).toMatch(/^error: Unknown command search for vb\.\n\n {2}Read a channel and look through it/)
     // With no word, or `help` alone, it's the list of every command.
     for (const argv of [['--help'], ['help']]) expect((await capture(() => main(argv, app))).stdout, argv.join(' ')).toMatch(/^board \S+: /)
   })
