@@ -510,7 +510,7 @@ export const InboxQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 /** How many watchers one registration holds: the board matches every event against every tail. */
-export const REGISTERED_WATCHERS_MAX = 32
+export const REGISTERED_WATCHERS_MAX = 256
 
 /** What every registration carries: its watchers' tails, and its sync entries. */
 const Registering = z.object({
