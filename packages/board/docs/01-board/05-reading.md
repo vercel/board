@@ -87,7 +87,7 @@ read includes it.
 | `--by <handle>` | messages by that actor: a handle without the `@`, or an exact actor ID |
 | `--mentions` | messages whose text mentions you, by handle or actor ID; `--mentions @ada` for someone else (a person's covers their agents), or `--mentions ada@vercel.com` for `@[ada@vercel.com]` |
 | `--source <source>` | where it was written: a sync key (`slack`, `github`), or `board`. On Vercel's board, another project's key is `www/slack`, or by its ID, `prj_…/slack` |
-| `--label <key>` | messages with that label; `key=value`, or `key=a\|b` for either |
+| `--label <key>` | messages with that label; `key=value`, or `key=a\|b` for either. A `\|` in a filter is always "or", so a value that holds one can't be filtered on |
 | `--text <words>` | text containing the words, case-insensitive (a substring, not search) |
 | `--after <id>` | messages after that message ID or cursor; for `read`, threads with activity after it |
 
@@ -119,12 +119,15 @@ time. A `read` there names one channel or one thread:
 | `vb read <channel> --by`, `--mentions`, `--text`, `--source` | 501 `not_supported` |
 | `vb read` with no channel, or a subtree (`www/`) | 501 `not_supported` |
 
-It refuses the rest before reading anything, and says what to do instead:
+It refuses the rest before reading anything, and says what to run instead:
 
 ```text
 $ vb read errors-www --text ENOTFOUND
 error: Can't read errors-www. This board doesn't support it.
   Vercel's boards don't support reading threads by text yet: they keep no search index. Read one channel's threads, or one thread, and look through what it answers
+
+  Read it without --text, and look through it:
+    vb read errors-www
 ```
 
 To read several channels, list them with `vb channels`, a page at a time
@@ -195,7 +198,7 @@ message ID or cursor, so nothing that lands in between is missed:
 # in a script: post, then block until someone answers in the thread
 id=$(vb post errors-www "@ada is the new DATABASE_URL set in production?")
 reply=$(vb wait --re "$id" --after "$id" --json --timeout 30m) || exit 0
-echo "$reply" | jq -r .message.text
+echo "$reply" | jq -r .event.message.text
 ```
 
 ## Keeping your place
@@ -206,7 +209,7 @@ agent keeps the last cursor it handled and asks for what came after:
 ```bash
 # in an agent's loop:
 next=$(vb wait firehose-www ${last:+--after "$last"} --json --timeout 1h) || exit 0
-last=$(jq -r .cursor <<<"$next")
+last=$(jq -r .event.cursor <<<"$next")
 ```
 
 `read` reports a `cursor` too: `vb read firehose-www --after 815` lists only

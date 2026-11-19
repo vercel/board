@@ -437,9 +437,21 @@ function retryWait(attempt: number, retryAfter: string | null): number {
 }
 
 /**
+ * What the API's 429 asks for: its whole window. It limits requests a minute with a bucket that refills all the
+ * time (a request a tenth of a second at 600 a minute), and says when it's full again: `Retry-After` is 60 and
+ * `x-ratelimit-reset` a minute from now whatever's left. A wait under this is the API's own, and is taken.
+ */
+const WHOLE_WINDOW_S = 59
+/** The most a put-off request is told to wait, where the API says only its whole window. */
+const THROTTLED_WAIT_MAX_S = 15
+
+/**
  * A 429 the API still answered after `retries` tries again in `ms`: how many requests a minute it
- * takes (`x-ratelimit-limit`), from whom, and when to send again. That's when its window resets
- * (`x-ratelimit-reset`, in Unix seconds), or what `Retry-After` asks where it doesn't say.
+ * takes (`x-ratelimit-limit`), from whom, and when it's worth sending again. That's what `Retry-After`
+ * (or `x-ratelimit-reset`, in Unix seconds) asks when it's under the whole window. Otherwise it's the next
+ * wait the retries would have taken, a second doubling each time, up to `THROTTLED_WAIT_MAX_S`: the limit
+ * gives a request back every tenth of a second at 600 a minute, so what's kept it off this long is everyone
+ * else on the login taking them first, and a try a few seconds later usually gets through.
  */
 function throttled(response: Response, code: string, retries: number, ms: number): HttpError {
   const header = (name: string) => {
@@ -448,13 +460,17 @@ function throttled(response: Response, code: string, retries: number, ms: number
   }
   const reset = header('x-ratelimit-reset')
   const untilReset = reset !== undefined ? reset - Math.floor(Date.now() / 1000) : undefined
-  const retryAfter = untilReset !== undefined && untilReset > 0 && untilReset <= 3600 ? untilReset : header('retry-after')
+  const asked = untilReset !== undefined && untilReset > 0 && untilReset <= 3600 ? untilReset : header('retry-after')
   const limit = header('x-ratelimit-limit')
+  const retryAfter = asked !== undefined && asked < WHOLE_WINDOW_S ? Math.max(1, asked) : Math.min(THROTTLED_WAIT_MAX_S, (RETRY_MS / 1000) * 2 ** retries)
   const tried = retries > 0 ? `rate-limited ${retries + 1} tries in ${Math.max(1, Math.round(ms / 1000))}s` : 'rate-limited it'
   const takes = limit !== undefined ? `takes ${limit} requests a minute` : 'limits requests'
-  return new HttpError(429, code, `Vercel's API ${tried}. It ${takes} per login or token, for all its agents and profiles together.`, {
-    ...(retryAfter !== undefined ? { retryAfter } : {}),
-  })
+  return new HttpError(
+    429,
+    code,
+    `Vercel's API ${tried}. It ${takes} per login or token, for all its agents and profiles together, and refills as the minute goes: a try a few seconds later usually gets through.`,
+    { retryAfter },
+  )
 }
 
 /** `ms` passing, or `signal` stopping it first. */
@@ -3112,9 +3128,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { created } = await ensureChannel(whoOf(caller), path)
       return { channel: { path }, created }
     },
-    async actors(caller, _input, signal) {
+    async actors(caller, { id: only }, signal) {
       const who = whoOf(caller)
-      const views = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)
+      // A few by ID, asked for with everyone else named in this turn, or kept from a read that named them: never the
+      // whole list, a request a page of it, for them. An API that doesn't answer by ID gives its list, kept to them.
+      const wanted = only ? [...new Set(only)] : null
+      const named = wanted && namesById ? await Promise.all(wanted.map((id) => byId(who, id, true))) : null
+      const views =
+        named && !named.includes(null)
+          ? named.filter((view) => view !== undefined && view !== null)
+          : (await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)).filter((view) => !wanted || wanted.includes(view.id))
       const names = projectNamesOf(views.map((view) => [view.id, view] as const))
       const listed = views.map((actor) => {
         const { profile } = actorParts(actor.id)

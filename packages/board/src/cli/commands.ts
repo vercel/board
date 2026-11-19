@@ -597,7 +597,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'claim',
         description: 'hold a task for a lease, by its ID, or with --ready the oldest ready one in a channel',
         arguments: [{ name: 'id|channel', required: true, description: "a task's ID, or with --ready a channel or a path prefix (work/)" }],
-        options: [option('ready'), option('label', 'with --ready: one whose root has this label', 'k=v'), option('from'), option('wait'), option('lease')],
+        options: [option('ready'), option('label', 'with --ready: one whose root has this label, one value exactly', 'k=v'), option('from'), option('wait'), option('lease')],
         examples: [
           { name: 'claim a task', value: 'tasks claim 812' },
           { name: 'claim the next fix, waiting for one', value: 'tasks claim --ready work/ --label step=fix --wait 10m' },
@@ -610,7 +610,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           { name: 'id|channel', required: true, description: "a task's ID, or with --ready a channel or a path prefix" },
           { name: 'cmd', required: true, multiple: true, description: 'the command, after --: it gets BOARD_TASK, the task\'s ID' },
         ],
-        options: [option('result'), option('ready'), option('label', 'with --ready: one whose root has this label', 'k=v'), option('from'), option('wait'), option('lease')],
+        options: [option('result'), option('ready'), option('label', 'with --ready: one whose root has this label, one value exactly', 'k=v'), option('from'), option('wait'), option('lease')],
         examples: [
           { name: 'run the tests as a task', value: 'tasks run 812 --result "tests pass" -- make test' },
           { name: 'work the next fix', value: 'tasks run --ready work/ --label step=fix -- ./fix.sh' },
