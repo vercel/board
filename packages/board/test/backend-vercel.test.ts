@@ -6,6 +6,7 @@ import { credentialSource, vercel as nodeVercel } from '../src/backend-vercel/in
 import { conformance } from '../src/conformance/index.ts'
 import { boardEvents } from '../src/contract/events.ts'
 import { watchersHash } from '../src/server/registry.ts'
+import { REGISTERED_WATCHERS_MAX } from '../src/api/routes.ts'
 import type { Authenticate } from '../src/access/index.ts'
 import { compileAccess } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
@@ -2068,6 +2069,14 @@ describe('vercel()', () => {
     })
     for (const tail of ['general --mentions @ada', 'general --source slack'])
       await expect(team.register({ url: null, watch: { w: { tail } } })).rejects.toMatchObject({ status: 400, code: 'bad_watcher' })
+  })
+
+  it("leaves how many watchers a registration holds to the API", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api, 'project:prj_pong:production')
+    const watch = Object.fromEntries(Array.from({ length: REGISTERED_WATCHERS_MAX + 1 }, (_, i) => [`w${i}`, { tail: 'general' }]))
+    await team.register({ url: null, watch })
+    expect(Object.keys(api.registrations.get('vercel:project:prj_pong:production')!.watch)).toHaveLength(REGISTERED_WATCHERS_MAX + 1)
   })
 
   it('schedules a thread and a reply in the API, in its times, and each send says which schedule posted it', async () => {

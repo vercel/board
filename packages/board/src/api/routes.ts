@@ -509,15 +509,13 @@ export const InboxQuery = z.object({
   channel: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
-/** How many watchers one registration holds: the board matches every event against every tail. */
+/** How many watchers one registration holds on the local engine, which matches every event against every tail. Vercel's API sets its own. */
 export const REGISTERED_WATCHERS_MAX = 64
 
 /** What every registration carries: its watchers' tails, and its sync entries. */
 const Registering = z.object({
   // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
-  watch: z
-    .record(z.string().max(100), z.object({ tail: z.string().max(1000) }))
-    .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
+  watch: z.record(z.string().max(100), z.object({ tail: z.string().max(1000) })),
   /**
    * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
    * where it may sync, and the board lists the entries.

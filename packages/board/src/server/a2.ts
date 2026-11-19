@@ -13,7 +13,7 @@ import { type Actor, type ExternalCopy, type Message } from '../contract/folds.t
 import { importedHandle, shownName, userIdOf } from '../contract/profiles.ts'
 import { extractMentions, isEmail, replaceMentions } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
-import { CHANNELS_LIMIT_DEFAULT, INBOX_EVENT_ID_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, INBOX_EVENT_ID_MAX, REGISTERED_WATCHERS_MAX, type Discovery, type InboxEntry, type Me, type ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, parseCan, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
@@ -774,6 +774,8 @@ function build(options: A2Options, binding: BoardBinding) {
       // A key names one sync's platform locations: this board's own sync's keys are its own.
       const taken = body.sync?.find((entry) => binding.sync.some((own) => own.key === entry.key))
       if (taken) throw new HttpError(409, 'sync_key_taken', `this board's own sync has sync entry ${taken.key}: give yours another key`)
+      if (Object.keys(body.watch).length > REGISTERED_WATCHERS_MAX)
+        throw badRequest(`a registration holds at most ${REGISTERED_WATCHERS_MAX} watchers`, 'too_many_watchers')
       for (const [id, spec] of Object.entries(body.watch)) {
         const name = RemoteWatcherId.safeParse(id)
         if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
