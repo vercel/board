@@ -2035,23 +2035,24 @@ const PLAN_KEYS = ['key', 'text', 'labels', 'needs', 'for', 'noSync', 'attachmen
 /** The help page that says what a plan holds. */
 const planHelp = (): Recovery => ({ instruction: 'See what a plan takes', argv: [...cli(), 'tasks', 'create', '--help'] })
 
-/** One of a plan task's `needs`: a task that's there, by its ID as text or as a number, or `{ "key": … }` for one of the plan's own. */
+/** One of a plan task's `needs`: a task that's there, by its ID as text, as a number, or as `{ "id": … }`, or `{ "key": … }` for one of the plan's own. */
 function isNeed(need: unknown): boolean {
   if (typeof need === 'string') return need.replace(/^#/, '').length > 0
   if (typeof need === 'number') return Number.isSafeInteger(need) && need >= 0
   if (typeof need !== 'object' || need === null) return false
   const keys = Object.keys(need)
-  return keys.length === 1 && keys[0] === 'key' && typeof (need as { key: unknown }).key === 'string'
+  if (keys.length !== 1) return false
+  const value = (need as Record<string, unknown>)[keys[0]!]
+  if (keys[0] === 'id') return typeof value === 'string' && isNeed(value)
+  return keys[0] === 'key' && typeof value === 'string'
 }
 
-/** The ID in a need that wraps one in an object, like `{"id": "812"}`, which the need takes as it is. */
-function wrappedId(need: unknown): string | undefined {
-  if (typeof need !== 'object' || need === null || Array.isArray(need)) return undefined
-  const values = Object.entries(need)
-  if (values.length !== 1 || values[0]![0] !== 'id') return undefined
-  const value = values[0]![1]
-  if (typeof value !== 'string' || !isNeed(value)) return undefined
-  return value
+/** A need as the board takes it: an ID as it is, or `{ "key": … }`. */
+function boardNeed(need: unknown): unknown {
+  if (typeof need === 'string') return need.replace(/^#/, '')
+  if (typeof need === 'number') return String(need)
+  if (typeof need === 'object' && need !== null && 'id' in need) return boardNeed(need.id)
+  return need
 }
 
 /**
@@ -2078,9 +2079,7 @@ function checkPlan(plan: Record<string, unknown>[], where: string): void {
     const odd = task.needs.find((need) => !isNeed(need))
     if (odd !== undefined) {
       const said = JSON.stringify(odd)
-      const wrapped = wrappedId(odd)
-      const hint = wrapped === undefined ? `A need is a task's ID as vb prints it, or {"key": "fix"} for a task of the plan's own.` : `A need is a task's ID as it is: write ${JSON.stringify(wrapped)}.`
-      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. ${hint}`, { next: [planHelp()] })
+      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. A need is a task's ID as vb prints it, {"id": "…"}, or {"key": "fix"} for a task of the plan's own.`, { next: [planHelp()] })
     }
   }
 }
@@ -2111,7 +2110,7 @@ async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
   const principal = named ? (await board.me()).principal : ''
   return plan.map((task) => ({
     ...task,
-    ...(Array.isArray(task.needs) ? { needs: task.needs.map((need) => (typeof need === 'string' ? need.replace(/^#/, '') : typeof need === 'number' ? String(need) : need)) } : {}),
+    ...(Array.isArray(task.needs) ? { needs: task.needs.map(boardNeed) } : {}),
     ...(typeof task.for === 'string' && !task.for.includes(':') ? { for: profileActor(principal, task.for) } : {}),
   })) as TaskInBatch[]
 }

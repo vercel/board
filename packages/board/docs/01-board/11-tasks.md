@@ -234,7 +234,7 @@ vb tasks create work --file plan.json --idempotency-key cve-123
   make a task that waits for nothing.
 - **A task's `key` names it for the others of the plan.** `needs` takes
   `{ "key": "fix" }` for a task of the plan, before it or after it, or an ID
-  for one that's there.
+  for one that's there, as it is (`"812"`) or as `{ "id": "812" }`.
 - **Up to 100 tasks are one write:** all of them or none, and none shows
   before all have landed. A longer plan goes in several writes, each task
   after the ones it waits for, so it isn't one: a ready task of an earlier
