@@ -367,8 +367,8 @@ describe('registering', () => {
       'watch review_pi: ids start with a letter and use up to 32 letters, numbers, and hyphens',
     )
     expect((await register({}, 'http://v0.test/board')).body.error.message).toContain('wake-ups go over https')
-    const many = Object.fromEntries(Array.from({ length: 257 }, (_, n) => [`w${n}`, { tail: 'feedback' }]))
-    expect((await register(many)).body.error.message).toContain('at most 256 watchers')
+    const many = Object.fromEntries(Array.from({ length: 65 }, (_, n) => [`w${n}`, { tail: 'feedback' }]))
+    expect((await register(many)).body.error.message).toContain('at most 64 watchers')
     // It wakes nothing: a registrant pulls.
     expect(await register({ fix: { tail: 'feedback' } }, V0_URL)).toMatchObject({ status: 501, body: { error: { code: 'no_wake_by_url' } } })
     expect((await register({ fix: { tail: 'feedback' } })).status).toBe(200)
@@ -423,8 +423,8 @@ describe('registering by path', () => {
     expect(await v0('POST', '/watchers', { url: V0_URL, path: '/api/board', watch: {} })).toMatchObject(refused('path: register a url or a path, not both'))
     expect(await v0('POST', '/watchers', { url: V0_URL, branch: 'jb/watchers', watch: {} })).toMatchObject(refused('branch: a branch goes with a path'))
     // A url registration that's wrong elsewhere is told what's wrong there, not only that it matched neither.
-    const watch = Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`w${i}`, { tail: 'feedback' }]))
-    expect(await v0('POST', '/watchers', { url: V0_URL, watch })).toMatchObject(refused('watch: a board registers at most 256 watchers'))
+    const watch = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`w${i}`, { tail: 'feedback' }]))
+    expect(await v0('POST', '/watchers', { url: V0_URL, watch })).toMatchObject(refused('watch: a board registers at most 64 watchers'))
   })
 
   it('types a registration as a url or a path, never both', () => {

@@ -207,7 +207,7 @@ matches the tails, and the route at the top of this page runs `run`:
   `POST /watchers` to it, and when a wake-up shows the API holds an older set.
   Nothing happens before that: creating the board does no I/O. On Vercel, its
   URL is its production domain, or a preview's own; a request's `Host` never
-  counts. A registration holds at most 256 watchers. Anyone else's credentials
+  counts. A registration holds at most 64 watchers. Anyone else's credentials
   get 403 `watchers_need_project`, so with them it doesn't try, and runs its
   watchers as tails instead (off Vercel: see
   [How it runs](#how-it-runs)).
