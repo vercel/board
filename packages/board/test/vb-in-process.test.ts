@@ -396,6 +396,10 @@ describe('vb()', () => {
     expect(await vb(first, ['tasks', 'claim', '--ready', 'work', '--label', 'step=review'], { claimToken: token })).toMatchObject({ code: 0, stderr: '' })
     expect(await vb(next, ['tasks', 'fail', ready, 'needs a database'], { claimToken: token })).toEqual({ code: 0, stdout: `failed ${ready}\n`, stderr: '' })
 
+    // A task made with its claim carries the token too.
+    const made = (await vb(first, ['tasks', 'create', 'work', 'ship it', '--claim', '--no-sync'], { claimToken: token })).stdout.split('  ')[0]!.slice(1)
+    expect(await vb(next, ['tasks', 'complete', made, 'shipped'], { claimToken: token })).toEqual({ code: 0, stdout: `completed ${made}\n`, stderr: '' })
+
     // A token any backend takes: 32 bytes in base64url.
     expect(failure(await vb(first, ['tasks', 'claim', ready, '--json'], { claimToken: 'run-7f3a9c' }))).toMatchObject({ reason: 'invalid_arguments' })
   })

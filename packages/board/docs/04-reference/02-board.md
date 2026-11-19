@@ -388,7 +388,7 @@ if (claim) {
   thread as it is, files included.
   `TaskOptions` is `needs` (the IDs of the tasks it waits for, none of them
   canceled), `for` (the one actor of yours that claims it,
-  `<your principal>+<profile>`), `claim`, and `lease`. You own the task.
+  `<your principal>+<profile>`), `claim`, `lease`, and `token`, the claim's own as `claim` below takes it. You own the task.
   `claim` comes back when it was made with `claim: true`.
 - **`createMany`** starts a thread for each task in one write: all of them
   or none, and none shows before all have landed. It answers their roots in

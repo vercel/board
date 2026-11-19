@@ -169,13 +169,14 @@ const scheduleBody = (input: ScheduleOptions) => {
 /**
  * What makes a thread a task: the tasks it waits for (`needs`, by their IDs), the one actor of
  * yours that claims it (`for`, `<your principal>+<profile>`), and `claim`, which claims it in the
- * same write, for `lease` seconds.
+ * same write, for `lease` seconds, with `token` as its token when you bring one.
  */
 export type TaskOptions = {
   needs?: string[]
   for?: string | null
   claim?: boolean
   lease?: number
+  token?: string
 }
 
 /** A new thread that's a task: its root's text, labels, `noSync`, `attachments`, and `id`, as a post takes them, and what makes it a task. */

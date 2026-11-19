@@ -2300,6 +2300,7 @@ async function tasks(args: string[]): Promise<number> {
       ...(flags.for ? { for: profileActor((await board.me()).principal, flags.for) } : {}),
       ...(claimFlag() ? { claim: true } : {}),
       ...(lease !== undefined ? { lease } : {}),
+      ...(claimFlag() && io.claimToken !== undefined ? { token: io.claimToken } : {}),
     }
     let made: Awaited<ReturnType<Board['tasks']['create']>>
     if (isMessageRef(target)) {

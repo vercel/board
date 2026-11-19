@@ -3553,7 +3553,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createTask(caller, input, signal) {
       const who = whoOf(caller)
-      const token = input.claim ? newClaimToken() : null
+      const token = input.claim ? (input.token ?? newClaimToken()) : null
       const spec = taskSpec(input, token)
       // To a caller that may post but not read, a retry answers the task's ID alone.
       let made: { task: ApiTaskOf | { id: string }; claimed?: boolean }

@@ -872,6 +872,9 @@ describe("vercel()'s tasks", () => {
     const ready = await julian.tasks.claim({ channel: 'work', token: RUN_TOKEN })
     expect(ready).toMatchObject({ token: RUN_TOKEN, task: { id: next.id } })
     expect(julian.wrote()).toMatchObject({ path: '/tasks/claim', body: { claimToken: RUN_TOKEN } })
+
+    const { claim: madeClaim } = await julian.tasks.create('work', { text: 'ship it', claim: true, token: RUN_TOKEN })
+    expect(madeClaim).toMatchObject({ token: RUN_TOKEN })
   })
 
   it('gets the lease the API gives: 5 minutes at most, and it asks for 15 when the caller asks for none', async () => {

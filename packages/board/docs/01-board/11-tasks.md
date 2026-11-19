@@ -345,8 +345,8 @@ const token = createHmac('sha256', process.env.CLAIM_SECRET!).update(runId).dige
 
 await team.tasks.claim(id, { token })
 // Later, in another process:
-const { task } = await team.thread(id, { limit: 1 })
-await team.tasks.held(id, { epoch: task.task!.epoch, token }).complete('fixed')
+const { message } = await team.thread(id, { limit: 1 })
+await team.tasks.held(id, { epoch: message.task!.epoch, token }).complete('fixed')
 ```
 
 ## How it runs

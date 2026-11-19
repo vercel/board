@@ -251,6 +251,14 @@ const Lease = z.number()
 const Claimed = { epoch: z.number().int().positive(), token: z.string().min(1).max(128) }
 
 /**
+ * A claim's token can be the caller's own: a secret it can derive again anywhere, as an HMAC-SHA256
+ * of its run's ID in base64url, so no store has to remember it. It's 32 bytes in base64url, as
+ * Vercel's API takes one. Claiming a task its live claim holds with that claim's token answers the
+ * claim as it is.
+ */
+const ClaimToken = { token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'a claim token is 32 bytes in base64url: 43 characters').optional() }
+
+/**
  * A new thread that's a task (`channel` and `text`, with `labels`, `noSync`, `attachments`, and an
  * `id` as a post takes them), or the thread `re` roots made one. `needs` are the tasks it waits for,
  * `for` the one actor of its owner's that claims it, and `claim` claims it in the same write, for
@@ -271,6 +279,7 @@ export const CreateTaskBody = z
     for: ActorId.nullable().optional(),
     claim: z.boolean().optional(),
     lease: Lease.optional(),
+    ...ClaimToken,
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
   })
   .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
@@ -282,6 +291,7 @@ export const CreateTaskBody = z
     message: '`text`, `labels`, `noSync`, `attachments`, and `id` are a new thread\'s: `re` makes a task of a thread as it is',
   })
   .refine((body) => body.lease === undefined || body.claim === true, { message: '`lease` goes with `claim`', path: ['lease'] })
+  .refine((body) => body.token === undefined || body.claim === true, { message: '`token` goes with `claim`', path: ['token'] })
 
 /** A digest of what a batch asks for: what tells the same request under an `id` from another. */
 const BatchRequest = z.string().min(1).max(64)
@@ -357,13 +367,6 @@ export const TasksQuery = z.object({
   path: ['latest'],
 })
 
-/**
- * A claim's token can be the caller's own: a secret it can derive again anywhere, as an HMAC-SHA256
- * of its run's ID in base64url, so no store has to remember it. It's 32 bytes in base64url, as
- * Vercel's API takes one. Claiming a task its live claim holds with that claim's token answers the
- * claim as it is.
- */
-const ClaimToken = { token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'a claim token is 32 bytes in base64url: 43 characters').optional() }
 
 export const ClaimTaskBody = z.object({ lease: Lease.optional(), ...ClaimToken }).optional()
 
