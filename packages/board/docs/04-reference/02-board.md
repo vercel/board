@@ -807,7 +807,7 @@ that reply in it.
 ```ts
 channels(query?: { prefix?: string; limit?: number; after?: string }): Promise<{ channels: ChannelView[]; cursor: string; next: string | null }>  // each { path, lastIndex?, messages?, threads? }
 createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
-actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
+actors(query?: { id?: string[] }): Promise<Actor[]>  // { id, kind, handle, name, avatar }; with `id`, only those
 me(): Promise<Me>                   // who this handle writes as
 discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync, name?
 ```

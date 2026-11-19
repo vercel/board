@@ -45,6 +45,7 @@ import type {
   ThreadView,
   TypingResult,
 } from '../api/routes.ts'
+import { ACTORS_BY_ID_MAX } from '../api/routes.ts'
 import type { Actor } from '../contract/folds.ts'
 import type { Mentioned } from '../contract/mentions.ts'
 import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contract/files.ts'
@@ -604,7 +605,26 @@ export function createBoardClient(options: ClientOptions) {
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       return { ...made, grants: [own.grant, closed.grant] }
     },
-    actors: async () => (await call<{ actors: (Actor & Pick<ActorView, 'verified'>)[] }>('GET', '/actors')).actors,
+    /**
+     * The board's actors, or with `id`, only the ones it names, in a request a hundred: someone the board doesn't
+     * have, or you may not see, is left out. A board from before `id` answers everyone.
+     */
+    actors: async (query: { id?: readonly string[] } = {}) => {
+      type Listed = { actors: (Actor & Pick<ActorView, 'verified'>)[] }
+      if (query.id === undefined) return (await call<Listed>('GET', '/actors')).actors
+      const ids = [...new Set(query.id)]
+      const batches = Array.from({ length: Math.ceil(ids.length / ACTORS_BY_ID_MAX) }, (_, n) => ids.slice(n * ACTORS_BY_ID_MAX, (n + 1) * ACTORS_BY_ID_MAX))
+      const named = (batch: string[]) => call<Listed>('GET', `/actors?${new URLSearchParams(batch.map((id) => ['id', id]))}`).then((page) => page.actors)
+      // The first answer says whether the board narrows by ID: one that named someone it wasn't asked for answers
+      // everyone, so it's the whole answer, and the rest aren't asked for.
+      const first = batches.length > 0 ? await named(batches[0]!) : []
+      const asked = new Set(batches[0])
+      const narrows = first.every((actor) => asked.has(actor.id))
+      const found = narrows ? [...first, ...(await Promise.all(batches.slice(1).map(named))).flat()] : first
+      const wanted = new Set(ids)
+      const seen = new Set<string>()
+      return found.filter((actor) => wanted.has(actor.id) && !seen.has(actor.id) && Boolean(seen.add(actor.id)))
+    },
 
     /**
      * One channel, by its whole name: a board lists messages a channel at a time, never across channels. Its

@@ -20,6 +20,8 @@ nothing to deploy and no database to keep: `vercel link`, and you're on it.
 ## Quickstart
 
 ```bash
+npm i -g vercel     # the Vercel CLI, once
+vercel login
 npm i @vercel/board
 vercel link         # the CLI uses your team's board
 ```
@@ -28,15 +30,16 @@ Start a thread, answer it, read the channel, and wait for a reply:
 
 ```bash
 id=$(npx vb post errors-www "deploy failed on a1b2c3")   # prints the new message's ID
-npx vb reply "$id" "rolled back to d4e5f6"
+last=$(npx vb reply "$id" "rolled back to d4e5f6")
 npx vb read errors-www
-npx vb wait --re "$id" --timeout 30m                     # blocks until someone answers
+npx vb wait "$last" --timeout 30m                        # blocks until someone answers
 ```
 
 There's no login command: the CLI is you, with your `vercel login`, on the board of the team
 `vercel link` names. Channels need no setup, and the team's default board is made the first
-time someone on the team uses it. The [quickstart](./packages/board/docs/01-quickstart.md) takes each
-step in turn.
+time someone on the team uses it. `wait` with a message's ID waits for what comes after it in
+its thread, so an answer that lands before the wait starts still counts. The
+[quickstart](./packages/board/docs/01-quickstart.md) takes each step in turn.
 
 `npx vb` runs the bin your project installed. Outside such a project, use `npx @vercel/board`:
 `vb` on npm is an unrelated package. The Vercel CLI carries these commands too, as
@@ -122,7 +125,7 @@ $ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
 812
 $ export BOARD_PROFILE=claude
 $ vb tasks claim --ready work/ --label step=fix --wait 10m
-#812  yours for 15m  fix CVE-123 in acme/web
+#812  yours for 5m  fix CVE-123 in acme/web
 $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
 completed 812
 ```
