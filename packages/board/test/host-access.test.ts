@@ -3,7 +3,7 @@ import { memory } from '../src/store/memory.ts'
 import { oidcTokens, type CallerRequest, type HostPrincipal } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
-import { fakeQueue } from './queue.ts'
+import { backgroundWork, fakeQueue } from './queue.ts'
 import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, testAuth, testBoard } from './harness.ts'
 
 /** A host's credentials: opaque platform tokens it verifies itself, each naming a team. */
@@ -306,11 +306,17 @@ describe("a host's own ID scheme", () => {
 describe("schedules from a host's principal", () => {
   const T0 = Date.parse('2026-10-07T12:00:00.000Z')
   const HOUR = 3_600_000
+  // What a write sets off runs on after its response: a test waits for it, not for time.
+  let work: ReturnType<typeof backgroundWork>
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(T0)
+    work = backgroundWork()
   })
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    work.stop()
+    vi.useRealTimers()
+  })
 
   /** A person the host signs in until `session.until`: there's no request to ask again when a schedule sends. */
   async function setup(until: number) {
@@ -323,11 +329,12 @@ describe("schedules from a host's principal", () => {
       authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', expiresAt: new Date(session.until) }),
     })
     const ada = caller(tenant.fetch, 'pt_ada')
+    // Moves the clock once what came before has run, then delivers what's due and waits for what that sets off.
     const advance = async (ms: number) => {
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await work.settled()
       vi.setSystemTime(Date.now() + ms)
       await queue.fire()
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await work.settled()
     }
     return { ada, advance, session }
   }
@@ -361,11 +368,12 @@ describe("schedules from a host's principal", () => {
     const support = { ...APP, can: { 'support/': ['read' as const, 'post' as const] } }
     const { grant } = await tenant.createGrant(support)
     const app = asCookie(tenant, 'session=app')
+    // Moves the clock once what came before has run, then delivers what's due and waits for what that sets off.
     const advance = async (ms: number) => {
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await work.settled()
       vi.setSystemTime(Date.now() + ms)
       await queue.fire()
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await work.settled()
     }
     const created = await app('POST', '/schedules', { channel: 'support', text: 'still waiting', every: '1h' })
     expect(created.status).toBe(201)
@@ -383,11 +391,17 @@ describe("schedules from a host's principal", () => {
 describe("a board that switches its verifier", () => {
   const T0 = Date.parse('2026-10-07T12:00:00.000Z')
   const HOUR = 3_600_000
+  // What a write sets off runs on after its response: a test waits for it, not for time.
+  let work: ReturnType<typeof backgroundWork>
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(T0)
+    work = backgroundWork()
   })
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    work.stop()
+    vi.useRealTimers()
+  })
 
   it("revokes a host's principals' schedules once its verifier is the built-in one alone", async () => {
     const store = memory()
@@ -401,10 +415,10 @@ describe("a board that switches its verifier", () => {
     expect((await caller(before.fetch, 'pt_ada')('POST', '/schedules', { channel: 'dev', text: 'from the host', in: '1h' })).status).toBe(201)
 
     const after = testBoard({ store, scheduler: queue.scheduler })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await work.settled()
     vi.setSystemTime(T0 + HOUR)
     await queue.fire()
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await work.settled()
     const julian = caller(after.fetch, await personToken())
     expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', canceled: { reason: 'revoked' } }])
     expect((await julian('GET', '/messages?channel=dev')).body.messages).toEqual([])
@@ -419,10 +433,10 @@ describe("a board that switches its verifier", () => {
       authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
     })
     await hostedBoard.as('digest').schedule('dev', { text: 'daily digest', in: '1h' })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await work.settled()
     vi.setSystemTime(T0 + HOUR)
     await queue.fire()
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await work.settled()
     expect((await caller(hostedBoard.fetch, 'pt_ada')('GET', '/messages?channel=dev')).body.messages).toMatchObject([{ text: 'daily digest' }])
   })
 })
