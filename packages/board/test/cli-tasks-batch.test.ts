@@ -143,10 +143,13 @@ describe('vb tasks create --file', () => {
     // One that's near none is said with what a task takes.
     expect((await refused([{ text: 'fix it', priority: 'high' }])).slice(0, 2)).toEqual(['error: Unknown key "priority" on task 1 of plan.json.', '  a task takes key, text, labels, needs, for, noSync, attachments'])
     // What a task waits for is a list, each a task's ID or a key of the plan's own.
-    expect((await refused([{ key: 'fix', text: 'fix it' }, { text: 'review it', needs: [{ key: 'fix' }, { ref: 'fix' }] }]))[0]).toBe('error: Task 2 of plan.json needs {"ref":"fix"}. A need is a task\'s ID as it is, like "812", or {"key": "fix"} for a task of the plan\'s own.')
-    for (const odd of [true, null, ['812'], { id: '812' }, { key: 'fix', text: 'fix it' }, { key: 5 }, '', '#', 1.5])
-      expect((await refused([{ text: 'review it', needs: ['812', odd] }]))[0]).toBe(`error: Task 1 of plan.json needs ${JSON.stringify(odd)}. A need is a task's ID as it is, like "812", or {"key": "fix"} for a task of the plan's own.`)
-    expect((await refused([{ text: 'review it', needs: [{ task: 'a'.repeat(100) }] }]))[0]).toBe(`error: Task 1 of plan.json needs {"task":"${'a'.repeat(50)}…. A need is a task's ID as it is, like "812", or {"key": "fix"} for a task of the plan's own.`)
+    expect((await refused([{ key: 'fix', text: 'fix it' }, { text: 'review it', needs: [{ key: 'fix' }, { ref: 'fix' }] }]))[0]).toBe('error: Task 2 of plan.json needs {"ref":"fix"}. A need is a task\'s ID as vb prints it, or {"key": "fix"} for a task of the plan\'s own.')
+    for (const odd of [true, null, ['812'], { id: 812 }, { key: 'fix', text: 'fix it' }, { key: 5 }, '', '#', 1.5])
+      expect((await refused([{ text: 'review it', needs: ['812', odd] }]))[0]).toBe(`error: Task 1 of plan.json needs ${JSON.stringify(odd)}. A need is a task's ID as vb prints it, or {"key": "fix"} for a task of the plan's own.`)
+    // One that wraps an ID is told the ID to write, whichever board handed it out.
+    for (const id of ['812', 'msg_95b6fe29-df97-4cca-b203-5e077e25c373_1'])
+      expect((await refused([{ text: 'review it', needs: [{ id }] }]))[0]).toBe(`error: Task 1 of plan.json needs {"id":"${id}"}. A need is a task's ID as it is: write "${id}".`)
+    expect((await refused([{ text: 'review it', needs: [{ task: 'a'.repeat(100) }] }]))[0]).toBe(`error: Task 1 of plan.json needs {"task":"${'a'.repeat(50)}…. A need is a task's ID as vb prints it, or {"key": "fix"} for a task of the plan's own.`)
     expect((await refused([{ text: 'review it', needs: '812' }]))[0]).toBe('error: Task 1 of plan.json has needs that aren\'t a list, such as [{"key": "fix"}, "812"].')
     // From stdin, and for a program: the same, as one document.
     const piped = await vb(['tasks', 'create', 'typos', '--file', '-', '--json'], {}, JSON.stringify([{ text: 'fix it', labls: { step: 'fix' } }]))

@@ -2044,6 +2044,16 @@ function isNeed(need: unknown): boolean {
   return keys.length === 1 && keys[0] === 'key' && typeof (need as { key: unknown }).key === 'string'
 }
 
+/** The ID in a need that wraps one in an object, like `{"id": "812"}`, which the need takes as it is. */
+function wrappedId(need: unknown): string | undefined {
+  if (typeof need !== 'object' || need === null || Array.isArray(need)) return undefined
+  const values = Object.entries(need)
+  if (values.length !== 1 || values[0]![0] !== 'id') return undefined
+  const value = values[0]![1]
+  if (typeof value !== 'string' || !isNeed(value)) return undefined
+  return value
+}
+
 /**
  * Refuses a plan that says something a task doesn't take, before anything is sent. The board
  * drops a key it doesn't know, so a `need` for `needs` would make a task that waits for nothing,
@@ -2068,7 +2078,9 @@ function checkPlan(plan: Record<string, unknown>[], where: string): void {
     const odd = task.needs.find((need) => !isNeed(need))
     if (odd !== undefined) {
       const said = JSON.stringify(odd)
-      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. A need is a task's ID as it is, like "812", or {"key": "fix"} for a task of the plan's own.`, { next: [planHelp()] })
+      const wrapped = wrappedId(odd)
+      const hint = wrapped === undefined ? `A need is a task's ID as vb prints it, or {"key": "fix"} for a task of the plan's own.` : `A need is a task's ID as it is: write ${JSON.stringify(wrapped)}.`
+      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. ${hint}`, { next: [planHelp()] })
     }
   }
 }
