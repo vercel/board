@@ -2754,16 +2754,16 @@ function stateCommand(): Recovery[] {
 
 type OtherName = { instruction: string; argv: string[]; teams?: { instruction: string; argv: string[] } }
 
-/** Search: a filter on read, where the board keeps an index, and Vercel's keeps none of text. */
+/** Search: a filter on read. Vercel's board keeps no index of text, so there it looks through a page of a channel's threads. */
 const SEARCH: OtherName = {
   instruction: 'Search is a filter on read',
   argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'],
-  teams: { instruction: "Read a channel and look through it, since this board keeps no text search", argv: ['read', '<CHANNEL>'] },
+  teams: { instruction: "Search a channel's latest threads, a page at a time, since this board keeps no text search", argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
 }
 
 /**
  * Words for a command this CLI names otherwise, and the command they mean: on a team's board in
- * Vercel's API, `teams`, where what it means there is refused (or when nothing says which board).
+ * Vercel's API, `teams`, where it reads one channel's page (or when nothing says which board).
  */
 const OTHER_NAMES: Record<string, OtherName> = {
   search: SEARCH,
@@ -2797,7 +2797,7 @@ const OTHER_NAMES: Record<string, OtherName> = {
   mentions: {
     instruction: 'Mentions are a filter on read and wait',
     argv: ['read', '--mentions'],
-    teams: { instruction: 'Mentions are a filter on wait and tail here', argv: ['wait', '--mentions'] },
+    teams: { instruction: "Read what mentions you in a channel's latest threads, then wait from where it stops", argv: ['read', '<CHANNEL>', '--mentions'] },
   },
   watch: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
   follow: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },

@@ -1074,12 +1074,12 @@ describe('the embedded CLI', () => {
     const home = await isolated()
     const run = async (...args: string[]) => JSON.parse((await capture(() => main([...args, '--json'], { name: 'board', commands: local }))).stderr).next
     try {
-      // A team's board keeps no text index and reads one channel: read one, and wait for mentions.
-      expect(await run('search', 'ENOTFOUND', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>'] }, { argv: ['vb', '--help'] }])
-      expect(await run('mentions', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'wait', '--mentions'] }, { argv: ['vb', '--help'] }])
+      // A team's board keeps no text index and reads one channel: one channel's page, by text or by mentions.
+      expect(await run('search', 'ENOTFOUND', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('mentions', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--mentions'] }, { argv: ['vb', '--help'] }])
       // A board at a URL of its own searches by text, and nothing says which board, so it's the one that works everywhere.
       expect(await run('grep', 'ENOTFOUND', '--url', 'http://localhost:4000')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
-      expect(await run('find', 'ENOTFOUND')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('find', 'ENOTFOUND')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
       // A claim is a task's, on every board.
       expect(await run('claim', '812', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'tasks', 'claim', '<ID>'] }, { argv: ['vb', '--help'] }])
       expect(await run('assign', '812', '--url', 'http://localhost:4000')).toMatchObject([{ argv: ['vb', 'tasks', 'assign', '<ID>', '<PROFILE>'] }, { argv: ['vb', '--help'] }])

@@ -372,7 +372,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     ],
     options: [option('limit', 'threads to list (default: 50, at most 500)'), option('before')],
     filters: true,
-    filtersNote: "Vercel's board reads one channel or thread here, with only --re, --label, and --after: it keeps no search index",
+    filtersNote: "Vercel's board reads one channel or thread here, with only --re, --label, and --after, or on a channel --mentions and --text, which look through one page of its threads: it keeps no search index",
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
       { name: 'read one thread, every message', value: 'read 812' },

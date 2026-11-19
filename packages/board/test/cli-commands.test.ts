@@ -49,7 +49,7 @@ describe("the CLI's commands, as data", () => {
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
     // What Vercel's board refuses is said where it's offered: read's every channel and search filters, post's --sync, schedule's files.
     expect(read.stdout).toContain("every channel without one, but not on Vercel's")
-    expect(read.stdout).toMatch(/repeated flags all must match\n  Vercel's board reads one channel or thread here, with only --re, --label, and\n  --after: it keeps no search index\n/)
+    expect(read.stdout).toMatch(/repeated flags all must match\n  Vercel's board reads one channel or thread here, with only --re, --label, and\n  --after, or on a channel --mentions and --text, which look through one page of\n  its threads: it keeps no search index\n/)
     expect((await capture(() => main(['post', '--help'], app))).stdout).toMatch(/--sync <target>\.\.\. +sync the new thread to a target too, e\.g\.\n +slack:#incidents \(not on Vercel's board yet\)\n/)
     expect((await capture(() => main(['schedule', '--help'], app))).stdout).toMatch(/--attach <file>\.\.\. +attach a file to what it posts \(not on Vercel's board yet\)\n/)
     // Where they work, as on tail and wait, they say nothing of it.
