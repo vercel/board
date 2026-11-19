@@ -914,6 +914,8 @@ describe('the embedded CLI', () => {
       // A URL names its team, so --scope goes with --name.
       expect(said.stderr).toContain('    vb conformance --url <URL>\n')
       expect(said.stderr).toContain('    vb conformance --scope test --name General\n')
+      // --ensure takes no value: what follows it stays.
+      expect((await run('conformance', '--name', 'scratch', '--ensure', '--scope', 'test')).stderr).toContain('    vb conformance --scope test --name General\n')
       const json = await run('conformance', '--name', 'scratch', '--ensure', '--json')
       expect(json).toMatchObject({ code: 1, stdout: '' })
       expect(JSON.parse(json.stderr)).toMatchObject({ status: 'error', reason: 'too_many_boards' })

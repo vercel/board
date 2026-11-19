@@ -984,8 +984,8 @@ function failureOf(error: unknown): Failure {
       current.command === 'conformance'
         ? [
             // It refuses the team's board unnamed: another board by its URL, or the team's own by its name, which it posts to and changes the grants of.
-            { instruction: 'Check a board by its URL, such as one from vb serve', argv: [...rerunWithout(['--name', '--ensure', '--scope']), '--url', '<URL>'] },
-            { instruction: "Or the team's own board, which it posts to and changes the grants of", argv: [...rerunWithout(['--name', '--ensure']), '--name', 'General'] },
+            { instruction: 'Check a board by its URL, such as one from vb serve', argv: [...rerunWithout(['--name', '--scope']).filter((arg) => arg !== '--ensure'), '--url', '<URL>'] },
+            { instruction: "Or the team's own board, which it posts to and changes the grants of", argv: [...rerunWithout(['--name']).filter((arg) => arg !== '--ensure'), '--name', 'General'] },
           ]
         : flags.name !== undefined
         ? [{ instruction: "Use the team's board instead", argv: rerunWithout(['--name']).filter((arg) => arg !== '--ensure') }]
