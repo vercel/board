@@ -1138,6 +1138,22 @@ function vercelBoard(url: string): { board: string; team?: string } | null {
   return { board: decodeURIComponent(found[1]!), ...(team ? { team } : {}) }
 }
 
+/**
+ * Whether this run's board is a team's board in Vercel's API, as its flags and environment say,
+ * without a request: undefined when they don't say (an in-process handle, or no board to use).
+ */
+function onTeamBoard(): boolean | undefined {
+  if (io.board) return undefined
+  try {
+    if (flags.url !== undefined) return vercelBoard(flags.url) !== null
+    if (flags.scope !== undefined || flags.team !== undefined || flags.name !== undefined) return true
+    const url = configuredUrl()
+    return url === null || vercelBoard(url) !== null
+  } catch {
+    return undefined
+  }
+}
+
 /** Who the handle writes as: `--as`'s profile (with `--avatar`), or what the environment says (`BOARD_PROFILE`), else yourself. */
 function profileFlag(): ProfileOption | undefined {
   if (flags.avatar !== undefined && !flags.as) throw usage('--avatar is the avatar of the profile --as names: pass --as too.', { reason: 'missing_arguments' })
@@ -2022,7 +2038,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const names = [...commands.flatMap((known) => [known.name, ...(known.aliases ?? [])]), ...Object.keys(app.commands)]
       const guess = closest(command, names)
       // What people and agents type for a command that goes by another name here.
-      const said = Object.hasOwn(OTHER_NAMES, command.toLowerCase()) ? OTHER_NAMES[command.toLowerCase()] : undefined
+      const other = Object.hasOwn(OTHER_NAMES, command.toLowerCase()) ? OTHER_NAMES[command.toLowerCase()] : undefined
+      // On a team's board, what works there; where nothing says which board, what works on every one.
+      const said = other?.teams && onTeamBoard() !== false ? other.teams : other
       throw usage(`Unknown command ${command} for ${named()}.${said ? '' : guess ? ` Did you mean ${guess}?` : ''}`, {
         reason: 'unknown_command',
         next: [
@@ -2734,11 +2752,23 @@ function stateCommand(): Recovery[] {
   return []
 }
 
-/** Words for a command this CLI names otherwise, and the command they mean. */
-const OTHER_NAMES: Record<string, { instruction: string; argv: string[] }> = {
-  search: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
-  find: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
-  grep: { instruction: 'Search is a filter on read', argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
+type OtherName = { instruction: string; argv: string[]; teams?: { instruction: string; argv: string[] } }
+
+/** Search: a filter on read, where the board keeps an index, and Vercel's keeps none of text. */
+const SEARCH: OtherName = {
+  instruction: 'Search is a filter on read',
+  argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'],
+  teams: { instruction: "Read a channel and look through it, since this board keeps no text search", argv: ['read', '<CHANNEL>'] },
+}
+
+/**
+ * Words for a command this CLI names otherwise, and the command they mean: on a team's board in
+ * Vercel's API, `teams`, where what it means there is refused (or when nothing says which board).
+ */
+const OTHER_NAMES: Record<string, OtherName> = {
+  search: SEARCH,
+  find: SEARCH,
+  grep: SEARCH,
   list: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
   ls: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
   threads: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
@@ -2760,11 +2790,15 @@ const OTHER_NAMES: Record<string, { instruction: string; argv: string[] }> = {
   remind: { instruction: 'Post later with schedule', argv: ['schedule', '<TARGET>', '<TEXT>', '--in', '<DURATION>'] },
   attach: { instruction: 'Attach a file to a post', argv: ['post', '<TARGET>', '<TEXT>', '--attach', '<FILE>'] },
   upload: { instruction: 'Attach a file to a post', argv: ['post', '<TARGET>', '<TEXT>', '--attach', '<FILE>'] },
-  claim: { instruction: 'Claim a thread with a label, unless someone has', argv: ['label', '<ID>', 'owner=<YOU>', '--if-unset', 'owner'] },
-  assign: { instruction: 'Claim a thread with a label, unless someone has', argv: ['label', '<ID>', 'owner=<YOU>', '--if-unset', 'owner'] },
+  claim: { instruction: 'Hold a task with tasks claim', argv: ['tasks', 'claim', '<ID>'] },
+  assign: { instruction: "Keep a task for one of its owner's profiles", argv: ['tasks', 'assign', '<ID>', '<PROFILE>'] },
   tag: { instruction: 'Set labels on a message', argv: ['label', '<ID>', '<KEY=VALUE>'] },
   labels: { instruction: 'Set labels on a message', argv: ['label', '<ID>', '<KEY=VALUE>'] },
-  mentions: { instruction: 'Mentions are a filter on read and wait', argv: ['read', '--mentions'] },
+  mentions: {
+    instruction: 'Mentions are a filter on read and wait',
+    argv: ['read', '--mentions'],
+    teams: { instruction: 'Mentions are a filter on wait and tail here', argv: ['wait', '--mentions'] },
+  },
   watch: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
   follow: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
   subscribe: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },

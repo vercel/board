@@ -41,6 +41,8 @@ export type CliCommand = {
   readonly options: readonly CliOption[]
   /** It takes the filters (`--re`, `--by`, `--label`, …) as well. */
   readonly filters?: true
+  /** What its filters do differently on some boards, as help says it under them. */
+  readonly filtersNote?: string
   readonly examples: readonly CliExample[]
   readonly subcommands?: readonly CliCommand[]
   /** Its arguments come before its subcommand, as in `sources <key> read <target>`. */
@@ -365,11 +367,12 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       {
         name: 'channel|id|link',
         required: false,
-        description: "a channel (every channel without one), a message's ID, or a Slack or GitHub link the board synced",
+        description: "a channel (every channel without one, but not on Vercel's board), a message's ID, or a Slack or GitHub link the board synced",
       },
     ],
     options: [option('limit', 'threads to list (default: 50, at most 500)'), option('before')],
     filters: true,
+    filtersNote: "Vercel's board reads one channel or thread here, with only --re, --label, and --after: it keeps no search index",
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
       { name: 'read one thread, every message', value: 'read 812' },
@@ -385,7 +388,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     brief: '[--label k=v]... [--attach file]...',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach'), option('sync', "sync the new thread to a target too, e.g. slack:#incidents (not on Vercel's board yet)"), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
     examples: [
       { name: 'start a thread', value: 'post dev "deploys are green again"' },
       { name: 'start a labeled thread', value: 'post dev "checkout times out" --label kind=bug' },
@@ -410,7 +413,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     brief: '(--in 5m | --at time | --every 30m)',
     description: 'post later, as you: once (--in or --at), or repeating (--every) until a stop or until canceled',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach'), option('no-sync')],
+    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('file', 'the text, from a file: - reads stdin'), option('schema'), option('attach', "attach a file to what it posts (not on Vercel's board yet)"), option('no-sync')],
     examples: [
       { name: 'reply in a thread tomorrow', value: 'schedule 812 "still broken?" --in 1d' },
       { name: 'post every morning', value: 'schedule dev "standup" --at 2026-11-02T09:00:00Z --every 1d' },

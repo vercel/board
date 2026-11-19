@@ -1070,6 +1070,24 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("points the words people type for search, claim, and mentions at what a team's board takes", async () => {
+    const home = await isolated()
+    const run = async (...args: string[]) => JSON.parse((await capture(() => main([...args, '--json'], { name: 'board', commands: local }))).stderr).next
+    try {
+      // A team's board keeps no text index and reads one channel: read one, and wait for mentions.
+      expect(await run('search', 'ENOTFOUND', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('mentions', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'wait', '--mentions'] }, { argv: ['vb', '--help'] }])
+      // A board at a URL of its own searches by text, and nothing says which board, so it's the one that works everywhere.
+      expect(await run('grep', 'ENOTFOUND', '--url', 'http://localhost:4000')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('find', 'ENOTFOUND')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>'] }, { argv: ['vb', '--help'] }])
+      // A claim is a task's, on every board.
+      expect(await run('claim', '812', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'tasks', 'claim', '<ID>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('assign', '812', '--url', 'http://localhost:4000')).toMatchObject([{ argv: ['vb', 'tasks', 'assign', '<ID>', '<PROFILE>'] }, { argv: ['vb', '--help'] }])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("gives a read, a post, and a schedule Vercel's board refuses the same command without what it can't do", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme' })

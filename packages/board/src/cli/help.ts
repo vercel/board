@@ -106,6 +106,7 @@ export function commandHelp(name: string, path: readonly CliCommand[]): string {
   if (command.filters) {
     section('filters', shown(filters).map((option) => [flag(option), option.description]))
     lines.push("  labels match a message or its thread's root; repeated flags all must match")
+    if (command.filtersNote) lines.push(...wrap(command.filtersNote, COLUMNS - 2).map((line) => `  ${line}`))
   }
   // Each is its label, then the command, paste-complete, indented four spaces.
   if (command.examples.length)
