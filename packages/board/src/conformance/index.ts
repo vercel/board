@@ -1201,6 +1201,30 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'lists the last active tasks with latest, wherever they come in the order they were made',
+    run: async (ctx) => {
+      // This check's own label, so the run's other tasks aren't among them.
+      const labels = { ...ctx.labels, 'conformance-latest': ctx.labels.conformance }
+      const { task: first } = await task(ctx, 'conformance: made first, active last', { labels })
+      const { task: second } = await task(ctx, 'conformance: made second, active first', { labels })
+      const { task: third } = await task(ctx, 'conformance: made third, active second', { labels })
+      // A board orders by time and nothing finer, so each reply comes a moment after the last.
+      for (const root of [second, third, first]) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        await reply(ctx, root.id, 'conformance: progress')
+      }
+      const listed = async (query: { latest?: boolean; limit: number }) => (await ctx.board.tasks.list({ channel: ctx.channel, label: labels, state: 'all', ...query })).tasks.map((t) => t.message.id)
+      // A list may trail a write by a moment.
+      await soon(async () => show(await listed({ latest: true, limit: 3 })) === show([second.id, third.id, first.id]), 'with latest, the tasks should list the latest active last')
+      alike(await listed({ latest: true, limit: 2 }), [third.id, first.id], 'the 2 last active, with latest')
+      alike(await listed({ limit: 2 }), [first.id, second.id], 'the 2 first made, without it')
+      const last = (await ctx.board.tasks.list({ channel: ctx.channel, label: labels, state: 'all', latest: true, limit: 1 })).tasks[0]!
+      same(last.last?.text, 'conformance: progress', "a last active task's latest reply")
+      await rejects(ctx.board.tasks.list({ channel: ctx.channel, latest: true, after: first.id }), 400, 'invalid_request', 'latest with an after')
+    },
+  },
+  {
+    group: 'tasks',
     name: 'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed',
     run: async (ctx) => {
       const { task: first } = await task(ctx, 'conformance: a prerequisite that completes first')

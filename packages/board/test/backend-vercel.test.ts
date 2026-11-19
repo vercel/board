@@ -126,6 +126,7 @@ describe('vercel()', () => {
       'tasks: holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
       'tasks: refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
       'tasks: lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',
+      'tasks: lists the last active tasks with latest, wherever they come in the order they were made': 'passed',
       'tasks: says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
       'tasks: changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none': 'passed',
       'tasks: refuses a change of needs that would make a task wait for itself, straight back or through others': 'passed',

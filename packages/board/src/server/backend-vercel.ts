@@ -3533,17 +3533,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const found: ApiTaskOf[] = []
       // The first page goes on after the task, and each one after it from the API's own cursor: it takes one or the other.
       let from: { after?: string; cursor?: string } = after !== undefined ? { after } : {}
-      while (found.length < limit) {
+      // The last active are anywhere in the list, which goes by when each was made: it's read to its end.
+      while (query.latest || found.length < limit) {
         const page = await api<{ tasks: ApiTaskOf[]; cursor: string | null }>(who, 'GET', path, { version: 2, query: { ...asked, ...from }, signal }).catch((error: unknown) => {
           throw taskRefusal(error)
         })
-        for (const task of page.tasks) if (found.length < limit && matching(task)) found.push(task)
+        for (const task of page.tasks) if ((query.latest || found.length < limit) && matching(task)) found.push(task)
         if (!page.cursor) break
         from = { cursor: page.cursor }
       }
+      // Only what it answers is built: the list says when each was last active, so the rest cost no reads.
+      // A sort keeps ties as they came, in the order they were made.
+      const kept = query.latest ? [...found].sort((a, b) => a.lastActivityAt - b.lastActivityAt).slice(-limit) : found
       // Each task comes with its first message: only its latest reply is read apart, by reference, and the page's
       // authors are named together, as a page of threads' are.
-      const tasks = await summaries(who, await Promise.all(found.map(async (task) => ({ thread: listedOf(task), channel: await channelById(who, task.channelId) }))), signal)
+      const tasks = await summaries(who, await Promise.all(kept.map(async (task) => ({ thread: listedOf(task), channel: await channelById(who, task.channelId) }))), signal)
       const last = found.at(-1)
       return { tasks, cursor: last ? idAt(last.id, 1) : none.cursor }
     },

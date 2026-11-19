@@ -664,8 +664,10 @@ export function createBoardClient(options: ClientOptions) {
        * Tasks, oldest first, each as its thread's summary: open ones (`waiting`, `ready`, `claimed`,
        * `blocked`) unless `state` says `all` or names one. `owner` and `for` take a handle or an ID,
        * `needs` a task's ID, for the tasks that wait for it. `cursor`, as `after`, reads the next page.
+       * `latest` answers the `limit` last active instead, the latest active last: the board reads every
+       * task to find them, and builds only those.
        */
-      list: (query: Omit<TasksQueryInput, 'label'> & { label?: Record<string, string> | string[] } = {}) => call<TasksPage>('GET', `/tasks${queryString(query)}`),
+      list: (query: Omit<TasksQueryInput, 'label' | 'latest'> & { label?: Record<string, string> | string[]; latest?: boolean } = {}) => call<TasksPage>('GET', `/tasks${queryString(query)}`),
       create: createTask,
       createMany: createTasks,
       claim: claimTask,

@@ -350,6 +350,11 @@ export const TasksQuery = z.object({
   /** A `cursor` an earlier page reported. */
   after: Ref.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
+  /** The `limit` last active instead of the first made, the latest active last: the board reads to the end, and takes no `after`. */
+  latest: flag.optional(),
+}).refine((query) => !query.latest || query.after === undefined, {
+  message: '`latest` reads every task to find the last active: it takes no `after`',
+  path: ['latest'],
 })
 
 export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()

@@ -639,14 +639,17 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
         for (const thread of page.threads) {
           last = thread.root.id
           if (thread.root.task && matches(thread.root as Root)) found.push(thread)
-          if (found.length === limit) break scan
+          if (!query.latest && found.length === limit) break scan
         }
       }
       // Once it has read them all, the next read picks up at what the board has now.
-      const cursor = found.length === limit ? last : Math.max(last, Math.min(position, through))
-      const reader = await ctx.reads.reader(principal.access, found.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
+      const cursor = !query.latest && found.length === limit ? last : Math.max(last, Math.min(position, through))
+      // The last active: a sort keeps ties as they came, in the order they were made.
+      const activeAt = (t: ThreadSummary) => (t.last ?? t.root).createdAt
+      const kept = query.latest ? found.sort((a, b) => activeAt(a).localeCompare(activeAt(b))).slice(-limit) : found
+      const reader = await ctx.reads.reader(principal.access, kept.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
       return {
-        tasks: found.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
+        tasks: kept.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
         cursor: ref(cursor),
       }
     },

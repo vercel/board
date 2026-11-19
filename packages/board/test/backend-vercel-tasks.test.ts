@@ -87,6 +87,7 @@ describe("vercel()'s tasks", () => {
       'holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
       'refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
       'lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',
+      'lists the last active tasks with latest, wherever they come in the order they were made': 'passed',
       'says task.ready each time a task that needs others becomes ready: right after it is made or unblocked, once they have completed': 'passed',
       'changes what a task needs: it waits for the new ones, is ready once they have completed, and at once with none': 'passed',
       'refuses a change of needs that would make a task wait for itself, straight back or through others': 'passed',
@@ -1731,6 +1732,25 @@ describe("vercel()'s tasks", () => {
     const [asked, resent] = retrying.sent.filter((request) => request.path.endsWith('/complete'))
     expect(resent!.body).toEqual(asked!.body)
     expect(await left(retried.waiting)).toBe(0)
+  })
+
+  it('lists the last active with latest from every page of the list, and reads the latest replies of only those it answers', async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    // 60 tasks, more than two of the API's pages, each with a reply: the first made is the last active.
+    const made: string[] = []
+    for (let n = 0; n < 60; n++) made.push((await julian.tasks.create('queue', { text: `task ${n}` })).task.id)
+    for (const id of [...made.slice(1), made[0]!]) await julian.reply(id, 'progress')
+    julian.sent.length = 0
+    const { tasks } = await julian.tasks.list({ channel: 'queue', state: 'all', latest: true, limit: 3 })
+    expect(tasks.map((task) => task.message.id)).toEqual([made[58], made[59], made[0]])
+    expect(tasks.map((task) => task.last?.text)).toEqual(['progress', 'progress', 'progress'])
+    // Every page of the list, and a reply read for each of the three alone.
+    expect(julian.sent.filter((request) => request.method === 'GET' && request.path === '/tasks').map((request) => request.query.cursor?.[0] ?? null)).toEqual([null, '25', '50'])
+    expect(julian.sent.filter((request) => request.method === 'GET' && request.path.startsWith('/messages/'))).toHaveLength(3)
+    // Without it, the first made.
+    expect((await julian.tasks.list({ channel: 'queue', state: 'all', limit: 3 })).tasks.map((task) => task.message.id)).toEqual(made.slice(0, 3))
+    await expect(julian.tasks.list({ channel: 'queue', latest: true, after: made[0]! })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
   })
 
   it("lists a caller that doesn't read the whole board only the channels it reads, with no page spent on the rest, 50 channels at most", async () => {

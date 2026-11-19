@@ -352,7 +352,7 @@ with 501 `no_scheduler`. See
 tasks.create(channel: string, input: string | NewTaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
 tasks.create(thread: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
 tasks.createMany(channel: string, tasks: TaskInBatch[], opts?: { id?: string }): Promise<MessageView[]>
-tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
+tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number; latest?: boolean }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
 tasks.claim(id: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
 tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
 tasks.held(id: string, claim: { epoch: number; token: string }): HeldTask
@@ -432,7 +432,9 @@ if (claim) {
   task stays held, and the same set changes nothing.
 - **`list`** answers open tasks, oldest first, as thread summaries. `state`
   is `open`, `all`, or one state. Pass `cursor` back as `after` for the next
-  page.
+  page. `latest: true` answers the `limit` last active instead, by each
+  thread's latest message, the latest active last: the board reads every task
+  that matches to find them, and builds only those. It takes no `after`.
 
 #### Several tasks at once
 
