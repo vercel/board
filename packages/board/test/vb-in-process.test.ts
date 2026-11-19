@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { vb } from '../src/cli/embedded.ts'
+import { vb, type Claims, type HeldClaim } from '../src/cli/embedded.ts'
 import { caller, personToken, testBoard, BOARD_URL } from './harness.ts'
 
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
@@ -320,5 +320,44 @@ describe('vb()', () => {
     expect(listing.hint).toBeUndefined()
     stall.on = false
     expect(JSON.parse((await vb(team, ['read', next, '--json'])).stdout).message.task.state).toBe('ready')
+  })
+
+  it('keeps claims in the store its caller passes, so a call on another handle settles them', async () => {
+    const served = testBoard()
+    // What a caller keeps in KV or a file: it outlives the handle, the process, and the instance.
+    const kept = new Map<string, HeldClaim>()
+    const claims = (profile: string | null): Claims => ({
+      get: async (task) => kept.get(`${profile}:${task}`) ?? null,
+      put: async (task, claim) => void kept.set(`${profile}:${task}`, claim),
+      drop: async (task) => void kept.delete(`${profile}:${task}`),
+    })
+    const first = await handle(undefined, served)
+    const id = (await vb(first, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--no-sync'])).stdout.trim()
+    const claimed = await vb(first, ['tasks', 'claim', id, '--lease', '5m', '--json'], { claims })
+    expect(claimed).toMatchObject({ code: 0, stderr: '' })
+    const [stored] = [...kept.values()]
+    expect([...kept.keys()]).toEqual([`null:${id}`])
+    // The token goes to the store and never to stdout.
+    expect(claimed.stdout).not.toContain(stored!.token)
+
+    // A fresh handle without the store holds nothing; with it, it renews and settles the claim.
+    const next = await handle(undefined, served)
+    expect((await vb(next, ['tasks', 'complete', id, 'fixed'])).stderr).toMatch(/^error: You hold no claim on task/)
+    expect(await vb(next, ['tasks', 'renew', id, '--lease', '10m'], { claims })).toMatchObject({ code: 0, stderr: '' })
+    expect(Date.parse(kept.get(`null:${id}`)!.until)).toBeGreaterThan(Date.parse(stored!.until))
+    // The store is asked per profile: a claim taken as yourself isn't the reviewer's.
+    expect((await vb(next, ['tasks', 'complete', id, 'fixed', '--as', 'reviewer'], { claims })).stderr).toMatch(/^error: You hold no claim on task .* as reviewer\./)
+    expect(await vb(next, ['tasks', 'complete', id, 'fixed in a1b2c3'], { claims })).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(JSON.parse((await vb(next, ['read', id, '--json'])).stdout).message.task).toMatchObject({ state: 'completed', result: 'fixed in a1b2c3' })
+    // Settled, the claim leaves the store.
+    expect(kept.size).toBe(0)
+
+    // A claim the board says is lost leaves the store too.
+    const lost = (await vb(first, ['tasks', 'create', 'work', 'rotate the keys', '--no-sync'])).stdout.trim()
+    expect(await vb(first, ['tasks', 'claim', lost, '--as', 'rotator'], { claims })).toMatchObject({ code: 0, stderr: '' })
+    expect([...kept.keys()]).toEqual([`rotator:${lost}`])
+    expect(await vb(first, ['tasks', 'cancel', lost, 'superseded'])).toMatchObject({ code: 0, stderr: '' })
+    expect((await vb(next, ['tasks', 'complete', lost, 'rotated', '--as', 'rotator'], { claims })).stderr).toMatch(/^error: Lost the claim on task/)
+    expect(kept.size).toBe(0)
   })
 })

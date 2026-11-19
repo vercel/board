@@ -3,12 +3,14 @@
 // nor A2 reaches an app that bundles it.
 import { stoppedBy } from '../server/board.ts'
 import type { Board } from '../server/index.ts'
+import type { Claims } from './claims.ts'
 import { exitCode, failureDocument, formatFailure, type Failure, type Warning } from './failure.ts'
 import { commandWord, Failed, main, mainWith } from './main.ts'
 
 export { commandWord }
 export { commandLine, failureLines } from './failure.ts'
 export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
+export type { Claims, HeldClaim } from './claims.ts'
 
 /**
  * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). With no board
@@ -77,6 +79,13 @@ export type VbOptions = {
   signal?: AbortSignal
   /** Commands this caller doesn't run, which answer 2: `['tail', 'wait']` for an agent's tool. */
   refuse?: string[]
+  /**
+   * Where the task claims this call takes and settles are kept, for the profile it writes as (null
+   * as the handle's own), in place of the handle's memory: a store in KV or a file, so a claim one
+   * call takes is settled by a call on another handle, process, or instance. It holds tokens, so
+   * only you read it, and it's one board's: key it by the board too when it holds several.
+   */
+  claims?: (profile: string | null) => Claims
 }
 
 /** What a `vb()` command printed, and its exit code: 0, 1 for an error (a `wait` that timed out included), 2 for misuse. */
@@ -123,6 +132,7 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
       board: (options.signal && stoppedBy(board, options.signal)) || board,
       // A call with a signal runs on a handle of its own: its claims are the caller's handle's all the same.
       claimsOf: board,
+      ...(options.claims ? { claims: options.claims } : {}),
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
       readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --file can't read files", 'readFile'),

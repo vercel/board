@@ -137,6 +137,36 @@ memory for that handle and its `--as`, so a later call on it settles the task,
 and another handle holds none. `tasks run` answers 2: it runs a command on the CLI's
 machine.
 
+On a serverless host, the call that settles a task can run on another
+instance. To support that, pass `claims`, a store for each profile a call
+writes as (`null` for the handle's own). Claims then live there instead of in
+memory:
+
+```ts
+import { board } from '@vercel/board'
+import { vb, type Claims } from '@vercel/board/cli'
+
+const team = board().as('triage')
+
+const claims = (profile: string | null): Claims => {
+  const key = (task: string) => `claims:${profile ?? '-'}:${task}`
+  return {
+    get: async (task) => /* await kv.get(key(task)) */ null,
+    put: async (task, claim) => { /* await kv.set(key(task), claim) */ },
+    drop: async (task) => { /* await kv.del(key(task)) */ },
+  }
+}
+
+await vb(team, ['tasks', 'claim', '812'], { claims })
+// Later, on any instance:
+await vb(team, ['tasks', 'complete', '812', 'fixed'], { claims })
+```
+
+A claim's token goes to the store and never to stdout, so keep the store
+private. A claim's `until` tells you when its lease ends, so it can serve as
+the store's expiry. A store is for one board: if one holds claims for several
+boards, put the board in its keys.
+
 `commandWord(argv)` answers the command `argv` runs (`tail` for
 `['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
 itself.

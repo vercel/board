@@ -397,6 +397,8 @@ export type Io = {
   board?: Board
   /** What `board`'s task claims are kept by, where `board` is made for one call: the handle its caller holds. */
   claimsOf?: object
+  /** Where `board`'s task claims are kept, for the profile a run writes as, in place of memory: a store that outlives the call, the process, or the instance. */
+  claims?: (profile: string | null) => Claims
   /** Whether a person reads it at a terminal: JSON is indented there. */
   tty?: boolean
 }
@@ -2112,12 +2114,12 @@ const asTyped = () => (flags.as ? ['--as', flags.as] : [])
 /**
  * This run's board, and the claims it holds there as whoever it writes as. A claim's token is the
  * CLI's to keep: in a file under its config directory, by the board's URL, the task, and the
- * profile this run writes as; or for `vb()`, whose board is a handle, in memory for as long as the
- * handle lasts.
+ * profile this run writes as; or for `vb()`, whose board is a handle, in the store its caller
+ * passes, or else in memory for as long as the handle lasts.
  */
 function tasksOn(): { board: Board; claims: Claims } {
   const profile = writesAs()
-  if (io.board) return { board: client(), claims: memoryClaims(io.claimsOf ?? io.board, profile) }
+  if (io.board) return { board: client(), claims: io.claims?.(profile) ?? memoryClaims(io.claimsOf ?? io.board, profile) }
   const { board, url } = connection()
   return { board, claims: fileClaims(async () => url ?? (await board.discovery()).url, profile) }
 }
