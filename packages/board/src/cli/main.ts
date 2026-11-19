@@ -2068,7 +2068,7 @@ function checkPlan(plan: Record<string, unknown>[], where: string): void {
     const odd = task.needs.find((need) => !isNeed(need))
     if (odd !== undefined) {
       const said = JSON.stringify(odd)
-      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}, which isn't a task's ID or {"key": "…"}.`, { next: [planHelp()] })
+      throw usage(`Task ${at + 1} of ${where} needs ${said.length > 60 ? `${said.slice(0, 59)}…` : said}. A need is a task's ID as it is, like "812", or {"key": "fix"} for a task of the plan's own.`, { next: [planHelp()] })
     }
   }
 }
