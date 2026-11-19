@@ -167,6 +167,30 @@ private. A claim's `until` tells you when its lease ends, so it can serve as
 the store's expiry. A store is for one board: if one holds claims for several
 boards, put the board in its keys.
 
+A run with a stable ID can skip the store: pass `claimToken`, a secret it
+derives again on every instance, such as an HMAC-SHA256 of the run's ID in
+base64url. Claims then carry that token, so any call that has it renews and
+settles the claim, and claiming a task you already hold answers the claim
+you have:
+
+```ts
+import { createHmac } from 'node:crypto'
+import { board } from '@vercel/board'
+import { vb } from '@vercel/board/cli'
+
+const team = board().as('triage')
+const runId = process.env.RUN_ID!
+const claimToken = createHmac('sha256', process.env.CLAIM_SECRET!).update(runId).digest('base64url')
+
+await vb(team, ['tasks', 'claim', '812'], { claimToken })
+// Later, on any instance:
+await vb(team, ['tasks', 'complete', '812', 'fixed'], { claimToken })
+```
+
+The token never reaches stdout either. Anyone who can label in the task's
+channel and knows it can write through the claim, so treat the secret like
+any other credential.
+
 `commandWord(argv)` answers the command `argv` runs (`tail` for
 `['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
 itself.

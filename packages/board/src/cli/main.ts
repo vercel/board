@@ -23,7 +23,7 @@ import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
 import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
-import { fileClaims, memoryClaims, type Claims } from './claims.ts'
+import { fileClaims, memoryClaims, tokenClaims, type Claims } from './claims.ts'
 import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
@@ -399,6 +399,8 @@ export type Io = {
   claimsOf?: object
   /** Where `board`'s task claims are kept, for the profile a run writes as, in place of memory: a store that outlives the call, the process, or the instance. */
   claims?: (profile: string | null) => Claims
+  /** The token `board`'s claims take, the caller's own: with it, a claim needs no store, as any call that has the token settles it. */
+  claimToken?: string
   /** Whether a person reads it at a terminal: JSON is indented there. */
   tty?: boolean
 }
@@ -2127,6 +2129,7 @@ const asTyped = () => (flags.as ? ['--as', flags.as] : [])
  */
 function tasksOn(): { board: Board; claims: Claims } {
   const profile = writesAs()
+  if (io.board && io.claimToken !== undefined) return { board: client(), claims: tokenClaims(client(), io.claimToken) }
   if (io.board) return { board: client(), claims: io.claims?.(profile) ?? memoryClaims(io.claimsOf ?? io.board, profile) }
   const { board, url } = connection()
   return { board, claims: fileClaims(async () => url ?? (await board.discovery()).url, profile) }
@@ -2183,7 +2186,7 @@ async function claimFor(board: Board, claims: Claims, target: string | undefined
   if (!flags.ready) {
     for (const given of ['label', 'from', 'wait'] as const)
       if (flags[given] !== undefined) throw usage(`--${given} goes with --ready, which claims the next ready task in a channel.`)
-    const claim = await board.tasks.claim(taskId(target), lease !== undefined ? { lease } : {})
+    const claim = await board.tasks.claim(taskId(target), { ...(lease !== undefined ? { lease } : {}), ...(io.claimToken !== undefined ? { token: io.claimToken } : {}) })
     await claims.put(claim.task.id, { epoch: claim.epoch, token: claim.token, until: claim.until })
     return claim
   }
@@ -2204,6 +2207,7 @@ async function claimFor(board: Board, claims: Claims, target: string | undefined
         ...(flags.from?.length ? { from: flags.from } : {}),
         ...(wait !== undefined ? { wait } : {}),
         ...(lease !== undefined ? { lease } : {}),
+        ...(io.claimToken !== undefined ? { token: io.claimToken } : {}),
       },
       { signal: controller.signal },
     )

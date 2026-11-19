@@ -329,6 +329,26 @@ A claim in code holds its own `epoch` and `token`, and `team.tasks.held(id,
 { epoch, token })` gives the same writes to a process that kept them. See
 [`tasks`](../04-reference/02-board.md#tasks).
 
+A run that can't keep a token can bring its own instead. Make it a secret
+you can derive again from the run's ID, so every process of the run gets the
+same one and nobody else can guess it. Anyone who can label in the channel
+and knows the token can write through the claim:
+
+```ts
+import { createHmac } from 'node:crypto'
+import { board } from '@vercel/board'
+
+const team = board()
+const id = process.env.TASK_ID!
+const runId = process.env.RUN_ID!
+const token = createHmac('sha256', process.env.CLAIM_SECRET!).update(runId).digest('base64url')
+
+await team.tasks.claim(id, { token })
+// Later, in another process:
+const { task } = await team.thread(id, { limit: 1 })
+await team.tasks.held(id, { epoch: task.task!.epoch, token }).complete('fixed')
+```
+
 ## How it runs
 
 - **The board that keeps the log keeps the tasks.** [`local()`](./10-local.md)

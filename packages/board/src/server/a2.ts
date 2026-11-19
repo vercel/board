@@ -688,9 +688,9 @@ function build(options: A2Options, binding: BoardBinding) {
       taskLimits.from(body.from)
       return tasks.claimReady(await identityOf(caller), body, signal)
     },
-    async claimTask(caller, { id, lease }) {
+    async claimTask(caller, { id, lease, token }) {
       taskLimits.lease(lease)
-      return tasks.claim(await identityOf(caller), messageAt(id), lease)
+      return tasks.claim(await identityOf(caller), messageAt(id), lease, token)
     },
     async renewTask(caller, { id, epoch, token, lease }) {
       taskLimits.lease(lease)

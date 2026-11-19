@@ -453,7 +453,7 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
     const owners = new Set([principal.id])
     for (const value of input.from ?? []) owners.add(ownerFrom(value))
     const seen = seenFor(identity, (await ctx.session.state(actorsReducer)).state)
-    const token = newToken()
+    const token = input.token ?? newToken()
     const read: { taken: { root: Root; claim: TaskClaim } | null } = { taken: null }
     const rows = await appendFrom(ctx, async () => {
       read.taken = null
@@ -654,14 +654,22 @@ export function createTasks(options: { store?: A2Store | undefined; scheduler?: 
       }
     },
 
-    /** Claims a task: `label` in its channel, whoever owns it. Of claims that race, one lands. */
-    async claim(identity: Identity, id: number, lease: number | undefined): Promise<Protocol['claimTask']['output']> {
+    /**
+     * Claims a task: `label` in its channel, whoever owns it. Of claims that race, one lands. With
+     * the token of the claim that holds it now, it answers that claim as it is.
+     */
+    async claim(identity: Identity, id: number, lease: number | undefined, sent: string | undefined): Promise<Protocol['claimTask']['output']> {
       const { principal, actor } = identity
       const { channel } = await taskOf(principal.access, id)
       authorize(principal.access, 'label', channel)
-      const token = newToken()
+      const token = sent ?? newToken()
       const made: { claim?: TaskClaim } = {}
       const root = await changeTask(identity, id, (found) => {
+        const { task } = found
+        if (sent !== undefined && task.state === 'claimed' && !lapsed(task, Date.now()) && hashes(sent, task.claim!.token)) {
+          made.claim = { epoch: task.epoch, token, until: task.claim!.until }
+          return []
+        }
         claimable(found, identity)
         const claimed = claiming(found, found.task, identity, lease, token)
         made.claim = claimed.claim

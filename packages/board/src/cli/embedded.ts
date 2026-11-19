@@ -86,6 +86,14 @@ export type VbOptions = {
    * only you read it, and it's one board's: key it by the board too when it holds several.
    */
   claims?: (profile: string | null) => Claims
+  /**
+   * The token the task claims this call takes carry, in place of one the board makes: a secret you
+   * can derive again on any instance, as an HMAC of your run's ID, so a call that has it settles
+   * the claim with no store, and claiming a task you hold again answers the claim you hold. It
+   * never reaches stdout. Anyone who can label in the task's channel and has it writes through
+   * the claim, so keep it as secret as a token.
+   */
+  claimToken?: string
 }
 
 /** What a `vb()` command printed, and its exit code: 0, 1 for an error (a `wait` that timed out included), 2 for misuse. */
@@ -133,6 +141,7 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
       // A call with a signal runs on a handle of its own: its claims are the caller's handle's all the same.
       claimsOf: board,
       ...(options.claims ? { claims: options.claims } : {}),
+      ...(options.claimToken !== undefined ? { claimToken: options.claimToken } : {}),
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
       readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --file can't read files", 'readFile'),

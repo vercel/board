@@ -3648,9 +3648,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // it to make the batch, and its key says whether it has: a retry goes through the middleware once more on the way.
       throw notFound(`no batch of yours has id ${id}`, 'batch_not_found')
     },
-    async claimTask(caller, { id, lease }, signal) {
+    async claimTask(caller, { id, lease, token: sent }, signal) {
       const who = whoOf(caller)
-      const token = newClaimToken()
+      const token = sent ?? newClaimToken()
       // The API gives what's asked up to its own cap, and the board's default when nothing is.
       const made = await taskWrite(who, `${await taskPath(who, id, signal)}/claim`, { claimToken: token, leaseSeconds: lease ?? LEASE_DEFAULT_S }, { id, signal })
       return { task: await rootOf(who, made), claim: claimOf(made, token) }
@@ -3665,7 +3665,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // many times, so where many tasks change it answers before its wait is up. Nothing here says the wait ran out:
       // whoever waits asks again until their own wait is up, as the handle does.
       const wait = Math.min(WAIT_MAX_S, Math.ceil(input.wait ?? 0))
-      const token = newClaimToken()
+      const token = input.token ?? newClaimToken()
       const body = {
         operationId: operationId(),
         claimToken: token,

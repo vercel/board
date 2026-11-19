@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
@@ -24,6 +25,9 @@ async function handle(stall: Stall = { on: false, seen: [] }, served = testBoard
   }) as typeof globalThis.fetch
   return board({ backend: http(BOARD_URL, { fetch }) }).as(null)
 }
+
+/** What a failed `--json` call said, on stderr. */
+const failure = (ran: { stderr: string }) => JSON.parse(ran.stderr) as { reason: string }
 
 describe('vb()', () => {
   it('posts, replies, and reads a thread as the CLI prints it', async () => {
@@ -359,5 +363,40 @@ describe('vb()', () => {
     expect(await vb(first, ['tasks', 'cancel', lost, 'superseded'])).toMatchObject({ code: 0, stderr: '' })
     expect((await vb(next, ['tasks', 'complete', lost, 'rotated', '--as', 'rotator'], { claims })).stderr).toMatch(/^error: Lost the claim on task/)
     expect(kept.size).toBe(0)
+  })
+
+  it('takes a token from its caller, so any call with it settles the claim, with no store', async () => {
+    const served = testBoard()
+    const token = createHmac('sha256', 'a caller secret').update('run 7f3a9c').digest('base64url')
+    const first = await handle(undefined, served)
+    const id = (await vb(first, ['tasks', 'create', 'work', 'fix CVE-123 in acme/web', '--no-sync'])).stdout.trim()
+    const claimed = await vb(first, ['tasks', 'claim', id, '--lease', '5m', '--json'], { claimToken: token })
+    expect(claimed).toMatchObject({ code: 0, stderr: '' })
+    expect(claimed.stdout).not.toContain(token)
+    const { claim } = JSON.parse(claimed.stdout) as { claim: { epoch: number; until: string } }
+
+    // Claimed again with its token, on another handle, the task answers the claim it has: same epoch, same lease.
+    const next = await handle(undefined, served)
+    const again = await vb(next, ['tasks', 'claim', id, '--json'], { claimToken: token })
+    expect(again).toMatchObject({ code: 0, stderr: '' })
+    expect(JSON.parse(again.stdout).claim).toEqual(claim)
+    // Without it, or with another, the task is someone else's.
+    expect(failure(await vb(next, ['tasks', 'claim', id, '--json'], { claimToken: 'b'.repeat(43) }))).toMatchObject({ reason: 'task_claimed' })
+    expect((await vb(next, ['tasks', 'complete', id, 'not mine'])).stderr).toMatch(/^error: You hold no claim on task/)
+    expect(failure(await vb(next, ['tasks', 'complete', id, 'not mine', '--json'], { claimToken: 'b'.repeat(43) }))).toMatchObject({ reason: 'claim_lost' })
+
+    // Any call with the token renews and settles it.
+    expect(await vb(next, ['tasks', 'renew', id, '--lease', '10m'], { claimToken: token })).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(await handle(undefined, served), ['tasks', 'complete', id, 'fixed in a1b2c3'], { claimToken: token })).toEqual({ code: 0, stdout: `completed ${id}\n`, stderr: '' })
+    expect(JSON.parse((await vb(next, ['read', id, '--json'])).stdout).message.task).toMatchObject({ state: 'completed', result: 'fixed in a1b2c3' })
+    expect((await vb(next, ['tasks', 'release', id], { claimToken: token })).stderr).toMatch(/^error: You hold no claim on task/)
+
+    // The next ready task, too.
+    const ready = (await vb(first, ['tasks', 'create', 'work', 'review the fix', '--label', 'step=review', '--no-sync'])).stdout.trim()
+    expect(await vb(first, ['tasks', 'claim', '--ready', 'work', '--label', 'step=review'], { claimToken: token })).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb(next, ['tasks', 'fail', ready, 'needs a database'], { claimToken: token })).toEqual({ code: 0, stdout: `failed ${ready}\n`, stderr: '' })
+
+    // A token any backend takes: 32 bytes in base64url.
+    expect(failure(await vb(first, ['tasks', 'claim', ready, '--json'], { claimToken: 'run-7f3a9c' }))).toMatchObject({ reason: 'invalid_arguments' })
   })
 })

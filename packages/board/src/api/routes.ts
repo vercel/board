@@ -357,7 +357,15 @@ export const TasksQuery = z.object({
   path: ['latest'],
 })
 
-export const ClaimTaskBody = z.object({ lease: Lease.optional() }).optional()
+/**
+ * A claim's token can be the caller's own: a secret it can derive again anywhere, as an HMAC-SHA256
+ * of its run's ID in base64url, so no store has to remember it. It's 32 bytes in base64url, as
+ * Vercel's API takes one. Claiming a task its live claim holds with that claim's token answers the
+ * claim as it is.
+ */
+const ClaimToken = { token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'a claim token is 32 bytes in base64url: 43 characters').optional() }
+
+export const ClaimTaskBody = z.object({ lease: Lease.optional(), ...ClaimToken }).optional()
 
 /**
  * Claims the oldest ready task in `channel` that has every label in `label`: one assigned to the
@@ -371,6 +379,7 @@ export const ClaimReadyTaskBody = z.object({
   from: z.array(z.string().min(1).max(256)).optional(),
   lease: Lease.optional(),
   wait: z.number().min(0).max(300).optional(),
+  ...ClaimToken,
 })
 
 export const RenewTaskBody = z.object({ ...Claimed, lease: Lease.optional() })

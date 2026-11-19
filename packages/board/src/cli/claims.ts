@@ -106,3 +106,20 @@ export function memoryClaims(board: object, profile: string | null): Claims {
     drop: async (task) => void claims.delete(at(task)),
   }
 }
+
+/**
+ * Claims by a token the caller chose, kept nowhere: a task's claim is this token's while the task
+ * is claimed, at the epoch the board shows, and the board says whether the token holds it. So any
+ * call with the token renews and settles the claim, on any handle, process, or instance.
+ */
+export function tokenClaims(board: { thread(id: string, range: { limit: number }): Promise<{ message: { task?: { state: string; epoch: number; claim: { until: string } | null } | null } }> }, token: string): Claims {
+  return {
+    async get(task) {
+      const held = (await board.thread(task, { limit: 1 })).message.task
+      if (held?.state !== 'claimed' || !held.claim) return null
+      return { epoch: held.epoch, token, until: held.claim.until }
+    },
+    put: async () => {},
+    drop: async () => {},
+  }
+}

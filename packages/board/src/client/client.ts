@@ -453,15 +453,16 @@ export function createBoardClient(options: ClientOptions) {
    * is how long you hold it, in seconds, the board's default without one: a board says how short
    * and how long one may be, and the claim's `until` says what it gave.
    */
-  async function claimTask(target: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
-  async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
+  async function claimTask(target: string, opts?: { lease?: number; token?: string; signal?: AbortSignal }): Promise<ClaimedTask>
+  async function claimTask(target: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number; token?: string }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
   async function claimTask(
-    target: string | { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number },
-    opts: { lease?: number; signal?: AbortSignal } = {},
+    target: string | { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number; token?: string },
+    opts: { lease?: number; token?: string; signal?: AbortSignal } = {},
   ): Promise<ClaimedTask | null> {
     const signal = opts.signal ? { signal: opts.signal } : {}
     if (typeof target === 'string') {
-      const { task, claim } = await call<{ task: MessageView; claim: TaskClaim }>('POST', `/tasks/${path(target)}/claim`, { body: opts.lease !== undefined ? { lease: opts.lease } : {}, ...signal })
+      const body = { ...(opts.lease !== undefined ? { lease: opts.lease } : {}), ...(opts.token !== undefined ? { token: opts.token } : {}) }
+      const { task, claim } = await call<{ task: MessageView; claim: TaskClaim }>('POST', `/tasks/${path(target)}/claim`, { body, ...signal })
       return claimed(task, claim)
     }
     const { wait, ...ready } = target

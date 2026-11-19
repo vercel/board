@@ -858,6 +858,22 @@ describe("vercel()'s tasks", () => {
     expect(seen).not.toMatch(/"token"|claimToken/)
   })
 
+  it("sends a token its caller chose as the claim's, by ID and for the next ready task", async () => {
+    const RUN_TOKEN = 'r'.repeat(43)
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'migrate the table' })
+    const claim = await julian.tasks.claim(task.id, { token: RUN_TOKEN })
+    expect(julian.wrote()).toMatchObject({ path: `/tasks/${threadOf(task.id)}/claim`, body: { claimToken: RUN_TOKEN } })
+    expect(claim.token).toBe(RUN_TOKEN)
+    await julian.tasks.held(task.id, { epoch: claim.epoch, token: RUN_TOKEN }).complete('migrated')
+
+    const { task: next } = await julian.tasks.create('work', { text: 'review it' })
+    const ready = await julian.tasks.claim({ channel: 'work', token: RUN_TOKEN })
+    expect(ready).toMatchObject({ token: RUN_TOKEN, task: { id: next.id } })
+    expect(julian.wrote()).toMatchObject({ path: '/tasks/claim', body: { claimToken: RUN_TOKEN } })
+  })
+
   it('gets the lease the API gives: 5 minutes at most, and it asks for 15 when the caller asks for none', async () => {
     const api = fakeMessageboard()
     const julian = handleOn(api)

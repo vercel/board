@@ -3743,7 +3743,15 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   writes as, `--as`'s or `BOARD_PROFILE`'s, lowercase as in its actor's ID, or
   none as yourself. The file goes when the claim ends, when the board answers
   `claim_lost`, and a day after a lease that nothing settled ran out. `vb()`
-  keeps a handle's claims in memory instead, by task and `--as`.
+  keeps a handle's claims in memory instead, by task and `--as`, or in its
+  caller's `claims` store. With `claimToken`, it keeps none: its claims carry
+  that token, and each write reads the task's epoch.
+- **A caller can bring the claim's token.** `claim` takes `token`, 32 bytes in
+  base64url, in place of one the board makes, so a run that derives it again
+  (an HMAC of its ID) needs no store. Claiming a task by ID with the live
+  claim's token answers that claim as it is, its epoch and lease unchanged,
+  so a retry is safe. Two claims by one run then share a token, and only the
+  epoch tells them apart.
 - **The board fences what a claim does.** Each claim raises the task's
   `epoch`. A write with an older epoch or the wrong token, or after its claim
   ended (released, blocked, or canceled), is 409 `claim_lost` and changes

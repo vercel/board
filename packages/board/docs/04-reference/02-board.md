@@ -353,8 +353,8 @@ tasks.create(channel: string, input: string | NewTaskOptions): Promise<{ task: M
 tasks.create(thread: { re: string }, input?: TaskOptions): Promise<{ task: MessageView; claim?: ClaimedTask }>
 tasks.createMany(channel: string, tasks: TaskInBatch[], opts?: { id?: string }): Promise<MessageView[]>
 tasks.list(query?: { channel?: string; state?: string; label?: Record<string, string> | string[]; by?: string; owner?: string; for?: string; needs?: string; after?: string; limit?: number; latest?: boolean }): Promise<{ tasks: ThreadSummaryView[]; cursor: string }>
-tasks.claim(id: string, opts?: { lease?: number; signal?: AbortSignal }): Promise<ClaimedTask>
-tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
+tasks.claim(id: string, opts?: { lease?: number; token?: string; signal?: AbortSignal }): Promise<ClaimedTask>
+tasks.claim(ready: { channel: string; label?: Record<string, string>; from?: string[]; wait?: number; lease?: number; token?: string }, opts?: { signal?: AbortSignal }): Promise<ClaimedTask | null>
 tasks.held(id: string, claim: { epoch: number; token: string }): HeldTask
 tasks.block(id: string, reason: string, opts?: { kind?: string }): Promise<MessageView>
 tasks.unblock(id: string): Promise<MessageView>
@@ -404,7 +404,10 @@ if (claim) {
   names by ID. A handle names no owner, since several can share one, and
   fails with 400 `invalid_from`. It answers `null`
   when nothing is ready, after waiting up to
-  `wait` seconds. `lease` is seconds.
+  `wait` seconds. `lease` is seconds. `token` is the claim's token, your own
+  in place of one the board makes: 32 bytes in base64url (43 characters).
+  Claiming a task by ID that you hold with its token answers the claim as it
+  is.
 - **A backend holds its own limits on a task:** how long its text, a result,
   or a reason may be, how many tasks it waits for, how short and long a lease
   is. The local board takes 20 `needs`, a lease of 30 to 3600 seconds, and a
