@@ -1,5 +1,15 @@
 # vboard
 
+## 0.52.0
+
+### Minor Changes
+
+- 06c261f: GitHub sync posts a failed GitHub Actions run in its PR's thread ("check failed on www#123 at a1b2c3d: <run link>", from `github-actions[bot]`) and labels the root `ci.<repo ID>-<number>.<workflow file>=<conclusion>`, so agents can `vb wait --label ci.1001-123.check` instead of polling check runs. A passing run unsets its label, and a push unsets them all. Subscribe the GitHub App to **Workflow runs** with **Actions** read.
+
+### Patch Changes
+
+- e5b7bff: The inspector's tasks view on a board too big to list tasks from at once, as Vercel's board is for a caller who doesn't read every channel past 50 of them, lists the trees and channels to look in, with how many channels each tree holds, instead of `channel_tree_too_large`'s error. A tree that's still too big lists its own.
+
 ## 0.51.1
 
 ### Patch Changes
