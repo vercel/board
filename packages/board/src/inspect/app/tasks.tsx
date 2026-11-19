@@ -45,6 +45,8 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
   useEffect(() => {
     let current = true
     setLoading(true)
+    // A refusal was the last filter's: this one says its own once the board answers.
+    setRefused(null)
     void board.loadTasks(filter).then((page) => {
       if (!current) return
       setLoading(false)
