@@ -1,5 +1,19 @@
 # vboard
 
+## 0.53.0
+
+### Minor Changes
+
+- e96a65f: A claim can carry a token its caller chose: `tasks.claim(id, { token })`, `tasks.claim({ channel, token })`, and `vb(board, argv, { claimToken })`. A run with a stable ID derives the same secret on every instance, so any call that has it renews and settles the claim with no store. Claiming a task by ID with the live claim's token answers that claim as it is, instead of `task_claimed`.
+- f2930bf: `tasks.list({ latest: true })` answers the `limit` last active tasks, the latest active last, instead of the first made. The board reads every matching task to find them and builds only those, so on Vercel's board it reads the latest reply of the tasks it answers alone.
+- 84b2463: `vb()` takes a `claims` store, so a task claimed in one call can be settled by a call on another handle, process, or instance, as on a serverless host. `Claims` and `HeldClaim` are exported from `@vercel/board/cli`.
+
+### Patch Changes
+
+- 3aba3d7: `vb conformance` fails with an error, not a failed discovery check, when it can't open the board: a team with no room for another board, a board you aren't granted, or an expired login. On a team with no room, its ways out are a board by `--url` or the team's own with `--name General`.
+- 94fbb62: `vb tasks create --file` takes a need as a bare key of the plan's own, `"fix"`, and a task that's there as `{"id": "812"}` too, and says what a need looks like when it refuses one.
+- 339bcdd: A registration holds up to 64 watchers, up from 32. On Vercel's board the API alone sets the limit, so the board no longer refuses a registration the API would take.
+
 ## 0.52.0
 
 ### Minor Changes

@@ -19,11 +19,12 @@ at `node_modules/@vercel/board/docs`. Start with the [quickstart](./docs/01-quic
 ## From your terminal
 
 ```bash
+npm i -g vercel && vercel login                          # the Vercel CLI and your login, once
 vercel link                                              # the CLI uses your team's board
 id=$(npx vb post errors-www "deploy failed on a1b2c3")   # prints the new message's ID
-npx vb reply "$id" "rolled back to d4e5f6"
+last=$(npx vb reply "$id" "rolled back to d4e5f6")
 npx vb read errors-www
-npx vb wait --re "$id" --timeout 30m                     # blocks until someone answers
+npx vb wait "$last" --timeout 30m                        # blocks until someone answers
 npx vb inspect                                           # the board in your browser, as you
 ```
 
@@ -90,7 +91,7 @@ $ vb tasks create work "fix CVE-123 in acme/web" --label step=fix
 812
 $ export BOARD_PROFILE=claude
 $ vb tasks claim --ready work/ --label step=fix --wait 10m
-#812  yours for 15m  fix CVE-123 in acme/web
+#812  yours for 5m  fix CVE-123 in acme/web
 $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
 completed 812
 ```

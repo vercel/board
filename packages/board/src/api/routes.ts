@@ -102,6 +102,14 @@ export const ChannelsQuery = z.strictObject({
   limit: z.coerce.number().int().min(1).max(CHANNELS_LIMIT_MAX).optional(),
 })
 
+/** How many actors one read of them by ID names at most. */
+export const ACTORS_BY_ID_MAX = 100
+
+/** The board's actors, or with `id`, only the ones it names: someone it doesn't have is left out. */
+export const ActorsQuery = z.strictObject({
+  id: repeated.pipe(z.array(z.string().min(1).max(300)).min(1).max(ACTORS_BY_ID_MAX)).optional(),
+})
+
 /**
  * A thread read in part: the root, and of its replies the ones after one of its messages (`after`), `limit` of
  * them. With `after` they're the first after it, to read on from; without, the newest.
@@ -521,15 +529,13 @@ export const InboxQuery = z.object({
   channel: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
-/** How many watchers one registration holds: the board matches every event against every tail. */
-export const REGISTERED_WATCHERS_MAX = 32
+/** How many watchers one registration holds on the local engine, which matches every event against every tail. Vercel's API sets its own. */
+export const REGISTERED_WATCHERS_MAX = 64
 
 /** What every registration carries: its watchers' tails, and its sync entries. */
 const Registering = z.object({
   // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
-  watch: z
-    .record(z.string().max(100), z.object({ tail: z.string().max(1000) }))
-    .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
+  watch: z.record(z.string().max(100), z.object({ tail: z.string().max(1000) })),
   /**
    * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
    * where it may sync, and the board lists the entries.
@@ -786,6 +792,7 @@ export type SyncFindInput = z.input<typeof SyncFindQuery>
 export type ChannelMessagesQueryInput = z.input<typeof ChannelMessagesQuery>
 export type ThreadQueryInput = z.input<typeof ThreadQuery>
 export type ChannelsQueryInput = z.input<typeof ChannelsQuery>
+export type ActorsQueryInput = z.input<typeof ActorsQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
@@ -1206,7 +1213,7 @@ export const routes = {
   channels: { method: 'GET', path: '/channels', query: ChannelsQuery },
   /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is. */
   createChannel: { method: 'POST', path: '/channels', body: CreateChannelBody },
-  actors: { method: 'GET', path: '/actors' },
+  actors: { method: 'GET', path: '/actors', query: ActorsQuery },
   /** One channel's messages across its threads: the newest, or those after one of its cursors. */
   channelMessages: { method: 'GET', path: '/messages', query: ChannelMessagesQuery },
   message: { method: 'GET', path: '/messages/:id', query: ThreadQuery },

@@ -24,9 +24,10 @@ describe('vb tasks create --file', () => {
     const before = await create('plans', 'cut the release branch')
     const path = await planFile([
       { key: 'fix', text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } },
-      { key: 'review', text: 'review the fix for CVE-123', labels: { step: 'review' }, needs: [{ key: 'fix' }] },
-      // What was there is named by its ID, written as the CLI prints it or as JSON has a number, and an assignee by a profile's name.
-      { text: 'ship it', needs: [{ key: 'review' }, `#${before}`, Number(before)], for: 'Shipper' },
+      // A bare string that's a key of the plan's own names that task.
+      { key: 'review', text: 'review the fix for CVE-123', labels: { step: 'review' }, needs: ['fix'] },
+      // What was there is named by its ID, written as the CLI prints it, as JSON has a number, or as { id }, and an assignee by a profile's name.
+      { text: 'ship it', needs: [{ key: 'review' }, `#${before}`, Number(before), { id: before }], for: 'Shipper' },
     ])
     const made = await vb(['tasks', 'create', 'plans', '--file', path, '--idempotency-key', 'cve-123'])
     expect(made).toMatchObject({ code: 0, stderr: '' })
@@ -76,6 +77,20 @@ describe('vb tasks create --file', () => {
     expect(await misused(['none', '--file', '/nowhere/plan.json'])).toBe("error: Can't read /nowhere/plan.json. There's no such file.")
     // A file of prose is the likeliest slip, --file carried over from post: it says what --file is here.
     expect(await misused(['none', '--file', await planFile('not json', 'notes.txt')])).toMatch(/^error: \S+notes\.txt isn't JSON: --file on tasks create is a plan of tasks\.$/)
+    // With one task's options too, it's still the file that's wrong: the way out is the same command, the file on stdin as its text.
+    const notes = await planFile('# fix the flaky test\n\nit fails one run in ten', 'notes.md')
+    const prose = await vb(['tasks', 'create', 'prose', '--file', notes, '--label', 'step=fix'])
+    expect([prose.code, prose.stdout]).toEqual([2, ''])
+    expect(prose.stderr.replaceAll(notes, 'notes.md').split('\n').slice(0, 3)).toEqual([
+      "error: notes.md isn't JSON: --file on tasks create is a plan of tasks.",
+      '',
+      "  One task's text goes on stdin, as -: vb tasks create prose --label step=fix - < notes.md",
+    ])
+    const piped = await vb(['tasks', 'create', 'prose', '--file', '-', '--label', 'step=fix'], {}, 'fix it')
+    expect(piped.stderr.split('\n')[2]).toBe("  One task's text goes on stdin, as -: vb tasks create prose --label step=fix -")
+    // That command makes the one task, with the file's text and the label.
+    const made = (await ok(['tasks', 'create', 'prose', '--label', 'step=fix', '-'], {}, '# fix the flaky test\n\nit fails one run in ten')).trim()
+    expect(await task(made)).toMatchObject({ text: '# fix the flaky test\n\nit fails one run in ten', labels: { step: 'fix' }, task: { state: 'ready' } })
     expect(await misused(['none', '--file', '-'], '{"text": "one task"}')).toBe('error: stdin holds no tasks. A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].')
     expect(await misused(['none', '--file', await planFile([])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)
     expect(await misused(['none', '--file', await planFile(['a task'])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)
@@ -143,10 +158,10 @@ describe('vb tasks create --file', () => {
     // One that's near none is said with what a task takes.
     expect((await refused([{ text: 'fix it', priority: 'high' }])).slice(0, 2)).toEqual(['error: Unknown key "priority" on task 1 of plan.json.', '  a task takes key, text, labels, needs, for, noSync, attachments'])
     // What a task waits for is a list, each a task's ID or a key of the plan's own.
-    expect((await refused([{ key: 'fix', text: 'fix it' }, { text: 'review it', needs: [{ key: 'fix' }, { ref: 'fix' }] }]))[0]).toBe('error: Task 2 of plan.json needs {"ref":"fix"}, which isn\'t a task\'s ID or {"key": "…"}.')
-    for (const odd of [true, null, ['812'], { key: 'fix', text: 'fix it' }, { key: 5 }, '', '#', 1.5])
-      expect((await refused([{ text: 'review it', needs: ['812', odd] }]))[0]).toBe(`error: Task 1 of plan.json needs ${JSON.stringify(odd)}, which isn't a task's ID or {"key": "…"}.`)
-    expect((await refused([{ text: 'review it', needs: [{ task: 'a'.repeat(100) }] }]))[0]).toBe(`error: Task 1 of plan.json needs {"task":"${'a'.repeat(50)}…, which isn't a task's ID or {"key": "…"}.`)
+    expect((await refused([{ key: 'fix', text: 'fix it' }, { text: 'review it', needs: [{ key: 'fix' }, { ref: 'fix' }] }]))[0]).toBe('error: Task 2 of plan.json needs {"ref":"fix"}. A need is a key of the plan\'s own, like "fix" or {"key": "fix"}, or a task\'s ID as vb prints it or as {"id": "…"}.')
+    for (const odd of [true, null, ['812'], { id: 812 }, { id: '' }, { id: '812', key: 'fix' }, { key: 'fix', text: 'fix it' }, { key: 5 }, '', '#', 1.5])
+      expect((await refused([{ text: 'review it', needs: ['812', odd] }]))[0]).toBe(`error: Task 1 of plan.json needs ${JSON.stringify(odd)}. A need is a key of the plan's own, like "fix" or {"key": "fix"}, or a task's ID as vb prints it or as {"id": "…"}.`)
+    expect((await refused([{ text: 'review it', needs: [{ task: 'a'.repeat(100) }] }]))[0]).toBe(`error: Task 1 of plan.json needs {"task":"${'a'.repeat(50)}…. A need is a key of the plan's own, like "fix" or {"key": "fix"}, or a task's ID as vb prints it or as {"id": "…"}.`)
     expect((await refused([{ text: 'review it', needs: '812' }]))[0]).toBe('error: Task 1 of plan.json has needs that aren\'t a list, such as [{"key": "fix"}, "812"].')
     // From stdin, and for a program: the same, as one document.
     const piped = await vb(['tasks', 'create', 'typos', '--file', '-', '--json'], {}, JSON.stringify([{ text: 'fix it', labls: { step: 'fix' } }]))

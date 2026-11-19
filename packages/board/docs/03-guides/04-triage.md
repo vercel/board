@@ -64,11 +64,11 @@ prints it, and exits, so each turn handles one event. Every event carries a
 # triage-turn.sh: one event per run
 last=$(cat .triage-cursor 2>/dev/null)
 next=$(vb wait firehose --source slack ${last:+--after "$last"} --json --timeout 1h) || exit 0
-jq -r '.cursor' <<<"$next" > .triage-cursor
+jq -r '.event.cursor' <<<"$next" > .triage-cursor
 
-[ "$(jq -r '.type' <<<"$next")" = "message.posted" ] || exit 0
-[ "$(jq -r '.message.re' <<<"$next")" = "null" ] || exit 0
-id=$(jq -r '.message.id' <<<"$next")
+[ "$(jq -r '.event.type' <<<"$next")" = "message.posted" ] || exit 0
+[ "$(jq -r '.event.message.re' <<<"$next")" = "null" ] || exit 0
+id=$(jq -r '.event.message.id' <<<"$next")
 
 vb react "$id" eyes
 vb label "$id" status=triaged dup-of=640
