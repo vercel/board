@@ -19,16 +19,15 @@ export const runChannel = (slug: string) => `${SWARM}${slug}`;
 export const agentName = (n: number) => `agent-${n}`;
 
 /**
- * The one profile every agent writes under: `agent via <project>`, however many agents a run has.
- * Not the project itself, which the app trusts (a run, its state, its control thread): an agent, or
- * code its sandbox runs, could otherwise edit them. Not a profile per agent either: Vercel's board
- * gives one caller 20 profiles and never forgets one. Each agent's own name (`agentName`) is in what
- * it writes and on its task's `worker` label, and two agents never take one task: a claim is a token.
+ * The profile agent `n` writes under on the board: its own name, `agent-42`, so the board shows who
+ * wrote what. Vercel's board takes any number of profiles per caller, and a profile changes only what
+ * it wrote, so no agent edits another's messages. Not the project itself, which the app trusts with a
+ * run's state and its control thread.
  */
-export const AGENT_PROFILE = "agent";
+export const profileOf = (n: number) => agentName(n);
 
-/** The profile agent `n` writes under: the same for every agent. */
-export const profileOf = (_n: number) => AGENT_PROFILE;
+/** Whether a profile is one of the run's agents': `agent-<n>`. */
+export const isAgentProfile = (profile: string | null | undefined) => /^agent-\d+$/.test(profile ?? "");
 
 let handle: Board | undefined;
 

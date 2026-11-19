@@ -93,11 +93,9 @@ on the pull request.
   reconciles (five minutes with the cron). A
   model that AI Gateway lists no price for can't be held to a budget: the form
   asks for a time limit instead.
-- **Agents write under one shared profile, `agent`.** Not the project itself,
-  which the app trusts, and not one each: Vercel's board gives one caller 20
-  profiles and never forgets one. Each agent's name (`agent-42`) is in its
-  replies and on its task's `worker` label, which the page shows as the holder.
-  A claim is a token, so two agents never take one task. 256 agents at most.
+- **Each agent writes under a profile of its own** (`agent-42 via <project>`).
+  Vercel's board takes any number of profiles per caller, and a profile changes
+  only what it wrote. 256 agents at most, for the reasons below.
 - **What holds a big run back is the board's write limit.** Every agent writes
   as this project, and Vercel's board takes 300 writes a minute from one
   caller: an agent renews its claim and labels its cost every two minutes, and

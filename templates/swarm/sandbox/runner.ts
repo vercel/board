@@ -144,7 +144,7 @@ async function output(id: string, role: Role): Promise<string | null> {
   const { replies } = await read(id);
   // Only one of the run's agents posts an output: a reply anyone else dresses up as one isn't.
   // And only as it was posted: agents share profiles, so one could edit another's output.
-  const found = [...replies].reverse().find((reply) => reply.text.startsWith(OUTPUT[role]) && profileOfSelf(reply.by, config.owner) === "agent" && !reply.editedAt);
+  const found = [...replies].reverse().find((reply) => reply.text.startsWith(OUTPUT[role]) && /^agent-\d+$/.test(profileOfSelf(reply.by, config.owner) ?? "") && !reply.editedAt);
   return found ? found.text.slice(OUTPUT[role].length).trim() : null;
 }
 
@@ -255,7 +255,7 @@ const progress = {
     if (!this.task || action === this.posted || now - this.last < config.progressMs) return;
     const more = this.since > 1 ? ` (and ${this.since - 1} more steps since the last note)` : "";
     Object.assign(this, { last: now, posted: action, since: 0 });
-    void note(this.task, `[progress] ${config.worker}: ${action}${more}`);
+    void note(this.task, `[progress] ${action}${more}`);
   },
 };
 
@@ -582,8 +582,6 @@ while (Date.now() < config.deadline) {
   const { title, body } = splitTask(task.text);
   log({ type: "claimed", task: task.id, role, title });
   await note(task.id, `[progress] ${config.worker} took this ${role} task, with ${config.model}.`);
-  // Agents share one profile, so the task says which of them holds it: the page shows it as the holder.
-  await vb("label", task.id, `${LABEL.worker}=${config.worker}`).catch(() => {});
   progress.start(task.id);
 
   // What the task cost before this try counts too: a task that was given back and taken again has spent both.

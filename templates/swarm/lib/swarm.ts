@@ -120,8 +120,7 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
       channel: message.channel,
       title: message.text.split("\n", 1)[0] || "(no title)",
       state: task.state,
-      // Agents share one profile: the task's `worker` label says which of them holds it.
-      holder: task.claim ? (message.labels.worker ?? holderOf(task.claim.actor, known)) : null,
+      holder: task.claim ? holderOf(task.claim.actor, known) : null,
       lease: task.claim?.until ?? null,
       needs: task.needs,
       note: task.blocked?.reason ?? task.result ?? task.reason ?? null,
