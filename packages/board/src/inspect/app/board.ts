@@ -474,9 +474,10 @@ listeners.add(() => {
 
 /**
  * The tasks a filter keeps, a page at a time, into the store. Answers where the list ends for
- * now, or what the board refused it for.
+ * now, or what the board refused it for: `tooWide` when the filter's tree holds more channels than
+ * one list reads, as Vercel's board says for a caller who doesn't read every channel.
  */
-export async function loadTasks(filter: store.TaskFilter, after?: string): Promise<{ cursor: string; last: MessageView | undefined; more: boolean } | { refused: string }> {
+export async function loadTasks(filter: store.TaskFilter, after?: string): Promise<{ cursor: string; last: MessageView | undefined; more: boolean } | { refused: string; tooWide: boolean }> {
   try {
     const page = await listTasks({
         state: filter.state,
@@ -490,7 +491,7 @@ export async function loadTasks(filter: store.TaskFilter, after?: string): Promi
     set((s) => store.merge(s, roots))
     return { cursor: page.cursor, last: roots.at(-1), more: roots.length === PAGE }
   } catch (error) {
-    return { refused: refusal(error) }
+    return { refused: refusal(error), tooWide: (error as { code?: unknown } | null)?.code === 'channel_tree_too_large' }
   }
 }
 

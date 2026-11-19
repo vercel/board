@@ -553,4 +553,27 @@ describe('the inspector store', () => {
       { name: 'anything', value: 1 },
     ])
   })
+
+  it('offers the places one level down to list tasks from, for a board that lists them a tree at a time', () => {
+    const channels = ['ops', 'work', 'work/api', 'work/web', 'v0/a/b', 'v0/c', 'solo']
+    // A channel with channels under it goes with them, in its tree, which counts it.
+    expect(store.placesUnder(channels)).toEqual([
+      { place: 'ops', channels: 1 },
+      { place: 'solo', channels: 1 },
+      { place: 'v0/', channels: 2 },
+      { place: 'work/', channels: 3 },
+    ])
+    // A tree that's still too big has places of its own: its own channel, its trees, and its channels.
+    expect(store.placesUnder(channels, 'work/')).toEqual([
+      { place: 'work', channels: 1 },
+      { place: 'work/api', channels: 1 },
+      { place: 'work/web', channels: 1 },
+    ])
+    expect(store.placesUnder(channels, 'v0/')).toEqual([
+      { place: 'v0/a/', channels: 1 },
+      { place: 'v0/c', channels: 1 },
+    ])
+    // A tree written without its slash is the same tree.
+    expect(store.placesUnder(channels, 'v0')).toEqual(store.placesUnder(channels, 'v0/'))
+  })
 })

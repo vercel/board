@@ -500,6 +500,11 @@ button.file:hover { background: var(--shade-hover); color: var(--bright); }
 .task-now .need + .need { margin-left: 8px; }
 .task-where { color: var(--faint); font-size: 12px; white-space: nowrap; }
 .task-row .time { text-align: right; }
+.task-places { display: grid; padding: 0 12px; }
+.task-place { display: flex; align-items: center; gap: 12px; padding: 5px 8px; color: var(--dim); }
+.task-place:hover { background: var(--shade); color: var(--bright); }
+.task-place .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-place .count { color: var(--faint); font-size: 12px; white-space: nowrap; }
 @media (max-width: 700px) {
   .task-row { grid-template-columns: 88px minmax(0, 1fr) 30px; row-gap: 0; }
   .task-where { display: none; }

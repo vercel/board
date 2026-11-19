@@ -6,7 +6,7 @@ import { Composer } from './composer.tsx'
 import { describe } from './filters.tsx'
 import { Pendings } from './message.tsx'
 import { Ago, here, Link, navigate, useTypeToFocus, type Where } from './nav.tsx'
-import { isTask, nameOf, stateNow, tasks, type State, type TaskFilter, type TaskRoot } from './store.ts'
+import { isTask, nameOf, placesUnder, stateNow, tasks, type State, type TaskFilter, type TaskRoot } from './store.ts'
 import { Lease, Needs, StateMark, useLapse } from './task.tsx'
 import { Header, nativeMenu, Panel, Suggest, type KnownLabels } from './ui.tsx'
 import { firstLine } from './words.ts'
@@ -39,8 +39,8 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
   const key = JSON.stringify(filter)
   // Where the board's list ended, for the filter it was asked with: the list stops there while the board has more.
   const [listed, setListed] = useState<{ key: string; cursor: string; last: MessageView | undefined; more: boolean } | null>(null)
-  // What the board answered instead of the list, when it refused.
-  const [refused, setRefused] = useState<string | null>(null)
+  // What the board answered instead of the list, when it refused: `tooWide` when its tree holds more channels than one list reads.
+  const [refused, setRefused] = useState<{ text: string; tooWide: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     let current = true
@@ -48,7 +48,7 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
     void board.loadTasks(filter).then((page) => {
       if (!current) return
       setLoading(false)
-      setRefused('refused' in page ? page.refused : null)
+      setRefused('refused' in page ? { text: page.refused, tooWide: page.tooWide } : null)
       setListed('cursor' in page ? { key, ...page } : null)
     })
     return () => {
@@ -96,8 +96,10 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
         ))}
       </nav>
       <div className="page">
-        {refused !== null ? (
-          <p className="empty error">{refused}</p>
+        {refused?.tooWide ? (
+          <Places channels={Object.keys(state.channels)} under={filter.channel} />
+        ) : refused !== null ? (
+          <p className="empty error">{refused.text}</p>
         ) : rows.length === 0 && pending.length === 0 ? (
           <p className="empty">{loading ? 'loading…' : chips.length > 0 || filter.state !== 'open' ? 'no tasks match' : 'no open tasks'}</p>
         ) : (
@@ -127,6 +129,29 @@ export function Tasks(props: { state: State; now: number; lead: ReactNode; where
         tasks={{ state, always: true }}
         onSend={({ text, noSync, channel, labels, files, task }) => void board.send({ channel, re: null, text, noSync, labels, files, ...(task ? { task } : {}) })}
       />
+    </>
+  )
+}
+
+/**
+ * Where to look, when the board lists tasks a tree at a time: Vercel's does for a caller who doesn't
+ * read every channel. Each place filters the list to it, and one that's still too big shows its own.
+ */
+function Places({ channels, under }: { channels: string[]; under: string | undefined }) {
+  const places = placesUnder(channels, under)
+  return (
+    <>
+      <p className="empty">
+        {under ? `#${under} has` : 'this board has'} too many channels to list tasks from at once, since you don't read every channel here. pick where to look:
+      </p>
+      <div className="task-places">
+        {places.map(({ place, channels: count }) => (
+          <Link key={place} to={here({ params: { channel: place } })} className="task-place">
+            <span className="name">#{place}</span>
+            {place.endsWith('/') && <span className="count">{count === 1 ? '1 channel' : `${count} channels`}</span>}
+          </Link>
+        ))}
+      </div>
     </>
   )
 }

@@ -616,6 +616,33 @@ export type TaskFilter = { channel?: string; state: 'open' | 'all' | TaskState; 
 
 const inChannel = (channel: string, wanted: string) => (wanted.endsWith('/') ? channel === wanted.slice(0, -1) || channel.startsWith(wanted) : channel === wanted)
 
+/** Where a task list can look: a tree (`work/`, it and what's under it) or one channel, and how many of your channels it holds. */
+export type TaskPlace = { place: string; channels: number }
+
+/**
+ * The places one level below `under`, a tree such as `work/`, or below the whole board without it:
+ * the tree's own channel, each tree under it, and each channel with nothing under it, by name. For a
+ * board that lists tasks a tree at a time, as Vercel's does for a caller who doesn't read every
+ * channel: a tree that's still too big has places of its own.
+ */
+export function placesUnder(channels: string[], under?: string): TaskPlace[] {
+  const base = under === undefined ? '' : under.endsWith('/') ? under : `${under}/`
+  const own = base.slice(0, -1)
+  const inside = channels.filter((path) => path.startsWith(base))
+  const treeOf = (path: string) => `${base}${path.slice(base.length).split('/')[0]}/`
+  const trees = new Set(inside.filter((path) => path.slice(base.length).includes('/')).map(treeOf))
+  const found = new Map<string, TaskPlace>()
+  if (base && channels.includes(own)) found.set(own, { place: own, channels: 1 })
+  for (const path of inside) {
+    // A channel with channels under it goes with them, in its tree: the tree holds it.
+    const place = trees.has(treeOf(path)) ? treeOf(path) : path
+    const known = found.get(place)
+    if (known) known.channels++
+    else found.set(place, { place, channels: 1 })
+  }
+  return [...found.values()].sort((a, b) => (a.place < b.place ? -1 : a.place > b.place ? 1 : 0))
+}
+
 /** The board's rules for a task list, for tasks already here, so one that changes state moves in or out as it happens. */
 export function taskMatches(root: TaskRoot, filter: TaskFilter, now: number): boolean {
   const { task } = root
