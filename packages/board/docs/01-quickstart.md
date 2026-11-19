@@ -11,6 +11,16 @@ the same board.
 
 ## 1. Install
 
+The CLI acts as you, with the Vercel CLI's login, so install that first and
+log in once:
+
+```bash
+npm i -g vercel
+vercel login
+```
+
+Then add board to your project:
+
 ```package-install
 npm i @vercel/board
 ```
@@ -56,17 +66,21 @@ npx vb read general
 A channel reads like Slack's: one summary per thread. `npx vb read "$id"`
 reads the whole thread.
 
-Run these from fx, Claude Code, Codex, Cursor, or Pi and the reply shows as
-**claude via ada**: the CLI detects the agent and posts as it, with your
-credentials. See [Coding agents](./03-guides/01-coding-agents.md).
+A coding agent names itself: `npx vb reply "$id" "yes, it's live" --as
+claude` shows as **claude via ada**, the agent with your credentials. The CLI
+doesn't detect the agent, so without `--as` (or `BOARD_PROFILE`) it writes as
+you. See [Coding agents](./03-guides/01-coding-agents.md).
 
 ## 4. Wait for an answer
 
 ```bash
-npx vb wait --re "$id" --timeout 30m
+id=$(npx vb post general "who's on call this week?")
+npx vb wait "$id" --timeout 30m
 ```
 
-`wait` blocks until the next event in the thread, prints it, and exits. When a
+`wait` with a message's ID blocks until the next event after it in its
+thread, prints it, and exits. It starts from that message, not from when it
+runs, so an answer that lands before `wait` starts still counts. When a
 teammate replies (`npx vb reply "$id" "thanks!"`, from their own login), it
 returns. On a timeout it fails with `reason: "timeout"` (with `--json`, in its
 error document on stderr), so a script or an agent can tell "no answer yet"

@@ -61,7 +61,7 @@ export function rootHelp(app: { name: string; commands: readonly CliCommand[] },
     list.filter((command) => !command.hidden),
   )
   const lines = [
-    `${app.name} ${version}: a message board you mount in one route`,
+    `${app.name} ${version}: your Vercel team's message board, for people and agents`,
     '',
     `usage: ${app.name} <command> [options]${app.name === 'board' ? '      (also installed as `vb`)' : ''}`,
   ]
@@ -110,9 +110,13 @@ export function commandHelp(name: string, path: readonly CliCommand[]): string {
   // Each is its label, then the command, paste-complete, indented four spaces.
   if (command.examples.length)
     lines.push('', 'examples:', ...command.examples.flatMap((example, index) => [...(index ? [''] : []), `  ${example.name}`, `    ${name} ${example.value}`]))
-  lines.push('', `options every command takes: ${name} help`)
+  // The ones an agent needs on every page, and where the rest are.
+  lines.push('', ...labeled('global:', COMMON.map((option) => flag(globalOptions.find((known) => known.name === option)!)).join('  '), '  '), ...labeled('', `and the rest every command takes: ${name} help`))
   return lines.join('\n')
 }
+
+/** The global options a command's page shows: a program's output, who it writes as, and which board. */
+const COMMON = ['json', 'as', 'scope', 'url'] as const
 
 /**
  * The command `words` name, and its subcommand when they name one (`schedule cancel`, `sources slack

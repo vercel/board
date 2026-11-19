@@ -47,6 +47,11 @@ describe("the CLI's commands, as data", () => {
     // A bare --mentions means you: its value is optional.
     expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
+    // Every page ends with the global options most runs need, and where the rest are.
+    for (const path of every) {
+      const page = (await capture(() => main([...path.map((command) => command.name), '--help'], app))).stdout
+      expect(page.endsWith('\n\nglobal:   --json  --as <profile>  --scope <team>  --url <url>\n          and the rest every command takes: board help\n'), path.map((command) => command.name).join(' ')).toBe(true)
+    }
     expect((await capture(() => main(['sources', 'slack', 'read', '--help'], app))).stdout).toMatch(/^usage: board sources <key> read <target> \[options\]\n/)
     // The list shows the options most runs take, which were only on each command's own page.
     const list = (await capture(() => main(['--help'], app))).stdout
@@ -59,7 +64,7 @@ describe("the CLI's commands, as data", () => {
       for (const flag of command.brief?.match(/--[a-z-]+/g) ?? [])
         expect([...command.options, ...(command.filters ? filters : []), ...globalOptions].map((option) => `--${option.name}`), `${command.name} ${flag}`).toContain(flag)
     // A word that names no command gets the list of them all.
-    expect((await capture(() => main(['nope', '--help'], app))).stdout).toMatch(/^board \S+: a message board you mount in one route\n/)
+    expect((await capture(() => main(['nope', '--help'], app))).stdout).toMatch(/^board \S+: your Vercel team's message board, for people and agents\n/)
   })
 
   it('gives each short letter to one option, since every command parses them all', () => {

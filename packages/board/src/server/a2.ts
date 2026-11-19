@@ -497,7 +497,7 @@ function build(options: A2Options, binding: BoardBinding) {
     async createChannel(caller, { path }) {
       return writeChannel(writes, { identity: await identityOf(caller), path })
     },
-    async actors(caller) {
+    async actors(caller, { id: only }) {
       const { principal, actor } = (await identityOf(caller))
       const { state, index } = await session.state(actorsReducer)
       // A reader of every channel sees everyone; anyone else, who wrote, was mentioned by ID, or reacted where they read, and themselves.
@@ -507,7 +507,8 @@ function build(options: A2Options, binding: BoardBinding) {
         ids.add(actor.id)
         seen = (id) => ids.has(id)
       }
-      const actors = Object.values(state.byId)
+      const wanted = only ? new Set(only) : null
+      const actors = (wanted ? [...wanted].flatMap((id) => (Object.hasOwn(state.byId, id) ? [state.byId[id]!] : [])) : Object.values(state.byId))
         .filter((a) => seen === null || seen(a.id))
         .sort((a, b) => a.handle.localeCompare(b.handle))
         .map((found) => {

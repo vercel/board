@@ -59,9 +59,17 @@ function rerun(...extra: string[]): string[] {
   return [...cli(), ...(at === -1 ? [...typed, ...extra] : [...typed.slice(0, at), ...extra, ...typed.slice(at)])]
 }
 
-/** A command line without `options` and their values. */
+/** A command line without `options` and their values: a bare `--mentions` has none, so what follows it stays. */
 const without = (argv: string[], ...options: string[]): string[] =>
-  argv.filter((arg, at) => !options.some((option) => arg === option || argv[at - 1] === option || arg.startsWith(`${option}=`)))
+  argv.filter(
+    (arg, at) =>
+      !options.some(
+        (option) =>
+          arg === option ||
+          arg.startsWith(`${option}=`) ||
+          (argv[at - 1] === option && !((OPTIONS as Record<string, { optionalValue?: true }>)[option.slice(2)]?.optionalValue && arg.startsWith('-'))),
+      ),
+  )
 
 /**
  * This run's command line without `options`, with `extra` in their place: both before any `--`,
@@ -1015,7 +1023,7 @@ function failureOf(error: unknown): Failure {
           ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }]
           : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
     )
-  if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`)
+  if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`, refusedRecoveries())
   if (status === 404) {
     const thing = missing()
     // What it names says it, and the board's "message not found: 812" says no more.
@@ -1051,9 +1059,55 @@ function failureOf(error: unknown): Failure {
     return theirs('rate_limit', 'rate_limited', `Can't ${doing()}. Too many requests to the board.`, [
       { instruction: wait !== undefined ? `Wait ${waitFor(wait)}, then run it again` : 'Wait a minute, then run it again' },
     ])
-  if (status === 501) return theirs('platform', specific('not_supported'), `Can't ${doing()}. This board doesn't support it.`)
+  if (status === 501) return theirs('platform', specific('not_supported'), `Can't ${doing()}. This board doesn't support it.`, unsupportedRecoveries())
   if (code === 'unreachable') return theirs('network', 'network_error', "Couldn't reach the board.")
   return theirs('platform', 'api_error', `Failed to ${doing()}.`)
+}
+
+/** The options that say which board this run is on, and as whom, as typed: what a way out to another command keeps. */
+const onThisBoard = (): string[] => [
+  ...(flags.url !== undefined ? ['--url', flags.url] : []),
+  ...((flags.scope ?? flags.team) !== undefined ? ['--scope', (flags.scope ?? flags.team)!] : []),
+  ...(flags.name !== undefined ? ['--name', flags.name] : []),
+  ...(flags.as ? ['--as', flags.as] : []),
+]
+
+/** Where to go from a 403: what you may do on this board, and who can let you do more. */
+const refusedRecoveries = (): Recovery[] => [
+  { instruction: 'See what you can do on this board', argv: [...cli(), 'whoami', ...onThisBoard()] },
+  { instruction: "Or ask someone who manages the board's grants to give you access" },
+]
+
+/** The filters a board answers 501 to on a read when it keeps no index of them, as Vercel's does. */
+const UNINDEXED = ['--by', '--mentions', '--source', '--text']
+
+/**
+ * What to run instead of what a board answered 501 to, by what this run asked for: the same without
+ * the part a board may not do (a read's search filters or its every channel, a post's `--sync`, a
+ * schedule's files). Nothing when it asked for none of them.
+ */
+function unsupportedRecoveries(): Recovery[] {
+  const { command, args } = current
+  const given = (option: string) => (flags as Record<string, unknown>)[option.slice(2)] !== undefined
+  if (command === 'read') {
+    const filtered = UNINDEXED.filter(given)
+    const target = args[0]
+    const whole = target === undefined || (target.endsWith('/') && !isMessageRef(target))
+    if (!filtered.length && !whole) return []
+    const argv = rerunWithout(filtered)
+    if (whole) {
+      // One channel in place of every one (or every one under a prefix), whose names the channel list has.
+      const at = argv.indexOf(positionals[0]!, cli().length)
+      argv.splice(at + 1, target === undefined ? 0 : 1, '<CHANNEL>')
+    }
+    return [
+      ...(whole ? [{ instruction: 'See the channels', argv: [...cli(), 'channels', ...(target !== undefined ? [target] : []), ...onThisBoard()] }] : []),
+      { instruction: whole ? `Read one channel at a time${filtered.length ? `, without ${filtered.join(' or ')}` : ''}` : `Read it without ${filtered.join(' or ')}, and look through it`, argv },
+    ]
+  }
+  if ((command === 'post' || command === 'reply') && given('--sync')) return [{ instruction: 'Post it without --sync', argv: rerunWithout(['--sync']) }]
+  if (command === 'schedule' && given('--attach')) return [{ instruction: 'Schedule the text without its files', argv: rerunWithout(['--attach']) }]
+  return []
 }
 
 /** `42s`, `2m`: a wait the way people say it. */
@@ -1422,7 +1476,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const working = task ? [...(task.claim ? [task.claim.actor] : []), ...(task.owner !== thread.message.by.principal ? [task.owner] : [])] : []
         // And a text mentions people by ID, who show by name.
         const unnamed = [...new Set([...reactionNames([thread.message, ...replies]), ...working, ...mentionedIn([thread.message, ...replies])])].filter((id) => !authors.has(id))
-        const listed = unnamed.length ? (await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)) : []
+        const listed = unnamed.length ? await board.actors({ id: unnamed }).catch(() => []) : []
         const known = new Map(listed.map((a) => [a.id, actorName(a)]))
         out(formatThreads([thread.message, ...replies], known, new Map(listed.map((a) => [a.id, a.handle]))))
         if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
@@ -1476,11 +1530,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const roots = page.threads.map(({ message }) => message)
         const wrote = new Set(page.threads.flatMap(({ message, last }) => (last ? [message.by.actor, last.by.actor] : [message.by.actor])))
         const unnamed = mentionedIn(roots).filter((id) => !wrote.has(id))
-        const handles = new Map(unnamed.length ? (await client().actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, a.handle]) : [])
+        const handles = new Map(unnamed.length ? (await board.actors({ id: unnamed }).catch(() => [])).map((a) => [a.id, a.handle]) : [])
         out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
       }
       // What it looked through is all it says: a mention further up a thread, or on an older page, isn't on this one.
-      if (scanned !== undefined) out(`\n(looked through ${scanned} ${scanned === 1 ? 'thread' : 'threads'}, by the first and latest message of each)`)
+      if (scanned !== undefined) out(`\n(looked through ${scanned} ${scanned === 1 ? 'thread' : 'threads'}, at the first and latest message of each: a match under a newer reply is not found)`)
       // A page that isn't all of them says where the rest are. Without --after, they're older: --before the
       // page's `older` reaches them where the board answered one, and a bigger --limit where it didn't. After
       // a cursor, they're newer than the page, and its cursor is past them
@@ -2006,10 +2060,13 @@ function seconds(flag: 'wait' | 'lease'): number | undefined {
  */
 async function createPlan(target: string, text: string | undefined, path: string): Promise<number> {
   if (isMessageRef(target)) throw usage(`--file holds a plan, which starts threads in a channel, and ${ref(target)} is a thread.`)
-  const own = text !== undefined ? 'text' : (['label', 'needs', 'for', 'claim', 'lease', 'no-sync'] as const).find((name) => (flags as Record<string, unknown>)[name] !== undefined && (flags as Record<string, unknown>)[name] !== false)
-  if (own !== undefined) throw usage(`${own === 'text' ? 'Text' : `--${own}`} is one task's: with --file, each task in the file has its own.`)
+  if (text !== undefined) throw usage("Text is one task's: with --file, each task in the file has its own.")
+  // What the file holds comes first: one task's text in it means these options are that task's, on stdin.
+  const parsed = await planSource(path)
+  const own = (['label', 'needs', 'for', 'claim', 'lease', 'no-sync'] as const).find((name) => (flags as Record<string, unknown>)[name] !== undefined && (flags as Record<string, unknown>)[name] !== false)
+  if (own !== undefined) throw usage(`--${own} is one task's: with --file, each task in the file has its own.`)
   const board = client()
-  const tasks = await planFrom(path, board)
+  const tasks = await planFrom(parsed, path, board)
   // Each root is a message: the longest says what a backend's refusal of one's text means, as for a task made alone.
   sentLength = Math.max(0, ...tasks.map((task) => (typeof task.text === 'string' ? task.text.length : 0)))
   const key = flags['idempotency-key'] ?? crypto.randomUUID()
@@ -2102,8 +2159,12 @@ function checkPlan(plan: Record<string, unknown>[], where: string): void {
   }
 }
 
-/** The tasks a plan's `--file` holds: a JSON array, from the file or from stdin for `-`. An ID may be written `#812`, and `for` as a profile's name. */
-async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
+/**
+ * What a plan's `--file` holds, as JSON: the file, or stdin for `-`. Prose is the likeliest slip,
+ * --file carried over from post, where it's the text: it says the same command with the file on
+ * stdin, `-` as the text, and the options it was given.
+ */
+async function planSource(path: string): Promise<unknown> {
   const where = path === '-' ? 'stdin' : path
   let source: string
   if (path === '-') source = await io.stdin()
@@ -2112,13 +2173,17 @@ async function planFrom(path: string, board: Board): Promise<TaskInBatch[]> {
     if (!data) throw usage(`Can't read ${path}. There's no such file.`, { reason: 'file_not_found', next: [] })
     source = new TextDecoder().decode(data)
   }
-  let parsed: unknown
   try {
-    parsed = JSON.parse(source)
+    return JSON.parse(source)
   } catch {
-    // The likeliest slip is --file carried over from post, where it's the text.
-    throw usage(`${where} isn't JSON: --file on tasks create is a plan of tasks.`, { next: [{ instruction: "For one task's text, pass it, or - to read it from stdin" }, planHelp()] })
+    const piped = `${commandLine(rerunWithout(['--file'], '-'))}${path === '-' ? '' : ` < ${commandLine([path])}`}`
+    throw usage(`${where} isn't JSON: --file on tasks create is a plan of tasks.`, { next: [{ instruction: `One task's text goes on stdin, as -: ${piped}` }, planHelp()] })
   }
+}
+
+/** The tasks a plan's `--file` holds: a JSON array. An ID may be written `#812`, and `for` as a profile's name. */
+async function planFrom(parsed: unknown, path: string, board: Board): Promise<TaskInBatch[]> {
+  const where = path === '-' ? 'stdin' : path
   const shape = 'A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].'
   if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((task) => typeof task !== 'object' || task === null || Array.isArray(task))) throw usage(`${where} holds no tasks. ${shape}`, { next: [planHelp()] })
   const plan = parsed as (Record<string, unknown> & { needs?: unknown; for?: unknown })[]
@@ -2186,14 +2251,31 @@ function printClaim(task: MessageView, claim: { epoch: number; until: string }, 
  */
 async function heldBy(board: Board, claims: Claims, id: string) {
   const stored = await claims.get(id)
-  if (!stored)
+  if (stored) return board.tasks.held(id, stored)
+  const none = `You hold no claim on task ${ref(id)} as ${writesAs() ?? 'yourself'}.`
+  const claim: Recovery = { instruction: 'Claim it', argv: [...cli(), 'tasks', 'claim', id, ...asTyped()] }
+  // A claim of one that's held, waiting, or finished would be refused too: what it is says the step that comes first, or that there's none.
+  const task = await board.thread(id).then(({ message }) => message.task, () => undefined)
+  const see: Recovery = { instruction: 'See where it stands', argv: [...cli(), 'read', id] }
+  if (task?.state === 'blocked')
     throw new Failed({
       class: 'conflict',
       reason: 'claim_not_held',
-      message: `You hold no claim on task ${ref(id)} as ${writesAs() ?? 'yourself'}.`,
-      next: [{ instruction: 'Claim it', argv: [...cli(), 'tasks', 'claim', id, ...asTyped()] }],
+      message: `${none} It's held for a person: claim it once the hold lifts.`,
+      next: [{ instruction: 'As its owner, lift the hold, then claim it', argv: [...cli(), 'tasks', 'unblock', id] }, see],
     })
-  return board.tasks.held(id, stored)
+  if (task?.state === 'waiting') {
+    const needs = task.needs.map(ref)
+    throw new Failed({
+      class: 'conflict',
+      reason: 'claim_not_held',
+      message: `${none} It waits for what it needs${needs.length ? ` (${needs.join(', ')})` : ''}: claim it once those complete.`,
+      next: [{ instruction: 'See what it waits for', argv: [...cli(), 'read', id] }],
+    })
+  }
+  if (task?.state === 'completed' || task?.state === 'failed' || task?.state === 'canceled')
+    throw new Failed({ class: 'conflict', reason: 'claim_not_held', message: `${none} It's ${task.state} already.`, next: [see] })
+  throw new Failed({ class: 'conflict', reason: 'claim_not_held', message: none, next: [claim] })
 }
 
 /** A write a claim makes. One the board answers `claim_lost` is over: the CLI forgets it, and the failure says how to claim again. */
@@ -2207,11 +2289,39 @@ async function withClaim<T>(claims: Claims, id: string, write: () => Promise<T>)
 }
 
 /**
+ * `--label` on `claim --ready` and `run --ready`: each an exact `key=value`, the one thing a claim
+ * matches. The list's `key=a|b` and bare `key` would match nothing, or the value `a|b`, and wait
+ * out its `--wait` without a word: they're refused, with the claim of one value and the list.
+ */
+function readyLabels(values: string[], target: string, verb: 'claim' | 'run'): Record<string, string> {
+  for (const value of values) {
+    const at = value.indexOf('=')
+    const options = at > 0 ? value.slice(at + 1).split('|') : []
+    if (at > 0 && options.length < 2) continue
+    const key = at > 0 ? value.slice(0, at) : value
+    if (at === 0) throw usage(`--label on ${verb} --ready takes key=value, and ${value} has no key before its =.`)
+    const listed = { instruction: "See what's ready, and their labels", argv: [...cli(), 'tasks', target, '--state', 'ready', '--label', value] }
+    if (at === -1)
+      throw usage(`--label on ${verb} --ready takes key=value: ${value} has no value, and a claim matches one exactly.`, { next: [listed] })
+    // The same command with the first value alone, the label written as it was. What follows `--` is run's
+    // command, which it hands over as it is: the same text there is the command's own, and stays.
+    const one = `${key}=${options[0]}`
+    const dash = typed.indexOf('--')
+    const ours = (index: number) => dash === -1 || index < dash
+    const again = [...cli(), ...typed.map((arg, index) => (!ours(index) ? arg : arg === value && typed[index - 1] === '--label' ? one : arg === `--label=${value}` ? `--label=${one}` : arg))]
+    throw usage(`--label on ${verb} --ready takes one value: ${value} has ${options.length}, and a claim matches one exactly.`, {
+      next: [{ instruction: `Claim one with ${one}`, argv: again }, listed],
+    })
+  }
+  return labelPairs(values)
+}
+
+/**
  * Claims a task for this run, by its ID or with `--ready` the oldest ready one in `target`, and
  * keeps the claim. With nothing ready it fails: `nothing_ready`, or `timeout` once `--wait` ran
  * out, as `wait` does. Stopped while it waits, it answers the exit code instead.
  */
-async function claimFor(board: Board, claims: Claims, target: string | undefined): Promise<ClaimedTask | number> {
+async function claimFor(board: Board, claims: Claims, target: string | undefined, verb: 'claim' | 'run'): Promise<ClaimedTask | number> {
   const lease = seconds('lease')
   if (!flags.ready) {
     for (const given of ['label', 'from', 'wait'] as const)
@@ -2232,7 +2342,7 @@ async function claimFor(board: Board, claims: Claims, target: string | undefined
     claim = await board.tasks.claim(
       {
         channel: target,
-        ...(flags.label?.length ? { label: labelPairs(flags.label) } : {}),
+        ...(flags.label?.length ? { label: readyLabels(flags.label, target, verb) } : {}),
         // Owners by their IDs: a handle names no owner.
         ...(flags.from?.length ? { from: flags.from } : {}),
         ...(wait !== undefined ? { wait } : {}),
@@ -2369,7 +2479,7 @@ async function tasks(args: string[]): Promise<number> {
     if (rest.length > 1) throw usage(`tasks claim takes one ${flags.ready ? 'channel' : 'task'}: ${rest[1]} is one too many.`)
     if (!flags.ready && rest[0] === undefined) throw usage('Missing the task to claim: its ID, or --ready and a channel.', { reason: 'missing_arguments' })
     const { board, claims } = tasksOn()
-    const claim = await claimFor(board, claims, rest[0])
+    const claim = await claimFor(board, claims, rest[0], 'claim')
     if (typeof claim === 'number') return claim
     printClaim(claim.task, claim)
     return 0
@@ -2387,7 +2497,7 @@ async function tasks(args: string[]): Promise<number> {
     // It runs a command on this machine, and holds every other call for as long as it runs.
     if (io.board) throw usage("tasks run isn't available in-process: it runs a command on this machine.", { reason: 'not_available', next: [] })
     const { board, claims } = tasksOn()
-    const claim = await claimFor(board, claims, before[0])
+    const claim = await claimFor(board, claims, before[0], 'run')
     if (typeof claim === 'number') return claim
     const id = claim.task.id
     const lease = seconds('lease')

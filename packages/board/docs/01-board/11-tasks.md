@@ -39,7 +39,7 @@ on it as on any other.
 ```text
 $ export BOARD_PROFILE=claude
 $ vb tasks claim --ready work/ --label step=fix --wait 10m
-#812  yours for 15m  fix CVE-123 in acme/web
+#812  yours for 5m  fix CVE-123 in acme/web
 $ vb reply 812 "patched, running the tests"
 818
 $ vb tasks complete 812 "fixed in a1b2c3, tests pass"
@@ -66,7 +66,9 @@ $ vb tasks work/ --state all
   Without `--wait`, nothing ready is `nothing_ready`, exit 1.
 - **A claim is a lease.** `--lease` asks for `30s` to `1h`, and 15 minutes
   when left out. A board gives up to its own cap, and the claim's line says
-  what it gave. `vb tasks renew <id>` extends it from now.
+  what it gave: a team's board in Vercel's API gives 5 minutes at most, for
+  now. `vb tasks renew <id>` extends it from now, so renew well inside the
+  lease, or let [`tasks run`](../04-reference/01-cli.md#tasks) renew it.
 - **Settle it when you stop.** `complete <id> ["<result>"]` finishes it,
   `fail <id> "<reason>"` gives up on it, and `release <id>` hands it back,
   ready again.
@@ -79,7 +81,7 @@ $ vb tasks work/ --state all
 $ vb read 812
 #812  julian · 1s  [step=fix board.task=claimed]
       fix CVE-123 in acme/web
-      task  claimed by claude via julian · 15m left
+      task  claimed by claude via julian · 5m left
   ↳ #818  claude via julian · 0s
     patched, running the tests
 ```

@@ -102,6 +102,14 @@ export const ChannelsQuery = z.strictObject({
   limit: z.coerce.number().int().min(1).max(CHANNELS_LIMIT_MAX).optional(),
 })
 
+/** How many actors one read of them by ID names at most. */
+export const ACTORS_BY_ID_MAX = 100
+
+/** The board's actors, or with `id`, only the ones it names: someone it doesn't have is left out. */
+export const ActorsQuery = z.strictObject({
+  id: repeated.pipe(z.array(z.string().min(1).max(300)).min(1).max(ACTORS_BY_ID_MAX)).optional(),
+})
+
 /**
  * A thread read in part: the root, and of its replies the ones after one of its messages (`after`), `limit` of
  * them. With `after` they're the first after it, to read on from; without, the newest.
@@ -784,6 +792,7 @@ export type SyncFindInput = z.input<typeof SyncFindQuery>
 export type ChannelMessagesQueryInput = z.input<typeof ChannelMessagesQuery>
 export type ThreadQueryInput = z.input<typeof ThreadQuery>
 export type ChannelsQueryInput = z.input<typeof ChannelsQuery>
+export type ActorsQueryInput = z.input<typeof ActorsQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
@@ -1209,7 +1218,7 @@ export const routes = {
   channels: { method: 'GET', path: '/channels', query: ChannelsQuery },
   /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is. */
   createChannel: { method: 'POST', path: '/channels', body: CreateChannelBody },
-  actors: { method: 'GET', path: '/actors' },
+  actors: { method: 'GET', path: '/actors', query: ActorsQuery },
   /** One channel's messages across its threads: the newest, or those after one of its cursors. */
   channelMessages: { method: 'GET', path: '/messages', query: ChannelMessagesQuery },
   message: { method: 'GET', path: '/messages/:id', query: ThreadQuery },

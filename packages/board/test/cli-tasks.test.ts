@@ -194,6 +194,40 @@ describe('vb tasks', () => {
     expect((await vb(['tasks', 'claim', '--ready', 'next', '--wait', 'a while'])).code).toBe(2)
   }, 60_000)
 
+  it("refuses the list's label filters on claim --ready and run --ready, which match one value exactly, with the claim of one", async () => {
+    const worker = await create('roles', 'build it', ['--label', 'role=worker'])
+    await create('roles', 'review it', ['--label', 'role=reviewer'])
+    // The list takes either value, or the key alone.
+    for (const label of ['role=worker|reviewer', 'role']) expect((await ok(['tasks', 'roles', '--label', label])).trimEnd().split('\n')).toHaveLength(2)
+    // A claim would match neither, and wait out its --wait for a task labeled `worker|reviewer`: it says so before it asks.
+    const either = await vb(['tasks', 'claim', '--ready', 'roles', '--label', 'role=worker|reviewer', '--wait', '1m'])
+    expect(either).toEqual({
+      code: 2,
+      stdout: '',
+      stderr: [
+        'error: --label on claim --ready takes one value: role=worker|reviewer has 2, and a claim matches one exactly.',
+        '',
+        '  Claim one with role=worker:',
+        '    vb tasks claim --ready roles --label role=worker --wait 1m',
+        "  See what's ready, and their labels:",
+        "    vb tasks roles --state ready --label 'role=worker|reviewer'",
+        '',
+      ].join('\n'),
+    })
+    const bare = await vb(['tasks', 'run', '--ready', 'roles', '--label=role', '--', 'true'])
+    expect([bare.code, bare.stdout, bare.stderr.split('\n')]).toEqual([2, '', ['error: --label on run --ready takes key=value: role has no value, and a claim matches one exactly.', '', "  See what's ready, and their labels:", '    vb tasks roles --state ready --label role', '']])
+    // What it says to run claims the task.
+    const claim = failure(await vb(['tasks', 'run', '--ready', 'roles', '--label=role=worker|reviewer', '--json', '--', 'true'])).next![0]!
+    expect(claim.argv).toEqual(['vb', 'tasks', 'run', '--ready', 'roles', '--label=role=worker', '--json', '--', 'true'])
+    expect(JSON.parse((await ok(claim.argv.slice(1))))).toMatchObject({ task: { id: worker } })
+    // The command after -- is run's to hand over as it is: the same label there is its own, and stays.
+    const own = failure(await vb(['tasks', 'run', '--ready', 'roles', '--label', 'role=worker|reviewer', '--json', '--', 'echo', '--label', 'role=worker|reviewer', '--label=role=worker|reviewer']))
+    expect(own.next![0]!.argv).toEqual(['vb', 'tasks', 'run', '--ready', 'roles', '--label', 'role=worker', '--json', '--', 'echo', '--label', 'role=worker|reviewer', '--label=role=worker|reviewer'])
+    // One with no key says so, not that it has no value.
+    const keyless = await vb(['tasks', 'claim', '--ready', 'roles', '--label', '=worker'])
+    expect([keyless.code, keyless.stderr.split('\n')[0]]).toEqual([2, 'error: --label on claim --ready takes key=value, and =worker has no key before its =.'])
+  }, 60_000)
+
   it('waits for a task that becomes ready, and stops quietly on Ctrl-C', async () => {
     const build = await create('pipeline', 'build the image')
     const deploy = await create('pipeline', 'deploy it', ['--label', 'step=deploy', '--needs', build])

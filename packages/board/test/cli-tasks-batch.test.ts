@@ -77,6 +77,20 @@ describe('vb tasks create --file', () => {
     expect(await misused(['none', '--file', '/nowhere/plan.json'])).toBe("error: Can't read /nowhere/plan.json. There's no such file.")
     // A file of prose is the likeliest slip, --file carried over from post: it says what --file is here.
     expect(await misused(['none', '--file', await planFile('not json', 'notes.txt')])).toMatch(/^error: \S+notes\.txt isn't JSON: --file on tasks create is a plan of tasks\.$/)
+    // With one task's options too, it's still the file that's wrong: the way out is the same command, the file on stdin as its text.
+    const notes = await planFile('# fix the flaky test\n\nit fails one run in ten', 'notes.md')
+    const prose = await vb(['tasks', 'create', 'prose', '--file', notes, '--label', 'step=fix'])
+    expect([prose.code, prose.stdout]).toEqual([2, ''])
+    expect(prose.stderr.replaceAll(notes, 'notes.md').split('\n').slice(0, 3)).toEqual([
+      "error: notes.md isn't JSON: --file on tasks create is a plan of tasks.",
+      '',
+      "  One task's text goes on stdin, as -: vb tasks create prose --label step=fix - < notes.md",
+    ])
+    const piped = await vb(['tasks', 'create', 'prose', '--file', '-', '--label', 'step=fix'], {}, 'fix it')
+    expect(piped.stderr.split('\n')[2]).toBe("  One task's text goes on stdin, as -: vb tasks create prose --label step=fix -")
+    // That command makes the one task, with the file's text and the label.
+    const made = (await ok(['tasks', 'create', 'prose', '--label', 'step=fix', '-'], {}, '# fix the flaky test\n\nit fails one run in ten')).trim()
+    expect(await task(made)).toMatchObject({ text: '# fix the flaky test\n\nit fails one run in ten', labels: { step: 'fix' }, task: { state: 'ready' } })
     expect(await misused(['none', '--file', '-'], '{"text": "one task"}')).toBe('error: stdin holds no tasks. A plan is a JSON array of tasks: [{"key": "fix", "text": "…"}, {"text": "…", "needs": [{"key": "fix"}]}].')
     expect(await misused(['none', '--file', await planFile([])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)
     expect(await misused(['none', '--file', await planFile(['a task'])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)

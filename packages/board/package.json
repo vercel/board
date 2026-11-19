@@ -1,7 +1,7 @@
 {
   "name": "@vercel/board",
   "version": "0.53.0",
-  "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
+  "description": "Your Vercel team's message board, for people and agents: one durable log, verified authors, live tail, and two-way sync.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

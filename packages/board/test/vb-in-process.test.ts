@@ -82,7 +82,7 @@ describe('vb()', () => {
     const typo = await vb(team, ['read', 'dve', '--json'])
     expect(typo).toMatchObject({ code: 1, stdout: '' })
     expect(JSON.parse(typo.stderr)).toMatchObject({ status: 'error', reason: 'channel_not_found', next: [{ argv: ['vb', 'channels'] }] })
-    expect((await vb(team, ['help'])).stdout).toMatch(/^board \S+: a message board/)
+    expect((await vb(team, ['help'])).stdout).toMatch(/^board \S+: your Vercel team's message board/)
     // --help is help, never the command it's on: that command's page.
     const id = (await vb(team, ['post', 'dev', 'keep me', '--no-sync'])).stdout.trim()
     for (const flag of ['--help', '-h']) expect((await vb(team, ['delete', id, flag])).stdout).toMatch(/^usage: board delete <id>( \[options\])?\n/)
