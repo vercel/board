@@ -485,7 +485,7 @@ describe("vercel()'s tasks", () => {
       '11 that wait for one that was there, one with a label': [...waiting(10), { text: 'and a label', needs: [there.id], labels: { step: 'fix' } }],
     }
     for (const [what, tasks] of Object.entries(over))
-      await expect(julian.tasks.createMany('plans', tasks), what).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringMatching(/\d+ items/) })
+      await expect(julian.tasks.createMany('plans', tasks), what).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringMatching(/\d+ items/), hint: expect.stringContaining('createTasksInChunks') })
     // Nothing of any of them, and not the channel they named.
     expect((await julian.tasks.list({ channel: 'plans', state: 'all' })).tasks).toEqual([])
     expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('plans')
@@ -505,13 +505,13 @@ describe("vercel()'s tasks", () => {
     // was made, and it sends less. Six tasks of 10,000 characters fit, and seven don't.
     const long = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `${n}${'x'.repeat(9999)}` }))
     julian.sent.length = 0
-    await expect(julian.tasks.createMany('long', long(7))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('bytes') })
+    await expect(julian.tasks.createMany('long', long(7))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('bytes'), hint: expect.stringContaining('createTasksInChunks') })
     expect(julian.sent.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual(['/tasks/batch'])
     expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('long')
     expect(await julian.tasks.createMany('long', long(6))).toHaveLength(6)
     // More than any batch makes is board()'s own to say: the API is never asked.
     julian.sent.length = 0
-    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('100 tasks at most') })
+    await expect(julian.tasks.createMany('plans', plain(101))).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringContaining('100 tasks at most'), hint: expect.stringContaining('createTasksInChunks') })
     expect(julian.sent.filter((request) => request.method === 'POST')).toEqual([])
   })
 

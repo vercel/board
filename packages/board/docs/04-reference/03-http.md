@@ -499,7 +499,8 @@ A task is a thread with a state. Its ID is its root's, and its root carries
   board in front of this one sends `request`, its digest of what it was given,
   so both tell a repeat by the same thing; leave it out otherwise. More
   than 100 tasks, or more than a board holds in one write, is 400
-  `batch_too_large`: send it in parts.
+  `batch_too_large`: send it in parts. Its `hint` says so, and
+  `createTasksInChunks` sends a plan in batches that fit.
 - **A claim is a lease.** `lease` is seconds, and 900 when left out. The
   answer's `claim` is `{ epoch, token, until }`: `epoch` and `token` go
   on every write the claim makes, and `until` is when the lease ends. The token
@@ -865,7 +866,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message, or making a task of one |
 | 400 | `reserved_label` | a write that sets or unsets a label under `board.` |
 | 400 | `invalid_needs` | a task whose `needs` names what isn't a task, what the caller can't read, the task itself, a task that was canceled, or, on a change, one that waits for it already; in a batch, a `key` two tasks have or no task has, or tasks that wait for each other |
-| 400 | `batch_too_large` | a batch of more than 100 tasks, or of more than the board holds in one write: nothing was made, so send it in parts |
+| 400 | `batch_too_large` | a batch of more than 100 tasks, or of more than the board holds in one write: nothing was made, so send it in parts (`createTasksInChunks` does) |
 | 400 | `invalid_from` | a claim whose `from` names an owner by handle: several can share one, so `from` takes IDs |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |

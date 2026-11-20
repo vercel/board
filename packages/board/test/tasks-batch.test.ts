@@ -282,7 +282,7 @@ describe('several tasks made at once', () => {
     const { ada } = await setup()
     const many = (count: number): Asked[] => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
     const over = await batch(ada, many(101))
-    expect(over).toEqual({ status: 400, body: { error: { code: 'batch_too_large', message: 'a batch makes 100 tasks at most, and this one has 101: send it in parts' } } })
+    expect(over).toEqual({ status: 400, body: { error: { code: 'batch_too_large', message: 'a batch makes 100 tasks at most, and this one has 101: send it in parts', hint: 'Send it in parts: createTasksInChunks sends a plan in batches that fit.' } } })
     expect(await listed(ada)).toEqual([])
     // It's said so whatever else is wrong with it: its sender splits it first.
     expect(code(await batch(ada, [...many(100), { text: '' }]))).toEqual([400, 'batch_too_large'])
