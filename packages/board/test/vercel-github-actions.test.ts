@@ -214,7 +214,7 @@ describe("workflows Vercel's API names", () => {
       code: 'board_not_granted',
       origin: 'handle',
       message: "this workflow has no access to the team's board (acme/web).",
-      hint: "Grant it: vb grants create --github acme/web --can '*=read,post,react,label'",
+      hint: "Grant it: vb grants create --github acme/web --scope team_test --can '*=read,post,react,label'",
     })
     expect(api.requests).not.toContain('POST /boards/default')
   })
@@ -224,7 +224,7 @@ describe("workflows Vercel's API names", () => {
     const api = fakeMessageboard({ boards: [{ name }] })
     await expect(board({ name, backend: vercel({ team: 'team_test', api: API, fetch: as(api, callers.run.principal) }) }).post('ci', 'deploy failed')).rejects.toMatchObject({
       code: 'board_not_granted',
-      hint: `Grant it: vb grants create --github acme/web --name 'ops'\\''; rm -rf ~ #' --can '*=read,post,react,label'`,
+      hint: `Grant it: vb grants create --github acme/web --name 'ops'\\''; rm -rf ~ #' --scope team_test --can '*=read,post,react,label'`,
     })
   })
 })

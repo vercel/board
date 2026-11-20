@@ -1057,11 +1057,11 @@ describe('the embedded CLI', () => {
       })
       expect(await run('read', 'dev', '--name', 'security', '--ensure')).toMatchObject({
         code: 1,
-        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'\n",
+        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --scope team_test --can '*=read,post,react,label'\n",
       })
       expect(await run('read', 'dev')).toMatchObject({
         code: 1,
-        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'\n",
+        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --scope team_test --can '*=read,post,react,label'\n",
       })
     } finally {
       fetching.mockRestore()

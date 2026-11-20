@@ -875,7 +875,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // the few older boards that share one, the API lists the oldest first, and that's the one.
     const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
     if (boards[0]) return boards[0].id
-    const { principal } = (await self(who)).actor
+    const me = await self(who)
+    const { principal } = me.actor
     if (binding?.ensure === false)
       throw new HttpError(404, 'no_board', `no board named ${name} on this team, or none you can see.`, {
         hint: 'Check the name, or make it: leave out ensure: false',
@@ -885,7 +886,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
       return made.id
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(name, principal)
+      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(name, principal, me.teamId)
       // Names are unique across the team's boards, private ones included: this one is someone else's to show.
       if (error instanceof HttpError && error.code === 'board_name_taken')
         throw new HttpError(409, 'board_name_taken', `the board name ${name} is taken.`, { hint: 'Pick another name, or ask whoever can see it for access.', origin: 'handle' })
@@ -896,21 +897,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * A project a board's grants don't let in, the one `name`s or the team's (null): they were narrowed,
    * since every project on the team gets in by default. Its way out is the grant that lets it back in,
-   * naming the project by ID, since `/me` carries no name.
+   * naming the project by ID, since `/me` carries no name, and the team, so it can't land on the
+   * board of whichever team the person who runs it is linked to.
    */
-  const notLetIn = (name: string | null, principal: ApiPrincipal) => {
+  const notLetIn = (name: string | null, principal: ApiPrincipal, team: string) => {
     const board = name === null ? "the team's board" : `board ${name}`
+    const on = `${name === null ? '' : ` --name ${shellWord(name)}`} --scope ${shellWord(team)}`
     if (principal.type === 'github' || principal.type === 'oidc') {
       // A repository the API names goes into the command only when it's one.
       const repository = principal.type === 'github' && REPOSITORY.test(principal.repository) ? principal.repository : null
       if (repository === null) return new HttpError(403, 'board_not_granted', `this workflow has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
       return new HttpError(403, 'board_not_granted', `this workflow has no access to ${board} (${repository}).`, {
-        hint: `Grant it: vb grants create --github ${repository}${name === null ? '' : ` --name ${shellWord(name)}`} --can '*=read,post,react,label'`,
+        hint: `Grant it: vb grants create --github ${repository}${on} --can '*=read,post,react,label'`,
         origin: 'handle',
       })
     }
     if (principal.type !== 'project') return new HttpError(403, 'board_not_granted', `this project has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
-    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${shellWord(name)}`} --can '*=read,post,react,label'`
+    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${on} --can '*=read,post,react,label'`
     return new HttpError(403, 'board_not_granted', `this project has no access to ${board} (${principal.projectId}, ${principal.environment}).`, {
       hint: `Grant it: ${grant}`,
       origin: 'handle',
@@ -931,9 +934,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ? boardNamed(who, boardName()!)
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
-            const { principal } = (await self(who)).actor
+            const me = await self(who)
+            const { principal } = me.actor
             // A deployment or a workflow the API names no board to isn't let in, and makes none.
-            if (principal.type === 'project' || principal.type === 'github' || principal.type === 'oidc') throw notLetIn(null, principal)
+            if (principal.type === 'project' || principal.type === 'github' || principal.type === 'oidc') throw notLetIn(null, principal, me.teamId)
             const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
             return made.id
           })).catch((error: unknown) => {
