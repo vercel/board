@@ -31,6 +31,7 @@ import {
   CreateChannelBody,
   Ref,
   RegisterBody,
+  PatchWatchersBody,
   ScheduleBody,
   CreateGrantsBody,
   GrantBody,
@@ -213,6 +214,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return SchemaBody.parse(await body())
     case 'register':
       return RegisterBody.parse(await body())
+    case 'patchWatchers':
+      return PatchWatchersBody.parse(await body())
     case 'edit':
       return { id, ...EditBody.parse(await body()) }
     case 'delete':

@@ -1,3 +1,4 @@
+import { REGISTERED_WATCHERS_MAX } from '../src/api/routes.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { board, type Watcher, type WatcherContext } from '../src/server/index.ts'
 import type { Can } from '../src/access/index.ts'
@@ -372,6 +373,21 @@ describe('registering', () => {
     // It wakes nothing: a registrant pulls.
     expect(await register({ fix: { tail: 'feedback' } }, V0_URL)).toMatchObject({ status: 501, body: { error: { code: 'no_wake_by_url' } } })
     expect((await register({ fix: { tail: 'feedback' } })).status).toBe(200)
+  })
+
+  it("patches only the watchers it names, keeping the caller's others, and caps what it leaves", async () => {
+    const t = await team()
+    const v0 = caller(t.remote.fetch, await v0Token())
+    await v0('POST', '/watchers', { watch: { fix: { tail: 'feedback' }, old: { tail: 'general' } } })
+    const patched = await v0('PATCH', '/watchers', { watch: { old: null, fresh: { tail: 'feedback --label status=open' } } })
+    expect(patched.status).toBe(200)
+    expect(patched.body.watch).toEqual({ fix: { tail: 'feedback' }, fresh: { tail: 'feedback --label status=open' } })
+    expect((await v0('GET', '/watchers')).body.watchers[0].watch).toEqual(patched.body.watch)
+    const many = Object.fromEntries(Array.from({ length: REGISTERED_WATCHERS_MAX - 1 }, (_, n) => [`w${n}`, { tail: 'feedback' }]))
+    expect(await v0('PATCH', '/watchers', { watch: many })).toMatchObject({ status: 400, body: { error: { code: 'too_many_watchers' } } })
+    expect((await v0('GET', '/watchers')).body.watchers[0].watch).toEqual(patched.body.watch)
+    expect(await v0('PATCH', '/watchers', { watch: {}, path: '/api/board' })).toMatchObject({ status: 501, body: { error: { code: 'no_wake_by_path' } } })
+    expect((await v0('PATCH', '/watchers', { watch: {}, sync: [] })).status).toBe(400)
   })
 
   it('needs a token that reads somewhere, and lists registrations to whoever may see them', async () => {

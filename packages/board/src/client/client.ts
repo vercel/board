@@ -25,6 +25,7 @@ import type {
   MessagesPage,
   MessageView,
   RegisterInput,
+  PatchWatchersInput,
   RegistrationView,
   ScheduleView,
   SchedulesQueryInput,
@@ -841,6 +842,12 @@ export function createBoardClient(options: ClientOptions) {
     /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
     register: (input: RegisterInput) =>
       call<RegistrationView>('POST', '/watchers', { body: input }),
+    /**
+     * Sets the watchers it names and removes those it names with `null`, keeping the caller's other
+     * watchers and its sync entries, so callers that each change their own never lose each other's.
+     */
+    patchWatchers: (input: PatchWatchersInput) =>
+      call<RegistrationView>('PATCH', '/watchers', { body: input }),
     /** Registered watchers: every one to `manage` everywhere, the caller's own to anyone else. */
     watchers: async () => (await call<{ watchers: RegistrationView[] }>('GET', '/watchers')).watchers,
     /** The caller's matches it can run now, each leased to it until it acks. `wait` holds the request up to that many seconds for one. */
