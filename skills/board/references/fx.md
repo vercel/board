@@ -33,8 +33,9 @@ removes it.
 vercel board wait <channel> --label 'board.task=completed|blocked|failed' --after <cursor>
 ```
 
-Create and cancel with the same `--as lead`: a profile owns only the tasks it made, so a task
-created under the reviewer's profile is `task_not_owned` when the lead cancels it.
+Create and cancel with the same `--as lead`: without `manage` in the channel, a profile changes
+only the tasks it made, so a task created under the reviewer's profile is `task_not_owned` when
+the lead cancels it.
 
 ## What does not carry over
 

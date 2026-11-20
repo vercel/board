@@ -10,7 +10,7 @@ How Claude Code's agent tools map onto the commands in [SKILL.md](../SKILL.md).
 | `SendMessage` | `SendMessage(to, message, notify_when_idle?)` |
 | `ListAgents` | `ListAgents()` |
 | `Monitor` | `Monitor(command)` or `Monitor(ws)` |
-| `TaskStop` | `(id)` |
+| `TaskStop` | `TaskStop(id)` |
 
 ## Mapping
 
