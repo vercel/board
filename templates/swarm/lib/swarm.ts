@@ -135,41 +135,57 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
   ];
 }
 
+/** When a task's thread was last active: its latest reply, or its root. */
+const activeAt = ({ message, last }: ThreadSummaryView) => (last ?? message).createdAt;
+
+/** The latest active last. A sort keeps ties as they came, so in the order the board lists them. */
+const byActivity = (tasks: ThreadSummaryView[]) => [...tasks].sort((a, b) => activeAt(a).localeCompare(activeAt(b)));
+
 /**
- * The swarm as it is now: its newest messages, then one read per task state. A task's state is a
- * label too, `board.task` on its root, and a board indexes a label with one value: so
- * `board.task=ready` lists only the ready tasks, newest activity last, while a filter with several
- * values, or the bare key, makes Vercel's board page through every thread in every channel of the
- * swarm. Finished states are read with a small limit, which caps their summaries, the
- * expensive part; Vercel's board still lists every finished task to find the newest few, a request
- * per page of them. Nothing is kept between snapshots: each is the board as it is, whoever asks
- * and whatever they missed.
+ * A state's tasks under the swarm, the latest active first. The board lists them by when each was
+ * made, oldest first: an open state is its oldest `limit`, the ones next in line. A finished one is
+ * the `limit` last active, which can be anywhere in that order (a task made first can finish last),
+ * so it asks the board for those with `latest`, which reads to the end itself, latest active last.
+ */
+async function tasksIn(board: Board, swarm: string, state: State, limit: number): Promise<ThreadSummaryView[]> {
+  if (!(FINISHED as readonly State[]).includes(state)) return byActivity((await board.tasks.list({ channel: swarm, state, limit })).tasks).reverse();
+  return (await board.tasks.list({ channel: swarm, state, limit, latest: true })).tasks.reverse();
+}
+
+/**
+ * The swarm as it is now: its newest events, then one task list per state, each a read of the whole
+ * subtree. Vercel's board answers both in one request for a caller that reads every channel, as
+ * this deployment does: the feed's newest events, and the tasks its index keeps for that state. A
+ * caller held to some channels lists tasks in 50 of them at most (400 `channel_tree_too_large`), and
+ * the swarm makes a channel per run, so this reads as the deployment. Nothing is kept between
+ * snapshots: each is the board as it is, whoever asks and whatever they missed.
  */
 export async function snapshot(board: Board = team(), swarm: string = SWARM): Promise<Snapshot> {
-  // The messages first: their cursor is where the live route listens from, so a change that lands
-  // between the reads is in the next snapshot rather than in neither.
-  const page = await board.messages({ channel: swarm, limit: 100 });
-  const read = async (state: State, limit: number) => (await board.threads({ channel: swarm, label: { "board.task": state }, limit })).threads.reverse();
+  // The feed first: its end is where the live route listens from, so a change that lands between the
+  // reads is in the next snapshot rather than in neither.
+  const feed = await board.poll({ channel: swarm, last: 100 });
+  // What was posted among them, each as it is now. A claim's renewals are events too, so it's fewer than 100.
+  const posted = feed.events.flatMap((event) => (event.type === "message.posted" && event.message && !event.message.deleted ? [event.message] : []));
   const [openRead, finishedRead] = await Promise.all([
-    Promise.all(OPEN.map((state) => read(state, OPEN_LIMIT))),
-    Promise.all(FINISHED.map((state) => read(state, FINISHED_LIMIT))),
+    Promise.all(OPEN.map((state) => tasksIn(board, swarm, state, OPEN_LIMIT))),
+    Promise.all(FINISHED.map((state) => tasksIn(board, swarm, state, FINISHED_LIMIT))),
   ]);
   const self = await selfOf(board).catch(() => null);
   const summaries = [...openRead.flat(), ...finishedRead.flat()];
   // A swarm with no launched runs (agents joining from JOIN.md alone) has no runs channel: that's no runs.
   const launched = await runs(board, 20).catch(() => []);
 
-  const known = handles([...page.messages, ...summaries.flatMap(({ message, last }) => [message, last])]);
+  const known = handles([...posted, ...summaries.flatMap(({ message, last }) => [message, last])]);
   const [open, finished] = [openRead, finishedRead].map((states) => states.map((threads) => threads.flatMap((thread) => toTask(thread, known, self))));
   return {
     name: NAME,
     swarm,
-    cursor: page.cursor,
+    cursor: feed.cursor,
     at: new Date().toISOString(),
     // The board lists oldest first; the page reads newest first, state by state.
     tasks: [...open!.flat(), ...finished!.flat()],
     finishedCapped: finished!.some((tasks) => tasks.length >= FINISHED_LIMIT),
-    flow: page.messages.map(line).reverse(),
+    flow: posted.map(line).reverse(),
     runsChannel: RUNS,
     runs: launched.map((run) => ({
       slug: run.slug,

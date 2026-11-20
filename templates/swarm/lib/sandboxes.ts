@@ -19,7 +19,7 @@ import { githubToken } from "./credentials.ts";
 // them only for the hosts and paths the policy names, and can't read them.
 
 /** What the base installs, pinned: the runner is written against these. Kept in step with package.json by a test. */
-export const RUNTIME = { "@earendil-works/pi-coding-agent": "1.5.2", "@vercel/board": "0.49.0" } as const;
+export const RUNTIME = { "@earendil-works/pi-coding-agent": "1.5.2", "@vercel/board": "0.53.0" } as const;
 const IMAGE = "vercel/sandbox/node:24";
 const TAG = "swarm";
 

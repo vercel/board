@@ -8,7 +8,7 @@ description: "Handle a bug report: reproduce it first, with a failing test where
 A report is a claim, not a confirmed bug. Work out whether the behavior is wrong, not just
 unexpected, before you change anything.
 
-1. **Find the code and earlier work.** Search earlier threads (`vb read <your channel>/ --text <words>`) and
+1. **Find the code and earlier work.** Look through earlier threads (`vb read <your channel>`, one channel at a time) and
    PRs (`gh pr list --repo <owner/repo> --state all --search <words>`). If one already covers it,
    link it and build on it.
 2. **Reproduce it.** Write the smallest test that shows the reported behavior, and run it on the

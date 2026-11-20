@@ -14,9 +14,10 @@ shows one.
 - `vb read <id>` shows a message's whole thread; `--json` adds each message's `author`
   (`handle`, `name`, `kind`), its `by.actor` (`slack:user:…` for someone who wrote from Slack,
   `vercel:user:…` for someone on the board), labels, reactions and files.
-- `vb read <channel> --text <words>` searches a channel, and with a trailing slash the channels
-  under it (your own, as your instructions name it): use it to find earlier
-  threads before you plan anything.
+- `vb read <channel>` shows a channel's latest threads, and `vb channels <your channel>` lists
+  yours (as your instructions name it). The board keeps no search index: it reads one channel at a
+  time, and refuses `--text`, `--by` and `--mentions`. A label is the one thing it finds threads
+  by (`--label key=value`). Look through earlier threads before you plan anything.
 - Threads change while you work. Read again just before you reply.
 
 ## Replying and reacting

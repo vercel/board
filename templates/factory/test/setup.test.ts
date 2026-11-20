@@ -338,7 +338,7 @@ test("once it runs, the page shows what one check found: the factory's pull requ
   assert.deepEqual(running.repos, [{ repo: "acme/factory", channel: "project-factory/rsi", slack: "#factory-rsi" }]);
   // Another repo is asked for where the factory changes itself, and the field suggests the ones with the app.
   assert.deepEqual(running.ask, { channel: "project-factory/rsi", slack: "#factory-rsi", waiting: 2, suggest: ["acme/api", "acme/web"], install: "https://github.com/apps/acme-factory/installations/new" });
-  assert.ok(running.join.includes("vercel board read project-factory/ --scope acme"));
+  assert.ok(running.join.includes("vercel board channels project-factory --scope acme"));
   assert.equal(running.first, null);
   // The week is read from the same check: the thread the fake board holds, which the agent answered.
   assert.deepEqual([running.overview.week.threads, running.overview.week.messages, running.overview.week.answered], [1, 2, 1]);
@@ -750,12 +750,12 @@ test("the first task isn't offered before the factory can write to its own repo,
 });
 
 test("a first task started long ago, past what one read brings, isn't offered again", async () => {
-  // Its channels are busy with other things: the page asks for the first task's thread by its label.
+  // Its channels are busy with other things: the page asks for the first task's thread by its label, where it starts.
   const opened = { id: "20", re: null, labels: { "first-task": "readme" }, by: { principal: DEPLOYMENT, profile: null, actor: "a" } } as never;
   const asked: unknown[] = [];
   const busy = await setup(untouched({ messages: async () => [message("90", "ada")], threads: async (query) => (asked.push(query), [opened]) }).deps);
   assert.equal(busy.open ? null : busy.found.first, "started");
-  assert.deepEqual(asked, [{ channel: "project-factory/", label: ["first-task"], limit: 1 }]);
+  assert.deepEqual(asked, [{ channel: "project-factory/rsi", label: ["first-task"], limit: 1 }]);
   // With no such thread, it's on offer.
   const none = await setup(untouched({ messages: async () => [message("90", "ada")] }).deps);
   assert.equal(none.open ? null : none.found.first, "offer");
@@ -997,29 +997,54 @@ test("the prompt for an agent to join names the team's board, the factory's chan
   const prompt = joinPrompt({ origin: "https://factory.acme.dev", team: "acme", board: null, home: "project-factory", repo: "acme/factory" });
   assert.ok(prompt.startsWith("Join the software factory at https://factory.acme.dev"));
   assert.ok(prompt.includes("vercel board whoami --scope acme"));
-  assert.ok(prompt.includes("vercel board read project-factory/ --scope acme"));
+  assert.ok(prompt.includes("vercel board channels project-factory --scope acme"));
   assert.ok(prompt.includes("https://github.com/acme/factory"));
   // Off a deployment from Git there's no repo to point at, and with no team the CLI's own linked one is used.
   const bare = joinPrompt({ origin: "http://localhost:3000", team: undefined, board: null, home: "project-factory", repo: null });
   assert.ok(!bare.includes("github.com") && !bare.includes("--scope"));
-  assert.ok(bare.includes("vercel board read project-factory/\n"));
+  assert.ok(bare.includes("vercel board channels project-factory\n"));
   // A preview's or a dev server's board isn't the team's default one: the commands name it, or they'd reach production's.
   const named = joinPrompt({ origin: "https://factory-git-fix.acme.dev", team: "acme", board: "factory-dev", home: "project-factory", repo: null });
   assert.ok(named.includes("vercel board whoami --scope acme --name factory-dev"));
-  assert.ok(named.includes("vercel board read project-factory/ --scope acme --name factory-dev"));
+  assert.ok(named.includes("vercel board channels project-factory --scope acme --name factory-dev"));
 });
 
-test("the threads the checks find by a label are their roots, however many replies bury them", async () => {
+test("the threads the checks find by a label are their roots, however many replies bury them, in the one channel asked", async () => {
   // A real board kept in memory, with one busy thread: more replies than one read of messages brings.
   // The first task is found this way, by its label, once it's older than what one read brings.
   const { board } = await import("@vercel/board");
   const { local } = await import("@vercel/board/backend-local");
   const team = board({ backend: local({ memory: true }) });
-  const busy = await team.post("project-factory/web", { text: "PR #1: Fix the build", labels: { pr: "acme/web#1", state: "open" } });
+  const busy = await team.post("project-factory/rsi", { text: "PR #1: Fix the build", labels: { pr: "acme/factory#1", state: "open" } });
   const quiet = await team.post("project-factory/rsi", { text: "PR #2: Tidy the README", labels: { pr: "acme/factory#2", state: "merged" } });
-  await team.post("project-factory", "not a pull request");
-  await team.post("elsewhere", { text: "PR #9: another factory's", labels: { pr: "acme/other#9", state: "open" } });
+  await team.post("project-factory/rsi", "not a pull request");
+  await team.post("project-factory/web", { text: "PR #9: a repo's", labels: { pr: "acme/web#9", state: "open" } });
   for (let i = 0; i < 12; i++) await team.reply(busy.id, `ci run ${i}`);
-  const roots = await boardDeps(team).threads({ channel: "project-factory/", label: ["pr"], limit: 10 });
+  const roots = await boardDeps(team).threads({ channel: "project-factory/rsi", label: ["pr"], limit: 10 });
   assert.deepEqual(roots.map((root) => root.id).sort(), [busy.id, quiet.id].sort());
+});
+
+test("the checks read a factory's channels one at a time, its own and the ones under it, and the newest of them all", async () => {
+  // A board lists messages a channel at a time, as Vercel's does: the tree is each of its channels' read.
+  const { board } = await import("@vercel/board");
+  const { local } = await import("@vercel/board/backend-local");
+  const team = board({ backend: local({ memory: true }) });
+  // Across channels a board orders by time and nothing finer, so each is posted a moment after the last.
+  const later = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const home = await team.post("project-factory", "about no repo");
+  await later();
+  const rsi = await team.post("project-factory/rsi", "make it faster");
+  await later();
+  const web = await team.post("project-factory/web", "the build is red");
+  await later();
+  const reply = await team.reply(rsi.id, "on it");
+  // Another factory's, whose name only starts like this one's, and another team's.
+  await team.post("project-factory-old", "not this factory's");
+  await team.post("elsewhere", "not a factory's");
+  const read = boardDeps(team).messages;
+  assert.deepEqual((await read({ channel: "project-factory/", limit: 200 })).map((message) => message.id), [home.id, rsi.id, web.id, reply.id]);
+  // The newest of them all, not of each channel.
+  assert.deepEqual((await read({ channel: "project-factory/", limit: 2 })).map((message) => message.id), [web.id, reply.id]);
+  // Without the slash, the channel alone.
+  assert.deepEqual((await read({ channel: "project-factory", limit: 200 })).map((message) => message.id), [home.id]);
 });
