@@ -103,7 +103,7 @@ export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'call
 export function subPrefix(value: string): string | null {
   if (!value.endsWith('*')) return null
   const prefix = value.slice(0, -1)
-  return /[:/]$/.test(prefix) && !prefix.includes('*') ? prefix : null
+  return /.[:/]$/.test(prefix) && !prefix.includes('*') ? prefix : null
 }
 
 const RANK: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }

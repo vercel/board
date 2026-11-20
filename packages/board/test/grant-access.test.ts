@@ -100,8 +100,8 @@ describe('grantAccess', () => {
 
 describe('subPrefix', () => {
   it('takes a * only at the end, right after a : or a /', () => {
-    const subs = ['project_path:acme/api:*', 'org/1/user/*', 'project_path:acme/api', 'acme*', '*', 'org:*:project:x', 'a:*:*', '']
-    expect(subs.map(subPrefix)).toEqual(['project_path:acme/api:', 'org/1/user/', null, null, null, null, null, null])
+    const subs = ['project_path:acme/api:*', 'org/1/user/*', 'project_path:acme/api', 'acme*', '*', ':*', '/*', 'org:*:project:x', 'a:*:*', '']
+    expect(subs.map(subPrefix)).toEqual(['project_path:acme/api:', 'org/1/user/', null, null, null, null, null, null, null, null])
   })
 })
 

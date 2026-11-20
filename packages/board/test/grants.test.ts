@@ -492,7 +492,7 @@ describe('grants', () => {
     expect(await made({})).toEqual(noSub)
     expect(await made({ sub: '*' })).toEqual(invalid(`sub * is everyone ${OIDC_ISS} serves: name a sub, or how one starts, like project_path:acme/api:*`))
     // `organization:acme*` would let in organization:acme-evil too.
-    for (const sub of ['organization:acme*', 'org:*:project:x', 'a:*:*'])
+    for (const sub of ['organization:acme*', 'org:*:project:x', 'a:*:*', ':*', '/*'])
       expect([sub, await made({ sub })]).toEqual([sub, invalid(`a sub's * goes last, right after a : or a /, like project_path:acme/api:*, got ${sub}`)])
     expect(await made({ sub: ['project_path:acme/api:*', 'project_path:acme*'] })).toEqual(invalid("a sub's * goes last, right after a : or a /, like project_path:acme/api:*, got project_path:acme*"))
     expect(await made({ sub: 'org/1/project/2/user/*', ref: 'release-*' })).toBe(200)

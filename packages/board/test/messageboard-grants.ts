@@ -59,7 +59,7 @@ const LEVEL: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }
 const levelOf = (principal: Stored): Level => (principal.kind === 'everyone' ? 'everyone' : principal.kind === 'all-users' || principal.kind === 'all-projects' || principal.kind === 'all-apps' ? 'group' : 'principal')
 
 /** What a `sub` pattern, `project_path:acme/api:*`, matches the start of, or null for one that matches exactly. */
-const subPrefix = (sub: string) => (/^[^*]*[:/]\*$/.test(sub) ? sub.slice(0, -1) : null)
+const subPrefix = (sub: string) => (/^[^*]+[:/]\*$/.test(sub) ? sub.slice(0, -1) : null)
 
 /** Whether grant pattern `pattern` covers `target`, a channel or a pattern of its own. */
 function covers(pattern: string, target: string): boolean {
