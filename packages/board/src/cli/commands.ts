@@ -122,7 +122,7 @@ export const options = {
   workflow: { type: 'string', multiple: true, value: 'file', description: "its --github's workflow, e.g. ci.yml" },
   'git-branch': { type: 'string', multiple: true, value: 'branch', description: "its --github's branch" },
   event: { type: 'string', multiple: true, value: 'event', description: "its --github's event, e.g. push" },
-  claim: { type: 'string', multiple: true, value: 'k=v', description: "a claim its --oidc's tokens carry" },
+  claim: { type: 'string', multiple: true, value: 'k=v', description: "a claim its --oidc's tokens carry: sub always, ending in :* or /* to match how it starts" },
   'add-user': { type: 'string', multiple: true, value: 'email', description: 'add a person' },
   'add-project': { type: 'string', multiple: true, value: 'name|id', description: "add a project's deployments" },
   'add-github': { type: 'string', multiple: true, value: 'owner/repo', description: "add a repository's runs" },
@@ -244,7 +244,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           { name: 'several grants in one write, from a file', value: 'grants create --file grants.json' },
           { name: "a project's production and previews", value: "grants create --project sec --environment production,preview --can 'security/=read,post'" },
           { name: "two repositories' workflows", value: "grants create --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml --can 'ci/=post'" },
-          { name: "another issuer's tokens", value: "grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'" },
+          { name: "another issuer's tokens, by their sub", value: "grants create --oidc https://gitlab.com --claim 'sub=project_path:acme/api:*' --claim project_id=42 --can 'ci/=post'" },
         ],
       },
       {

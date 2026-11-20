@@ -262,7 +262,7 @@ describe('a board on http()', () => {
   it("keeps a principal's keyed IDs from one whose ID is a colon-prefix of it", async () => {
     // OIDC subjects carry colons, so one principal's ID can be the start of another's.
     const remote = testBoard()
-    await remote.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
+    await remote.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { sub: ['acme', 'acme:ci'] } }], can: { '*': 'all' } })
     const acme = caller(remote.fetch, await oidcToken({ sub: 'acme' }))
     expect((await acme('GET', '/me')).body.principal).toBe('oidc:gitlab.test:acme')
     const theirs = 'key:oidc:gitlab.test:acme:ci:0123456789abcdef0123456789abcdef'

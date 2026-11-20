@@ -1200,9 +1200,9 @@ describe('the embedded CLI', () => {
     process.chdir(home)
     try {
       expect(await run('grants', 'create', '--github', 'acme/web', '--git-branch', 'main', '--can', 'ci/=post')).toEqual({ code: 0, stdout: 'created g4  --github acme/web --git-branch main  ci/=post\n', stderr: '' })
-      expect(await run('grants', 'create', '--oidc', 'https://gitlab.com', '--claim', 'project_path=acme/api', '--can', 'deploys=post')).toEqual({
+      expect(await run('grants', 'create', '--oidc', 'https://gitlab.com', '--claim', 'sub=project_path:acme/api:*', '--can', 'deploys=post')).toEqual({
         code: 0,
-        stdout: 'created g5  --oidc https://gitlab.com --claim project_path=acme/api  deploys=post\n',
+        stdout: 'created g5  --oidc https://gitlab.com --claim sub=project_path:acme/api:*  deploys=post\n',
         stderr: '',
       })
       expect(await run('grants', 'explain', 'ci/www', '--github', 'acme/web', '--git-branch', 'main')).toEqual({ code: 0, stdout: 'ci/ wins. Closest grant for acme/web: g4 (--github): post.\n', stderr: '' })

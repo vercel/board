@@ -2,7 +2,7 @@ import type { JWTVerifyGetKey } from 'jose'
 import type { PrincipalInput } from '../api/routes.ts'
 import { compileAccess, FULL_ACCESS, parseCan, writtenCan, type Access, type Can, type WrittenCan } from './access.ts'
 import { badRequest, forbidden, HttpError, unauthorized } from './errors.ts'
-import { admits, grantAccess, type GrantFacts, type GrantSource } from './grants.ts'
+import { admits, grantAccess, subPrefix, type GrantFacts, type GrantSource } from './grants.ts'
 
 /**
  * What a request says about who's calling, beside its credential: labels the caller picks for
@@ -207,10 +207,15 @@ function checkIssuer(issuer: string, trusted: readonly string[]) {
   if (other !== undefined) throw invalidGrant(`issuers ${other} and ${issuer} name the same principals, oidc:${name}:<sub>: use ${other}`)
 }
 
-/** An issuer's claims, keys and lists sorted: at least one, since an issuer signs tokens for everyone it serves. */
-function checkClaims(issuer: string, given: Readonly<Record<string, string | readonly string[]>>): Record<string, string | string[]> {
+/**
+ * An issuer's claims, keys and lists sorted. They name a `sub`, exact or a pattern `subPrefix`
+ * takes: an issuer signs tokens for everyone it serves, and only `sub` says whose a token is. A
+ * removal is checked for neither, so a principal stored without one can still be taken out.
+ */
+function checkClaims(issuer: string, given: Readonly<Record<string, string | readonly string[]>>, removal: boolean): Record<string, string | string[]> {
   const entries = typeof given === 'object' && given !== null ? Object.entries(given) : []
-  if (entries.length === 0) throw invalidGrant(`name at least one claim for ${issuer}: its issuer signs tokens for everyone it serves`)
+  if (!removal && !entries.some(([name]) => name === 'sub'))
+    throw invalidGrant(`name a sub for ${issuer}, like project_path:acme/api:*: it signs tokens for everyone it serves, and only a sub says whose a token is`)
   if (entries.length > GRANT_CLAIMS_MAX) throw invalidGrant(`an oidc principal names at most ${GRANT_CLAIMS_MAX} claims`)
   const claims: Record<string, string | string[]> = {}
   for (const [name, value] of entries.sort(([a], [b]) => a.localeCompare(b))) {
@@ -219,6 +224,9 @@ function checkClaims(issuer: string, given: Readonly<Record<string, string | rea
       throw invalidGrant(`claim ${name} has no value to match: give a string, or a list of them`)
     if (values.length > GRANT_VALUES_MAX || values.some((one) => (one as string).length > GRANT_VALUE_MAX))
       throw invalidGrant(`claim ${name} lists at most ${GRANT_VALUES_MAX} values of up to ${GRANT_VALUE_MAX} characters`)
+    const wild = name === 'sub' && !removal ? (values as string[]).find((one) => one.includes('*') && subPrefix(one) === null) : undefined
+    if (wild === '*') throw invalidGrant(`sub * is everyone ${issuer} serves: name a sub, or how one starts, like project_path:acme/api:*`)
+    if (wild !== undefined) throw invalidGrant(`a sub's * goes last, right after a : or a /, like project_path:acme/api:*, got ${wild}`)
     const sorted = (values as string[]).sort()
     claims[name] = sorted.length === 1 ? sorted[0]! : sorted
   }
@@ -238,10 +246,11 @@ export const workflowPath = (workflow: string) => (workflow.includes('/') ? work
  * A principal as a board that verifies tokens itself keeps it, or a 400 `invalid_grant` that says
  * what to write. Such a board has nothing to look a name up with, so it takes IDs: a user's ID, a
  * project's `prj_…`, and a repository's `owner/name`, which it matches on the token's claims.
- * `removal`: one to take out of a grant, which names a project without its environments. `team`: the
- * board's own team, which a project it names is kept on, so it no longer matches once it's moved to
- * another; null where the board doesn't know it, and then a project is its ID on any team. `logins`:
- * the board's verifier names people by their logins, so a user's email is its ID, with nothing to look up.
+ * `removal`: one to take out of a grant, which names a project without its environments, and an
+ * issuer's tokens without a `sub`. `team`: the board's own team, which a project it names is kept
+ * on, so it no longer matches once it's moved to another; null where the board doesn't know it, and
+ * then a project is its ID on any team. `logins`: the board's verifier names people by their
+ * logins, so a user's email is its ID, with nothing to look up.
  */
 export function checkPrincipal(input: PrincipalInput, trusted: readonly string[], removal = false, team: string | null = null, logins = false): GrantPrincipal {
   switch (input.kind) {
@@ -281,7 +290,7 @@ export function checkPrincipal(input: PrincipalInput, trusted: readonly string[]
       }
     case 'oidc':
       checkIssuer(input.issuer, trusted)
-      return { kind: 'oidc', issuer: input.issuer, claims: checkClaims(input.issuer, input.claims) }
+      return { kind: 'oidc', issuer: input.issuer, claims: checkClaims(input.issuer, input.claims, removal) }
     case 'app':
       if (!APP_ID.test(input.app)) throw invalidGrant(`an app is its client ID, letters, numbers, and ._-, got ${input.app}`)
       return { kind: 'app', clientId: input.app }

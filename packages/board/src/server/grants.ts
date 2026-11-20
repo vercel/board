@@ -84,11 +84,26 @@ export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'call
         Object.entries(principal.claims).every(([name, allowed]) => {
           const value = caller.claims[name]
           if (value === undefined) return false
-          return typeof allowed === 'string' ? String(value) === allowed : allowed.includes(String(value))
+          const given = String(value)
+          return (typeof allowed === 'string' ? [allowed] : allowed).some((one) => {
+            const prefix = name === 'sub' ? subPrefix(one) : null
+            return prefix === null ? given === one : given.startsWith(prefix)
+          })
         })
         ? 'principal'
         : null
   }
+}
+
+/**
+ * What a `sub` pattern matches the start of: `project_path:acme/api:` for `project_path:acme/api:*`.
+ * Null for any other value, which matches exactly: a `*` only ends a pattern, right after a `:` or
+ * a `/`, so no pattern lets `acme-evil` in for `acme`.
+ */
+export function subPrefix(value: string): string | null {
+  if (!value.endsWith('*')) return null
+  const prefix = value.slice(0, -1)
+  return /[:/]$/.test(prefix) && !prefix.includes('*') ? prefix : null
 }
 
 const RANK: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }

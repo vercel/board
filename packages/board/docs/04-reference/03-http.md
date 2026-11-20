@@ -576,7 +576,12 @@ show `{ kind: 'user', userId, email }`, `{ kind: 'project', projectId, name,
 environments }`, and `{ kind: 'github', repositoryId, repository, … }`. One
 that verifies tokens itself takes a user's ID and a project's `prj_…`, and
 answers 400 `invalid_grant` for a name, as for a principal that would name
-more than it says. See [how grants combine](../01-board/09-access.md#how-grants-combine).
+more than it says. An `oidc` principal's `claims` name a `sub`, since its
+issuer signs tokens for everyone it serves: exact, or ending in `*` right
+after a `:` or `/` to match how one starts (`project_path:acme/api:*`), and
+others narrow it. Without one, or with a `*` anywhere else in it, it's 400
+`invalid_grant`, except to remove it from a grant. See
+[how grants combine](../01-board/09-access.md#how-grants-combine).
 
 ### Schemas
 

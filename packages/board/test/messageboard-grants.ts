@@ -58,6 +58,9 @@ export class GrantRefused extends Error {
 const LEVEL: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }
 const levelOf = (principal: Stored): Level => (principal.kind === 'everyone' ? 'everyone' : principal.kind === 'all-users' || principal.kind === 'all-projects' || principal.kind === 'all-apps' ? 'group' : 'principal')
 
+/** What a `sub` pattern, `project_path:acme/api:*`, matches the start of, or null for one that matches exactly. */
+const subPrefix = (sub: string) => (/^[^*]*[:/]\*$/.test(sub) ? sub.slice(0, -1) : null)
+
 /** Whether grant pattern `pattern` covers `target`, a channel or a pattern of its own. */
 function covers(pattern: string, target: string): boolean {
   if (pattern === '*' || pattern === target) return true
@@ -123,9 +126,17 @@ export function fakeGrants(options: {
         const { workflow, branch, event } = input
         return { kind: 'github', repositoryId, repository: input.repository, ...(workflow ? { workflow } : {}), ...(branch ? { branch } : {}), ...(event ? { event } : {}) }
       }
-      case 'oidc':
+      case 'oidc': {
         if (typeof input.issuer !== 'string' || !input.issuer.startsWith('https://')) throw invalid('an oidc issuer is an https URL')
-        return { kind: 'oidc', issuer: input.issuer, claims: input.claims ?? {} }
+        const claims: Record<string, string | string[]> = input.claims ?? {}
+        // A removal goes by who it is, so one stored without a sub can still be taken out.
+        if (!removal) {
+          if (claims.sub === undefined) throw invalid('an oidc principal names a sub')
+          const wild = [claims.sub].flat().find((one) => one.includes('*') && subPrefix(one) === null)
+          if (wild !== undefined) throw invalid(`a sub's * goes last, after a : or a /: got ${wild}`)
+        }
+        return { kind: 'oidc', issuer: input.issuer, claims }
+      }
       case 'app': {
         // A slug or a client ID, kept by client ID.
         const clientId = input.app in options.apps ? input.app : Object.keys(options.apps).find((id) => options.apps[id] === input.app)
@@ -199,7 +210,14 @@ export function fakeGrants(options: {
         return (
           who.kind === 'oidc' &&
           who.issuer === principal.issuer &&
-          Object.entries(principal.claims).every(([name, value]) => (Array.isArray(value) ? value.includes(who.claims[name] ?? '') : who.claims[name] === value))
+          Object.entries(principal.claims).every(([name, value]) => {
+            const given = who.claims[name]
+            if (given === undefined) return false
+            return [value].flat().some((one) => {
+              const prefix = name === 'sub' ? subPrefix(one) : null
+              return prefix === null ? given === one : given.startsWith(prefix)
+            })
+          })
         )
       case 'everyone':
         return admitted

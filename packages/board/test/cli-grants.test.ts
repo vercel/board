@@ -37,8 +37,8 @@ describe('cli grants', () => {
     expect(project.stdout).toBe(`created ${project.id}  --project prj_sec --environment production,preview  dev/=read security/=read,post\n`)
     const runs = await create('--github', 'acme/web', '--workflow', 'ci.yml', '--git-branch', 'main', '--github', 'acme/api', '--workflow', 'deploy.yml', '--can', 'ci/=post')
     expect(runs.stdout).toBe(`created ${runs.id}  --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml  ci/=post\n`)
-    const issuer = await create('--oidc', 'https://gitlab.com', '--claim', 'project_id=42', '--can', 'ci/=post')
-    expect(issuer.stdout).toBe(`created ${issuer.id}  --oidc https://gitlab.com --claim project_id=42  ci/=post\n`)
+    const issuer = await create('--oidc', 'https://gitlab.com', '--claim', 'sub=project_path:acme/api:*', '--claim', 'project_id=42', '--can', 'ci/=post')
+    expect(issuer.stdout).toBe(`created ${issuer.id}  --oidc https://gitlab.com --claim project_id=42 --claim sub=project_path:acme/api:*  ci/=post\n`)
     // A project without --environment is its production deployments.
     const web = await create('--project', 'prj_web', '--can', 'web/=all')
     expect(web.stdout).toBe(`created ${web.id}  --project prj_web --environment production  web/=all\n`)
@@ -57,7 +57,7 @@ describe('cli grants', () => {
         [people.id, '--user u_alice --user u_bob', 'security/=all'],
         [project.id, '--project prj_sec --environment production,preview', 'dev/=read security/=read,post'],
         [runs.id, '--github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml', 'ci/=post'],
-        [issuer.id, '--oidc https://gitlab.com --claim project_id=42', 'ci/=post'],
+        [issuer.id, '--oidc https://gitlab.com --claim project_id=42 --claim sub=project_path:acme/api:*', 'ci/=post'],
         [web.id, '--project prj_web --environment production', 'web/=all'],
         [app.id, '--app cl_ship', 'ship/=post'],
       ]
@@ -124,10 +124,18 @@ describe('cli grants', () => {
   }, 30_000)
 
   it('gathers a repeated --claim into one claim that any of its values meets', async () => {
-    const made = await create('--oidc', 'https://gitlab.com', '--claim', 'project_id=42', '--claim', 'ref_type=branch', '--claim', 'project_id=43', '--can', 'ci/=post')
-    expect(made.stdout).toBe(`created ${made.id}  --oidc https://gitlab.com --claim project_id=42 --claim project_id=43 --claim ref_type=branch  ci/=post\n`)
+    const made = await create('--oidc', 'https://gitlab.com', '--claim', 'sub=project_path:acme/api:*', '--claim', 'project_id=42', '--claim', 'ref_type=branch', '--claim', 'project_id=43', '--can', 'ci/=post')
+    expect(made.stdout).toBe(`created ${made.id}  --oidc https://gitlab.com --claim project_id=42 --claim project_id=43 --claim ref_type=branch --claim sub=project_path:acme/api:*  ci/=post\n`)
     const listed = JSON.parse((await vb(['grants', '--json'])).stdout).grants.find((grant: { id: string }) => grant.id === made.id)
-    expect(listed.principals).toEqual([{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: ['42', '43'], ref_type: 'branch' } }])
+    expect(listed.principals).toEqual([{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: ['42', '43'], ref_type: 'branch', sub: 'project_path:acme/api:*' } }])
+  })
+
+  it("says the board's refusal of an issuer's grant that names no sub", async () => {
+    expect(await vb(['grants', 'create', '--oidc', 'https://gitlab.com', '--claim', 'project_id=42', '--can', 'ci/=post'])).toEqual({
+      code: 2,
+      stdout: '',
+      stderr: "error: Can't create the grant.\n  name a sub for https://gitlab.com, like project_path:acme/api:*: it signs tokens for everyone it serves, and only a sub says whose a token is\n",
+    })
   })
 
   it('reads each modifier with the principal before it, and refuses one without its principal, making nothing', async () => {

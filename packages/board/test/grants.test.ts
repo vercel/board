@@ -445,7 +445,7 @@ describe('grants', () => {
     const { person, as } = await setUp()
     const gitlab = await as(oidcToken())
     expect((await gitlab('GET', '/me')).status).toBe(401)
-    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['post'] } })
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { sub: 'project_path:acme/api:*', project_path: 'acme/api' } }], can: { 'ci/': ['post'] } })
     expect((await gitlab('POST', '/messages', { channel: 'ci', text: 'from gitlab' })).status).toBe(201)
     const another = await as(oidcToken({ project_path: 'acme/other', sub: 'project_path:acme/other' }))
     expect((await another('POST', '/messages', { channel: 'ci', text: 'not granted' })).status).toBe(403)
@@ -453,7 +453,7 @@ describe('grants', () => {
 
   it("refuses a token whose sub would read as another workflow's profile, and changes no one's ID", async () => {
     const { person, as, board } = await setUp()
-    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['read', 'post'] } })
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { sub: ['build', 'build%2Bpi', 'project_path:acme/api:*'] } }], can: { 'ci/': ['read', 'post'] } })
     for (const sub of ['build+pi', 'build]', 'build pi']) {
       const refused = await (await as(oidcToken({ sub })))('POST', '/messages', { channel: 'ci', text: 'hi' })
       expect([sub, refused.status, refused.body.error.message]).toEqual([sub, 401, `token from ${OIDC_ISS} has a sub with a +, a ], or a space, which a principal's ID can't hold`])
@@ -465,11 +465,55 @@ describe('grants', () => {
     expect(await who(await as(oidcToken()))).toBe('oidc:gitlab.test:project_path:acme/api:ref_type:branch:ref:main')
   })
 
+  it("lets in an issuer's tokens by their sub, exactly or by how it starts, and with every other claim it names", async () => {
+    const { person, as } = await setUp()
+    const subs = ['project_path:acme/api:*', 'project_path:acme/web:ref_type:branch:ref:main']
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { sub: subs, project_id: '42' } }], can: { 'ci/': ['post'] } })
+    const posts = async (claims: Record<string, unknown>) => (await (await as(oidcToken({ project_id: '42', ...claims })))('POST', '/messages', { channel: 'ci', text: 'run' })).status
+    expect(await posts({})).toBe(201)
+    expect(await posts({ sub: 'project_path:acme/api:ref_type:tag:ref:v1' })).toBe(201)
+    expect(await posts({ sub: 'project_path:acme/web:ref_type:branch:ref:main' })).toBe(201)
+    // A pattern's start ends at its : or /, and a sub without a * is all of it.
+    expect(await posts({ sub: 'project_path:acme/api-evil:ref_type:branch:ref:main' })).toBe(403)
+    expect(await posts({ sub: 'project_path:acme/api' })).toBe(403)
+    expect(await posts({ sub: 'project_path:acme/web:ref_type:branch:ref:main-evil' })).toBe(403)
+    expect(await posts({ project_id: '43' })).toBe(403)
+  })
+
+  it('refuses an oidc principal without a sub, or with a * anywhere but last, right after a : or a /', async () => {
+    const { person } = await setUp()
+    const made = async (claims: Record<string, unknown>) => {
+      const { status, body } = await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims }], can: { 'ci/': ['post'] } })
+      return status === 200 ? status : [status, body.error.code, body.error.message]
+    }
+    const invalid = (message: string) => [400, 'invalid_grant', message]
+    const noSub = invalid(`name a sub for ${OIDC_ISS}, like project_path:acme/api:*: it signs tokens for everyone it serves, and only a sub says whose a token is`)
+    expect(await made({ project_path: 'acme/api' })).toEqual(noSub)
+    expect(await made({})).toEqual(noSub)
+    expect(await made({ sub: '*' })).toEqual(invalid(`sub * is everyone ${OIDC_ISS} serves: name a sub, or how one starts, like project_path:acme/api:*`))
+    // `organization:acme*` would let in organization:acme-evil too.
+    for (const sub of ['organization:acme*', 'org:*:project:x', 'a:*:*'])
+      expect([sub, await made({ sub })]).toEqual([sub, invalid(`a sub's * goes last, right after a : or a /, like project_path:acme/api:*, got ${sub}`)])
+    expect(await made({ sub: ['project_path:acme/api:*', 'project_path:acme*'] })).toEqual(invalid("a sub's * goes last, right after a : or a /, like project_path:acme/api:*, got project_path:acme*"))
+    expect(await made({ sub: 'org/1/project/2/user/*', ref: 'release-*' })).toBe(200)
+  })
+
+  it('takes a principal without a sub out of a grant made before the board asked for one, and adds none', async () => {
+    const { board, person } = await setUp()
+    const older = { kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } } as const
+    const run = { kind: 'github', repository: 'acme/web' } as const
+    const log = createServer({ contract: accessContract, store: board.store.log }).session(ACCESS_SESSION)
+    await log.append({ type: 'grant.created', payload: { principals: [older, run], can: { 'ci/': ['post'] }, by: 'local:user:julian' } })
+    expect((await person('PATCH', '/grants/g4', { add: [older] })).body.error.code).toBe('invalid_grant')
+    const removed = await person('PATCH', '/grants/g4', { remove: [older] })
+    expect([removed.status, removed.body.grant.principals]).toEqual([200, [{ ...run, repositoryId: null }]])
+  })
+
   it("finds a grant's issuer's keys by OIDC discovery, never by a redirect or on the board's own network", async () => {
     const ISS = 'https://idp.acme.dev'
     const DISCOVERY = `${ISS}/.well-known/openid-configuration`
     const { person, as } = await setUp()
-    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['read'] } })
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: ISS, claims: { sub: 'project_path:acme/api:*' } }], can: { 'ci/': ['read'] } })
     const me = async () => (await (await as(oidcToken({}, ISS)))('GET', '/me')).status
     // The network as fetch sees it: a redirect is followed unless the request says otherwise.
     const asked: string[] = []
@@ -511,7 +555,7 @@ describe('grants', () => {
     const ISS = 'https://idp-once.acme.dev'
     const DISCOVERY = `${ISS}/.well-known/openid-configuration`
     const { person, as } = await setUp()
-    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: ISS, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['read'] } })
+    await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: ISS, claims: { sub: 'project_path:acme/api:*' } }], can: { 'ci/': ['read'] } })
     const call = await as(oidcToken({}, ISS))
     let discoveries = 0
     let up = false
@@ -557,8 +601,8 @@ describe('grants', () => {
     expect(await refused({ kind: 'oidc', issuer: 'https://169.254.169.254', claims: { sub: 'x' } })).toEqual(invalid)
     expect(await refused({ kind: 'oidc', issuer: 'https://ci.internal/oidc', claims: { sub: 'x' } })).toEqual(invalid)
     expect(await refused({ kind: 'oidc', issuer: 'http://gitlab.com', claims: { sub: 'x' } })).toEqual(invalid)
-    expect(await refused({ kind: 'oidc', issuer: 'https://oidc.vercel.com/acme', claims: { project_id: 'prj_front' } })).toEqual(invalid)
-    expect(await refused({ kind: 'oidc', issuer: 'https://token.actions.githubusercontent.com', claims: { repository: 'acme/web' } })).toEqual(invalid)
+    expect(await refused({ kind: 'oidc', issuer: 'https://oidc.vercel.com/acme', claims: { sub: 'owner:acme:*' } })).toEqual(invalid)
+    expect(await refused({ kind: 'oidc', issuer: 'https://token.actions.githubusercontent.com', claims: { sub: 'repo:acme/web:*' } })).toEqual(invalid)
     expect(await refused(everyone, { 'ci/*': ['post'] })).toEqual(invalid)
     expect(await refused(everyone, {})).toEqual(invalid)
     expect((await person('POST', '/grants', { principals: [], can: { '*': ['read'] } })).status).toBe(400)
@@ -568,7 +612,7 @@ describe('grants', () => {
   it('refuses an issuer that names the same principals as one a grant trusts', async () => {
     const board = testBoard()
     const person = caller(board.fetch, await personToken())
-    const gitlab = (issuer: string) => ({ principals: [{ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['post'] } })
+    const gitlab = (issuer: string) => ({ principals: [{ kind: 'oidc', issuer, claims: { sub: 'project_path:acme/api:*' } }], can: { 'ci/': ['post'] } })
     expect((await person('POST', '/grants', gitlab(OIDC_ISS))).status).toBe(200)
     const { status, body } = await person('POST', '/grants', gitlab(`${OIDC_ISS}/`))
     expect([status, body.error.code]).toEqual([400, 'invalid_grant'])
@@ -576,7 +620,7 @@ describe('grants', () => {
 
   it('refuses two issuers that name the same principals within one grant, or added to it', async () => {
     const { person } = await setUp()
-    const gitlab = (issuer: string) => ({ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } })
+    const gitlab = (issuer: string) => ({ kind: 'oidc', issuer, claims: { sub: 'project_path:acme/api:*' } })
     const both = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS), gitlab(`${OIDC_ISS}/`)], can: { 'ci/': ['post'] } })
     expect([both.status, both.body.error.code]).toEqual([400, 'invalid_grant'])
     const one = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS)], can: { 'ci/': ['post'] } })
@@ -588,7 +632,7 @@ describe('grants', () => {
     const { owner, as } = await setUp()
     await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { 'ci/': 'all' } })
     const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
-    const gitlab = { kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }
+    const gitlab = { kind: 'oidc', issuer: OIDC_ISS, claims: { sub: 'project_path:acme/api:*' } }
     expect((await ops('POST', '/grants', { principals: [gitlab], can: { 'ci/': ['post'] } })).status).toBe(403)
     const run = await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })
     expect(run.status).toBe(200)

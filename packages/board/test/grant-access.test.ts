@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkGrantChange, explainGrants, grantAccess, type DecidingGrant, type GrantFacts, type GrantShape } from '../src/access/index.ts'
+import { checkGrantChange, explainGrants, grantAccess, subPrefix, type DecidingGrant, type GrantFacts, type GrantShape } from '../src/access/index.ts'
 
 // The grant decision as Vercel's API makes it with board's code: plain data in, accesses out.
 
@@ -60,12 +60,26 @@ describe('grantAccess', () => {
     const ci: DecidingGrant = { principals: [{ kind: 'github', repository: 'acme/web', repositoryId: '7', workflow: '.github/workflows/ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } }
     expect(summaries({ ...run, grants: [ci] })?.caller).toEqual({ 'ci/': ['post'] })
     expect(grantAccess({ caller: { ...run.caller, ref: 'refs/heads/dev' }, grants: [ci] })).toBeNull()
-    const gitlab: DecidingGrant = { principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: ['42', '43'] } }], can: { 'ci/': ['post'] } }
-    expect(grantAccess({ caller: { kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: 43 } }, grants: [gitlab] })).not.toBeNull()
+    const gitlab: DecidingGrant = { principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:*', project_id: ['42', '43'] } }], can: { 'ci/': ['post'] } }
+    expect(grantAccess({ caller: { kind: 'oidc', issuer: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:ref_type:branch:ref:main', project_id: 43 } }, grants: [gitlab] })).not.toBeNull()
     const app = { caller: { kind: 'app', clientId: 'cl_ship' }, teamApp: true } as const
     expect(summaries({ ...app, grants: [g3] })?.caller).toEqual({ '*': ['read', 'post', 'react', 'label'] })
     expect(summaries({ ...app, grants: [g3, { principals: [{ kind: 'app', clientId: 'cl_ship' }], can: { 'ship/': 'all' } }] })?.caller).toEqual({ '*': ['read', 'post', 'react', 'label'], 'ship/': ALL })
     expect(grantAccess({ ...app, teamApp: false, grants: [g3] })).toBeNull()
+  })
+
+  it("matches an issuer's sub by how it starts where it ends in :* or /*, and every other value exactly", () => {
+    const issuer = 'https://gitlab.com'
+    const gitlab: DecidingGrant = { principals: [{ kind: 'oidc', issuer, claims: { sub: ['project_path:acme/api:*', 'org/1/project/2/user/*', 'deploy'], ref: 'release/*' } }], can: { 'ci/': ['post'] } }
+    const lets = (sub: string, ref = 'release/*') => grantAccess({ caller: { kind: 'oidc', issuer, claims: { sub, ref } }, grants: [gitlab] }) !== null
+    expect(['project_path:acme/api:ref_type:branch:ref:main', 'org/1/project/2/user/3', 'deploy'].map((sub) => lets(sub))).toEqual([true, true, true])
+    expect(['project_path:acme/api-evil:ref_type:branch:ref:main', 'project_path:acme/api', 'org/1/project/20/user/3', 'deploy:prod'].map((sub) => lets(sub))).toEqual([false, false, false, false])
+    // Only a sub is a pattern.
+    expect(lets('deploy', 'release/1')).toBe(false)
+    // A grant stored before the board refused other *s matches them as they're written.
+    const stored: DecidingGrant = { principals: [{ kind: 'oidc', issuer, claims: { sub: ['acme*', '*'] } }], can: { 'ci/': ['post'] } }
+    const storedLets = (sub: string) => grantAccess({ caller: { kind: 'oidc', issuer, claims: { sub } }, grants: [stored] }) !== null
+    expect(['acme-evil', 'anyone', 'acme*', '*'].map(storedLets)).toEqual([false, false, true, true])
   })
 
   it('lets an app capped by its scope, or narrowed where everyone reads, let no one in', () => {
@@ -81,6 +95,13 @@ describe('grantAccess', () => {
     const narrowed = grantAccess({ ...app, grants: [g3, manages, reads], can: { '*': 'all', 'open/': [] } })!
     expect(checkGrantChange({ ...narrowed, after, changed })).toEqual({ reason: 'admission', pattern: 'open/', permission: 'read' })
     expect(checkGrantChange({ ...grantAccess({ ...app, grants: [g3, manages, reads] })!, after, changed })).toBeNull()
+  })
+})
+
+describe('subPrefix', () => {
+  it('takes a * only at the end, right after a : or a /', () => {
+    const subs = ['project_path:acme/api:*', 'org/1/user/*', 'project_path:acme/api', 'acme*', '*', 'org:*:project:x', 'a:*:*', '']
+    expect(subs.map(subPrefix)).toEqual(['project_path:acme/api:', 'org/1/user/', null, null, null, null, null, null])
   })
 })
 

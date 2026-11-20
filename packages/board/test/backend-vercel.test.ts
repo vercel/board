@@ -3003,15 +3003,19 @@ describe('vercel()', () => {
     const jb = handleOn(api)
     const { grant } = await jb.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', branch: 'main' }], can: { 'ci/': ['post'] } })
     expect(grant.principals).toEqual([{ kind: 'github', repositoryId: '700001', repository: 'acme/web', branch: 'main' }])
-    const issuer = { kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_path: 'acme/api' } } as const
+    const issuer = { kind: 'oidc', issuer: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:*', project_id: '42' } } as const
     const updated = await jb.updateGrant(grant.id, { add: [issuer] })
     expect(updated.grant.principals).toEqual([{ kind: 'github', repositoryId: '700001', repository: 'acme/web', branch: 'main' }, issuer])
+    // The API names an issuer's caller by its sub, as a board does.
+    for (const claims of [{ project_id: '42' }, { sub: 'project_path:acme*' }] as Record<string, string>[])
+      await expect(jb.updateGrant(grant.id, { add: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims }] })).rejects.toMatchObject({ status: 400, code: 'invalid_grant' })
     const [made] = (await jb.createGrants([{ principals: [{ kind: 'github', repository: 'acme/api', event: 'push' }], can: { 'deploys/': ['read'] } }])).grants
     expect(made?.principals).toEqual([{ kind: 'github', repositoryId: '700002', repository: 'acme/api', event: 'push' }])
     // What the API decides for a run on main, and for one on another branch, which the grant doesn't name.
     expect(await jb.explain('ci/www', { github: 'acme/web', branch: 'main' })).toMatchObject({ pattern: 'ci/', level: 'principal', grants: [{ id: grant.id }], can: ['post'] })
     expect(await jb.explain('ci/www', { github: 'acme/web', branch: 'dev' })).toMatchObject({ pattern: null, grants: [], can: [] })
-    expect(await jb.explain('ci/www', { oidc: 'https://gitlab.com', claims: { project_path: 'acme/api' } })).toMatchObject({ pattern: 'ci/', grants: [{ id: grant.id }], can: ['post'] })
+    expect(await jb.explain('ci/www', { oidc: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:ref_type:branch:ref:main', project_id: '42' } })).toMatchObject({ pattern: 'ci/', grants: [{ id: grant.id }], can: ['post'] })
+    expect(await jb.explain('ci/www', { oidc: 'https://gitlab.com', claims: { sub: 'project_path:acme/api-evil:ref_type:branch:ref:main', project_id: '42' } })).toMatchObject({ pattern: null, grants: [], can: [] })
   })
 
   it("says what an API that takes no GitHub or OIDC principal answers, in its own words and nothing else", async () => {
@@ -3029,7 +3033,7 @@ describe('vercel()', () => {
     const theirs = { status: 400, ...refused, origin: 'board', hint: undefined }
     await expect(jb.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })).rejects.toMatchObject(theirs)
     const { grant } = await jb.createGrant({ principals: [{ kind: 'app', app: 'ship' }], can: { 'ci/': ['post'] } })
-    await expect(jb.updateGrant(grant.id, { add: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }] })).rejects.toMatchObject(theirs)
+    await expect(jb.updateGrant(grant.id, { add: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:*', project_id: '42' } }] })).rejects.toMatchObject(theirs)
     await expect(jb.explain('ci', { github: 'acme/web' })).rejects.toMatchObject(theirs)
   })
 

@@ -34,4 +34,4 @@ export {
   type GrantChangeRefusal,
   type GrantShape,
 } from '../server/access.ts'
-export { explainGrants, grantAccess, type Caller, type DecidingGrant, type GrantExplanation, type GrantFacts, type GrantSource } from '../server/grants.ts'
+export { explainGrants, grantAccess, subPrefix, type Caller, type DecidingGrant, type GrantExplanation, type GrantFacts, type GrantSource } from '../server/grants.ts'

@@ -92,7 +92,7 @@ deployments.
 | `vb grants create --everyone --can 'attic/=none' --lock-me-out` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'attic/': 'none' } }, { lockMeOut: true })` |
 | `vb grants create --project sec --environment production,preview --can 'security/=read,post'` | `team.createGrant({ principals: [{ kind: 'project', project: 'sec', environments: ['production', 'preview'] }], can: { 'security/': ['read', 'post'] } })` |
 | `vb grants create --github acme/web --workflow ci.yml --git-branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
-| `vb grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })` |
+| `vb grants create --oidc https://gitlab.com --claim 'sub=project_path:acme/api:*' --claim project_id=42 --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:*', project_id: '42' } }], can: { 'ci/': ['post'] } })` |
 | `vb grants create --app ship --can 'ship/=post'` | `team.createGrant({ principals: [{ kind: 'app', app: 'ship' }], can: { 'ship/': ['post'] } })` |
 | `vb grants update g5 --add-user carol@acme.com` | `team.updateGrant('g5', { add: [{ kind: 'user', email: 'carol@acme.com' }] })` |
 | `vb grants update g6 --remove-project sec --can 'security/=read'` | `team.updateGrant('g6', { remove: [{ kind: 'project', project: 'sec' }], can: { 'security/': ['read'] } })` |
@@ -105,7 +105,7 @@ deployments.
 | `user` | a person on the team, by `email`, or by `userId` on a board that verifies tokens itself | one principal |
 | `project` | a project's deployments in its `environments`, by name or ID (`prj_…`) | one principal |
 | `github` | GitHub Actions runs in a `repository`, narrowed by `workflow`, `branch`, or `event` | one principal |
-| `oidc` | an `issuer`'s tokens that carry every one of its `claims` | one principal |
+| `oidc` | an `issuer`'s tokens that carry every one of its `claims`, `sub` among them | one principal |
 | `all-users` | every person on the team | a group |
 | `all-projects` | every project's deployments on the board's team, in its `environments` | a group |
 | `app` | an app on the team, by its slug or client ID (`clientId` on a board that verifies tokens itself) | one principal |
@@ -181,6 +181,15 @@ more specific pattern decides first.
   `jwks_uri` that's an https URL on the internet, and no redirect is followed.
   Every claim must match exactly, and a list is any of its values. Vercel's
   and GitHub's issuers have kinds of their own.
+- **An `oidc` principal names a `sub`.** An issuer such as GitLab.com signs
+  tokens for everyone it serves, so a claim like `ref=main` lets in anyone's
+  job on main. Its `sub` is the one claim unique to a workload, so a grant
+  names it, and other claims narrow it further. A `sub` that ends in `*` right
+  after a `:` or `/` matches how one starts: `project_path:acme/api:*` is any
+  job in `acme/api`, and not one in `acme/api-evil`. A `*` anywhere else in a
+  `sub` is refused, `*` alone too, and in any other claim it's just a `*`.
+  A grant made before boards asked for a `sub` still lets in what it did,
+  and a principal without one can still be removed from it.
 - **The same principals again are another grant.** Change one by its ID:
   `updateGrant(id, { add, remove, can })` adds principals, removes them by who
   they are (a project whatever its environments), and replaces its `can`.

@@ -147,7 +147,7 @@ describe('what a grant lets in', () => {
 })
 
 describe('a grant for another OIDC issuer', () => {
-  const gitlab = (can: GrantInput['can'] = { 'ci/': ['read', 'post'] }) => granting({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can })
+  const gitlab = (can: GrantInput['can'] = { 'ci/': ['read', 'post'] }) => granting({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { sub: 'project_path:acme/api:*', project_path: 'acme/api' } }], can })
 
   it('trusts a pinned issuer’s tokens whose claims match exactly', async () => {
     const me = await caller((await gitlab()).fetch, await oidcToken())('GET', '/me')
@@ -161,6 +161,8 @@ describe('a grant for another OIDC issuer', () => {
   it('refuses tokens whose claims differ', async () => {
     const other = await caller((await gitlab()).fetch, await oidcToken({ project_path: 'acme/api-fork' }))('GET', '/me')
     expect(other).toMatchObject({ status: 403, body: { error: { message: "this token can't use this board: no grant lets in its claims" } } })
+    const evil = await caller((await gitlab()).fetch, await oidcToken({ sub: 'project_path:acme/api-evil:ref_type:branch:ref:main' }))('GET', '/me')
+    expect(evil.status).toBe(403)
     const nested = await caller((await gitlab()).fetch, await oidcToken({ project_path: ['acme/api'] }))('GET', '/me')
     expect(nested.status).toBe(403)
   })
@@ -184,7 +186,7 @@ describe('a grant for another OIDC issuer', () => {
     // Before, both were oidc:gitlab.test:8443:deploy.
     const withPort = `${OIDC_ISS}:8443`
     const board = testBoard({ auth: { ...testAuth, oidc: { ...testAuth.oidc, [withPort]: testAuth.oidc[OIDC_ISS]! } } })
-    for (const issuer of [OIDC_ISS, withPort]) await board.createGrant({ principals: [{ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
+    for (const [issuer, sub] of [[OIDC_ISS, '8443:deploy'], [withPort, 'deploy']] as const) await board.createGrant({ principals: [{ kind: 'oidc', issuer, claims: { sub } }], can: { '*': 'all' } })
     const { fetch } = board
     const principal = async (sub: string, issuer?: string) =>
       (await caller(fetch, await oidcToken({ sub }, issuer))('GET', '/me')).body.principal
@@ -195,8 +197,8 @@ describe('a grant for another OIDC issuer', () => {
   it('keeps each grant to its own issuer', async () => {
     const selfHosted = 'https://ci.selfhosted.test'
     const board = testBoard({ auth: { ...testAuth, oidc: { ...testAuth.oidc, [selfHosted]: testAuth.oidc[OIDC_ISS]! } } })
-    await board.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
-    await board.createGrant({ principals: [{ kind: 'oidc', issuer: selfHosted, claims: { team: 'x' } }], can: { 'ci/': ['post'] } })
+    await board.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { sub: 'project_path:acme/api:*' } }], can: { '*': 'all' } })
+    await board.createGrant({ principals: [{ kind: 'oidc', issuer: selfHosted, claims: { sub: 'project_path:acme/api:*', team: 'x' } }], can: { 'ci/': ['post'] } })
     const { fetch } = board
     // A token from the self-hosted issuer that claims gitlab.com's project gets nothing of its grant.
     const forged = await caller(fetch, await oidcToken({ project_path: 'acme/api' }, selfHosted))('GET', '/me')

@@ -664,7 +664,11 @@ talking to.
 - **Any other issuer** is trusted only when a grant names it, as an https URL:
   board() hands its grants' issuers to its verifier (`board.issuers`). The
   board fetches keys only for issuers a grant names, and an `oidc` principal
-  matches exact claims, at least one. Its principal is `oidc:<issuer host and path>:<sub>`,
+  matches exact claims, `sub` among them: an issuer signs tokens for everyone
+  it serves, and its `sub` is the one claim that says whose a token is. A
+  `sub` that ends in `*` right after a `:` or `/` matches how one starts
+  (`project_path:acme/api:*`), and a `*` anywhere else in it is refused.
+  Its principal is `oidc:<issuer host and path>:<sub>`,
   with a `:` or `%` in the issuer part percent-encoded
   (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at the first `:`.
 - **Tests** pass `board({ authenticate: oidcTokens(testIssuers) })` in code,
@@ -680,7 +684,7 @@ const team = board({ backend: local() })
 
 await team.createGrant({ principals: [{ kind: 'project', project: 'prj_front', environments: ['production'] }], can: { 'feedback/': ['post'] } })
 await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', event: 'push' }], can: { 'ci/': ['read', 'post'] } })
-await team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })
+await team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { sub: 'project_path:acme/api:*', project_id: '42' } }], can: { 'ci/': ['post'] } })
 // On a production board, its own previews read dev/.
 await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', environments: ['preview'] }], can: { 'dev/': ['read'] } })
 ```
@@ -905,7 +909,7 @@ await team.revokeGrant(grant.id)
 - **Principals.** `user` (a person on the team), `project` (a project's
   deployments in its environments), `github` (Actions runs in a repository,
   narrowed by workflow, branch, or event),
-  and `oidc` (an issuer's tokens carrying every claim it names) are one
+  and `oidc` (an issuer's tokens carrying every claim it names, `sub` always) are one
   principal each, and so is `app` (an app on the team, named by slug or client
   ID and kept by client ID). `all-users` (every person on the team),
   `all-projects` (every project on the board's team, in production, preview,
