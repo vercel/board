@@ -79,7 +79,7 @@ describe("the CLI's commands, as data", () => {
       })
     // And what it goes by here, when it goes by another name, as without --help.
     expect((await capture(() => main(['search', '--help'], app))).stderr).toBe((await capture(() => main(['search'], app))).stderr)
-    expect((await capture(() => main(['search', '--help'], app))).stderr).toMatch(/^error: Unknown command search for vb\.\n\n {2}Read a channel and look through it/)
+    expect((await capture(() => main(['search', '--help'], app))).stderr).toMatch(/^error: Unknown command search for vb\.\n\n {2}Search a channel's latest threads, a page at a time/)
     // With no word, or `help` alone, it's the list of every command.
     for (const argv of [['--help'], ['help']]) expect((await capture(() => main(argv, app))).stdout, argv.join(' ')).toMatch(/^board \S+: /)
   })
