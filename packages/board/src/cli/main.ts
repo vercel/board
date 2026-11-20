@@ -929,8 +929,9 @@ function failureOf(error: unknown): Failure {
         return own('permission', 'watchers_need_project')
       case 'missing_team':
         return {
+          // A CI log is read widely: this names the option without the command's text.
           ...own('missing_input', 'missing_scope', [
-            { instruction: "Use a team's board", argv: rerun('--scope', '<TEAM_ID>') },
+            { instruction: "Use a team's board: add --scope <TEAM_ID>" },
             { instruction: 'Or set VERCEL_ORG_ID to its ID' },
           ]),
           actionRequired: true,

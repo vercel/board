@@ -1254,9 +1254,12 @@ describe('the embedded CLI', () => {
       expect(await run('post', 'ci', 'deploy failed', '--name', 'ops')).toEqual({
         code: 2,
         stdout: '',
-        stderr: "error: A GitHub Actions token names no Vercel team, so there's no team's board to use.\n\n  Use a team's board:\n    vb post ci 'deploy failed' --name ops --scope <TEAM_ID>\n  Or set VERCEL_ORG_ID to its ID\n",
+        stderr: "error: A GitHub Actions token names no Vercel team, so there's no team's board to use.\n\n  Use a team's board: add --scope <TEAM_ID>\n  Or set VERCEL_ORG_ID to its ID\n",
       })
-      expect(JSON.parse((await run('post', 'ci', 'deploy failed', '--name', 'ops', '--json')).stderr)).toMatchObject({ status: 'action_required', reason: 'missing_scope' })
+      // The job's log never repeats what it was about to post.
+      const { stderr } = await run('post', 'ci', 'deploy failed', '--name', 'ops', '--json')
+      expect(JSON.parse(stderr)).toMatchObject({ status: 'action_required', reason: 'missing_scope' })
+      expect(stderr).not.toContain('deploy failed')
       // A token Vercel's API doesn't take: no login in the job to log in again with.
       vi.stubEnv('VERCEL_ORG_ID', 'team_test')
       vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'request-for-another-job')
