@@ -22,7 +22,7 @@ team. With `BOARD_URL` set, in Node, it's the board at that URL instead
 (`http()`, internal too: `src/server/backend-http.ts`), which is `vb serve`'s.
 Neither backend is exported: people write `board()`. In a
 Vercel deployment it authenticates with the deployment's OIDC token, and
-elsewhere with `BOARD_TOKEN`, a GitHub Actions job's OIDC token, or the Vercel CLI's login, never `VERCEL_TOKEN`. Vercel's API keeps
+elsewhere with `BOARD_TOKEN`, `VERCEL_AUTH_TOKEN`, a GitHub Actions job's OIDC token, or `vercel login`, never `VERCEL_TOKEN`. Vercel's API keeps
 the board: messages, threads, reactions, labels, a channel's changes,
 schedules, files, and watchers, whose matches it wakes the deployment to run.
 It doesn't run sync yet: `board({ sync })` on it throws when it binds.
@@ -2040,10 +2040,10 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 - **`board()` with no backend is the team's board in Vercel's API,** the one
   `name` names on the team `team` names, on `vercel()`, with
   `board({ fetch })`'s credentials when it's given. In Node they default to
-  the deployment's OIDC token, which nothing in the environment replaces, or else `BOARD_TOKEN`, then a
-  GitHub Actions job's OIDC token (both `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`
-  set, audience `https://api.vercel.com/v1/messageboard`), sent as it is, then the
-  login a CLI hands it (`VERCEL_AUTH_TOKEN`) or your `vercel login`, never `VERCEL_TOKEN`. A CLI
+  the deployment's OIDC token, which nothing in the environment replaces, or else `BOARD_TOKEN`, then the
+  login a CLI hands it (`VERCEL_AUTH_TOKEN`), then a GitHub Actions job's OIDC token (both
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` set, audience
+  `https://api.vercel.com/v1/messageboard`), sent as it is, then your `vercel login`, never `VERCEL_TOKEN`. A CLI
   that embeds board's says who its commands run as: the login it gives (`createApp({ login })`, or
   `createApp({ token })` for one someone passed it for a run, as `vercel board --token`) is the one
   that goes, wherever that CLI runs, ahead of them all, so `vercel board` is you, as every `vercel`

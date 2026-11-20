@@ -1,6 +1,6 @@
 // Your team's board in Vercel's API, internal: board()'s default backend, and the CLI's. In Node, it finds credentials the way
-// a deployment and the Vercel CLI do: the deployment's OIDC token, or else `BOARD_TOKEN`, a GitHub Actions job's OIDC token,
-// or your login. Never `VERCEL_TOKEN`, a name people set for other reasons, and nothing in the environment replaces a
+// a deployment and the Vercel CLI do: the deployment's OIDC token, or else `BOARD_TOKEN`, `VERCEL_AUTH_TOKEN`, a GitHub
+// Actions job's OIDC token, or your `vercel login`. Never `VERCEL_TOKEN`, a name people set for other reasons, and nothing in the environment replaces a
 // deployment's own token: only the login of an app that runs board's CLI goes ahead of it, since the app says who its commands run as.
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
@@ -20,8 +20,11 @@ const asDeployment = () => !appLogin() && (process.env.VERCEL === '1' || !!proce
 /** Off a deployment, a credential Vercel's API takes, set for board: what a sandbox or CI passes. Not ahead of an app's login either. */
 const boardToken = () => (appLogin() || asDeployment() ? null : process.env.BOARD_TOKEN || null)
 
-/** Whether a GitHub Actions job's own OIDC token goes: in a job that may ask for one, with nothing above to send. */
-const asGithubActions = () => !appLogin() && !asDeployment() && !boardToken() && inGithubActions()
+/**
+ * Whether a GitHub Actions job's own OIDC token goes: in a job that may ask for one, with nothing above to send.
+ * A `VERCEL_AUTH_TOKEN` the workflow sets goes ahead of it: `id-token: write` is often there for something else.
+ */
+const asGithubActions = () => !appLogin() && !asDeployment() && !boardToken() && !process.env.VERCEL_AUTH_TOKEN && inGithubActions()
 
 /** Whether what goes is a Vercel login: an app's, or with nothing else to send, yours. */
 const asLogin = () => !asDeployment() && !boardToken() && !asGithubActions()
@@ -61,8 +64,8 @@ function githubToken(): Promise<string> {
 /**
  * A token Vercel's API takes: the login of the app that runs board's CLI, when it gave one (the
  * token it was passed, as `vercel board --token`, or else its own), or else this deployment's OIDC
- * token, or else `BOARD_TOKEN`, or else a GitHub Actions job's OIDC token, or your Vercel login:
- * `VERCEL_AUTH_TOKEN`, or your `vercel login`.
+ * token, or else `BOARD_TOKEN`, or else `VERCEL_AUTH_TOKEN`, or else a GitHub Actions job's OIDC
+ * token, or your `vercel login`.
  */
 async function token(): Promise<string> {
   if (asDeployment()) return getVercelOidcToken()

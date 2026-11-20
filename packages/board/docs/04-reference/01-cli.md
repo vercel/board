@@ -97,8 +97,8 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 login's default team. `--scope <team>` picks another, by its slug or ID. It
 reads and writes as the login the CLI that runs it gives it. Given none, it
 finds its credentials as `vb` does: a deployment's own token, or else
-`BOARD_TOKEN`, or else a GitHub Actions job's OIDC token, or else you, with
-`VERCEL_AUTH_TOKEN` or `vercel login`'s. It never sends `VERCEL_TOKEN`.
+`BOARD_TOKEN`, or else `VERCEL_AUTH_TOKEN`, or else a GitHub Actions job's
+OIDC token, or else your `vercel login`. It never sends `VERCEL_TOKEN`.
 
 ### In-process, on a handle
 

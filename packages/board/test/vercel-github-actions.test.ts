@@ -69,8 +69,7 @@ describe("a GitHub Actions job on Vercel's board", () => {
     const api = fakeMessageboard({ tokens: { [RUN]: 'github:repo:700001' } })
     const { asked, sent, request } = inActions(api)
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
-    // A login the Vercel CLI left in the environment is below it, and so is the host's fetch for that login.
-    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
+    // The host's fetch for a login is below it.
     const host = vi.fn(as(api, 'user:u_ada'))
     handFetch(host)
     const team = board({ backend: nodeVercel() })
@@ -83,7 +82,7 @@ describe("a GitHub Actions job on Vercel's board", () => {
     expect(host).not.toHaveBeenCalled()
   })
 
-  it('sends it only when nothing ahead of it applies: an app\'s login, the deployment\'s token, or BOARD_TOKEN', async () => {
+  it('sends it only when nothing ahead of it applies: an app\'s login, the deployment\'s token, BOARD_TOKEN, or VERCEL_AUTH_TOKEN', async () => {
     const api = fakeMessageboard({ tokens: { [RUN]: 'github:repo:700001', [DEPLOYMENT]: 'project:prj_pong:production', k7Qe2mXa9vLp: 'user:u_bo' } })
     const { asked } = inActions(api)
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
@@ -103,8 +102,12 @@ describe("a GitHub Actions job on Vercel's board", () => {
     vi.stubEnv('VERCEL_OIDC_TOKEN', '')
     vi.stubEnv('BOARD_TOKEN', '')
     expect([await principal(), credentialSource()]).toEqual(['vercel:user:u_ada', 'the Vercel CLI'])
-    expect(asked).toEqual([])
     handLogin(null)
+    // A login the workflow sets is its choice, while id-token: write is often there for something else.
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
+    expect([await principal(), credentialSource()]).toEqual(['vercel:user:u_ada', 'the Vercel CLI'])
+    expect(asked).toEqual([])
+    vi.stubEnv('VERCEL_AUTH_TOKEN', '')
     expect([await principal(), credentialSource()]).toEqual(['github:repo:700001', 'GitHub Actions OIDC'])
   })
 
