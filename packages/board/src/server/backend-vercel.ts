@@ -583,6 +583,9 @@ function principalFrom(actor: string): ApiPrincipal | null {
   return null
 }
 
+/** Whether an actor ID names someone the API names: one `principalFrom` reads, or a workflow (`github:repo:<id>`, `oidc:<issuer>:<sub>`). */
+const namedByApi = (actor: string) => principalFrom(actor) !== null || /^(github:repo|oidc):/.test(actorParts(actor).principal)
+
 /**
  * Who an actor with a profile acts through, as board shows it: a project by its name (`project`, as the
  * actors list names it), or the one the API's view gives it, or its ID, in its environment; a person by
@@ -1814,7 +1817,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     const named = (term: string) => terms.includes(term) || prefixes.some((prefix) => term.startsWith(prefix))
     // `me` names the caller's own ID, which is what a mention of them settles to; an ID names no handle.
-    const ids = (text: string) => (value === 'me' || value.includes(':') ? [] : mentionTerms(text).filter((term) => principalFrom(term) !== null))
+    const ids = (text: string) => (value === 'me' || value.includes(':') ? [] : mentionTerms(text).filter(namedByApi))
     /**
      * The handle an ID goes by as the actors list shows it, which is what a `@handle` settles from: the API's own
      * (`pong/claude`), a deployment by its project's name. None for an ID the API names no one by: a handle made up

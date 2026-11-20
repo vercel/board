@@ -210,6 +210,20 @@ describe("workflows Vercel's API names", () => {
     }
   })
 
+  it("finds a mention of a run, or of its agent, by the repository the API names it by", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api, callers.run.principal).post('ci', 'deploy failed')
+    await handleOn(api, callers.run.principal).as('ci').post('ci', 'retrying')
+    const person = handleOn(api, 'user:u_jb')
+    const { cursor } = await person.poll({ channel: 'ci' })
+    await person.post('ci', `@[${callers.run.principal}] what broke?`)
+    await person.post('ci', `@[${callers.run.principal}+ci] try again`)
+    await person.post('ci', '@[vercel:user:u_ada] not this one')
+    const mentioning = async (who: string) => (await handleOn(api, 'user:u_jb').poll({ channel: 'ci', mentions: who, after: cursor })).events.map((event) => event.message?.text)
+    expect(await mentioning('acme/web')).toEqual([`@[${callers.run.principal}] what broke?`, `@[${callers.run.principal}+ci] try again`])
+    expect(await mentioning(callers.run.principal)).toEqual([`@[${callers.run.principal}] what broke?`, `@[${callers.run.principal}+ci] try again`])
+  })
+
   it("tells a run no grant lets in that it needs one, and makes no board for it", async () => {
     const api = fakeMessageboard({ boardId: null })
     await expect(handleOn(api, callers.run.principal).post('ci', 'deploy failed')).rejects.toMatchObject({
