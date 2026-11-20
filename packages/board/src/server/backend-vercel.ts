@@ -264,6 +264,8 @@ type Who = { profile: { name: string; avatar?: string } | null; can?: string }
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 /** A GitHub repository as `owner/name`. */
 const REPOSITORY = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/
+/** A word of a hint's command as a shell reads it back: a board's name can hold anything but a `/`. */
+const shellWord = (word: string): string => (/^[\w@%+=:,.-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
 
 /**
  * What `vb` on this board calls in Vercel's API for what a sandboxed agent does, by method and path
@@ -903,12 +905,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const repository = principal.type === 'github' && REPOSITORY.test(principal.repository) ? principal.repository : null
       if (repository === null) return new HttpError(403, 'board_not_granted', `this workflow has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
       return new HttpError(403, 'board_not_granted', `this workflow has no access to ${board} (${repository}).`, {
-        hint: `Grant it: vb grants create --github ${repository}${name === null ? '' : ` --name ${name}`} --can '*=read,post,react,label'`,
+        hint: `Grant it: vb grants create --github ${repository}${name === null ? '' : ` --name ${shellWord(name)}`} --can '*=read,post,react,label'`,
         origin: 'handle',
       })
     }
     if (principal.type !== 'project') return new HttpError(403, 'board_not_granted', `this project has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
-    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${name}`} --can '*=read,post,react,label'`
+    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${shellWord(name)}`} --can '*=read,post,react,label'`
     return new HttpError(403, 'board_not_granted', `this project has no access to ${board} (${principal.projectId}, ${principal.environment}).`, {
       hint: `Grant it: ${grant}`,
       origin: 'handle',

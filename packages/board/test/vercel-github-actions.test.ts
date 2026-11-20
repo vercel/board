@@ -218,4 +218,13 @@ describe("workflows Vercel's API names", () => {
     })
     expect(api.requests).not.toContain('POST /boards/default')
   })
+
+  it("quotes a board's name in the grant it suggests, so the command can't run what the name holds", async () => {
+    const name = "ops'; rm -rf ~ #"
+    const api = fakeMessageboard({ boards: [{ name }] })
+    await expect(board({ name, backend: vercel({ team: 'team_test', api: API, fetch: as(api, callers.run.principal) }) }).post('ci', 'deploy failed')).rejects.toMatchObject({
+      code: 'board_not_granted',
+      hint: `Grant it: vb grants create --github acme/web --name 'ops'\\''; rm -rf ~ #' --can '*=read,post,react,label'`,
+    })
+  })
 })

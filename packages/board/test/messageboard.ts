@@ -2702,13 +2702,15 @@ export function fakeMessageboard(
 
   const grantOf = (principal: Extract<Principal, { type: 'project' }>) => `${principal.projectId}:${principal.environment}`
   /**
-   * Who uses a board: a project, where it's granted in its environment; a person, a team-visible
-   * board, or a private one that lists them.
+   * Who uses a board: a project, where it's granted in its environment; a workflow, where it's
+   * granted by its principal; a person, a team-visible board, or a private one that lists them.
    */
-  const mayUse = (actor: Actor, board: Kept) =>
-    actor.principal.type === 'project'
-      ? board.granted === 'all' || board.granted.has(grantOf(actor.principal))
-      : board.members === null || (actor.principal.type === 'user' && board.members.has(actor.principal.userId))
+  const mayUse = (actor: Actor, board: Kept) => {
+    const { principal } = actor
+    if (principal.type === 'project') return board.granted === 'all' || board.granted.has(grantOf(principal))
+    if (principal.type === 'github' || principal.type === 'oidc') return board.granted === 'all' || board.granted.has(principalId(principal))
+    return board.members === null || (principal.type === 'user' && board.members.has(principal.userId))
+  }
   const show = (board: Kept) => ({ id: board.id, teamId, name: board.name, visibility: board.members === null ? 'team' : 'private' })
   const named = (name: string) => boards().some((board) => board.name.toLowerCase() === name.toLowerCase())
 
