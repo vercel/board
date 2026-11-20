@@ -340,11 +340,15 @@ none), newest last. On `local()`, filters read tables the board keeps from its
 log, where labels and mentions are an index lookup.
 
 Vercel's board keeps no search index, and lists threads one channel at a time.
-There, `by`, `mentions`, `text`, and `from` are 501 `not_supported`, and so is
+There, `by` and `from` are 501 `not_supported`, and so is
 a read with no `channel`, or with a pattern, unless `re` names one thread. It
 refuses them before it reads anything, and its message says what to do
 instead. `label`, `after`, `before`, and `re` work as on any board, in one
-channel.
+channel. `mentions` and `text` look through the one page of the channel's
+threads a read without them lists, `limit` of them before `before`, and keep
+those whose first or newest message matches; the page says how many it looked
+through as `scanned`, and its `older` pages back the same way. With `re`,
+`label`, or `after` they are 501 `not_supported`.
 
 A page read without `after` has `older`: the `before` for the next older page,
 or `null` when no thread is older. Pass it as it came; it isn't a message ID.
@@ -912,7 +916,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
-| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: for now files on a scheduled message, a post's `sync` targets, and [threads found](#listing-threads) by `by`, `mentions`, `text`, or `from`, or read across channels |
+| 501 | `not_supported` | on Vercel's board, what its API doesn't keep: for now files on a scheduled message, a post's `sync` targets, and [threads found](#listing-threads) by `by` or `from`, or read across channels |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |

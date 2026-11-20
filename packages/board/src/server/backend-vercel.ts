@@ -1993,16 +1993,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * or read by reference from an API that lists threads without them, then every author on the page is asked for
    * together, before any is named.
    */
-  async function summaries(who: Who, page: { thread: ApiThread; channel: { name: string } }[], signal: AbortSignal): Promise<ThreadSummaryView[]> {
-    const read = await Promise.all(
-      page.map(({ thread }) => {
-        const replied = thread.lastMessage !== undefined && thread.lastMessage.sequence > 1
-        return Promise.all([
-          thread.rootMessage ?? messageById(who, idAt(thread.id, 1), signal).then((found) => found.message),
-          !replied ? null : (thread.latestMessage ?? messageById(who, thread.lastMessage!.id, signal).then((found) => found.message)),
-        ])
-      }),
-    )
+  /** A thread's first message and its newest, or null without replies: as its thread list brought them, or read by reference. */
+  function endsOf(who: Who, thread: ApiThread, signal: AbortSignal): Promise<[ApiMessage, ApiMessage | null]> {
+    const replied = thread.lastMessage !== undefined && thread.lastMessage.sequence > 1
+    return Promise.all([
+      thread.rootMessage ?? messageById(who, idAt(thread.id, 1), signal).then((found) => found.message),
+      !replied ? null : (thread.latestMessage ?? messageById(who, thread.lastMessage!.id, signal).then((found) => found.message)),
+    ])
+  }
+
+  async function summaries(who: Who, page: { thread: ApiThread; channel: { name: string }; ends?: [ApiMessage, ApiMessage | null] }[], signal: AbortSignal): Promise<ThreadSummaryView[]> {
+    // A thread whose ends a read has already looked at isn't read for them again.
+    const read = await Promise.all(page.map(({ thread, ends }) => ends ?? endsOf(who, thread, signal)))
     naming(who, read.flatMap(([root, last]) => [root.createdBy, ...(last ? [last.createdBy] : [])]))
     return Promise.all(
       page.map(async ({ thread, channel }, i) => {
@@ -3191,13 +3193,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async threads(caller, query, signal) {
       const who = whoOf(caller)
       // What the API keeps no index for: answering either would read every thread of every channel it names, a request each.
-      const unindexed = [query.by !== undefined && 'author', query.mentions !== undefined && 'mention', query.text !== undefined && 'text', query.from !== undefined && 'source'].filter((name) => name !== false)
+      const unindexed = [query.by !== undefined && 'author', query.from !== undefined && 'source'].filter((name) => name !== false)
       if (unindexed.length > 0)
         throw notSupported(`reading threads by ${unindexed.join(', ')}`, "they keep no search index. Read one channel's threads, or one thread, and look through what it answers")
       if (query.re === undefined && (query.channel === undefined || query.channel.endsWith('/')))
         throw notSupported(
           query.channel === undefined ? 'reading every channel at once' : `reading every channel under ${query.channel} at once`,
           'name one channel, and read the others one at a time. The channel list has their names',
+        )
+      // Nor for mentions and text: those are looked for in the one page of threads a read of one channel lists, each
+      // thread's first and newest message, which that list brings. Anything else would read on past that page.
+      const looked = [query.mentions !== undefined && 'mention', query.text !== undefined && 'text'].filter((name) => name !== false)
+      if (looked.length > 0 && (query.re !== undefined || query.label?.length || query.after !== undefined))
+        throw notSupported(
+          `reading threads by ${looked.join(', ')} ${query.re !== undefined ? 'in one thread' : query.label?.length ? 'and a label' : 'after a cursor'}`,
+          "they keep no search index, so they look through one page of a channel's threads, and page back with `before`. Read one thread whole, or wait for what's new",
         )
       const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
       const limit = query.limit ?? 50
@@ -3208,6 +3218,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // One channel's threads, as the API lists them, page for page.
       if (query.re === undefined && !query.label?.length && after === undefined) {
         const name = query.channel!
+        // Who `me` is, before anything is read: what a page's mentions are matched against.
+        const narrow = looked.length > 0 ? await narrowOf(who, { mentions: query.mentions }) : undefined
         const read = await inNamed(who, name, async (channel) => {
           // The head first: the cursor is then at or behind what the page saw, and a poll after it misses nothing.
           const feed = await head(who, channel)
@@ -3220,11 +3232,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         // A cursor keeps each feed by its channel's ID, which a page with no thread doesn't say: it's asked for.
         const id = read.id ?? (await channelNamed(who, name))?.id
         const page = read.found.threads.map((thread) => ({ thread, channel: { name }, at: thread.lastActivityAt })).reverse()
-        return {
-          threads: await summaries(who, page, signal),
-          cursor: cursorOf({ t: page.reduce((max, { at }) => Math.max(max, at), 0), feeds: id === undefined ? {} : { [id]: read.feed } }),
-          older: read.found.older,
-        }
+        const cursor = cursorOf({ t: page.reduce((max, { at }) => Math.max(max, at), 0), feeds: id === undefined ? {} : { [id]: read.feed } })
+        if (!narrow) return { threads: await summaries(who, page, signal), cursor, older: read.found.older }
+        // The threads of the page whose first or newest message matches, as the list brought them: no thread is read for it.
+        const ends = await Promise.all(page.map(({ thread }) => endsOf(who, thread, signal)))
+        narrow.mentions?.ahead(ends.flatMap(([root, last]) => [root.text, ...(last ? [last.text] : [])]))
+        const filters = { mentions: query.mentions, text: query.text }
+        const matched = await Promise.all(page.map(async ({ thread }, i) => (await Promise.all(ends[i]!.filter((end) => end !== null).map((end) => matches(filters, end, thread, narrow)))).some(Boolean)))
+        const kept = page.flatMap((shown, i) => (matched[i] ? [{ ...shown, ends: ends[i]! }] : []))
+        return { threads: await summaries(who, kept, signal), cursor, older: read.found.older, scanned: page.length }
       }
       if (query.before !== undefined) throw new HttpError(400, 'invalid_request', "before: this board pages one channel's threads, with no filters")
       if (query.re !== undefined) {

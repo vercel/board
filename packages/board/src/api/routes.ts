@@ -1149,6 +1149,11 @@ export type ThreadsPage = {
    * threads backward sends it on every read without `after`; one from before it leaves it out.
    */
   older?: string | null
+  /**
+   * Set by a board that keeps no search index (Vercel's) on a read by `mentions` or `text`: how many threads of the
+   * channel's page it looked through, matching each one's first and newest message. Its `older` pages back the same way.
+   */
+  scanned?: number
 }
 /** Tasks, oldest first, each as its thread's summary: `message.task` is the task. `cursor` reads the next page, as `after`. */
 export type TasksPage = { tasks: ThreadSummaryView[]; cursor: string }

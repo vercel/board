@@ -25,8 +25,8 @@ export type Config = {
 };
 
 /**
- * The most agents a run has. Agents share 16 board profiles (`profileOf`), so the number isn't held
- * to the board's 20 profiles. What does hold a big run back: every agent writes as this one project,
+ * The most agents a run has. Each writes under a profile of its own, and Vercel's board doesn't cap
+ * those. What does hold a big run back: every agent writes as this one project,
  * and Vercel's board takes 300 writes a minute from one caller; your team's sandbox concurrency; and
  * AI Gateway's rate limits for the model.
  */

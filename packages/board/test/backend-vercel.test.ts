@@ -659,15 +659,16 @@ describe('vercel()', () => {
     expect((await later.poll({ channel: 'dev', mentions: 'pong', after: cursor })).events.map((event) => event.message?.text)).toEqual(['@[vercel:project:prj_pong:production+claude] again'])
   }, 15_000)
 
-  it('refuses to find threads by who wrote them, who they mention, what they say, or where they came from, without a request', async () => {
+  it('refuses to find threads by who wrote them or where they came from, without a request', async () => {
     const api = fakeMessageboard({ inlineThreadMessages: true })
     const team = handleOn(api)
     const root = await team.post('archive', { text: 'osprey nests here' })
     await team.reply(root.id, { text: 'osprey, seen today' })
+    await team.label(root.id, { set: { kind: 'sighting' } })
     await team.threads({ channel: 'archive', limit: 1 })
     api.requests.length = 0
-    // The API keeps no index for any of them: answering would read every thread of the channel, a request each.
-    for (const [filter, named] of [[{ by: 'julian' }, 'author'], [{ mentions: 'me' }, 'mention'], [{ text: 'osprey' }, 'text'], [{ from: 'slack' }, 'source']] as const) {
+    // The API keeps no index for either: answering would read every thread of the channel, a request each.
+    for (const [filter, named] of [[{ by: 'julian' }, 'author'], [{ from: 'slack' }, 'source']] as const) {
       await expect(team.threads({ channel: 'archive', ...filter }), named).rejects.toMatchObject({
         status: 501,
         code: 'not_supported',
@@ -676,13 +677,80 @@ describe('vercel()', () => {
       // In one thread too: it's read whole, and whoever reads it looks through it.
       await expect(team.threads({ re: root.id, ...filter }), named).rejects.toMatchObject({ status: 501, code: 'not_supported' })
     }
-    await expect(team.threads({ channel: 'archive', text: 'osprey', by: 'julian' })).rejects.toMatchObject({ message: expect.stringContaining('reading threads by author, text yet') })
+    await expect(team.threads({ channel: 'archive', text: 'osprey', by: 'julian' })).rejects.toMatchObject({ message: expect.stringContaining('reading threads by author yet') })
+    // Mentions and text are looked for in one page of one channel's threads: nothing that would read on past it.
+    for (const [filter, named] of [[{ mentions: 'me' }, 'mention'], [{ text: 'osprey' }, 'text']] as const) {
+      await expect(team.threads({ re: root.id, ...filter }), named).rejects.toMatchObject({ status: 501, message: expect.stringContaining(`reading threads by ${named} in one thread yet`) })
+      await expect(team.threads({ channel: 'archive', label: { kind: 'sighting' }, ...filter }), named).rejects.toMatchObject({ status: 501, message: expect.stringContaining('and a label yet') })
+      await expect(team.threads({ channel: 'archive', after: '0', ...filter }), named).rejects.toMatchObject({ status: 501, message: expect.stringContaining('after a cursor yet') })
+      await expect(team.threads({ channel: 'archive/', ...filter }), named).rejects.toMatchObject({ status: 501, message: expect.stringContaining('reading every channel under archive/ at once') })
+    }
     expect(api.requests).toEqual([])
     // What it does index still narrows a read: a root's label, in one request for the list.
-    await team.label(root.id, { set: { kind: 'sighting' } })
-    api.requests.length = 0
     expect((await team.threads({ channel: 'archive', label: { kind: 'sighting' } })).threads.map((thread) => thread.message.id)).toEqual([root.id])
     expect(api.requests.filter((request) => /\/threads\/[^/]+\/messages$/.test(request))).toEqual([])
+  })
+
+  it("finds threads by mention or text in one page of a channel's threads, by each one's first and newest message, in the requests a plain read sends and one more", async () => {
+    const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
+    const julian = handleOn(api)
+    const val = handleOn(api, 'user:u_val')
+    // A question to julian's agent as a thread of its own, one as the newest reply, and one a later reply buried.
+    const asked = await val.post('dev', { text: '@julian/claude what is the cache key?' })
+    const replied = await val.post('dev', { text: 'deploy failed' })
+    await val.reply(replied.id, { text: '@julian/claude can you look?' })
+    const buried = await val.post('dev', { text: 'flaky test' })
+    await val.reply(buried.id, { text: '@julian/claude seen this?' })
+    await val.reply(buried.id, { text: 'never mind' })
+    for (let n = 0; n < 3; n++) await val.post('dev', { text: `noise ${n}` })
+    const claude = () => handleOn(api).as('claude')
+    const ids = (page: { threads: { message: { id: string } }[] }) => page.threads.map((thread) => thread.message.id)
+    // A plain read of the channel, for what it costs.
+    let reader = claude()
+    api.requests.length = 0
+    await reader.threads({ channel: 'dev' })
+    const plain = api.requests.length
+    reader = claude()
+    api.requests.length = 0
+    const mine = await reader.threads({ channel: 'dev', mentions: 'me' })
+    // The thread that asks, and the one whose newest reply does; the buried mention isn't on either end.
+    expect(ids(mine)).toEqual([asked.id, replied.id])
+    expect(mine.scanned).toBe(6)
+    expect(mine.older).toBeNull()
+    // One more than a plain read: who `me` is. No thread is read for it.
+    expect(api.requests.length).toBe(plain + 1)
+    expect(api.requests.filter((request) => /\/threads\/[^/]+\/messages|\/messages\//.test(request))).toEqual([])
+    // By handle: the mentioned are named by ID, together, in one request at most.
+    reader = claude()
+    api.requests.length = 0
+    expect(ids(await reader.threads({ channel: 'dev', mentions: 'julian/claude' }))).toEqual([asked.id, replied.id])
+    expect(api.requests.length).toBeLessThanOrEqual(plain + 1)
+    // Text, on the same two ends, case aside.
+    expect(ids(await julian.threads({ channel: 'dev', text: 'CACHE KEY' }))).toEqual([asked.id])
+    // A page at a time: each says how many it looked through, and its `older` pages back the same way.
+    const newest = await julian.threads({ channel: 'dev', mentions: 'julian/claude', limit: 4 })
+    expect([ids(newest), newest.scanned]).toEqual([[], 4])
+    const back = await julian.threads({ channel: 'dev', mentions: 'julian/claude', limit: 4, before: newest.older! })
+    expect([ids(back), back.scanned, back.older]).toEqual([[asked.id, replied.id], 2, null])
+  })
+
+  it('reads each thread of the page for its first and newest message once, on an API that lists threads without them', async () => {
+    const api = fakeMessageboard()
+    const val = handleOn(api, 'user:u_val')
+    const asked = await val.post('dev', { text: '@julian/claude what is the cache key?' })
+    const replied = await val.post('dev', { text: 'deploy failed' })
+    await val.reply(replied.id, { text: '@julian/claude can you look?' })
+    await val.post('dev', { text: 'noise' })
+    const byRef = () => api.requests.filter((request) => /^GET .*\/messages\/[^/]+$/.test(request)).length
+    const reader = handleOn(api).as('claude')
+    await reader.threads({ channel: 'dev' })
+    api.requests.length = 0
+    await reader.threads({ channel: 'dev' })
+    const plain = byRef()
+    api.requests.length = 0
+    expect((await reader.threads({ channel: 'dev', mentions: 'me' })).threads.map((thread) => thread.message.id)).toEqual([asked.id, replied.id])
+    // The ends it matched on are the ones its summaries show: no thread is read for them twice.
+    expect(byRef()).toBe(plain)
   })
 
   it("names a message's channel by its ID, without listing the board's channels", async () => {

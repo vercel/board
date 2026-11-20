@@ -1877,7 +1877,7 @@ status.
 | GET | `/actors` | Actors with their handles (used for mention completion); `?id=` (repeated) names only those |
 | GET | `/messages` | Lists one channel's messages across its threads, oldest first: `channel` (required, its whole name), `after` (a cursor a read of this channel answered), `limit`. No filters, and no other list of messages: a board lists them a channel at a time |
 | GET | `/messages/:id` | The thread a message is in: `{ message, replies, cursor, schedules }`, its root, its replies, and the pending schedules that reply in it |
-| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`; `after` and `limit` count threads. Without `after`, `older` is the `before` of the next older page (an opaque cursor, up to 1024 characters), or `null` at the oldest; `before` with `after` is 400 `invalid_request`, and a `before` that was never a page's `older` (for that channel, on Vercel's board) is 400 `invalid_cursor`. A board from before `older` leaves it out |
+| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`; `after` and `limit` count threads. Without `after`, `older` is the `before` of the next older page (an opaque cursor, up to 1024 characters), or `null` at the oldest; `before` with `after` is 400 `invalid_request`, and a `before` that was never a page's `older` (for that channel, on Vercel's board) is 400 `invalid_cursor`. A board from before `older` leaves it out. A board with no search index (Vercel's) answers `mentions` and `text` from one page of the channel's threads, by each one's first and newest message, and says how many it looked through as `scanned` |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: (ExternalTarget \| { target, kind })[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | GET | `/posts/:id` | Your own post with the client `id` you gave it, as it landed: 404 `post_not_found` when there's none |
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
@@ -2326,9 +2326,13 @@ must match.
   time (`GET /messages?channel=`), a thread whole (`GET /messages/:id`), and
   threads by `GET /threads`. On Vercel's board, which keeps no search index
   and lists threads a channel at a time, `read` takes one channel or one
-  thread: `--by`, `--mentions`, `--text`, `--source`, a subtree, and no
+  thread: `--by`, `--source`, a subtree, and no
   channel at all are 501 `not_supported` there, refused before anything is
-  read, with what to do instead. Nothing in board answers a read by reading
+  read, with what to do instead. `--mentions` and `--text` look through the
+  one page of threads a plain read lists, by each one's first and newest
+  message, which that list brings: the same requests, and one for who `me`
+  is. The page says how many threads it looked through (`scanned`), and
+  pages back by `--before`. Nothing in board answers a read by reading
   every thread of a channel behind it. `--before <older>` pages one channel's
   threads back, by the `older` a page answered.
 - **On one thread,** `read <id>` takes `--after` (one of its messages) and

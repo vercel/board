@@ -770,10 +770,12 @@ first `limit` threads active after that cursor.
 | `text` | a case-insensitive substring |
 
 A team board in Vercel's API keeps no search index, and lists threads one
-channel at a time: `by`, `mentions`, `text`, and `from` there are 501
+channel at a time: `by` and `from` there are 501
 `not_supported`, and so is a read with no `channel` or with a subtree, unless
 `re` names one thread. It reads nothing before it refuses, and its message
-says what to do instead. [`events`](#events) and [`wait`](#wait) take every
+says what to do instead. `mentions` and `text` look through one page of the
+channel's threads, by each one's first and newest message, and the page says
+how many as `scanned`: `older` pages back the same way. [`events`](#events) and [`wait`](#wait) take every
 filter there.
 
 `older` is the `before` for the threads last active before the page's, or

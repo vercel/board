@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { board as makeBoard, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
 import { doing, LABEL, planFrom, planReplies, REPLY_MAX, type RunnerConfig, type State } from "../sandbox/shared.ts";
-import { PROFILES, profileOf, runChannel } from "../lib/board.ts";
+import { isAgentProfile, profileOf, runChannel } from "../lib/board.ts";
+import { snapshot as liveSnapshot } from "../lib/swarm.ts";
 import { DEFAULTS, MAX_AGENTS, parseConfig, priced, readConfig, runText, type Config } from "../lib/config.ts";
 
 /** A run thread's text as versions before the slug line wrote it. */
@@ -42,13 +43,12 @@ test("a config holds every number to its range, and takes a GitHub URL for its r
   assert.equal(parsed.config.title, "Find the security bugs in the API.");
 });
 
-test("a run of hundreds of agents writes under no more than the board's profiles, each profile shared evenly", () => {
-  const used = new Map<string, number>();
-  for (let n = 1; n <= MAX_AGENTS; n++) used.set(profileOf(n), (used.get(profileOf(n)) ?? 0) + 1);
-  assert.equal(used.size, PROFILES);
-  assert.ok(PROFILES < 20, "the board gives one caller 20 profiles, and the launcher needs one");
-  assert.deepEqual(new Set(used.values()), new Set([MAX_AGENTS / PROFILES]));
-  assert.equal(profileOf(1), profileOf(PROFILES + 1));
+test("every agent writes under a profile of its own, however many there are, and none is the project's", () => {
+  const used = new Set(Array.from({ length: MAX_AGENTS }, (_, i) => profileOf(i + 1)));
+  assert.equal(used.size, MAX_AGENTS);
+  assert.ok([...used].every(isAgentProfile));
+  assert.equal(isAgentProfile(null), false);
+  assert.equal(isAgentProfile("launcher"), false);
 });
 
 test("agents start a batch at a time, and no new batch starts once the time is up", async () => {
@@ -516,4 +516,13 @@ test("a run from an earlier version, known only by its label, is wound down and 
   const moved = await board.post("swarm/runs", { text: readConfigText(config({ agents: 1 })), labels: { run: other, phase: "running", torn: "no" } });
   assert.equal(await readRun(other, board), null);
   assert.equal((await listRuns(board)).some((run) => run.id === moved.id), false);
+});
+
+test("the live page names a task's holder by the agent's own profile", async () => {
+  const board = fresh();
+  const task = (await board.tasks.create("swarm/rtest01", { text: "Add a test" })).task;
+  const claim = (await board.as(profileOf(42)).tasks.claim(task.id, { lease: 300 }))!;
+  const live = await liveSnapshot(board, "swarm/");
+  assert.equal(live.tasks.find((entry) => entry.id === task.id)!.holder, "agent-42");
+  await claim.release();
 });

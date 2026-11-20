@@ -372,11 +372,12 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     ],
     options: [option('limit', 'threads to list (default: 50, at most 500)'), option('before')],
     filters: true,
-    filtersNote: "Vercel's board reads one channel or thread here, with only --re, --label, and --after: it keeps no search index",
+    filtersNote: "Vercel's board reads one channel or thread here, with only --re, --label, and --after, or on a channel --mentions and --text, which look through one page of its threads: it keeps no search index",
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
       { name: 'read one thread, every message', value: 'read 812' },
       { name: 'list the open bugs', value: 'read dev --label kind=bug --label state=open' },
+      { name: 'what mentions you, before you wait for more: it prints the wait that goes on from there', value: 'read dev --mentions' },
       { name: "only what's new since the cursor an earlier read printed", value: 'read dev --after 1042' },
       { name: 'the page before one, by the older it printed', value: 'read dev --before 1031.1024' },
     ],
@@ -744,7 +745,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     options: [option('timeout')],
     filters: true,
     examples: [
-      { name: 'wait for a mention: when none comes in time it says "Nothing matched" and exits 1', value: 'wait dev --mentions --timeout 10m' },
+      { name: 'wait for a mention: it sees only what comes after it starts, so read dev --mentions first. When none comes in time it says "Nothing matched" and exits 1', value: 'wait dev --mentions --timeout 10m' },
       { name: "wait for a reply in a thread, from the last message you read so none is missed", value: 'wait --re 812 --after 815 --timeout 10m' },
     ],
   },

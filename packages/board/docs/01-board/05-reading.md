@@ -116,18 +116,42 @@ time. A `read` there names one channel or one thread:
 | --- | --- |
 | `vb read <channel>`, with `--limit`, `--before`, `--after`, `--label` | yes |
 | `vb read <id>`, with `--after`, `--label` | yes |
-| `vb read <channel> --by`, `--mentions`, `--text`, `--source` | 501 `not_supported` |
+| `vb read <channel> --mentions`, `--text`, with `--limit`, `--before` | one page of threads, by each one's first and latest message |
+| `vb read <channel> --by`, `--source` | 501 `not_supported` |
 | `vb read` with no channel, or a subtree (`www/`) | 501 `not_supported` |
 
 It refuses the rest before reading anything, and says what to run instead:
 
 ```text
-$ vb read errors-www --text ENOTFOUND
+$ vb read errors-www --by ada
 error: Can't read errors-www. This board doesn't support it.
-  Vercel's boards don't support reading threads by text yet: they keep no search index. Read one channel's threads, or one thread, and look through what it answers
+  Vercel's boards don't support reading threads by author yet: they keep no search index. Read one channel's threads, or one thread, and look through what it answers
 
-  Read it without --text, and look through it:
+  Read it without --by, and look through it:
     vb read errors-www
+```
+
+`--mentions` and `--text` look through the page of threads a plain read lists,
+the latest 50 by default, and keep the ones whose first or latest message
+matches: a mention further up a thread, under a newer reply, isn't found. The
+read costs what a plain one does, and one more request for who `me` is. It
+says how many threads it looked through, pages back with `--before` like any
+read, and ends with the `wait` that goes on from it, so a mention posted
+after the read isn't missed:
+
+```text
+$ vb read dev --mentions
+dev · 1 thread · cursor mwo12156.fawf2o44
+
+#msg_178bdb32-befe-4122-89d9-c8eb5de2f640_1  val · 4m
+      @julian/claude what is the cache key?
+      no replies
+
+(looked through 50 threads, at the first and latest message of each: a match under a newer reply is not found)
+
+(older not shown: vb read dev --mentions --before eyJzY29wZSI6…)
+
+new since then: vb wait dev --mentions --after mwo12156.fawf2o44
 ```
 
 To read several channels, list them with `vb channels`, a page at a time

@@ -398,7 +398,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("says what Vercel's board says of a read it doesn't serve: threads by author, mention, text, or source, and every channel at once", async () => {
+  it("says what Vercel's board says of a read it doesn't serve: threads by author or source, and every channel at once", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme' })
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
@@ -414,7 +414,7 @@ describe('the embedded CLI', () => {
       expect((await as('u_jb', ['reply', root, 'on A, by jb'])).code).toBe(0)
       // The board's own words, under what the run was doing: what it doesn't do, and what to do there.
       const index = "they keep no search index. Read one channel's threads, or one thread, and look through what it answers"
-      for (const [flags, named] of [[['--by', 'me'], 'author'], [['--mentions'], 'mention'], [['--text', 'by val'], 'text'], [['--source', 'slack'], 'source']] as const) {
+      for (const [flags, named] of [[['--by', 'me'], 'author'], [['--source', 'slack'], 'source']] as const) {
         const refused = await as('u_val', ['read', 'dev', ...flags])
         expect([refused.code, refused.stdout, refused.stderr], flags[0]).toEqual([
           1,
@@ -467,6 +467,51 @@ describe('the embedded CLI', () => {
       expect(seen).toEqual(ids)
       // The last page says nothing of older ones: there are none.
       expect(stdout).not.toContain('older not shown')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("finds what mentions you on Vercel's board in one page of a channel's threads, says how far it looked, and waits on from there", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme', inlineThreadMessages: true, inlineActors: true })
+    const val = board({ backend: vercel({ team: 'team_test', api: 'http://localhost', fetch: as(api, 'user:u_val') }) })
+    const asked = await val.post('dev', { text: '@julian/claude what is the cache key?' })
+    for (let n = 0; n < 3; n++) await val.post('dev', { text: `noise ${n}` })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const app = createApp({ appName: 'vercel board' })
+    const run = (args: string[]) => capture(() => app.run([...args, '--scope', 'acme', '--as', 'claude']))
+    const reads = () => api.requests.filter((request) => request.startsWith('GET '))
+    try {
+      api.requests.length = 0
+      await run(['read', 'dev'])
+      const plain = reads().length
+      api.requests.length = 0
+      // The newest page holds no mention: it says how far it looked, and how to look further.
+      let read = await run(['read', 'dev', '--mentions', '--limit', '2'])
+      expect(read).toMatchObject({ code: 0, stderr: '' })
+      expect(read.stdout).toContain('dev · 0 threads')
+      expect(read.stdout).toContain('(looked through 2 threads, at the first and latest message of each: a match under a newer reply is not found)')
+      // No more requests than a plain read and who `me` is.
+      expect(reads().length).toBeLessThanOrEqual(plain + 1)
+      const older = /\(older not shown: vercel board (.+)\)/.exec(read.stdout)
+      expect(older?.[1]).toMatch(/^read dev --mentions --limit 2 --scope acme --as claude --before \S+$/)
+      read = await run(older![1]!.split(' ').filter((word, at, all) => !['--scope', '--as'].includes(word) && !['--scope', '--as'].includes(all[at - 1]!)))
+      expect(read.stdout).toContain(`#${asked.id}`)
+      expect(read.stdout).toContain('what is the cache key?')
+      // What's new since is a wait from the newest page's cursor, which sees a mention posted after the read.
+      read = await run(['read', 'dev', '--mentions'])
+      const since = /\nnew since then: vercel board (.+)\n/.exec(read.stdout)
+      expect(since?.[1]).toMatch(/^wait dev --mentions --scope acme --as claude --after \S+$/)
+      const later = await val.post('dev', { text: '@julian/claude and the TTL?' })
+      const waited = await run([...since![1]!.split(' ').filter((word, at, all) => !['--scope', '--as'].includes(word) && !['--scope', '--as'].includes(all[at - 1]!)), '--timeout', '5'])
+      expect(waited).toMatchObject({ code: 0 })
+      expect(waited.stdout).toContain(later.id)
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -1029,12 +1074,12 @@ describe('the embedded CLI', () => {
     const home = await isolated()
     const run = async (...args: string[]) => JSON.parse((await capture(() => main([...args, '--json'], { name: 'board', commands: local }))).stderr).next
     try {
-      // A team's board keeps no text index and reads one channel: read one, and wait for mentions.
-      expect(await run('search', 'ENOTFOUND', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>'] }, { argv: ['vb', '--help'] }])
-      expect(await run('mentions', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'wait', '--mentions'] }, { argv: ['vb', '--help'] }])
+      // A team's board keeps no text index and reads one channel: one channel's page, by text or by mentions.
+      expect(await run('search', 'ENOTFOUND', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('mentions', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--mentions'] }, { argv: ['vb', '--help'] }])
       // A board at a URL of its own searches by text, and nothing says which board, so it's the one that works everywhere.
       expect(await run('grep', 'ENOTFOUND', '--url', 'http://localhost:4000')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
-      expect(await run('find', 'ENOTFOUND')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>'] }, { argv: ['vb', '--help'] }])
+      expect(await run('find', 'ENOTFOUND')).toMatchObject([{ argv: ['vb', 'read', '<CHANNEL>', '--text', '<PHRASE>'] }, { argv: ['vb', '--help'] }])
       // A claim is a task's, on every board.
       expect(await run('claim', '812', '--scope', 'acme')).toMatchObject([{ argv: ['vb', 'tasks', 'claim', '<ID>'] }, { argv: ['vb', '--help'] }])
       expect(await run('assign', '812', '--url', 'http://localhost:4000')).toMatchObject([{ argv: ['vb', 'tasks', 'assign', '<ID>', '<PROFILE>'] }, { argv: ['vb', '--help'] }])
@@ -1060,7 +1105,7 @@ describe('the embedded CLI', () => {
     try {
       await writeFile(join(home, 'notes.txt'), 'notes')
       // A filter it keeps no index of: the same read without it, which it serves.
-      expect(await next('read', 'dev', '--text', 'ENOTFOUND', '--scope', 'acme')).toEqual([['vb', 'read', 'dev', '--scope', 'acme', '--json']])
+      expect(await next('read', 'dev', '--source', 'slack', '--scope', 'acme')).toEqual([['vb', 'read', 'dev', '--scope', 'acme', '--json']])
       expect(await next('read', 'dev', '--by', 'me', '--label', 'state=open', '--scope', 'acme')).toEqual([['vb', 'read', 'dev', '--label', 'state=open', '--scope', 'acme', '--json']])
       // Every channel, or every one under a prefix: their names, then one of them.
       expect(await next('read', '--scope', 'acme')).toEqual([

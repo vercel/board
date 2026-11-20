@@ -1516,7 +1516,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (flags.before !== undefined && flags.after !== undefined) throw usage("Can't use --before with --after. One pages back, the other reads forward.")
       // A read of one channel's threads as they are is the one a board pages back, by the `older` its page answers:
       // it's asked for the page as shown, so that `older` goes on from the last thread listed.
-      const paged = target !== undefined && !target.endsWith('/') && Object.keys(filters()).length === 0
+      // So is one by mentions or text, which a board with no search index answers from that page.
+      const paged = target !== undefined && !target.endsWith('/') && Object.keys(filters()).every((key) => key === 'mentions' || key === 'text')
       // Otherwise one thread more than asked for, where a read lists that many, tells whether the page is all of
       // them. Not for --json, which is the board's page as it answered.
       const peek = !paged && !flags.json && flags.before === undefined && Number.isInteger(limit) && limit >= 1 && limit < THREADS_LIMIT_MAX
@@ -1534,8 +1535,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const older = !peek && typeof listed.older === 'string' ? listed.older : undefined
       const more = peek ? listed.threads.length > limit : listed.older === null ? false : older !== undefined || listed.threads.length === limit
       const page = listed.threads.length > limit ? { ...listed, threads: flags.after !== undefined ? listed.threads.slice(0, limit) : listed.threads.slice(-limit) } : listed
+      // A board that looked through threads to find none says by that the channel has some.
+      const scanned = typeof listed.scanned === 'number' ? listed.scanned : undefined
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
-      if (!page.threads.length && target) {
+      if (!page.threads.length && target && !scanned) {
         // Every channel, a page at a time: a name close to the one typed could be any of them.
         const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
@@ -1560,6 +1563,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const handles = new Map(unnamed.length ? (await board.actors({ id: unnamed }).catch(() => [])).map((a) => [a.id, a.handle]) : [])
         out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/'), handles }))
       }
+      // What it looked through is all it says: a mention further up a thread, or on an older page, isn't on this one.
+      if (scanned !== undefined) out(`\n(looked through ${scanned} ${scanned === 1 ? 'thread' : 'threads'}, at the first and latest message of each: a match under a newer reply is not found)`)
       // A page that isn't all of them says where the rest are. Without --after, they're older: --before the
       // page's `older` reaches them where the board answered one, and a bigger --limit where it didn't. After
       // a cursor, they're newer than the page, and its cursor is past them
@@ -1585,6 +1590,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         )
       // A page back from one isn't where the board is now: only a read of the latest says what's new since.
       if (flags.before !== undefined) return 0
+      // Such a board reads no further by its cursor: a wait with the same filters from it sees what comes next, and
+      // misses nothing posted since this read.
+      if (scanned !== undefined) {
+        const argv = rerunWithout(['--after', '--limit', '-n'], '--after', String(page.cursor))
+        argv[argv.indexOf('read', cli().length)] = 'wait'
+        out(`\nnew since then: ${commandLine(argv)}`)
+        return 0
+      }
       // The cursor is where this read stopped: the next command is the one that reads on from it.
       // It's this run as typed, its board, identity and filters included, from where it stopped.
       out(`\nnew since then: ${commandLine(rerunWithout(['--after'], '--after', String(page.cursor)))}`)
@@ -2762,16 +2775,16 @@ function stateCommand(): Recovery[] {
 
 type OtherName = { instruction: string; argv: string[]; teams?: { instruction: string; argv: string[] } }
 
-/** Search: a filter on read, where the board keeps an index, and Vercel's keeps none of text. */
+/** Search: a filter on read. Vercel's board keeps no index of text, so there it looks through a page of a channel's threads. */
 const SEARCH: OtherName = {
   instruction: 'Search is a filter on read',
   argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'],
-  teams: { instruction: "Read a channel and look through it, since this board keeps no text search", argv: ['read', '<CHANNEL>'] },
+  teams: { instruction: "Search a channel's latest threads, a page at a time, since this board keeps no text search", argv: ['read', '<CHANNEL>', '--text', '<PHRASE>'] },
 }
 
 /**
  * Words for a command this CLI names otherwise, and the command they mean: on a team's board in
- * Vercel's API, `teams`, where what it means there is refused (or when nothing says which board).
+ * Vercel's API, `teams`, where it reads one channel's page (or when nothing says which board).
  */
 const OTHER_NAMES: Record<string, OtherName> = {
   search: SEARCH,
@@ -2805,7 +2818,7 @@ const OTHER_NAMES: Record<string, OtherName> = {
   mentions: {
     instruction: 'Mentions are a filter on read and wait',
     argv: ['read', '--mentions'],
-    teams: { instruction: 'Mentions are a filter on wait and tail here', argv: ['wait', '--mentions'] },
+    teams: { instruction: "Read what mentions you in a channel's latest threads, then wait from where it stops", argv: ['read', '<CHANNEL>', '--mentions'] },
   },
   watch: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
   follow: { instruction: 'Block for the next match with wait, or follow live with tail', argv: ['wait', '<CHANNEL>', '--after', '<CURSOR>'] },
