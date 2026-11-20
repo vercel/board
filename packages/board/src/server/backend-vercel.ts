@@ -29,9 +29,9 @@ type ApiPrincipal =
   | { type: 'app'; clientId: string }
   | { type: 'project'; projectId: string; environment: string }
   /** A GitHub Actions run, by its repository: `github:repo:<repositoryId>`. */
-  | { type: 'github'; repositoryId: string; repository: string; workflowRef?: string; ref?: string; event?: string }
+  | { type: 'github'; repositoryId: string; repository: string }
   /** A caller another OIDC issuer vouches for: `oidc:<issuer's host and path>:<subject>`. */
-  | { type: 'oidc'; issuer: string; subject: string; claims: Record<string, string | number | boolean> }
+  | { type: 'oidc'; issuer: string; subject: string }
   /** An imported message's author as the API named it before platform profiles: the platform user alone. */
   | { type: 'external'; id: string; syncKey: string }
 /**

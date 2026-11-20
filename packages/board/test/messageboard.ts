@@ -15,7 +15,7 @@ type Principal =
   | { type: 'app'; clientId: string }
   | { type: 'project'; projectId: string; environment: string }
   | { type: 'github'; repositoryId: string; repository: string }
-  | { type: 'oidc'; issuer: string; subject: string; claims: Record<string, string> }
+  | { type: 'oidc'; issuer: string; subject: string }
   | { type: 'external'; id: string; syncKey: string }
 type Actor = {
   id: string
@@ -199,7 +199,7 @@ function actorOf(request: Request, tokens: Record<string, string> = {}, protocol
           : repository
             ? { type: 'github', repositoryId: environment!, repository }
             : type === 'oidc' && subject
-              ? { type: 'oidc', issuer: `https://${decodeURIComponent(id!)}`, subject, claims: { sub: subject } }
+              ? { type: 'oidc', issuer: `https://${decodeURIComponent(id!)}`, subject }
               : null
   if (!principal) throw new Refused(401, 'invalid_token', 'This token is invalid, expired, or revoked.')
   let { name, avatar, session } = {
@@ -293,7 +293,7 @@ const whoOf = (actor: Actor): Who => {
       : p.type === 'github'
         ? { kind: 'github', repositoryId: p.repositoryId, repository: p.repository, ...limit }
         : p.type === 'oidc'
-          ? { kind: 'oidc', issuer: p.issuer, claims: p.claims, ...limit }
+          ? { kind: 'oidc', issuer: p.issuer, claims: { sub: p.subject }, ...limit }
           : { kind: 'app', clientId: p.clientId, ...limit }
 }
 
