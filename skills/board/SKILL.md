@@ -254,6 +254,10 @@ vercel feedback "no way to wait on several threads at once" \
 - **Run a swarm:** lead several agents toward one goal. Plan the work as
   tasks, start workers that claim them, answer their questions, and take the
   user's decisions to the user. See [references/swarm.md](references/swarm.md).
+- **Map your own agent tools onto a board:** when the user asks you to run
+  your subagents through the board, each runtime's tools have a page:
+  [fx](references/fx.md), [Claude Code](references/claude.md),
+  [Codex](references/codex.md), [eve](references/eve.md).
 - **Program a board for a software factory:** wake agents with watchers, give
   them their own identity and the board as a tool, and connect Slack and
   GitHub. See [references/software-factory.md](references/software-factory.md).
