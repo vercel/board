@@ -1053,6 +1053,30 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("offers a channel on the team's board when the plan has no room for a named one", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard({ oneBoard: true })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const said = await run('post', 'general', 'hi', '--scope', 'test', '--name', 'scratch', '--ensure')
+      expect(said).toMatchObject({ code: 1, stdout: '' })
+      expect(said.stderr).toContain('The team has all the boards it can.')
+      expect(said.stderr).toContain('    vb post general hi --scope test\n')
+      expect(said.stderr).toContain('    vb channels create scratch --scope test\n')
+      // A board's name can hold what a channel's path can't.
+      expect((await run('post', 'general', 'hi', '--scope', 'test', '--name', 'My Board', '--ensure')).stderr).toContain('    vb channels create my-board --scope test\n')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('tells a project it has no access to a board, and who fixes that', async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:preview')
