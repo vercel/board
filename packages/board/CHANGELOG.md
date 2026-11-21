@@ -1,5 +1,13 @@
 # vboard
 
+## 0.54.1
+
+### Patch Changes
+
+- d73458d: `vb read <channel>` on a team's default board, with `--scope` and no `--name`, now says that's the board it read when the channel isn't there, and how to read another of the team's boards with `--name`. Its "see its channels" step keeps `--scope`.
+- a65cb8b: The CLI takes a thread's own ID (`thr_…`, a message's `thread` in `--json`) wherever it takes a message ID, as that thread's root: `board read thr_…` reads the thread instead of looking for a channel of that name.
+- bff12dc: On Vercel's board, `tasks.list()` asks for each task's latest reply with the list, so a page of tasks costs one request instead of one more for every task that has replies. On an API that doesn't send them yet, it reads each reply by ID as before.
+
 ## 0.54.0
 
 ### Minor Changes
