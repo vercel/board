@@ -9,6 +9,18 @@ import { BoardError } from '../client/client.ts'
 import { appLogin, asYou, environmentProfile, expiry, githubActionsToken, inGithubActions, loginHanded, PASSED, passedToken, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
+import { VERSION } from '../version.ts'
+
+/** What sends board's requests: its CLI, while it runs a command, or else its SDK, in someone's code. */
+let program: 'cli' | 'sdk' = 'sdk'
+
+/** Hands board the program it runs in: `cli` while board's CLI runs a command. Null takes it back. */
+export function handProgram(name: 'cli' | null) {
+  program = name ?? 'sdk'
+}
+
+/** The user agent board's requests to Vercel's API send: board, its version, and whether its CLI or its SDK sent them. */
+export const userAgent = () => `@vercel/board/${VERSION} (${program})`
 
 /**
  * Whether this deployment's own token is what goes: on Vercel, or with its OIDC token pulled
@@ -152,10 +164,11 @@ const environment: VercelEnvironment = {
   fetch: () => async (input, init = {}) => {
     if (asGithubActions()) return withGithubActions(input, init)
     const credential = await token()
+    const headers = new Headers(init.headers)
+    headers.set('user-agent', userAgent())
     // Your login goes through the fetch the CLI that runs board's hands it, which adds its own
     // credentials. A deployment's token, or BOARD_TOKEN, goes as it is.
-    if (asLogin()) return asYou(input, init, credential)
-    const headers = new Headers(init.headers)
+    if (asLogin()) return asYou(input, { ...init, headers }, credential)
     headers.set('authorization', `Bearer ${credential}`)
     return globalThis.fetch(input, { ...init, headers })
   },

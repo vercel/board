@@ -3,6 +3,7 @@ import { board } from '../src/server/index.ts'
 import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { credentialSource, vercel as nodeVercel } from '../src/backend-vercel/index.ts'
+import { VERSION } from '../src/version.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { boardEvents } from '../src/contract/events.ts'
 import { watchersHash } from '../src/server/registry.ts'
@@ -1403,6 +1404,27 @@ describe('vercel()', () => {
     vi.stubEnv('BOARD_TOKEN', '')
     expect((await board({ backend: nodeVercel() }).me()).principal).toBe('vercel:user:u_ada')
     expect(credentialSource()).toBe('the Vercel CLI')
+  })
+
+  it("tells Vercel's API it's board, at its version, sent from its SDK, whichever credential goes", async () => {
+    for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    })
+    const api = fakeMessageboard({ tokens: { k7Qe2mXa9vLp: 'user:u_bo' } })
+    const agents: (string | null)[] = []
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      agents.push(new Headers(init?.headers).get('user-agent'))
+      return api.fetch(input, init)
+    })
+    for (const [key, set] of Object.entries({ VERCEL_ORG_ID: 'team_test', BOARD_TOKEN: 'k7Qe2mXa9vLp' })) vi.stubEnv(key, set)
+    expect((await board({ backend: nodeVercel() }).me()).principal).toBe('vercel:user:u_bo')
+    // A login goes with the same.
+    vi.stubEnv('BOARD_TOKEN', '')
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
+    expect((await board({ backend: nodeVercel() }).me()).principal).toBe('vercel:user:u_ada')
+    expect(new Set(agents)).toEqual(new Set([`@vercel/board/${VERSION} (sdk)`]))
   })
 
   describe('a board by its name', () => {

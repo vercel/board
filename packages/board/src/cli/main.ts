@@ -10,7 +10,7 @@ import type { Mentioned } from '../contract/mentions.ts'
 import { createTasksInChunks, TasksInChunksError } from '../client/chunks.ts'
 import { boardUrl, connect, environmentProfile, handFetch, handLogin, handToken, PASSED, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
-import { credentialed, credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
+import { credentialed, credentialSource, handProgram, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
 import { apiThreadRoot, isApiMessageId } from '../server/backend-vercel.ts'
@@ -2880,6 +2880,7 @@ export async function main(argv: string[], options: App): Promise<number> {
   handToken(options.token ?? null)
   handTeam(options.team ?? null)
   handFetch(options.fetch ?? null)
+  handProgram('cli')
   try {
     return await runOnce(argv, options)
   } finally {
@@ -2887,6 +2888,7 @@ export async function main(argv: string[], options: App): Promise<number> {
     handToken(null)
     handTeam(null)
     handFetch(null)
+    handProgram(null)
   }
 }
 

@@ -11,6 +11,8 @@ import { local } from '../src/cli/local.ts'
 import { env, url, useBoard } from './cli-harness.ts'
 import { board } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
+import { vercel as nodeVercel } from '../src/backend-vercel/index.ts'
+import { VERSION } from '../src/version.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 /** What `run` printed, and the exit code it answered. */
@@ -145,6 +147,32 @@ describe('the embedded CLI', () => {
     expect(stopped).toMatchObject({ code: 2, stdout: '' })
     expect(stopped.stderr).toMatch(new RegExp(`\\n  made 100 of 101: #\\d+ to #\\d+\\n\\n  Make the rest, under the same key: what was made stays as it is:\\n    vercel board tasks create embedded-plan --file ${plan} --idempotency-key [0-9a-f-]{36}\\n$`))
   }, 30_000)
+
+  it("tells Vercel's API its requests come from board's CLI while it runs a command, and from its SDK once it's done", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme' })
+    const agents: (string | null)[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      agents.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('user-agent'))
+      return api.fetch(input, init)
+    })
+    const app = createApp({ appName: 'vercel board', login: async () => 'user:u_jb', team: async () => 'team_test' })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
+      expect(new Set(agents)).toEqual(new Set([`@vercel/board/${VERSION} (cli)`]))
+      agents.length = 0
+      vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+      vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+      await board({ backend: nodeVercel() }).me()
+      expect(new Set(agents)).toEqual(new Set([`@vercel/board/${VERSION} (sdk)`]))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 
   it("asks for the app's login and team only when a request needs them, and reaches that team's board with them", async () => {
     const home = await isolated()
