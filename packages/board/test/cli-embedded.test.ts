@@ -274,6 +274,12 @@ describe('the embedded CLI', () => {
       const thread = await capture(() => app.run(['read', id]))
       expect(thread).toMatchObject({ code: 0, stdout: expect.stringContaining('a reply') })
       expect(thread.stdout).toContain('on the team board')
+      // The thread's own ID, as --json gives it, reads that thread too: it's no channel's name.
+      const threadId = JSON.parse((await capture(() => app.run(['read', id, '--json']))).stdout).message.thread
+      expect(threadId).toMatch(/^thr_[0-9a-f-]{36}$/)
+      const byThread = await capture(() => app.run(['read', threadId]))
+      expect(byThread).toMatchObject({ code: 0, stdout: expect.stringContaining('a reply') })
+      expect(byThread.stdout).toContain('on the team board')
       const whoami = await capture(() => app.run(['whoami']))
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toContain('board   https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test\nsource  the Vercel CLI\n')

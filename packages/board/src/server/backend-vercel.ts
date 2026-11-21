@@ -332,6 +332,12 @@ const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
 /** Whether `value` is a message ID Vercel's API hands out (`msg_<thread>_<n>`): the CLI takes one as a message, even where a channel has its name. */
 export const isApiMessageId = (value: string) => MESSAGE_ID.test(value)
+const THREAD_ID = /^thr_([0-9a-f-]{36})$/
+/** A thread ID Vercel's API hands out (`thr_<thread>`, a message's `thread`) as its root's message ID, or null for one that isn't. */
+export const apiThreadRoot = (value: string): string | null => {
+  const found = THREAD_ID.exec(value)
+  return found ? `msg_${found[1]}_1` : null
+}
 /** A cursor this backend made: a time, then the position it names, in base 36. */
 const CURSOR = /^([0-9a-z]+)(?:\.([0-9a-z]+))?$/
 /** The API's own cursor for one channel, which its message list and feed share, and any process resumes. */

@@ -13,7 +13,7 @@ import { http } from '../backend-http/index.ts'
 import { credentialed, credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
-import { isApiMessageId } from '../server/backend-vercel.ts'
+import { apiThreadRoot, isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
@@ -447,7 +447,8 @@ function messageId(value: string | undefined, what = 'message ID'): string {
   const id = value?.replace(/^#/, '') ?? ''
   if (value === undefined) throw usage(`Missing the ${what}.`, { reason: 'missing_arguments' })
   if (!/^[^\s/]+$/.test(id)) throw usage(`${value} isn't a ${what}.`)
-  return id
+  // A thread's own ID, as a message's `thread` gives it, names its root.
+  return apiThreadRoot(id) ?? id
 }
 
 /** Characters that change how a name reads without showing: invisible formatting (bidi overrides, zero-width), and line and paragraph separators. */
@@ -464,8 +465,8 @@ const exists = (path: string) =>
 const tooLarge = (path: string) =>
   new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't attach ${path}. It's over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be.` })
 
-/** Whether an ID goes in and out bare: a number, or one Vercel's API hands out (`msg_…`), a message even where a channel has its name. */
-const bareId = (value: string) => /^\d+$/.test(value) || isApiMessageId(value)
+/** Whether an ID goes in and out bare: a number, or one Vercel's API hands out (`msg_…`, or a thread's `thr_…`), a message even where a channel has its name. */
+const bareId = (value: string) => /^\d+$/.test(value) || isApiMessageId(value) || apiThreadRoot(value) !== null
 
 /** Whether an argument names a message rather than a channel: `#<id>`, or an ID that goes bare. */
 const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value)
