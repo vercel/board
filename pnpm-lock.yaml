@@ -11,13 +11,15 @@ importers:
       '@changesets/cli':
         specifier: ^3.0.3
         version: 3.0.3
+      turbo:
+        specifier: 2.11.11
+        version: 2.11.11
 
   apps/preview-publisher:
     dependencies:
       '@vercel/board':
         specifier: workspace:*
         version: link:../../packages/board
-
 
   packages/board:
     dependencies:
@@ -980,6 +982,36 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
+  '@turbo/darwin-64@2.11.11':
+    resolution: {integrity: sha512-HMMeUIEAsmyIbSYn1ySvF/4gGMa0joiTMq4dQDuloIAnOpbtFT3JEiVsYnASdTWDXvplbRbZlqjU1EBeSR9G1A==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@turbo/darwin-arm64@2.11.11':
+    resolution: {integrity: sha512-+8iySNgqYWY6PZYUQzYu6zn0C04z2OEq1vQ6oMGsJ9sxN6wOpg1gzi1AJ5VKDHviWvMUjhqng51hTEQZOuiqYQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@turbo/linux-64@2.11.11':
+    resolution: {integrity: sha512-uImTKFYCFKsoFxjaXeJXlMPv4uU3OIIDjyzoIwYVqOtu9LnCZ/5/fzu/WP6+G9YfwGAPRplTHkKFfcI5t97RGw==}
+    cpu: [x64]
+    os: [android, linux]
+
+  '@turbo/linux-arm64@2.11.11':
+    resolution: {integrity: sha512-Y7xffSVfyyYRGzNy6PLdrFL4xXN6iTuR3W0SyJvH/yd3d4defA6dansZwJpPDVnIpD8a2Qn256DwY/Qin4Ip4g==}
+    cpu: [arm64]
+    os: [android, linux]
+
+  '@turbo/windows-64@2.11.11':
+    resolution: {integrity: sha512-e2WqNtkPGo3QDwNNwwBo89Dx3PtSJ9Wp9QuRNzn80rrRnSHB+1mfBMZTpdHjA8/G/sG9rl76TdWdpgVsimjRdg==}
+    cpu: [x64]
+    os: [win32]
+
+  '@turbo/windows-arm64@2.11.11':
+    resolution: {integrity: sha512-LURivfmgv34Osm8NR1gZGx4vdlux9KAgRM+FoooXNG0838ff0+akWZ76iPSke0NS2rsf7Z4Gw+YSaygzNTZuRA==}
+    cpu: [arm64]
+    os: [win32]
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -1152,7 +1184,6 @@ packages:
 
   '@upstash/qstash@2.12.0':
     resolution: {integrity: sha512-LRFuMAqdDlVtCnDRLS00DM4lsE6JeP1A696lUcuUdWEXM9Sb1lhKYSuK2gHkG5VBxreR4QJNs909AGabAfSRdg==}
-
 
   '@vercel/cli-config@0.3.0':
     resolution: {integrity: sha512-kQLt5Pm8wKd7/imzDY9/9u0tf8OuRkAuXI+s7j057FSUrXapAmumJSKwDqnR4ZZqdWoUcNLlFAgVIAdiwcGTcw==}
@@ -1894,11 +1925,6 @@ packages:
 
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
-
-  geist@1.7.2:
-    resolution: {integrity: sha512-Gu5lDFa3pLRyoBlBPf0QIFHVdWAnpco7fS1bJm41jyLPFoguBgiubseUN2oLXMgqZ7uxAxDoXcHMhCY/fOTTgg==}
-    peerDependencies:
-      next: '>=13.2.0'
 
   get-intrinsic@1.3.0:
     resolution: {integrity: sha512-9fSjSaos/fRIVIp+xSJlE6lfwhES7LNtKaCBIamHsjr2na1BiABJPo0mOjjz8GJDURarmCPGqaiVg5mfjb98CQ==}
@@ -2920,6 +2946,10 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  turbo@2.11.11:
+    resolution: {integrity: sha512-AI4UJbUE/2cVZdoXJ4PODc8qvrjhQQX9Fa93eKGOI6Ims/w7+kUIb9T1jhlgSnZcf+gtUruci/ohSwqtNNC5Yw==}
+    hasBin: true
+
   turndown@7.2.4:
     resolution: {integrity: sha512-I8yFsfRzmzK0WV1pNNOA4A7y4RDfFxPRxb3t+e3ui14qSGOxGtiSP6GjeX+Y6CHb7HYaFj7ECUD7VE5kQMZWGQ==}
     engines: {node: '>=18', npm: '>=9'}
@@ -3745,7 +3775,8 @@ snapshots:
       - supports-color
     optional: true
 
-  '@next/env@16.3.8': {}
+  '@next/env@16.3.8':
+    optional: true
 
   '@next/swc-darwin-arm64@16.3.8':
     optional: true
@@ -3993,6 +4024,7 @@ snapshots:
   '@swc/helpers@0.5.23':
     dependencies:
       tslib: 2.8.1
+    optional: true
 
   '@tokenizer/inflate@0.4.1':
     dependencies:
@@ -4003,6 +4035,24 @@ snapshots:
     optional: true
 
   '@tokenizer/token@0.3.0':
+    optional: true
+
+  '@turbo/darwin-64@2.11.11':
+    optional: true
+
+  '@turbo/darwin-arm64@2.11.11':
+    optional: true
+
+  '@turbo/linux-64@2.11.11':
+    optional: true
+
+  '@turbo/linux-arm64@2.11.11':
+    optional: true
+
+  '@turbo/windows-64@2.11.11':
+    optional: true
+
+  '@turbo/windows-arm64@2.11.11':
     optional: true
 
   '@types/chai@5.2.3':
@@ -4122,7 +4172,6 @@ snapshots:
       neverthrow: 7.2.0
       uncrypto: 0.1.3
     optional: true
-
 
   '@vercel/cli-config@0.3.0':
     dependencies:
@@ -4306,7 +4355,8 @@ snapshots:
   balanced-match@4.0.4:
     optional: true
 
-  baseline-browser-mapping@2.11.26: {}
+  baseline-browser-mapping@2.11.26:
+    optional: true
 
   before-after-hook@4.0.0: {}
 
@@ -4346,7 +4396,8 @@ snapshots:
       get-intrinsic: 1.3.0
     optional: true
 
-  caniuse-lite@1.0.30001814: {}
+  caniuse-lite@1.0.30001814:
+    optional: true
 
   ccount@2.0.1: {}
 
@@ -4375,7 +4426,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  client-only@0.0.1: {}
+  client-only@0.0.1:
+    optional: true
 
   cluster-key-slot@1.1.1:
     optional: true
@@ -4742,10 +4794,6 @@ snapshots:
     optional: true
 
   function-bind@1.1.2: {}
-
-  geist@1.7.2(next@16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)):
-    dependencies:
-      next: 16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
   get-intrinsic@1.3.0:
     dependencies:
@@ -5469,6 +5517,7 @@ snapshots:
       - '@babel/core'
       - '@types/node'
       - babel-plugin-macros
+    optional: true
 
   nf3@0.3.24:
     optional: true
@@ -5622,6 +5671,7 @@ snapshots:
       nanoid: 3.3.19
       picocolors: 1.1.1
       source-map-js: 1.2.2
+    optional: true
 
   postcss@8.5.28:
     dependencies:
@@ -5991,6 +6041,7 @@ snapshots:
     dependencies:
       client-only: 0.0.1
       react: 19.3.0
+    optional: true
 
   tinybench@6.2.0: {}
 
@@ -6047,6 +6098,15 @@ snapshots:
       - vue-tsc
 
   tslib@2.8.1: {}
+
+  turbo@2.11.11:
+    optionalDependencies:
+      '@turbo/darwin-64': 2.11.11
+      '@turbo/darwin-arm64': 2.11.11
+      '@turbo/linux-64': 2.11.11
+      '@turbo/linux-arm64': 2.11.11
+      '@turbo/windows-64': 2.11.11
+      '@turbo/windows-arm64': 2.11.11
 
   turndown@7.2.4:
     dependencies:
