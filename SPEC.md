@@ -3858,7 +3858,7 @@ that task, a `claim --ready` that found nothing ready there, or a list.
   than any backend makes. A batch with more than a backend holds in one
   write is refused the same way, by the backend: `local()` holds all 100,
   one append of at most 301 events, and Vercel's board what fits one of the
-  API's transactions, 15 plain tasks, or 14 with an `id`. Nothing is made,
+  API's transactions, 12 plain tasks, with an `id` or without. Nothing is made,
   and the sender splits it.
 - **A plan longer than a batch is several batches.** `createTasksInChunks(
   team, channel, tasks, { id? })`, a plain function on `tasks.createMany`,
