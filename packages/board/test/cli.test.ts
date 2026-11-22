@@ -641,6 +641,12 @@ describe('cli', () => {
 
     // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel open-wrok\. Did you mean open-work\?\n/) })
+    // A name like no channel's may be a message's ID that doesn't go bare: the error says how to read it as one.
+    const opaque = await vb(['read', '5d08b9af-5b45-465b-bb43-3b24e540ed95'])
+    expect(opaque).toMatchObject({ code: 1, stdout: '' })
+    expect(opaque.stderr).toContain("If 5d08b9af-5b45-465b-bb43-3b24e540ed95 is a message's ID, #5d08b9af-5b45-465b-bb43-3b24e540ed95 reads its thread.")
+    expect(opaque.stderr).toContain("vb read '#5d08b9af-5b45-465b-bb43-3b24e540ed95'")
+    expect((await vb(['read', 'open-wrok'])).stderr).not.toContain("is a message's ID")
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n\nnew since then: vb read open-work --text 'nothing like this' --after \d+\n$/) })
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
   })

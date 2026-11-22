@@ -1548,15 +1548,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
           const guess = closest(target, channels)
+          // A name like no channel's, under none, may be a message's ID that doesn't go bare: `#` reads its thread.
+          const id = !guess && !target.includes('/')
           throw new Failed({
             class: 'not_found',
             reason: 'channel_not_found',
             message: `Couldn't find channel ${target}.${guess ? ` Did you mean ${guess}?` : ''}`,
             details: [
               'A channel appears with its first post: one nobody has posted in yet is not there to read.',
+              ...(id ? [`If ${target} is a message's ID, #${target} reads its thread.`] : []),
               ...(teamDefault ? [`This is ${teamDefault.team ?? 'the team'}'s default board: --name reads another of its boards.`] : []),
             ],
             next: [
+              ...(id ? [{ instruction: 'Read it as a message', argv: [...cli(), 'read', `#${target}`] }] : []),
               { instruction: 'See its channels', argv: [...cli(), 'channels', ...(teamDefault?.team !== undefined ? ['--scope', teamDefault.team] : [])] },
               ...(teamDefault ? [{ instruction: "Read it on another of the team's boards", argv: rerun('--name', '<BOARD>') }] : []),
             ],
