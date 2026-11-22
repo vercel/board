@@ -586,7 +586,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           option('for', 'only this profile of yours claims it', 'profile'),
           claimNow,
           option('lease', 'with --claim: how long to hold it'),
-          option('file', 'a plan, from a JSON file (- reads stdin): an array of tasks, each { key?, text, labels?, needs?, for?, noSync?, attachments? }, all made, in as many writes as it takes'),
+          option('file', 'a plan, from a JSON file (- reads stdin): an array of tasks, each { key?, text, labels?, needs?, for?, noSync?, attachments? }, all made, in as many writes as it takes. needs takes a key of the plan ("fix" or {"key": "fix"}) or a task that\'s there by its ID ("812" or {"id": "812"})'),
           option('no-sync'),
           option('idempotency-key', 'sending the same one again makes it once'),
         ],
