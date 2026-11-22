@@ -641,6 +641,12 @@ describe('cli', () => {
 
     // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel open-wrok\. Did you mean open-work\?\n/) })
+    // A message ID cut short isn't a channel: the error says so, and names its thread's root when it can.
+    const thread = '73a86530-2081-47c4-b7a2-479632af9026'
+    for (const cut of [`msg_${thread}`, `msg_${thread}_`, `thr_${thread}_`])
+      expect(await vb(['read', cut]), cut).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(new RegExp(`^error: Couldn't find channel ${cut}\\. Did you mean msg_${thread}_1\\?\\n.*message ID cut short`)) })
+    expect(await vb(['read', 'msg_73a86530-2081'])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Couldn't find channel msg_73a86530-2081\.\n.*message ID cut short/) })
+    expect((await vb(['read', 'open-wrok'])).stderr).not.toContain('message ID')
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n\nnew since then: vb read open-work --text 'nothing like this' --after \d+\n$/) })
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
   })

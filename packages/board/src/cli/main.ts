@@ -468,6 +468,16 @@ const tooLarge = (path: string) =>
 /** Whether an ID goes in and out bare: a number, or one Vercel's API hands out (`msg_…`, or a thread's `thr_…`), a message even where a channel has its name. */
 const bareId = (value: string) => /^\d+$/.test(value) || isApiMessageId(value) || apiThreadRoot(value) !== null
 
+/**
+ * What a value that starts like Vercel's message or thread ID but isn't a whole one (a copy cut short) would be
+ * whole: its thread's root, when the thread's part is all there, or only that it's cut short.
+ */
+const partialApiId = (value: string): { root: string | null } | null => {
+  if (!/^(?:msg|thr)_[0-9a-f-]/.test(value) || bareId(value)) return null
+  const thread = /^(?:msg|thr)_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_?$/.exec(value)
+  return { root: thread ? `msg_${thread[1]}_1` : null }
+}
+
 /** Whether an argument names a message rather than a channel: `#<id>`, or an ID that goes bare. */
 const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value)
 
@@ -1547,12 +1557,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // Every channel, a page at a time: a name close to the one typed could be any of them.
         const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
-          const guess = closest(target, channels)
+          const partial = partialApiId(target)
+          const guess = partial ? partial.root : closest(target, channels)
           throw new Failed({
             class: 'not_found',
             reason: 'channel_not_found',
             message: `Couldn't find channel ${target}.${guess ? ` Did you mean ${guess}?` : ''}`,
             details: [
+              ...(partial ? [`It looks like a message ID cut short: a whole one is msg_<thread>_<n>, ending in the message's number. Check the full ID.`] : []),
               'A channel appears with its first post: one nobody has posted in yet is not there to read.',
               ...(teamDefault ? [`This is ${teamDefault.team ?? 'the team'}'s default board: --name reads another of its boards.`] : []),
             ],
