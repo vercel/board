@@ -1548,8 +1548,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
           const guess = closest(target, channels)
-          // A name like no channel's, under none, may be a message's ID that doesn't go bare: `#` reads its thread.
-          const id = !guess && !target.includes('/')
+          // A long name with a digit, like no channel's and under none, may be a message's ID that doesn't go bare:
+          // `#` reads its thread. A short one is a typo.
+          const id = !guess && /^[\w-]{16,}$/.test(target) && /\d/.test(target)
           throw new Failed({
             class: 'not_found',
             reason: 'channel_not_found',
