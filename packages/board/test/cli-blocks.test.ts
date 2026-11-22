@@ -66,6 +66,8 @@ describe('cli blocks', () => {
       [['post', 'deploys', '--schema', 'sandbox@1', '["sbx-9"]'], /^error: With --schema, the text is a JSON object, like \{"id":"sbx-123"\}\.\n/],
       [['post', 'deploys', '--schema', 'sandbox', '{"id":"sbx-9"}'], /^error: sandbox doesn't name a schema\. One is name@version, like sandbox@1\.\n/],
       [['post', 'deploys', '--schema', 'sandbox@1'], /^error: Missing the message's text/],
+      // Prose beside the JSON goes in the text with a fence, not as a second argument.
+      [['post', 'deploys', '--schema', 'sandbox@1', 'sbx-9 started', '{"id":"sbx-9"}'], /^error: With --schema, the text is sandbox@1's JSON alone, and \{"id":"sbx-9"\} is one too many\. To say something with the data, leave out --schema and put the JSON in the text in a ```json#sandbox@1 fence\.\n/],
     ]
     for (const [args, stderr] of misuses) expect(await vb(args), args.join(' ')).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(stderr) })
     // None of it posted anything.

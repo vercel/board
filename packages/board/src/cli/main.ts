@@ -532,6 +532,11 @@ function oneText(command: string, target: string, extra: string[]) {
     throw usage(`${first} looks like a label, and ${command} takes labels with --label.`, {
       next: [{ instruction: 'Label it as you post it', argv: [...cli(), command, target, '<TEXT>', '--label', first] }],
     })
+  // With --schema the text is the JSON alone, so quoting both as one fails as not JSON: say where prose goes.
+  if (flags.schema !== undefined && first !== '-')
+    throw usage(
+      `With --schema, the text is ${flags.schema}'s JSON alone, and ${first.length > 40 ? `${first.slice(0, 40)}…` : first} is one too many. To say something with the data, leave out --schema and put the JSON in the text in a \`\`\`json#${flags.schema} fence.`,
+    )
   throw usage(
     first === '-'
       ? `${command} takes one text, and - (stdin) is a second. For a long message, pass - alone as the text: it has no title.`
