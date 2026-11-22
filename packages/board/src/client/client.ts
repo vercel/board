@@ -593,7 +593,19 @@ export function createBoardClient(options: ClientOptions) {
         await takeBack(own.grant.id)
         throw granted(raced, [own.grant])
       }
-      const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
+      // A lock the board refused, such as one on everyone from a member where it takes a team owner (403
+      // `owner_required`), never landed: its own grant would be all that's left, so it goes too. One that
+      // may have landed (the request failed on the way) keeps it, so its creator isn't shut out.
+      const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } }).catch(async (error: unknown) => {
+        if (!(error instanceof BoardError && error.origin === 'board' && error.status >= 400 && error.status < 500)) throw error
+        await takeBack(own.grant.id)
+        if (error.code === 'owner_required')
+          throw new BoardError('owner_required', `Closing ${path} to everyone else takes a team owner, so a private ${path} wasn't made, and nothing was left behind.`, error.status, {
+            hint: `Ask a team owner to make it, or make ${path} open: vb channels create ${path}`,
+            origin: error.origin,
+          })
+        throw error
+      })
       // Once the lock is there, no one it shuts out can grant themselves past it, so this listing is
       // the last word: a grant made or changed before the lock landed would still let someone in, so
       // it isn't private, and both of its grants go, the lock first.

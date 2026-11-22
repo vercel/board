@@ -116,6 +116,27 @@ describe('a private channel, from the handle', () => {
     expect((await team.channels()).channels).toEqual([])
   })
 
+  it("takes its own grant back when only a team owner may lock the channel, so nothing is left half made", async () => {
+    const team = testBoard()
+    // Vercel's board: a lock on everyone takes a team owner.
+    const member = async (request: Request) => {
+      if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/grants')) {
+        const body = (await request.clone().json()) as { principals: { kind: string }[] }
+        if (body.principals.some((principal) => principal.kind === 'everyone'))
+          return Response.json({ error: { code: 'owner_required', message: 'a lock on everyone takes a team owner' } }, { status: 403 })
+      }
+      return team.fetch(request)
+    }
+    const before = await ids(team)
+    await expect(handleAs(member, () => personToken()).createChannel('vault', { private: true })).rejects.toMatchObject({
+      status: 403,
+      code: 'owner_required',
+      message: expect.stringContaining('nothing was left behind'),
+    })
+    expect(await ids(team)).toEqual(before)
+    expect((await team.channels()).channels).toEqual([])
+  })
+
   it('leaves at most one way in when two make the same private channel at once', async () => {
     const team = testBoard()
     /** What opens once both racers have reached it. */
