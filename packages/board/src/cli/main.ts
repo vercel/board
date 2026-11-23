@@ -4,7 +4,7 @@ import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
 import { everyChannel } from '../client/channels.ts'
-import { withMentions } from '../api/tail.ts'
+import { mentionValue, withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
 import type { Mentioned } from '../contract/mentions.ts'
 import { createTasksInChunks, TasksInChunksError } from '../client/chunks.ts'
@@ -244,6 +244,8 @@ let current: { command: string | undefined; args: string[] } = { command: undefi
 let typed: string[] = []
 /** What this run's writes had to say, for its JSON result. */
 let warnings: Warning[] = []
+/** The word a bare `--mentions` came before, when it isn't the command: a warning says how it reads. */
+let bareMentions: string | undefined
 /** The board this run reached by its URL, for a failure to name. */
 let reached: string | null = null
 /** The team whose default board this run reached, nothing naming one of its boards: `--scope`'s, or the one the environment finds. */
@@ -271,6 +273,19 @@ const named = () => (app.name === 'board' ? 'vb' : app.name)
 /** The commands that take their text as an argument, where text that starts with `-` goes after `--`. */
 const TEXT = new Set(['post', 'reply', 'edit', 'schedule'])
 
+/**
+ * The word a bare `--mentions` came before, when it isn't the command: `--mentions ada` means
+ * mentions of you, with `ada` a channel or ID, since only `me` or a word with an `@` is its value.
+ */
+function bareMentionsWord(argv: string[], word: string | undefined): string | undefined {
+  const end = argv.includes('--') ? argv.indexOf('--') : argv.length
+  for (let at = 0; at < end - 1; at++) {
+    const next = argv[at + 1]!
+    if (argv[at] === '--mentions' && !mentionValue(next) && !next.startsWith('-') && canonical(next) !== word) return next
+  }
+  return undefined
+}
+
 /** Parses `argv` for this run, or throws what's wrong with it. */
 function parse(argv: string[]) {
   const args = withMentions(argv)
@@ -286,6 +301,7 @@ function parse(argv: string[]) {
     )
     flags = parsed.values
     positionals = parsed.positionals.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
+    bareMentions = bareMentionsWord(argv, word)
   } catch (error) {
     throw parseFailure(error as Error & { code?: string }, argv, word)
   }
@@ -2964,6 +2980,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
   flags = {} as Flags
   positionals = []
   warnings = []
+  bareMentions = undefined
   reached = null
   teamDefault = null
   sent = () => null
@@ -2984,6 +3001,11 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     const [word, ...args] = positionals
     const command = canonical(word)
     current = { command, args }
+    if (bareMentions !== undefined)
+      warn({
+        reason: 'bare_mentions',
+        message: `--mentions ${bareMentions} means mentions of you, with ${bareMentions} as a channel or ID: for mentions of ${bareMentions}, write --mentions @${bareMentions}.`,
+      })
     if (io.board) {
       const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.ensure ? 'ensure' : null
       if (given) throw usage(`--${given} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })

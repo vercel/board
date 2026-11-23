@@ -9,7 +9,7 @@ export const FILTER_FLAGS = { re: options.re, by: options.by, mentions: options.
  * What `--mentions` takes as its value when it's the next word: `@ada`, `ada@vercel.com`, or `me`.
  * A channel never has an `@`, and a flag (`--text=a@b`) is never the value.
  */
-const mentionValue = (word: string | undefined) => word !== undefined && !word.startsWith('-') && (word === 'me' || word.includes('@'))
+export const mentionValue = (word: string | undefined) => word !== undefined && !word.startsWith('-') && (word === 'me' || word.includes('@'))
 
 /**
  * `--mentions` alone means mentions of me; `--mentions @ada`, mentions of ada; `--mentions
