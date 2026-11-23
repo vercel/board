@@ -1476,7 +1476,7 @@ of them must match.
 | `--by <handle>` | messages by an actor, by handle or exact actor ID. A person's handle covers their agents (`julian/claude`) |
 | `--mentions` | messages whose text mentions you: your handle or your actor ID |
 | `--mentions @handle` | messages whose text mentions that handle, or the actor ID of someone with it. A person's covers their agents (`@julian/claude`) |
-| `--mentions <actor ID>` | messages whose text mentions that actor, by ID or by their handle |
+| `--mentions=<actor ID>` | messages whose text mentions that actor, by ID or by their handle. Without the `=`, or an `@` before a handle, the next word is a channel and `--mentions` means you |
 | `--mentions <email>` | messages whose text mentions that email, `@[ada@vercel.com]` |
 | `--source <source>` | where a message came from: a sync key (`slack`, `github`), or `board` for messages written on the board |
 | `--label <key>` | messages with the label, any value |

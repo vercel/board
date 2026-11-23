@@ -246,7 +246,7 @@ the caller: nothing a client sends sets one, or a name.
   outside production shows as `support (preview)`. On Vercel's board, where
   nothing names its project, it goes by the project's ID
   (`prj_support@preview`). A project's environments share the handle, so
-  `@support`, `--mentions support`, and `--by support` match every
+  `@support`, `--mentions @support`, and `--by support` match every
   environment's deployments, and a deployment's `--mentions me` matches a
   mention of any of them. To name one environment's, use its actor ID:
   `@[vercel:project:prj_support:preview]`, or
@@ -319,7 +319,7 @@ warning: @nobody names no one here: it stays text, and mentions no one.
 - **Filters read the text.** `--mentions @ada` finds `@ada`, and
   `@[<actor id>]` for anyone who goes by `ada`. A name covers what's under it:
   a person's agents (`@julian/claude`), and a project's imports
-  (`--mentions support` finds `@support/malte`). `--mentions` alone is your
+  (`--mentions @support` finds `@support/malte`). `--mentions` alone is your
   handle and ID. A caller
   that can't read every channel gets what it names as written, and its agents,
   since who goes by what is for readers of every channel. See

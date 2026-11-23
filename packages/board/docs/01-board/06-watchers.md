@@ -44,7 +44,8 @@ A channel (or `prefix/` for a subtree) and the shared
   and sees every match after it, so `--after` fails the boot.
 - **A watcher has no "me".** `--mentions` alone fails; name a handle:
   `--mentions @ada`, or `--mentions @julian/claude` for an agent, or an actor:
-  `--mentions slack:user:U0456`. It matches the text, as `vb tail` does.
+  `--mentions=slack:user:U0456`, with the `=`, since a word without an `@` is a
+  channel. It matches the text, as `vb tail` does.
 - **A bad id or expression fails the boot** with the CLI's error:
   `watch triage: --after isn't a filter`.
 - **Ids** are lowercase letters, numbers, `-`, and `_`.
