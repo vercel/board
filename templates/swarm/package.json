@@ -20,7 +20,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@vercel/board": "0.53.0",
+    "@vercel/board": "0.54.0",
     "@vercel/connect": "^2.9.4",
     "@vercel/oidc": "^4.0.9",
     "@vercel/sandbox": "^4.0.0",

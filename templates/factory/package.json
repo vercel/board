@@ -15,7 +15,7 @@
     "@agent-browser/eve": "0.43.0",
     "@chat-adapter/github": "^4.45.0",
     "@chat-adapter/slack": "^4.45.0",
-    "@vercel/board": "0.53.0",
+    "@vercel/board": "0.54.0",
     "@vercel/connect": "^2.9.4",
     "@vercel/oidc": "^4.0.9",
     "@vercel/sandbox": "^4.0.0",

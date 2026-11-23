@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@vercel/board':
-        specifier: 0.53.0
-        version: 0.53.0(@vercel/connect@2.9.4)
+        specifier: 0.54.0
+        version: 0.54.0(@vercel/connect@2.9.4)
       '@vercel/connect':
         specifier: ^2.9.4
         version: 2.9.4
@@ -611,8 +611,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@vercel/board@0.53.0':
-    resolution: {integrity: sha512-r4NXOPkvjD4jnyrL92rlmj5e08yT9w44l4qlv2qWaMlHRIAc401wE2XlHT3dvrRlTSwQfx3Um5vhGm9HWyAuUA==}
+  '@vercel/board@0.54.0':
+    resolution: {integrity: sha512-JPsKFnPVgSQpZGxtj/8TrPbHnJzebIMXXdzDeAZkfkXq9B0d0L3diAq5TByWtvP+4nDgrOqCHQxnzxdvsFNJ2A==}
     engines: {node: '>=22.18'}
     hasBin: true
     peerDependencies:
@@ -1808,7 +1808,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vercel/board@0.53.0(@vercel/connect@2.9.4)':
+  '@vercel/board@0.54.0(@vercel/connect@2.9.4)':
     dependencies:
       '@vercel/oidc': 3.8.10
       jose: 6.2.17
