@@ -1172,10 +1172,10 @@ function unsupportedRecoveries(): Recovery[] {
 /** `42s`, `2m`: a wait the way people say it. */
 const waitFor = (seconds: number) => (seconds < 120 ? `${Math.max(1, seconds)}s` : `${Math.ceil(seconds / 60)}m`)
 
-/** How this run ends with `failure`: shown on stderr, or by the app, and its exit code. */
+/** How this run ends with `failure`: shown on stderr, or by the app, and its exit code. With `--json`, its document carries the run's warnings, which may say why it failed. */
 function report(failure: Failure, json: boolean): number {
   if (app.onError) app.onError(failure, { json })
-  else if (json) io.error(`${JSON.stringify(failureDocument(failure))}\n`)
+  else if (json) io.error(`${JSON.stringify(warnings.length ? { ...failureDocument(failure), warnings } : failureDocument(failure))}\n`)
   else io.error(`${terminalText(formatFailure(failure))}\n`)
   return exitCode(failure)
 }

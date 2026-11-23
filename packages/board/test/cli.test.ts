@@ -787,6 +787,8 @@ describe('cli', () => {
     expect(bare.stderr).toMatch(/^warning: --mentions u_julian\/claude means mentions of you, with u_julian\/claude as a channel or ID: for mentions of u_julian\/claude, write --mentions @u_julian\/claude\.\n/)
     const json = await vb(['read', '--mentions', 'questions', '--json'])
     expect(JSON.parse(json.stdout).warnings).toEqual([expect.objectContaining({ reason: 'bare_mentions' })])
+    const timedOut = await vb(['wait', '--re', id, '--mentions', 'u_julian/claude', '--timeout', '300ms', '--json'])
+    expect(JSON.parse(timedOut.stderr)).toMatchObject({ reason: 'timeout', warnings: [expect.objectContaining({ reason: 'bare_mentions' })] })
     // Its value, or the command after it, reads as it always has, without a word.
     for (const args of [['wait', '--re', id, '--mentions', '@u_julian/claude', '--timeout', '300ms'], ['--mentions', 'read', 'questions'], ['read', 'questions', '--mentions'], ['read', '--mentions', 'me']])
       expect((await vb(args)).stderr).not.toContain('warning:')
