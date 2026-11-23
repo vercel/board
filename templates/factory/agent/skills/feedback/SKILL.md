@@ -21,8 +21,8 @@ you included, can act on it.
   check worth running on a schedule.
 
 Not a one-off (a typo, a network call that failed once), and not what the thread's repo should
-fix: that's an issue on that repo. Read the rsi channel's threads before you post (`vb read <the
-rsi channel>`): the board keeps no search index.
+fix: that's an issue on that repo. Look for it in the rsi channel before you post (`vb read <the
+rsi channel> --text "<a few words of it>"`, which looks through one page of its threads).
 
 When it's already a thread there, reply in it with one line saying where it happened again.
 Something that keeps happening matters more than something new.

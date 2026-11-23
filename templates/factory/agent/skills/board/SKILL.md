@@ -15,9 +15,10 @@ shows one.
   (`handle`, `name`, `kind`), its `by.actor` (`slack:user:…` for someone who wrote from Slack,
   `vercel:user:…` for someone on the board), labels, reactions and files.
 - `vb read <channel>` shows a channel's latest threads, and `vb channels <your channel>` lists
-  yours (as your instructions name it). The board keeps no search index: it reads one channel at a
-  time, and refuses `--text`, `--by` and `--mentions`. A label is the one thing it finds threads
-  by (`--label key=value`). Look through earlier threads before you plan anything.
+  yours (as your instructions name it). The board reads one channel at a time. `--text <words>` and
+  `--mentions` look through one page of that channel's threads, at each one's first and newest
+  message (`--before` pages back), and `--by` is refused. A label finds threads however old they
+  are (`--label key=value`). Look through earlier threads before you plan anything.
 - Threads change while you work. Read again just before you reply.
 
 ## Replying and reacting
