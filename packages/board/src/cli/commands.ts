@@ -282,6 +282,28 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   },
   {
     group: 'the board',
+    name: 'boards',
+    description: "the team's boards you can use, in Vercel's API: the names --name takes",
+    arguments: [],
+    options: [],
+    runsWithoutSubcommand: true,
+    examples: [
+      { name: "list the team's boards", value: 'boards' },
+      { name: "another team's", value: 'boards --scope acme' },
+    ],
+    subcommands: [
+      {
+        name: 'list',
+        default: true,
+        description: "the team's boards you can use, and which is its default",
+        arguments: [],
+        options: [],
+        examples: [{ name: "list the team's boards", value: 'boards list' }],
+      },
+    ],
+  },
+  {
+    group: 'the board',
     name: 'channels',
     description: 'channels, a page at a time, grouped by path prefix: a first post makes one, and so does create',
     arguments: [{ name: 'prefix', required: false, description: 'only the channels whose path starts with it: dev/' }],

@@ -849,6 +849,7 @@ function doing(): string {
       return a === 'create' ? `create ${b ?? 'the channel'}` : 'list channels'
     case 'schedules':
     case 'actors':
+    case 'boards':
       return `list ${command}`
     case 'tasks': {
       if (a === undefined || !TASK_VERBS.has(a)) return a === undefined ? 'list tasks' : `list tasks in ${a}`
@@ -1238,6 +1239,32 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
 }
 
 /**
+ * The team's boards, in Vercel's API: `--scope`'s team, the one `--url` or `BOARD_URL` names when
+ * it's a team's board there, or the one the environment finds. A board of its own (`vb serve`, a
+ * deployment's) is one board, with no team's to list.
+ */
+async function teamBoards() {
+  if (io.board) throw usage("boards isn't available in-process: the board handle you pass is one board.", { reason: 'not_available', next: [] })
+  if (flags.name !== undefined || flags.ensure)
+    throw usage(`boards lists every board of the team, and --${flags.name !== undefined ? 'name' : 'ensure'} picks one: leave it out.`, { reason: 'conflicting_options' })
+  let team = flags.scope ?? flags.team
+  if (team !== undefined && flags.url !== undefined)
+    throw usage("--url names its board, its team included, and --scope a team: pass one of them.", { reason: 'conflicting_options' })
+  const url = flags.url ?? (team === undefined ? configuredUrl() : null)
+  if (url !== null && url !== undefined) {
+    const onVercel = vercelBoard(url.replace(/\/+$/, ''))
+    if (!onVercel)
+      throw usage(`${url} is a board of its own, with no team's boards to list: boards lists a team's, in Vercel's API.`, {
+        reason: 'not_available',
+        next: [{ instruction: "List a team's boards", argv: rerunWithout(['--url'], '--scope', '<TEAM>') }],
+      })
+    team = onVercel.team
+  }
+  sent = credentialSource
+  return vercel({ ...(team !== undefined ? { team } : {}), ...sending(undefined) }).boards()
+}
+
+/**
  * The team's board this run names: `--name`, or `BOARD_NAME`, on `--scope`'s team or the one the
  * environment finds. A URL names a board itself, its team included. `BOARD_NAME` is read only
  * where it picks the board: beside `BOARD_URL`, which names another, nothing says which one.
@@ -1492,6 +1519,21 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       // A page that isn't the last says how to read the next.
       if (listed.next !== null) out(`\n(more not shown: ${commandLine(rerunWithout(['--after'], '--after', listed.next))})`)
+      return 0
+    }
+
+    case 'boards': {
+      const [sub, extra] = args
+      if (sub !== undefined && sub !== 'list') throw usage(`Unknown command ${sub} for ${named()} boards.`, { reason: 'unknown_command' })
+      if (extra !== undefined) throw usage(`boards list takes no arguments: ${extra} is one too many.`)
+      const listed = await teamBoards()
+      if (flags.json) return result(listed), 0
+      if (listed.boards.length === 0) return out('no boards you can use on this team yet'), 0
+      const width = Math.max(...listed.boards.map((board) => board.name.length))
+      for (const board of listed.boards) {
+        const notes = [...(board.id === listed.defaultBoardId ? ['default'] : []), ...(board.visibility === 'private' ? ['private'] : [])]
+        out(`${board.name.padEnd(width)}  ${board.id}${notes.length > 0 ? `  ${notes.join(', ')}` : ''}`.trimEnd())
+      }
       return 0
     }
 

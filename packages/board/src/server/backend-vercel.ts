@@ -4046,6 +4046,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         under: [{ path: `/v2/messageboard${board}`, routes: SANDBOX_TASK_ROUTES }],
       }
     },
+    /**
+     * The team's boards this backend's credentials may use, every page of them, and the ID of the
+     * team's default board where it has one the caller may use: `GET /boards`, as `vb boards` lists them.
+     */
+    async boards(): Promise<{ boards: VercelBoardListed[]; defaultBoardId: string | null }> {
+      const who = { profile: null }
+      const boards: VercelBoardListed[] = []
+      let defaultBoardId: string | null = null
+      let cursor: string | undefined
+      do {
+        const page = await api<{ boards: VercelBoardListed[]; defaultBoardId: string | null; cursor?: string | null }>(who, 'GET', '/boards', { query: { cursor } })
+        boards.push(...page.boards)
+        defaultBoardId ??= page.defaultBoardId ?? null
+        cursor = page.cursor ?? undefined
+      } while (cursor)
+      return { boards, defaultBoardId }
+    },
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,
     // One deployment of a project holds each of its sync keys, as Vercel's API says when it registers.
@@ -4078,3 +4095,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 }
 
 export type VercelBackend = ReturnType<typeof createVercel>
+
+/** A board as Vercel's API lists a team's: `private` is one only its members see, `team` one the whole team does. */
+export type VercelBoardListed = { id: string; name: string; teamId?: string; visibility?: 'team' | 'private' }

@@ -321,6 +321,44 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("lists the team's boards you can use, by the names --name takes, its default marked", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({
+      slug: 'acme',
+      boards: [
+        { name: 'security', id: 'brd_security', members: ['u_jb'] },
+        { name: 'design', id: 'brd_design' },
+        { name: 'secret', id: 'brd_secret', members: ['u_someone_else'] },
+      ],
+    })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      expect(await capture(() => app.run(['boards', '--scope', 'acme']))).toEqual({
+        code: 0,
+        stdout: 'General   brd_test  default\nsecurity  brd_security  private\ndesign    brd_design\n',
+        stderr: '',
+      })
+      expect((await capture(() => app.run(['boards', 'list', '--scope', 'acme']))).stdout).toContain('security  brd_security  private\n')
+      const listed = JSON.parse((await capture(() => app.run(['boards', '--scope', 'acme', '--json']))).stdout)
+      expect(listed.defaultBoardId).toBe('brd_test')
+      expect(listed.boards.map((board: { name: string }) => board.name)).toEqual(['General', 'security', 'design'])
+      // A board named by its URL in Vercel's API names its team.
+      expect((await capture(() => app.run(['boards', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_design?teamId=team_test']))).stdout).toContain('design    brd_design\n')
+      // A board of its own has no team's to list, and --name picks one rather than listing them.
+      const own = await capture(() => app.run(['boards', '--url', 'https://board.example.com/api/board']))
+      expect(own).toMatchObject({ code: 2, stderr: expect.stringContaining("is a board of its own, with no team's boards to list") })
+      expect(await capture(() => app.run(['boards', '--scope', 'acme', '--name', 'design']))).toMatchObject({ code: 2, stderr: expect.stringContaining('--name picks one') })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("says to run it again in seconds when Vercel's API rate-limits it, the same wait with --json", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
