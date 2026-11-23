@@ -951,7 +951,16 @@ function failureOf(error: unknown): Failure {
       case 'too_large':
         return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
       case 'no_team':
-        return { ...own('platform', 'api_error'), message: "Couldn't tell which team's board to use.", details: [message] }
+        // Outside a linked project, the app may know no team to use: the same command with one, or a board's URL, still works.
+        return {
+          ...own('platform', 'api_error', [
+            ...fix,
+            { instruction: "Use a team's board", argv: rerun('--scope', '<TEAM>') },
+            { instruction: 'Or a board at a URL (or set BOARD_URL)', argv: rerun('--url', '<URL>') },
+          ]),
+          message: "Couldn't tell which team's board to use.",
+          details: [message],
+        }
       case 'upload_failed':
         return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
       case 'channel_exists':

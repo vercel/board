@@ -238,6 +238,10 @@ describe('the embedded CLI', () => {
           reason: 'api_error',
           message: "Couldn't tell which team's board to use.",
           details: ['request to https://api.vercel.com/v2/user failed, reason: getaddrinfo ENOTFOUND'],
+          next: [
+            { instruction: "Use a team's board", argv: ['vercel', 'board', 'read', 'general', '--scope', '<TEAM>'] },
+            { instruction: 'Or a board at a URL (or set BOARD_URL)', argv: ['vercel', 'board', 'read', 'general', '--url', '<URL>'] },
+          ],
         },
       ])
       expect([fetching.mock.calls, logged.mock.calls]).toEqual([[], []])
