@@ -858,6 +858,26 @@ describe("vercel()'s tasks", () => {
     expect(seen).not.toMatch(/"token"|claimToken/)
   })
 
+  it("asks again with the same operation and token when a write's answer is lost on the way, so a claim that landed is the caller's", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { task } = await julian.tasks.create('work', { text: 'migrate the table' })
+    let lost = false
+    const cut = handleOn(api, 'user:u_jb', {
+      answered: (request, response) => {
+        if (!request.path.endsWith('/claim') || lost) return response
+        lost = true
+        throw new TypeError('fetch failed')
+      },
+    })
+    const claim = await cut.as('claude').tasks.claim(task.id, { lease: 60 })
+    const [landed, retried] = cut.sent.filter((request) => request.path === `/tasks/${threadOf(task.id)}/claim`)
+    expect(retried!.body).toMatchObject({ operationId: landed!.body!.operationId, claimToken: landed!.body!.claimToken })
+    expect(claim).toMatchObject({ token: landed!.body!.claimToken, epoch: 1 })
+    expect((await julian.thread(task.id)).message.task).toMatchObject({ state: 'claimed', epoch: 1 })
+    await claim.complete('migrated')
+  })
+
   it("sends a token its caller chose as the claim's, by ID and for the next ready task", async () => {
     const RUN_TOKEN = 'r'.repeat(43)
     const api = fakeMessageboard()

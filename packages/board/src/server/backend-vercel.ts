@@ -798,6 +798,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         })
       } catch (error) {
         if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
+        // An answer lost on the way may follow a write that landed: one the API can tell it has seen goes again, and is answered as it was.
+        if (attempt < RETRIES && repeatable && !init.signal?.aborted) {
+          await pause(retryWait(attempt, null), init.signal)
+          init.signal?.throwIfAborted()
+          continue
+        }
         throw new HttpError(502, 'unreachable', `Vercel's API didn't answer: ${error instanceof Error ? error.message : String(error)}`)
       }
       if (response.status === 304 && kept) {
