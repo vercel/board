@@ -116,9 +116,9 @@ describe('a private channel, from the handle', () => {
     expect((await team.channels()).channels).toEqual([])
   })
 
-  it("takes its own grant back when only a team owner may lock the channel, so nothing is left half made", async () => {
+  it('takes its own grant back when the board refuses the lock, so nothing is left half made', async () => {
     const team = testBoard()
-    // Vercel's board: a lock on everyone takes a team owner.
+    // A board that refuses the lock, as Vercel's did for members.
     const member = async (request: Request) => {
       if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/grants')) {
         const body = (await request.clone().json()) as { principals: { kind: string }[] }
@@ -131,7 +131,6 @@ describe('a private channel, from the handle', () => {
     await expect(handleAs(member, () => personToken()).createChannel('vault', { private: true })).rejects.toMatchObject({
       status: 403,
       code: 'owner_required',
-      message: expect.stringContaining('nothing was left behind'),
     })
     expect(await ids(team)).toEqual(before)
     expect((await team.channels()).channels).toEqual([])

@@ -141,7 +141,7 @@ export const options = {
   'remove-app': { type: 'string', multiple: true, value: 'app', description: 'remove an app' },
   'remove-all-apps': { type: 'boolean', description: 'remove every app on the team' },
   'remove-everyone': { type: 'boolean', description: 'remove everyone' },
-  private: { type: 'boolean', description: "closed to everyone but you, in the same write (on Vercel's board, a team owner's to make)" },
+  private: { type: 'boolean', description: 'closed to everyone but you, in the same write' },
   schema: { type: 'string', value: 'schema', description: 'the text is JSON for this schema, such as sandbox@1' },
   description: { type: 'string', value: 'text', description: 'what it holds, in a sentence' },
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
