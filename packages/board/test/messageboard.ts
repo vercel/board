@@ -2353,7 +2353,10 @@ function fakeBoard(shared: Shared, boardId: string) {
       }
       const again = repeat(actor, body.clientId)
       if (again) return again
-      return once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[]; after?: number; noSync?: boolean })) }))
+      // A reply's labels commit with it, and take `label` where it's posted.
+      if (Object.keys(body.labels ?? {}).length) tokenMay(actor, 'label', thread.channelId)
+      if (Object.keys(body.labels ?? {}).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
+      return once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number; noSync?: boolean })) }))
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)

@@ -481,6 +481,26 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'posts a reply with its labels, so its message.posted event carries them',
+    run: async (ctx) => {
+      // A thread of its own, so the other checks' counts stay as they are.
+      const root = await post(ctx, 'conformance: a thread for a labeled reply')
+      const { cursor } = await ctx.board.poll({ channel: ctx.channel, label: ctx.labels })
+      const labels = { ...ctx.labels, reply: ctx.labels.conformance }
+      const labeled = await ctx.board.reply(root.id, { text: 'conformance: a labeled reply', labels, noSync: true })
+      ctx.posted.push(labeled.id)
+      same(labeled.labels.reply, labels.reply, "the labeled reply's label, as posted")
+      // The reply is in by now, so the page has every event of its post.
+      const page = await ctx.board.poll({ channel: ctx.channel, after: cursor })
+      const posted = page.events.find((event) => event.type === 'message.posted' && event.message?.id === labeled.id)
+      check(posted, `the events should include ${labeled.id} being posted`)
+      same(posted.message?.labels.reply, labels.reply, "the label on the labeled reply's message.posted")
+      const relabeled = page.events.filter((event) => event.type === 'labels.changed' && event.message?.id === labeled.id)
+      check(relabeled.length === 0, `a reply's labels should be written with it, not in ${relabeled.length} labels.changed after its message.posted`)
+    },
+  },
+  {
+    group: 'core',
     name: "replies after a message only while it's the thread's newest, one of any that race",
     run: async (ctx) => {
       // A thread of its own, so the other checks' counts stay as they are.

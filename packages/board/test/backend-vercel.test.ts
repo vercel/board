@@ -82,6 +82,7 @@ describe('vercel()', () => {
       'core: says in its discovery where it is': 'passed',
       'core: posts a message, and reads it back by its ID': 'passed',
       "core: puts a reply in its root's thread": 'passed',
+      'core: posts a reply with its labels, so its message.posted event carries them': 'passed',
       'core: labels a message only while its labels are as the write says, one of any that race': 'passed',
       'core: edits and deletes a message only at the revision it was read at, which only edits and deletes change': 'passed',
       "core: replies after a message only while it's the thread's newest, one of any that race": 'passed',

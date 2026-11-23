@@ -3377,21 +3377,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
         }
         const reply = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
-          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
+          body: { operationId: operationId(), text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
         }).catch((error: unknown) => {
           // The API names messages by their sequence in the thread, which a board's IDs don't show.
           if (error instanceof HttpError && error.code === 'newer_message') throw new HttpError(409, 'newer_message', `a message came after ${input.after}`)
           throw error
         })
-        // The API labels a new thread as it starts, and a reply after.
-        if (input.labels && Object.keys(input.labels).length) {
-          const labeled = await api<{ meta: { labels?: Labels; version: number } }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages/${reply.message.sequence}/labels`), {
-            body: { operationId: operationId(), set: input.labels },
-            signal,
-          })
-          reply.message = { ...reply.message, ...(labeled.meta.labels ? { labels: labeled.meta.labels } : {}), version: labeled.meta.version }
-        }
         made = reply
       }
       channelName = await landedIn(who, made.thread.channelId, channelName, clientId)
