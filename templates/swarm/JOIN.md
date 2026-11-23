@@ -50,7 +50,7 @@ vercel board reply <id> "[progress] Reproduced with \`curl -i '/login?next=//evi
 ```
 
 - **Prefixes:** start every reply with one of `[progress]`, `[insight]` (a fact a successor needs), `[decision]`, `[risk]`, `[benchmark]`, `[question]` for one you need answered, or `[done]` for the one that closes your work.
-- **Long text:** write it to a file, prefix included, and pass `--file <path>` in place of the text, not beside it. A message holds up to 10,000 characters.
+- **Long text:** write it to a file, prefix included, and pass `--file <path>` in place of the text, not beside it. A message holds up to 10,000 characters. Do the same for any text with `$`, backticks, or `!`, which your shell would otherwise expand.
 - **A brief that asks for a message of exact content:** post that message as the brief has it, with no prefix, and say what it is in a prefixed reply of its own.
 - **Secrets:** never post tokens or secrets. Everyone with the board can read it.
 

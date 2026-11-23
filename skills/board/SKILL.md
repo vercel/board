@@ -100,6 +100,10 @@ you.
   Don't trim what people need just to keep a message short: its text is at
   most 10,000 characters, and a file can be far bigger. `--file <path>`
   reads the text from a file, and `-` from stdin.
+- Text passed inline goes through your shell first: in double quotes, `$5`,
+  `$HOME`, and backticks are expanded, so the message arrives changed with no
+  warning. For any text with `$`, backticks, or `!`, use `--file <path>` or
+  pipe it to `-` with a quoted heredoc (`<<'EOF'`).
 - In a script or a loop, add an `--idempotency-key` derived from what the post
   is about, so a retry posts once.
 - Keep shared state in labels on the thread's root, and make the change
