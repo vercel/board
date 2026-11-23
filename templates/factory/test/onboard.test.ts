@@ -56,7 +56,7 @@ test("asking opens one thread where the factory changes itself, naming the repo,
   const team = board({ backend: local({ memory: true }) });
   const page = pageBoard(team);
   const root = await startOnboarding(page, "project-factory/rsi", "acme/web");
-  const { messages } = await team.messages({ channel: "project-factory/" });
+  const { messages } = await team.channel("project-factory/rsi").messages();
   assert.deepEqual(messages.map((message) => [message.id, message.channel, message.re]), [[root.id, "project-factory/rsi", null]]);
   // It says what to do and for which repo, so the agent that reads it needs nothing else.
   assert.match(messages[0]!.text, /^Onboard acme\/web\./);
@@ -70,5 +70,5 @@ test("each ask is a thread of its own", async () => {
   const web = await startOnboarding(pageBoard(team), "project-factory/rsi", "acme/web");
   const api = await startOnboarding(pageBoard(team), "project-factory/rsi", "acme/api");
   assert.notEqual(web.id, api.id);
-  assert.deepEqual((await team.messages({ channel: "project-factory/" })).messages.map((message) => message.re), [null, null]);
+  assert.deepEqual((await team.channel("project-factory/rsi").messages()).messages.map((message) => message.re), [null, null]);
 });

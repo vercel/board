@@ -1,4 +1,4 @@
-import type { Board, MessageView } from "@vercel/board";
+import type { Board, ChannelsPage, MessageView } from "@vercel/board";
 import { byAgent } from "../agent/lib/identity.ts";
 import { FIRST_TASK_LABEL, FIRST_TASK_PATH, firstTask, type FirstTask } from "./first-task.ts";
 import { githubScope, ownRepo } from "./github.ts";
@@ -101,7 +101,7 @@ export type Deps = {
   credits(): Promise<number>;
   /** Who this deployment is on its board, and what it may do there, by channel pattern. Rejects with the board's own error when it can't use it. */
   me(): Promise<Me>;
-  /** The board's latest messages in a channel, newest last. */
+  /** The board's latest messages in a channel, or with a trailing `/` in it and every channel under it, newest last. */
   messages(query: { channel: string; limit: number }): Promise<MessageView[]>;
   /** The roots of the latest threads in a channel that carry a label, one per thread however many replies it has, the last active last. */
   threads(query: { channel: string; label: string[]; limit: number }): Promise<MessageView[]>;
@@ -505,7 +505,7 @@ async function tryStep(deps: Deps, project: Project, found: Found, github: Promi
   const REPLY = "Get a reply from the agent";
   // The Vercel step says how to open the board: nothing to try until then.
   if (!me) return step("try", [todo(FIRST), todo(REPLY)]);
-  // The factory's channels, in one read: its own and the ones under it.
+  // The factory's channels: its own and the ones under it.
   const recent: MessageView[] | Error = await deps.messages({ channel: `${deps.synced.home}/`, limit: READ }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   if (recent instanceof Error) return step("try", [todo("Couldn't read the board", { hint: message(recent) }), todo(REPLY)]);
   found.recent = recent;
@@ -515,13 +515,14 @@ async function tryStep(deps: Deps, project: Project, found: Found, github: Promi
   const replied = recent.some((m) => m.re !== null && byAgent(m.by, me.principal));
   // The first task is a pull request in the factory's own repo, so it's offered once the app can write there.
   found.first = isDone(await github) ? firstTask(deps.source("README.md"), recent) : null;
+  // Where the factory changes itself: its first task starts there, and people ask it things there.
+  const rsi = `${deps.synced.home}/rsi`;
   // Its thread may be older than what one read brings: before offering it again, ask for it by its label.
   if (found.first === "offer") {
-    const started = await deps.threads({ channel: `${deps.synced.home}/`, label: [FIRST_TASK_LABEL], limit: 1 }).catch(() => []);
+    const started = await deps.threads({ channel: rsi, label: [FIRST_TASK_LABEL], limit: 1 }).catch(() => []);
     found.first = firstTask(deps.source("README.md"), started) ?? "offer";
   }
-  // Where people ask it things: where the factory changes itself, in Slack once its channel is mirrored there.
-  const rsi = `${deps.synced.home}/rsi`;
+  // In Slack once its channel is mirrored there.
   const mirror = mirrorOf(deps.synced.slackChannels, rsi);
   const where = mirror && isDone(await slack) ? mirror : rsi;
   const start: Help =
@@ -537,9 +538,31 @@ export const boardDeps = (board: Board): Pick<Deps, "me" | "messages" | "threads
     const { principal, can } = await board.me();
     return { principal, can };
   },
-  messages: async (query) => (await board.messages(query)).messages,
+  // A board lists messages a channel at a time: a tree's are the newest of each of its channels'.
+  messages: async ({ channel, limit }) => {
+    const names = channel.endsWith("/") ? await channelsIn(board, channel) : [channel];
+    const pages = await Promise.all(names.map((name) => board.channel(name).messages({ limit })));
+    return pages
+      .flatMap((page) => page.messages)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(-limit);
+  },
   threads: async (query) => (await board.threads(query)).threads.map((thread) => thread.message),
 });
+
+/** The channels of a tree, `project-factory/`: `project-factory` and every one under it, page by page. */
+async function channelsIn(board: Board, tree: string): Promise<string[]> {
+  const root = tree.replace(/\/+$/, "");
+  const names: string[] = [];
+  let after: string | null = null;
+  do {
+    // The list goes by prefix, so it brings `project-factory-old` too: the tree is the root and what's under it.
+    const page: ChannelsPage = await board.channels({ prefix: root, limit: 500, ...(after ? { after } : {}) });
+    names.push(...page.channels.map((c) => c.path).filter((path) => path === root || path.startsWith(`${root}/`)));
+    after = page.next;
+  } while (after);
+  return names;
+}
 
 /** The checks' real dependencies, loaded only when the launcher runs. */
 export async function liveDeps(board: Pick<Deps, "me" | "messages" | "threads">, synced: Synced): Promise<Deps> {

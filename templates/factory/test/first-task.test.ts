@@ -20,7 +20,7 @@ test("starting it opens one thread where the factory changes itself, written by 
   const team = board({ backend: local({ memory: true }) });
   const page = pageBoard(team);
   const root = await startFirstTask(page, "project-factory/rsi");
-  const { messages } = await team.messages({ channel: "project-factory/" });
+  const { messages } = await team.channel("project-factory/rsi").messages();
   assert.deepEqual(messages.map((message) => [message.id, message.channel, message.re]), [[root.id, "project-factory/rsi", null]]);
   // It says what to do, so the agent that reads it needs nothing else.
   assert.match(messages[0]!.text, /README/);
@@ -38,7 +38,7 @@ test("asked twice, it starts once: one thread", async () => {
   const first = await startFirstTask(pageBoard(team), "project-factory/rsi");
   const again = await startFirstTask(pageBoard(team), "project-factory/rsi");
   assert.equal(again.id, first.id);
-  assert.equal((await team.messages({ channel: "project-factory/" })).messages.length, 1);
+  assert.equal((await team.channel("project-factory/rsi").messages()).messages.length, 1);
 });
 
 test("a team's factories share a board, and each starts its own first task there", async () => {
@@ -46,7 +46,7 @@ test("a team's factories share a board, and each starts its own first task there
   const a = await startFirstTask(team, "project-web/rsi");
   const b = await startFirstTask(team, "project-api/rsi");
   assert.notEqual(a.id, b.id);
-  assert.deepEqual((await team.messages({ channel: "project-api/" })).messages.map((message) => message.id), [b.id]);
+  assert.deepEqual((await team.channel("project-api/rsi").messages()).messages.map((message) => message.id), [b.id]);
 });
 
 test("the page's handle opens threads where the factory changes itself, and writes nowhere else", async () => {
@@ -59,14 +59,15 @@ test("the page's handle opens threads where the factory changes itself, and writ
   // A thread it can't read isn't there for it at all.
   await assert.rejects(page.reply(elsewhere.id, "and this"));
   await assert.rejects(page.react(elsewhere.id, "eyes"));
-  const { messages } = await team.messages({ channel: "project-factory/" });
+  const { messages } = await team.channel("project-factory/web").messages();
   assert.deepEqual(messages.map((message) => [message.text, Object.keys(message.reactions ?? {})]), [["a thread about a repo", []]]);
+  for (const channel of ["project-factory", "another-team"]) assert.deepEqual((await team.channel(channel).messages()).messages, [], channel);
 });
 
 test("the first task is on offer while the README is the template's and nothing started it, and gone once the README is the team's", async () => {
   const team = board({ backend: local({ memory: true }) });
   await team.post("project-factory/rsi", "hello");
-  const { messages } = await team.messages({ channel: "project-factory/" });
+  const { messages } = await team.channel("project-factory/rsi").messages();
   assert.equal(firstTask(TEMPLATE_README, messages), "offer");
   assert.equal(firstTask(TEMPLATE_README, []), "offer");
   assert.equal(firstTask("# Acme's factory\n", messages), null);

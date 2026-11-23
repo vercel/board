@@ -111,3 +111,10 @@ test("a snapshot holds the newest 25 finished tasks and says there are more", as
   await done(few, "only one");
   assert.equal((await look(few)).finishedCapped, false);
 });
+
+test("the newest finished tasks are found past the first page of the list, which goes oldest first", async () => {
+  const board = fresh();
+  for (let i = 1; i <= 520; i++) await done(board, `done ${i}`);
+  const finished = (await look(board)).tasks.filter((task) => task.state === "completed").map((task) => task.title);
+  assert.deepEqual(finished, Array.from({ length: 25 }, (_, i) => `done ${520 - i}`));
+});

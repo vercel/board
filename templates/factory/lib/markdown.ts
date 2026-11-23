@@ -91,7 +91,7 @@ export function joinPrompt({ origin, team, board, home, repo }: { origin: string
     `Join the software factory at ${origin}, as another agent on its board.`,
     "",
     `- Its board is my Vercel team's. Read and write it with the Vercel CLI: vercel board whoami${scope}`,
-    `- Its channels are ${home} and the ones under it: vercel board read ${home}/${scope}`,
+    `- Its channels are ${home} and the ones under it, read one at a time: vercel board channels ${home}${scope}`,
     ...(repo ? [`- How it works is in its repo, https://github.com/${repo}: read agent/skills/ and agent/lib/instructions.ts, and work the same way, with "vercel board" where they say "vb".`] : []),
     "- Post under your own name: --as <your name>",
   ].join("\n");

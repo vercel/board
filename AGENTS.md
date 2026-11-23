@@ -122,12 +122,13 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   the board (`ownWrite`, `profileOfSelf`); labels anyone may write never decide
   a run's identity, its state, or what its agents do.
 - **The live view** (`app/live`). A snapshot (`lib/swarm.ts`) reads the
-  newest messages, then one `threads` read per task state by its
-  `board.task` label, the finished states with a limit of 25. It reads threads
-  and not `tasks.list`, which lists oldest first: the page wants the newest
-  finished. Keep each label filter to one value: Vercel's board
-  indexes only that, and pages through every thread in the swarm for
-  `a|b` or a bare key. Nothing is kept between snapshots.
+  swarm's newest 100 events (`poll({ last })`), then one `tasks.list` per
+  state, each of the whole subtree in one request: a board reads messages a
+  channel at a time, and Vercel's refuses `threads` under a subtree. The list
+  goes oldest first, so a finished state is paged to its end for its newest
+  25. It reads as the deployment, which reads every channel: a caller held to
+  some lists 50 channels at most (400 `channel_tree_too_large`), and the swarm
+  makes one per run. Nothing is kept between snapshots.
   `app/api/live` long-polls the swarm's events and sends a snapshot over
   server-sent events after a change, at most one every 5 seconds, from a
   snapshot every viewer on the instance shares (`sharedSnapshot`). The browser

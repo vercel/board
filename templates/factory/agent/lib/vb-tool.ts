@@ -11,7 +11,7 @@ export const inputSchema = z.object({
   args: z
     .array(z.string())
     .describe(
-      'vb\'s arguments, one per item, as you\'d type them after vb: ["read", "42"], ["reply", "42", "on it", "--attach", "~/shot.png"], ["label", "42", "kind=bug"], ["read", "project-factory/", "--text", "attach"].',
+      'vb\'s arguments, one per item, as you\'d type them after vb: ["read", "42"], ["reply", "42", "on it", "--attach", "~/shot.png"], ["label", "42", "kind=bug"], ["channels", "project-factory"].',
     ),
 });
 
