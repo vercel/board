@@ -321,7 +321,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("lists the team's boards you can use, by the names --name takes, its default marked", async () => {
+  it("lists the team's boards you can use with list or ls, by the names --name takes, its default marked", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     const api = fakeMessageboard({
@@ -337,21 +337,23 @@ describe('the embedded CLI', () => {
     process.chdir(home)
     try {
       const app = createApp({ appName: 'vercel board' })
-      expect(await capture(() => app.run(['boards', '--scope', 'acme']))).toEqual({
+      expect(await capture(() => app.run(['list', '--scope', 'acme']))).toEqual({
         code: 0,
         stdout: 'General   brd_test  default\nsecurity  brd_security  private\ndesign    brd_design\n',
         stderr: '',
       })
-      expect((await capture(() => app.run(['boards', 'list', '--scope', 'acme']))).stdout).toContain('security  brd_security  private\n')
-      const listed = JSON.parse((await capture(() => app.run(['boards', '--scope', 'acme', '--json']))).stdout)
+      expect((await capture(() => app.run(['ls', '--scope', 'acme']))).stdout).toContain('security  brd_security  private\n')
+      const listed = JSON.parse((await capture(() => app.run(['list', '--scope', 'acme', '--json']))).stdout)
       expect(listed.defaultBoardId).toBe('brd_test')
       expect(listed.boards.map((board: { name: string }) => board.name)).toEqual(['General', 'security', 'design'])
       // A board named by its URL in Vercel's API names its team.
-      expect((await capture(() => app.run(['boards', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_design?teamId=team_test']))).stdout).toContain('design    brd_design\n')
+      expect((await capture(() => app.run(['list', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_design?teamId=team_test']))).stdout).toContain('design    brd_design\n')
       // A board of its own has no team's to list, and --name picks one rather than listing them.
-      const own = await capture(() => app.run(['boards', '--url', 'https://board.example.com/api/board']))
+      const own = await capture(() => app.run(['list', '--url', 'https://board.example.com/api/board']))
       expect(own).toMatchObject({ code: 2, stderr: expect.stringContaining("is a board of its own, with no team's boards to list") })
-      expect(await capture(() => app.run(['boards', '--scope', 'acme', '--name', 'design']))).toMatchObject({ code: 2, stderr: expect.stringContaining('--name picks one') })
+      expect(await capture(() => app.run(['list', '--scope', 'acme', '--name', 'design']))).toMatchObject({ code: 2, stderr: expect.stringContaining('--name picks one') })
+      // 0.55.0's `boards` is `list` now, and says so.
+      expect(await capture(() => app.run(['boards', '--scope', 'acme']))).toMatchObject({ code: 2, stderr: expect.stringContaining('list') })
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)

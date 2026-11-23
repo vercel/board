@@ -849,8 +849,9 @@ function doing(): string {
       return a === 'create' ? `create ${b ?? 'the channel'}` : 'list channels'
     case 'schedules':
     case 'actors':
-    case 'boards':
       return `list ${command}`
+    case 'list':
+      return "list the team's boards"
     case 'tasks': {
       if (a === undefined || !TASK_VERBS.has(a)) return a === undefined ? 'list tasks' : `list tasks in ${a}`
       const one = b === undefined ? 'a task' : `task ${ref(b)}`
@@ -1244,9 +1245,9 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
  * deployment's) is one board, with no team's to list.
  */
 async function teamBoards() {
-  if (io.board) throw usage("boards isn't available in-process: the board handle you pass is one board.", { reason: 'not_available', next: [] })
+  if (io.board) throw usage("list isn't available in-process: the board handle you pass is one board.", { reason: 'not_available', next: [] })
   if (flags.name !== undefined || flags.ensure)
-    throw usage(`boards lists every board of the team, and --${flags.name !== undefined ? 'name' : 'ensure'} picks one: leave it out.`, { reason: 'conflicting_options' })
+    throw usage(`list lists every board of the team, and --${flags.name !== undefined ? 'name' : 'ensure'} picks one: leave it out.`, { reason: 'conflicting_options' })
   let team = flags.scope ?? flags.team
   if (team !== undefined && flags.url !== undefined)
     throw usage("--url names its board, its team included, and --scope a team: pass one of them.", { reason: 'conflicting_options' })
@@ -1254,7 +1255,7 @@ async function teamBoards() {
   if (url !== null && url !== undefined) {
     const onVercel = vercelBoard(url.replace(/\/+$/, ''))
     if (!onVercel)
-      throw usage(`${url} is a board of its own, with no team's boards to list: boards lists a team's, in Vercel's API.`, {
+      throw usage(`${url} is a board of its own, with no team's boards to list: list lists a team's, in Vercel's API.`, {
         reason: 'not_available',
         next: [{ instruction: "List a team's boards", argv: rerunWithout(['--url'], '--scope', '<TEAM>') }],
       })
@@ -1522,10 +1523,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'boards': {
-      const [sub, extra] = args
-      if (sub !== undefined && sub !== 'list') throw usage(`Unknown command ${sub} for ${named()} boards.`, { reason: 'unknown_command' })
-      if (extra !== undefined) throw usage(`boards list takes no arguments: ${extra} is one too many.`)
+    case 'list': {
+      if (args[0] !== undefined) throw usage(`list takes no arguments: ${args[0]} is one too many.`)
       const listed = await teamBoards()
       if (flags.json) return result(listed), 0
       if (listed.boards.length === 0) return out('no boards you can use on this team yet'), 0
@@ -2869,8 +2868,7 @@ const OTHER_NAMES: Record<string, OtherName> = {
   search: SEARCH,
   find: SEARCH,
   grep: SEARCH,
-  list: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
-  ls: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
+  boards: { instruction: "List the team's boards", argv: ['list'] },
   threads: { instruction: "List a channel's threads with read", argv: ['read', '<CHANNEL>'] },
   messages: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },
   thread: { instruction: 'Read one thread, every message', argv: ['read', '<ID>'] },

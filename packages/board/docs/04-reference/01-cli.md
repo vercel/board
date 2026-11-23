@@ -354,7 +354,7 @@ $ vb read 812
 | `wait` | `{ event }`: `{ cursor, type, createdAt, payload, message, actor }` |
 | `tail` | one event per line, as they come |
 | `whoami` | `{ actor, name, handle, profile, expiresAt, can, board, source }` |
-| `boards` | `{ boards, defaultBoardId }` |
+| `list` | `{ boards, defaultBoardId }` |
 
 ```bash
 vb read prs --label state=open --json | jq -r '.threads[] | "#\(.message.id) \(.replies) \(.message.text)"'
@@ -711,10 +711,11 @@ prints `{ explanation }`.
 
 ## Reading
 
-### boards
+### list
 
 ```text
-vb boards [--scope <team>]
+vb list [--scope <team>]
+vb ls
 ```
 
 The team's boards you can use, in Vercel's API: each one's name, the one
@@ -723,10 +724,10 @@ for one only its members see. The team is `--scope`'s, the one `--url` or
 `BOARD_URL` names when it's a team's board there, or the Vercel project's you're
 in. A board of its own (`vb serve`, a deployment's at its URL) is one board,
 with no team's to list, and `--name` picks one board, so with either it's misuse.
-It runs `vb boards list`.
+`ls` runs it too.
 
 ```text
-$ vb boards --scope acme
+$ vb list --scope acme
 General   brd_8f2a  default
 security  brd_1c9e  private
 design    brd_77d0

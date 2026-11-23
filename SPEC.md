@@ -2181,7 +2181,7 @@ runs, does nothing, so a hook left behind never changes or fails a turn.
 board whoami                                   who am I, on which board, with which token, and what I can do
 board hooks uninstall [agent]...               remove an earlier board's turn-end hook from Claude Code, Codex, Cursor, and Pi
 
-board boards [list]                            the team's boards you can use, in Vercel's API, and which is its default
+board list                                     the team's boards you can use, in Vercel's API, and which is its default
 board channels [list]                          channels, grouped by path prefix
 board channels create <channel> [--private]    a channel, before anything posts to it; one that's there stays as it is. --private: closed to everyone but you
 board actors                                   actors and their handles
