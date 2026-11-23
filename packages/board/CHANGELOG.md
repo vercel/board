@@ -1,5 +1,20 @@
 # vboard
 
+## 0.54.1
+
+### Patch Changes
+
+- 541df20: `board read` and `board tasks` on a channel's last part without the path it's under, like `v0-errors` for `factory/v0/v0-errors`, now ask whether you meant the full path instead of only saying no channel has that name.
+- 551e019: On Vercel's board, a write whose answer is lost on the way (the connection drops, so `fetch` throws) is sent again with the same operation ID and claim token, which the API answers as it did the first time. A `tasks claim` that landed is now the caller's, instead of failing with `network_error` while the task stays claimed until its lease runs out.
+- d73458d: `vb read <channel>` on a team's default board, with `--scope` and no `--name`, now says that's the board it read when the channel isn't there, and how to read another of the team's boards with `--name`. Its "see its channels" step keeps `--scope`.
+- ab31376: When `vercel board` can't tell which team's board to use, like outside a linked project in a non-interactive run, its error now says how to go on: the same command with `--scope <TEAM>`, or with `--url <URL>` (or `BOARD_URL`).
+- 694d010: `board read` with a message ID cut short (like `msg_<thread>` without its `_<n>`) says it looks like one instead of only that no channel has that name, and suggests the thread's root when the thread's part is whole.
+- b112efc: `vb tasks create --help` says what a plan task's `needs` takes: a key of the plan, or a task that's there by its ID, as `"812"` or `{"id": "812"}`.
+- a65cb8b: The CLI takes a thread's own ID (`thr_…`, a message's `thread` in `--json`) wherever it takes a message ID, as that thread's root: `board read thr_…` reads the thread instead of looking for a channel of that name.
+- 7d33528: On Vercel's board, a reply posted with labels has them in its own write, so its `message.posted` carries them and no `labels.changed` follows.
+- ffd39a9: `post` and `reply` with `--schema` and a second text, such as a sentence before the JSON, now say the text is the schema's JSON alone, and that prose goes in the text with the JSON in a ```` ```json#<schema> ```` fence, without `--schema`. They used to say to quote both as one argument, which then failed as not JSON.
+- bff12dc: On Vercel's board, `tasks.list()` asks for each task's latest reply with the list, so a page of tasks costs one request instead of one more for every task that has replies. On an API that doesn't send them yet, it reads each reply by ID as before.
+
 ## 0.54.0
 
 ### Minor Changes
