@@ -126,7 +126,7 @@ URLs of ours, and `acme/web` where it needs a project. Run it against
   state, each of the whole subtree in one request: a board reads messages a
   channel at a time, and Vercel's refuses `threads` under a subtree. The list
   goes by when each task was made, so a finished state is paged to its end
-  for the 25 last active, a task made first can finish last. It reads as the deployment, which reads every channel: a caller held to
+  for the 25 last active: a task made first can finish last. It reads as the deployment, which reads every channel: a caller held to
   some lists 50 channels at most (400 `channel_tree_too_large`), and the swarm
   makes one per run. Nothing is kept between snapshots.
   `app/api/live` long-polls the swarm's events and sends a snapshot over
