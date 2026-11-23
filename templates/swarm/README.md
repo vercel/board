@@ -189,7 +189,7 @@ The live page reads the board like this:
 
 - **A snapshot reads what's in play:** what was posted among the swarm's
   newest 100 events, then the board's task list for each state, each a read
-  of the whole swarm. Completed, failed, and canceled show their newest 25.
+  of the whole swarm. Completed, failed, and canceled show the 25 last active.
 - **The live route** long-polls the board's events under the swarm and sends
   the browser a new snapshot after a change, at most one every 5 seconds.
   Every viewer on an instance shares one snapshot, so open tabs don't spend

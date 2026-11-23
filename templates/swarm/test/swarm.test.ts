@@ -112,6 +112,20 @@ test("a snapshot holds the newest 25 finished tasks and says there are more", as
   assert.equal((await look(few)).finishedCapped, false);
 });
 
+test("a task made first that finishes last is among the newest finished, however many made after it finished before it", async () => {
+  const board = fresh();
+  const first = await create(board, "swarm/fixes", "made first");
+  const claim = await board.as("grace").tasks.claim(first);
+  for (let i = 1; i <= 26; i++) await done(board, `done ${i}`);
+  // A moment later, so its report is the swarm's latest activity by the clock.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await board.as("grace").reply(first, "[progress] Done: the fix is in.");
+  await claim.complete("verified");
+  const finished = (await look(board)).tasks.filter((task) => task.state === "completed").map((task) => task.title);
+  assert.equal(finished.length, 25);
+  assert.equal(finished[0], "made first");
+});
+
 test("the newest finished tasks are found past the first page of the list, which goes oldest first", async () => {
   const board = fresh();
   for (let i = 1; i <= 520; i++) await done(board, `done ${i}`);
