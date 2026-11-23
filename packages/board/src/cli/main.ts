@@ -28,7 +28,7 @@ import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
-import { closest, commandLine, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
+import { closest, closestChannel, commandLine, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
 
 /** A failure this run says in its own words: what a command throws to stop with it. */
 export class Failed extends Error {
@@ -1563,7 +1563,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const channels = (await everyChannel(board)).map((c) => c.path)
         if (!channels.some((path) => path === target || path.startsWith(target.replace(/\/?$/, '/')))) {
           const partial = partialApiId(target)
-          const guess = partial ? partial.root : closest(target, channels)
+          const guess = partial ? partial.root : closestChannel(target, channels)
           throw new Failed({
             class: 'not_found',
             reason: 'channel_not_found',
@@ -2473,7 +2473,7 @@ async function tasks(args: string[]): Promise<number> {
       if (!channels.some((path) => path === name || path.startsWith(`${name}/`))) {
         const meant = closest(verb, TASK_VERBS)
         if (meant) throw usage(`Unknown command ${verb} for ${named()} tasks. Did you mean ${meant}?`, { reason: 'unknown_command' })
-        const guess = closest(verb, channels)
+        const guess = closestChannel(verb, channels)
         throw new Failed({
           class: 'not_found',
           reason: 'channel_not_found',

@@ -647,6 +647,10 @@ describe('cli', () => {
       expect(await vb(['read', cut]), cut).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(new RegExp(`^error: Couldn't find channel ${cut}\\. Did you mean msg_${thread}_1\\?\\n.*message ID cut short`)) })
     expect(await vb(['read', 'msg_73a86530-2081'])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Couldn't find channel msg_73a86530-2081\.\n.*message ID cut short/) })
     expect((await vb(['read', 'open-wrok'])).stderr).not.toContain('message ID')
+    // A channel's last part, without the path it's under, names the channel it's the end of.
+    expect((await vb(['post', 'team/alerts/errors', 'deploy failed'])).code).toBe(0)
+    expect(await vb(['read', 'errors'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel errors\. Did you mean team\/alerts\/errors\?\n/) })
+    expect(await vb(['read', 'alerts/errors'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel alerts\/errors\. Did you mean team\/alerts\/errors\?\n/) })
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n\nnew since then: vb read open-work --text 'nothing like this' --after \d+\n$/) })
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
   })

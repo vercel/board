@@ -114,6 +114,22 @@ export function closest(word: string, known: Iterable<string>): string | undefin
   return best !== undefined && distance > 0 && distance <= (word.length >= 6 ? 2 : 1) ? best : undefined
 }
 
+/**
+ * The channel a name that's no channel's likely means: one close to it, or the one whose path ends in it, like
+ * `factory/v0/v0-errors` for `v0-errors`, a channel's last part that leaves out the path it's under. Several that
+ * end in it are each named.
+ */
+export function closestChannel(name: string, channels: readonly string[]): string | undefined {
+  const close = closest(name, channels)
+  if (close) return close
+  const tail = `/${name.replace(/^\/+|\/+$/g, '')}`
+  if (tail === '/') return undefined
+  const ending = channels.filter((path) => path.endsWith(tail) || path.endsWith(`${tail}/`))
+  if (!ending.length) return undefined
+  if (ending.length <= 3) return ending.join(' or ')
+  return `${ending.slice(0, 3).join(', ')}, or ${ending.length - 3} more`
+}
+
 /** How many edits turn `a` into `b`, a swap of neighbors counting as one. */
 function edits(a: string, b: string): number {
   const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)))
