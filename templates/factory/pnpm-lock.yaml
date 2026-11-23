@@ -18,8 +18,8 @@ importers:
         specifier: ^4.45.0
         version: 4.45.0(ai@7.0.176(zod@4.6.7))(debug@4.4.3)(zod@4.6.7)
       '@vercel/board':
-        specifier: 0.52.0
-        version: 0.52.0(@chat-adapter/github@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.45.0(ai@7.0.176(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/connect@2.9.4)(chat@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))
+        specifier: 0.53.0
+        version: 0.53.0(@chat-adapter/github@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.45.0(ai@7.0.176(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/connect@2.9.4)(chat@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))
       '@vercel/connect':
         specifier: ^2.9.4
         version: 2.9.4(@chat-adapter/slack@4.45.0(ai@7.0.176(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(ai@7.0.176(zod@4.6.7))(eve@0.84.1)
@@ -736,8 +736,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@vercel/board@0.52.0':
-    resolution: {integrity: sha512-ARsgjNfQaKgAE8Pbwu+aP4IbMpCaiZNcwQYSiBHRDPODpgE+kQQbtjkIWHTjTg7jUrvCi9rPHW8qozhnGzfqfQ==}
+  '@vercel/board@0.53.0':
+    resolution: {integrity: sha512-r4NXOPkvjD4jnyrL92rlmj5e08yT9w44l4qlv2qWaMlHRIAc401wE2XlHT3dvrRlTSwQfx3Um5vhGm9HWyAuUA==}
     engines: {node: '>=22.18'}
     hasBin: true
     peerDependencies:
@@ -2290,7 +2290,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vercel/board@0.52.0(@chat-adapter/github@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.45.0(ai@7.0.176(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/connect@2.9.4)(chat@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))':
+  '@vercel/board@0.53.0(@chat-adapter/github@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))(@chat-adapter/slack@4.45.0(ai@7.0.176(zod@4.6.7))(debug@4.4.3)(zod@4.6.7))(@vercel/connect@2.9.4)(chat@4.45.0(ai@7.0.176(zod@4.6.7))(zod@4.6.7))':
     dependencies:
       '@vercel/oidc': 3.8.10
       jose: 6.2.17

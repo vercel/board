@@ -135,9 +135,6 @@ function toTask({ message, replies, last }: ThreadSummaryView, known: Map<string
   ];
 }
 
-/** A page of a task list, as many as a board answers at once. */
-const TASK_PAGE = 500;
-
 /** When a task's thread was last active: its latest reply, or its root. */
 const activeAt = ({ message, last }: ThreadSummaryView) => (last ?? message).createdAt;
 
@@ -148,18 +145,11 @@ const byActivity = (tasks: ThreadSummaryView[]) => [...tasks].sort((a, b) => act
  * A state's tasks under the swarm, the latest active first. The board lists them by when each was
  * made, oldest first: an open state is its oldest `limit`, the ones next in line. A finished one is
  * the `limit` last active, which can be anywhere in that order (a task made first can finish last),
- * so its list is read to the end, a request per page.
+ * so it asks the board for those with `latest`, which reads to the end itself, latest active last.
  */
 async function tasksIn(board: Board, swarm: string, state: State, limit: number): Promise<ThreadSummaryView[]> {
   if (!(FINISHED as readonly State[]).includes(state)) return byActivity((await board.tasks.list({ channel: swarm, state, limit })).tasks).reverse();
-  let newest: ThreadSummaryView[] = [];
-  let after: string | undefined;
-  for (;;) {
-    const page = await board.tasks.list({ channel: swarm, state, limit: TASK_PAGE, ...(after !== undefined ? { after } : {}) });
-    newest = byActivity([...newest, ...page.tasks]).slice(-limit);
-    if (page.tasks.length < TASK_PAGE) return newest.reverse();
-    after = page.cursor;
-  }
+  return (await board.tasks.list({ channel: swarm, state, limit, latest: true })).tasks.reverse();
 }
 
 /**
