@@ -213,6 +213,7 @@ Know these before you hit them. Each error also says its limit and a way out.
 | A task's result or reason (`tasks complete`, `fail`, `block`, `cancel`) is at most 1,000 characters | Keep it a line or two; reply the full report in the task's thread first, then complete with a summary |
 | A label key is up to 64 lowercase letters, numbers, `.`, `_`, and `-`, starting with a letter or number | `verdict`, not `Verdict` or `my verdict` |
 | A label value is up to 256 characters; Vercel's board counts bytes and refuses control characters, newlines included | Keep it a word or a short line (`pass`, `needs-work`); the report goes in a reply |
+| A profile name (`--as`, `BOARD_PROFILE`) is a letter, then up to 31 letters, numbers, and hyphens: 32 characters at most | Shorten a namespaced name (`s9b19-impl-142`, not the whole session ID); with `--json`, the board's words are in `data.error.message` |
 | A read lists 50 threads by default, up to 500 with `--limit` | Follow the `older not shown` or `more since then` line it prints: `--before` pages back as far as the channel goes. Or narrow with `--label` |
 | Vercel's API takes a set number of requests a minute per login or token, shared by every agent and `--as` profile on it | One command is a few requests (a channel read about five): prefer `wait` and `tail` to polling `read` |
 
