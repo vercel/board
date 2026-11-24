@@ -11,7 +11,7 @@ import { foldActors, foldMessages, iso, type Actor, type ActorsState, type Messa
 import { blocksIn } from '../contract/blocks.ts'
 import { authorView, type Author } from '../contract/schemas.ts'
 import { actorParts, type Via } from '../contract/profiles.ts'
-import { mentionTerm, mentionTerms } from '../contract/mentions.ts'
+import { mentionTerm, mentionTerms, meTerms } from '../contract/mentions.ts'
 import { own } from '../contract/own.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
@@ -187,7 +187,7 @@ export type Me = { id: string; handle: string }
  * handle and ID. Anyone else doesn't, since that would say who goes by what where it can't read.
  */
 export function mentionFilter(value: string, context: { me: Me | null; actors: ActorsState; access: Access }): NonNullable<MessageFilter['mentions']> {
-  if (value === 'me') return { terms: context.me === null ? [] : [mentionTerm(context.me.handle), context.me.id], prefixes: [] }
+  if (value === 'me') return { terms: context.me === null ? [] : meTerms(context.me), prefixes: [] }
   const under = (name: string) => (name.includes(':') ? `${name}+` : `${mentionTerm(name)}/`)
   const terms = new Set([mentionTerm(value)])
   const prefixes = new Set([under(value)])

@@ -9,7 +9,7 @@ import { displayEmoji } from '../../contract/emoji.ts'
 import type { Attachment } from '../../server/index.default.ts'
 import { BlockCard } from './blocks.tsx'
 import * as board from './board.ts'
-import { setEditing, toast, useEditing, useHighlight } from './chrome.ts'
+import { setEditing, toast, useEditing } from './chrome.ts'
 import { Ago } from './nav.tsx'
 import { bodyParts, continues, isTask, schemaOf, sourcePlatform, type Groupable, type Pending, type ReplySummary, type State } from './store.ts'
 import { TaskLine } from './task.tsx'
@@ -22,6 +22,8 @@ export type RowOptions = {
   me: string
   now: number
   known: KnownLabels
+  /** The message the URL points at (`?message=`): its row scrolls into view and shows it for a moment. */
+  target?: string
   /** Opens a message's thread; unset inside the thread itself. */
   openThread?: (id: string) => void
   /** Shown after the author, e.g. "in #prs" in the activity view. */
@@ -313,10 +315,10 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const [labelsOpen, setLabelsOpen] = useState(false)
   const row = useRef<HTMLDivElement>(null)
   const editing = useEditing() === m.id
-  const highlighted = useHighlight() === m.id
+  const target = options.target === m.id
   useEffect(() => {
-    if (highlighted) row.current?.scrollIntoView({ block: 'center' })
-  }, [highlighted])
+    if (target) row.current?.scrollIntoView({ block: 'center' })
+  }, [target])
   const name = authorName(m)
   const mine = m.by.actor === options.me
   const reacted = (emoji: string) => (m.reactions[emoji] ?? []).includes(options.me)
@@ -353,7 +355,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
       <div
         ref={row}
         id={`m${m.id}`}
-        className={`message${continued ? ' continued' : ''}${active ? ' active' : ''}${highlighted ? ' highlight' : ''}`}
+        className={`message${continued ? ' continued' : ''}${active ? ' active' : ''}${target ? ' target' : ''}`}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >

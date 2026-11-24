@@ -2,9 +2,9 @@ import type { ActorView, BlockView, BoardEventView, ChannelView, Discovery, Gran
 // `@vercel/board/schemas`, in an app of yours.
 import { findBlocks } from '../../contract/blocks.ts'
 import { canonicalEmoji } from '../../contract/emoji.ts'
-import { mentionTerm, mentionTerms, replaceMentions } from '../../contract/mentions.ts'
+import { mentionsMe } from '../../contract/mentions.ts'
 import type { ScheduleTiming } from '../../server/index.default.ts'
-import { authorName, firstLine, shownName } from './words.ts'
+import { shownName } from './words.ts'
 
 // The board, as this page knows it. Pure functions over plain state: the page
 // loads snapshots, folds the live stream in, and overlays your own writes until
@@ -534,44 +534,14 @@ export function namesOf(state: State): Record<string, string> {
 // --- mentions of you ---------------------------------------------------------------------------
 
 /**
- * The messages a batch of live events makes mention you, as `--mentions me` matches: your actor ID
- * (`@[id]`) or your handle (`@julian`) in the text, outside code. A mention of one of your profiles
- * isn't one of you. `state` is the page before the batch: a post or an edit counts only when the
- * text before it, as the page held it, didn't mention you already. Your own messages and deleted
- * ones never count.
+ * The new post a live event brings when it mentions `person`, as `--mentions me` matches: their
+ * actor ID (`@[id]`) or handle (`@julian`) in the text, outside code. A mention of one of their
+ * profiles isn't one of them. Their own posts don't count; their agents' do.
  */
-export function freshMentions(state: State, events: BoardEventView[], me: Pick<Me, 'actor' | 'handle'>): MessageView[] {
-  const terms = [me.actor, mentionTerm(me.handle)]
-  const mentions = (text: string | undefined) => text !== undefined && mentionTerms(text).some((term) => terms.includes(term))
-  const fresh = new Map<string, MessageView>()
-  for (const event of events) {
-    const message = event.message
-    if (!message) continue
-    if (event.type === 'message.deleted') fresh.delete(message.id)
-    if (event.type !== 'message.posted' && event.type !== 'message.edited') continue
-    if (message.deleted || message.by.actor === me.actor || mentions(state.messages[message.id]?.text) || !mentions(message.text)) continue
-    fresh.set(message.id, message)
-  }
-  return [...fresh.values()]
-}
-
-/** What a notification of a message says: who wrote it and where, its first line with `@[id]` as `@name`, and the author's avatar when it's an https URL. */
-export type Notice = { title: string; body: string; icon?: string; tag: string }
-
-/** A notification of a message on the board at `board`, as the page shows it now. Its tag is the same in every tab, so the browser shows one. */
-export function notice(state: State, id: string, board: string): Notice | undefined {
-  const message = shown(state, id)
-  if (!message) return undefined
-  // You're in it, by name, before the board has listed who's who.
-  const names = state.me ? { [state.me.actor]: state.me.name, ...namesOf(state) } : namesOf(state)
-  const text = replaceMentions(message.text, (token) => (token.kind === 'actor' ? `@${names[token.actor] ?? token.actor}` : null))
-  const avatar = message.author?.avatar
-  return {
-    title: `${authorName(message)} in #${message.channel}`,
-    body: firstLine(text),
-    ...(avatar?.startsWith('https://') ? { icon: avatar } : {}),
-    tag: `board:${board}:${message.id}`,
-  }
+export function mentionOf(event: BoardEventView, person: Pick<Me, 'actor' | 'handle'>): MessageView | null {
+  const message = event.message
+  if (event.type !== 'message.posted' || !message || message.deleted || message.by.actor === person.actor) return null
+  return mentionsMe(message.text, { id: person.actor, handle: person.handle }) ? message : null
 }
 
 // --- tasks: a thread with a state ---------------------------------------------------------

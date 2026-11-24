@@ -234,7 +234,7 @@ export function App() {
       {where.thread !== null && (
         <aside className="pane" style={{ width: pane.width }}>
           <ResizeHandle side="left" label="resize the thread" onDrag={pane.drag} onDone={pane.done} onStep={pane.step} />
-          <ThreadPane key={where.thread} id={where.thread} state={state} viewer={viewer} now={now} known={known} />
+          <ThreadPane key={where.thread} id={where.thread} target={where.params.get('message')} state={state} viewer={viewer} now={now} known={known} />
         </aside>
       )}
       <Toasts />
@@ -372,7 +372,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   )
 }
 
-function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: number; known: KnownLabels }) {
+function ThreadPane(props: { id: string; target: string | null; state: State; viewer: Viewer; now: number; known: KnownLabels }) {
   const { id, state, viewer } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
@@ -387,7 +387,7 @@ function ThreadPane(props: { id: string; state: State; viewer: Viewer; now: numb
   const scheduled = threadSchedules(state, id)
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
   const names = namesOf(state)
-  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names }
+  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names, ...(props.target ? { target: props.target } : {}) }
   return (
     <>
       <Header title={isTask(t?.root) ? 'task' : 'thread'} meta={t ? `in #${t.root.channel}` : undefined}>

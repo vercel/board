@@ -10,10 +10,10 @@ import { board, BoardError, type Attachment, type EventsState, type ExplainPrinc
 // Everything under that line reads as it would in your app: plain `team.*` calls.
 import { http } from '../../backend-http/index.default.ts'
 import { everyChannel } from '../../client/channels.ts'
-import { flash, toast } from './chrome.ts'
+import { toast } from './chrome.ts'
 import { listing } from './listing.ts'
 import { base, navigate } from './nav.tsx'
-import { askOnGesture, notify } from './notify.ts'
+import { askOnGesture, notice, notify } from './notify.ts'
 import * as store from './store.ts'
 import { refusal, said } from './words.ts'
 
@@ -178,40 +178,31 @@ export async function boot() {
   // Every channel, a page at a time: the sidebar lists them all.
   const [me, discovery, channels] = await Promise.all([team.me(), team.discovery().catch(() => null), everyChannel(team)])
   set((s) => ({ ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])) }))
+  // Mentions are of the person, whichever profile the page posts as. Served from an app, the page
+  // has no visitor to be, so it notifies no one.
+  const person = named ? null : team === yourself ? me : await yourself.me().catch(() => null)
+  if (person) askOnGesture()
   const latest = await recent
   // Folded as live events are, oldest first, so an edit or a delete among them leaves its message as it is now.
   if ('page' in latest) {
     listed.apply(latest.page.events)
     set((s) => ({ ...s, cursor: latest.page.cursor }))
   } else set((s) => ({ ...s, activityRefused: latest.refused }))
-  askOnGesture()
-  // A burst of events is one render: they're folded in a frame at a time. A hidden tab gets no
-  // frames, so there it's folded right away, and a mention still notifies while you're away.
+  // A burst of events is one render: they're folded in a frame at a time.
   let queue: BoardEventView[] = []
   const flush = () => {
-    if (queue.length === 0) return
     const events = queue
     queue = []
-    const mentions = state.me ? store.freshMentions(state, events, state.me) : []
     listed.apply(events)
-    for (const message of mentions) {
-      const notice = store.notice(state, message.id, state.discovery?.url ?? location.origin)
-      if (notice) notify(message.id, notice, () => openMessage(message))
-    }
     // A schedule's own state isn't in the feed, but its sends are: one that landed means the list moved.
     if (events.some((event) => event.message?.schedule !== undefined)) void loadSchedules()
   }
-  // A tab hidden after a frame was asked for gets that frame only once it's shown again.
-  addEventListener('visibilitychange', () => {
-    if (document.hidden && queue.length > 0) setTimeout(flush, 0)
-  })
   follow(
     'page' in latest ? latest.page.cursor : undefined,
     (event) => {
-      if (queue.push(event) === 1) {
-        if (document.hidden) setTimeout(flush, 0)
-        else requestAnimationFrame(flush)
-      }
+      // Here, not in `flush`: a hidden tab gets no animation frames, and a mention still notifies.
+      if (person) mentioned(event, person, discovery?.url ?? location.origin)
+      if (queue.push(event) === 1) requestAnimationFrame(flush)
     },
     (feed) => set((s) => ({ ...s, live: feed === 'live' ? 'live' : 'reconnecting' })),
   ).catch((error) => toast(`live updates stopped: ${said(error)}`))
@@ -222,10 +213,12 @@ export async function boot() {
   void loadTasks({ state: 'open', label: [] }).then((listed) => 'cursor' in listed && !listed.more && set((s) => ({ ...s, tasksCounted: true })))
 }
 
-/** Opens a message's thread and points at it, as a click on its notification does. */
-function openMessage(message: MessageView) {
-  navigate(`/c/${message.channel}?thread=${message.re ?? message.id}`)
-  flash(message.id)
+/** Notifies of a new post that mentions `person`; a click opens its thread at it. */
+function mentioned(event: BoardEventView, person: Me, board: string) {
+  const message = store.mentionOf(event, person)
+  if (!message) return
+  const names = { [person.actor]: person.name, ...store.namesOf(state) }
+  notify(message.id, notice(message, names, board), () => navigate(`/c/${message.channel}?thread=${message.re ?? message.id}&message=${message.id}`))
 }
 
 // #region guide inspector/live.ts

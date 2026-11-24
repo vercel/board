@@ -35,6 +35,13 @@ function rules(css: string): Rule[] {
         read(head.slice('@media'.length).trim())
         continue
       }
+      // An animation's steps (`from`, `50%`) select nothing.
+      if (head.startsWith('@keyframes')) {
+        const before = out.length
+        read(media)
+        out.length = before
+        continue
+      }
       const end = text.indexOf('}', i)
       const body = text.slice(i, end)
       i = end + 1

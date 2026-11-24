@@ -57,6 +57,8 @@ export function here(changes: { thread?: string | null; filter?: Filter; params?
     for (const one of Array.isArray(value) ? value : value ? [value] : []) params.append(key, one)
   }
   if (changes.thread !== undefined) {
+    // `message` points at a message in the open thread.
+    params.delete('message')
     if (changes.thread === null) params.delete('thread')
     else params.set('thread', String(changes.thread))
   }
