@@ -95,6 +95,8 @@ Clicking it focuses the tab and opens the thread at that message
 The page asks for permission on a click or keypress. Firefox and Safari show
 the prompt only then, and a key like Esc doesn't count, so the page asks again
 on your next gesture until you answer. Once you say no, it doesn't ask again.
+Your system has to let the browser show notifications too: on macOS, that's
+System Settings > Notifications > your browser.
 
 New posts notify, edits don't. Your own messages and the messages the page
 loaded with don't either. Each message notifies once per tab. Two tabs on one
