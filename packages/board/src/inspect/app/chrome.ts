@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-// The page's own state, which no board knows: what it's telling you, and which message you're editing.
+// The page's own state, which no board knows: what it's telling you, which message you're editing, and which one it's pointing at.
 
 function signal<T>(initial: T) {
   let value = initial
@@ -24,6 +24,20 @@ function signal<T>(initial: T) {
 const editing = signal<string | null>(null)
 export const setEditing = editing.set
 export const useEditing = editing.use
+
+// --- which message a notification opened -----------------------------------------------
+
+const highlight = signal<string | null>(null)
+let unhighlight: ReturnType<typeof setTimeout> | undefined
+
+/** Marks a message for a moment: its row scrolls into view and shows it. */
+export function flash(id: string) {
+  highlight.set(id)
+  clearTimeout(unhighlight)
+  unhighlight = setTimeout(() => highlight.set(null), 2000)
+}
+
+export const useHighlight = highlight.use
 
 // --- what went wrong, said once ----------------------------------------------------
 

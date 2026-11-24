@@ -9,7 +9,7 @@ import { displayEmoji } from '../../contract/emoji.ts'
 import type { Attachment } from '../../server/index.default.ts'
 import { BlockCard } from './blocks.tsx'
 import * as board from './board.ts'
-import { setEditing, toast, useEditing } from './chrome.ts'
+import { setEditing, toast, useEditing, useHighlight } from './chrome.ts'
 import { Ago } from './nav.tsx'
 import { bodyParts, continues, isTask, schemaOf, sourcePlatform, type Groupable, type Pending, type ReplySummary, type State } from './store.ts'
 import { TaskLine } from './task.tsx'
@@ -313,6 +313,10 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const [labelsOpen, setLabelsOpen] = useState(false)
   const row = useRef<HTMLDivElement>(null)
   const editing = useEditing() === m.id
+  const highlighted = useHighlight() === m.id
+  useEffect(() => {
+    if (highlighted) row.current?.scrollIntoView({ block: 'center' })
+  }, [highlighted])
   const name = authorName(m)
   const mine = m.by.actor === options.me
   const reacted = (emoji: string) => (m.reactions[emoji] ?? []).includes(options.me)
@@ -349,7 +353,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
       <div
         ref={row}
         id={`m${m.id}`}
-        className={`message${continued ? ' continued' : ''}${active ? ' active' : ''}`}
+        className={`message${continued ? ' continued' : ''}${active ? ' active' : ''}${highlighted ? ' highlight' : ''}`}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >

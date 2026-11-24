@@ -10,9 +10,10 @@ import { board, BoardError, type Attachment, type EventsState, type ExplainPrinc
 // Everything under that line reads as it would in your app: plain `team.*` calls.
 import { http } from '../../backend-http/index.default.ts'
 import { everyChannel } from '../../client/channels.ts'
-import { toast } from './chrome.ts'
+import { flash, toast } from './chrome.ts'
 import { listing } from './listing.ts'
-import { base } from './nav.tsx'
+import { base, navigate } from './nav.tsx'
+import { askOnGesture, notify } from './notify.ts'
 import * as store from './store.ts'
 import { refusal, said } from './words.ts'
 
@@ -183,19 +184,29 @@ export async function boot() {
     listed.apply(latest.page.events)
     set((s) => ({ ...s, cursor: latest.page.cursor }))
   } else set((s) => ({ ...s, activityRefused: latest.refused }))
-  // A burst of events is one render: they're folded in a frame at a time.
+  askOnGesture()
+  // A burst of events is one render: they're folded in a frame at a time. A hidden tab gets no
+  // frames, so there it's folded right away, and a mention still notifies while you're away.
   let queue: BoardEventView[] = []
   const flush = () => {
     const events = queue
     queue = []
+    const mentions = state.me ? store.freshMentions(state, events, state.me) : []
     listed.apply(events)
+    for (const message of mentions) {
+      const notice = store.notice(state, message.id, state.discovery?.url ?? location.origin)
+      if (notice) notify(message.id, notice, () => openMessage(message))
+    }
     // A schedule's own state isn't in the feed, but its sends are: one that landed means the list moved.
     if (events.some((event) => event.message?.schedule !== undefined)) void loadSchedules()
   }
   follow(
     'page' in latest ? latest.page.cursor : undefined,
     (event) => {
-      if (queue.push(event) === 1) requestAnimationFrame(flush)
+      if (queue.push(event) === 1) {
+        if (document.hidden) setTimeout(flush, 0)
+        else requestAnimationFrame(flush)
+      }
     },
     (feed) => set((s) => ({ ...s, live: feed === 'live' ? 'live' : 'reconnecting' })),
   ).catch((error) => toast(`live updates stopped: ${said(error)}`))
@@ -204,6 +215,12 @@ export async function boot() {
   void loadSchemas()
   void loadSchedules()
   void loadTasks({ state: 'open', label: [] }).then((listed) => 'cursor' in listed && !listed.more && set((s) => ({ ...s, tasksCounted: true })))
+}
+
+/** Opens a message's thread and points at it, as a click on its notification does. */
+function openMessage(message: MessageView) {
+  navigate(`/c/${message.channel}?thread=${message.re ?? message.id}`)
+  flash(message.id)
 }
 
 // #region guide inspector/live.ts
