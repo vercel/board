@@ -228,6 +228,22 @@ describe('vb tasks', () => {
     expect([keyless.code, keyless.stderr.split('\n')[0]]).toEqual([2, 'error: --label on claim --ready takes key=value, and =worker has no key before its =.'])
   }, 60_000)
 
+  it("refuses a result or reason over 1,000 characters before sending it, and says where the rest goes", async () => {
+    const id = await create('notes', 'run the suite')
+    await ok(['tasks', 'claim', id])
+    const long = 'a'.repeat(1001)
+    const reply = { argv: ['vb', 'reply', id, '-'] }
+    expect(failure(await vb(['tasks', 'complete', id, long, '--json']))).toMatchObject({
+      reason: 'payload_too_large',
+      message: `Can't complete task #${id}. A task's result is at most 1,000 characters, and this one is 1,001.`,
+      next: [reply],
+    })
+    expect(failure(await vb(['tasks', 'fail', id, long, '--json']))).toMatchObject({ reason: 'payload_too_large', next: [reply] })
+    expect(failure(await vb(['tasks', 'run', id, '--json', '--result', long, '--', 'true']))).toMatchObject({ reason: 'payload_too_large', next: [reply] })
+    expect((await task(id)).task).toMatchObject({ state: 'claimed' })
+    expect(await ok(['tasks', 'complete', id, 'a'.repeat(1000)])).toBe(`completed ${id}\n`)
+  }, 30_000)
+
   it('waits for a task that becomes ready, and stops quietly on Ctrl-C', async () => {
     const build = await create('pipeline', 'build the image')
     const deploy = await create('pipeline', 'deploy it', ['--label', 'step=deploy', '--needs', build])

@@ -15,7 +15,7 @@ import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
 import { apiThreadRoot, isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, TASK_NOTE_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, patternsIn, principalsIn, type OptionToken } from './grants.ts'
@@ -2627,6 +2627,7 @@ async function tasks(args: string[]): Promise<number> {
     const before = rest.slice(0, rest.length - command.length)
     if (before.length > 1) throw usage(`tasks run takes one ${flags.ready ? 'channel' : 'task'} before --: ${before[1]} is one too many.`)
     if (!flags.ready && before[0] === undefined) throw usage('Missing the task to run it on: its ID, or --ready and a channel.', { reason: 'missing_arguments' })
+    if (flags.result !== undefined) fits(flags.result, 'result')
     // It runs a command on this machine, and holds every other call for as long as it runs.
     if (io.board) throw usage("tasks run isn't available in-process: it runs a command on this machine.", { reason: 'not_available', next: [] })
     const { board, claims } = tasksOn()
@@ -2687,7 +2688,7 @@ async function tasks(args: string[]): Promise<number> {
   const reason = (what: string) => {
     const given = rest[1]?.trim()
     if (!given) throw usage(`Missing ${what}, in a line.`, { reason: 'missing_arguments' })
-    return given
+    return fits(given, 'reason')
   }
   const { board, claims } = tasksOn()
 
@@ -2711,8 +2712,9 @@ async function tasks(args: string[]): Promise<number> {
     }
     case 'complete': {
       one(rest[2], 'a task and its result, quoted')
+      const done = rest[1] === undefined ? undefined : fits(rest[1], 'result')
       const held = await heldBy(board, claims, id)
-      const task = await withClaim(claims, id, () => held.complete(rest[1]))
+      const task = await withClaim(claims, id, () => held.complete(done))
       await claims.drop(id)
       printTask(task, 'completed')
       return 0
@@ -2782,6 +2784,18 @@ async function tasks(args: string[]): Promise<number> {
       return 0
     }
   }
+}
+
+/** A task's result or reason, refused before it's sent when it's over what the board keeps, with where the rest goes. */
+function fits(note: string, what: 'result' | 'reason'): string {
+  if (note.length <= TASK_NOTE_MAX) return note
+  const id = current.args[1] !== undefined && isMessageRef(current.args[1]) ? messageId(current.args[1]) : '<ID>'
+  throw new Failed({
+    class: 'limit',
+    reason: 'payload_too_large',
+    message: `Can't ${doing()}. A task's ${what} is at most ${TASK_NOTE_MAX.toLocaleString('en-US')} characters, and this one is ${note.length.toLocaleString('en-US')}.`,
+    next: [{ instruction: `Reply the full ${what === 'result' ? 'report' : 'detail'} in the task's thread, then run this again with a line or two`, argv: [...cli(), 'reply', id, '-'] }],
+  })
 }
 
 /** How a board's own word about a task reads from here: the headline, and the way on. Null for any other code. */
