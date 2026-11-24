@@ -202,7 +202,7 @@ export async function boot() {
     if (events.some((event) => event.message?.schedule !== undefined)) void loadSchedules()
   }
   // A tab hidden after a frame was asked for gets that frame only once it's shown again.
-  document.addEventListener('visibilitychange', () => {
+  addEventListener('visibilitychange', () => {
     if (document.hidden && queue.length > 0) setTimeout(flush, 0)
   })
   follow(

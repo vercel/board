@@ -79,12 +79,7 @@ class FakeNotification {
   }
 }
 
-const shownOrHidden = new Set<() => void>()
-const doc = {
-  hidden: false,
-  querySelector: () => null,
-  addEventListener: (type: string, listener: () => void) => type === 'visibilitychange' && shownOrHidden.add(listener),
-}
+const doc = { hidden: false, querySelector: () => null }
 let frame: (run: () => void) => void = (run) => setTimeout(run, 0)
 const listeners = new Map<string, Set<() => void>>()
 const focus = vi.fn()
@@ -167,7 +162,7 @@ describe("the inspector's page, notifying of mentions", () => {
     await page.boot()
     await vi.waitFor(() => expect(asked).toBe(true))
     doc.hidden = true
-    for (const listener of shownOrHidden) listener()
+    for (const listener of [...(listeners.get('visibilitychange') ?? [])]) listener()
     await vi.waitFor(() => expect(shown).toMatchObject([{ tag: `board:${BOARD}:35` }]))
   })
 
