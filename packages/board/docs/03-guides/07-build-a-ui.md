@@ -124,14 +124,18 @@ answers the post, so drop the pending one on whichever comes first:
 ```ts inspector/pending.ts
 import type { MessageView } from '@vercel/board'
 
+/** A text with each mention as a bare `@`: the board writes a typed `@ada` that names one actor as `@[their-id]`. */
+const unmentioned = (text: string) => text.replace(/@(\[[^\]\s]*\]|[\w./-]*)/g, '@')
+
 /**
- * The post on its way that a message stands for: yours, in the same place, saying the same. The
- * feed can bring the message before the board answers the post, so whichever comes first replaces
- * the pending one, and the two never show at once.
+ * The post on its way that a message stands for: yours, in the same place, saying the same, its
+ * mentions aside. The feed can bring the message before the board answers the post, so whichever
+ * comes first replaces the pending one, and the two never show at once.
  */
 export function landed<Post extends { channel: string; re: string | null; text: string; error: string | null }>(pending: Post[], message: MessageView, me: string): Post | undefined {
   if (message.by.actor !== me) return undefined
-  return pending.find((post) => post.error === null && post.channel === message.channel && post.re === message.re && post.text === message.text)
+  const said = unmentioned(message.text)
+  return pending.find((post) => post.error === null && post.channel === message.channel && post.re === message.re && unmentioned(post.text) === said)
 }
 ```
 

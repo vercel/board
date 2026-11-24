@@ -202,13 +202,13 @@ describe("the inspector's page, notifying of mentions", () => {
     metas['inspect-profile'] = JSON.stringify({ name: 'claude' })
     await reload()
     const mine = (id: string, text: string) => message(id, text, `${ME}+claude`)
-    // The first post's answer waits until the feed has brought it.
+    // The first post's answer waits until the feed has brought it. The board wrote the `@julian` typed as `@[id]`.
     let answer!: () => void
     const answered = new Promise<void>((resolve) => (answer = resolve))
-    next.set('POST /messages', [async () => (await answered, Response.json({ message: mine('90', '@julian first') }, { status: 201 })), () => Response.json({ message: mine('91', '@julian second') }, { status: 201 })])
+    next.set('POST /messages', [async () => (await answered, Response.json({ message: mine('90', `@[${ME}] first`) }, { status: 201 })), () => Response.json({ message: mine('91', '@julian second') }, { status: 201 })])
     let second!: () => void
     const later = new Promise<void>((resolve) => (second = resolve))
-    await run([], async () => (await later, feed(mine('90', '@julian first'), mine('91', '@julian second'), message('92', '@julian from ada'))()))
+    await run([], async () => (await later, feed(mine('90', `@[${ME}] first`), mine('91', `@[${ME}] second`), message('92', '@julian from ada'))()))
     const first = page.send({ channel: 'dev', re: null, text: '@julian first', noSync: false, labels: {} })
     await vi.waitFor(() => expect(page.getState().pending).toHaveLength(1))
     await page.send({ channel: 'dev', re: null, text: '@julian second', noSync: false, labels: {} })

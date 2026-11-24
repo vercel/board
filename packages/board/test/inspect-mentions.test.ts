@@ -83,3 +83,16 @@ describe('what a mention notification says', () => {
     expect(notice(message(7, '@julian', { author: { kind: 'person', handle: 'ada', name: 'Ada', avatar: 'http://example.com/ada.png' } }), {}, 'b')).not.toHaveProperty('icon')
   })
 })
+
+describe('a post on its way, when the feed brings it first', () => {
+  it('settles for the message, though the board wrote its typed mention as an ID', () => {
+    const mine = { actor: ME.actor, principal: ME.actor, profile: null }
+    const pending: store.Pending = { key: 'k1', channel: 'ops', re: null, text: '@ada can you look?', noSync: false, labels: {}, createdAt: '2026-10-01T00:00:00.000Z', error: null }
+    const state = { ...store.initialState, me: { actor: ME.actor } as store.State['me'], pending: [pending] }
+    const after = store.applyEvent(state, event('message.posted', message(1, `@[${ADA}] can you look?`, { by: mine })))
+    expect(after.pending).toEqual([])
+    // Saying something else, it's another post.
+    const other = store.applyEvent(state, event('message.posted', message(2, `@[${ADA}] can you look now?`, { by: mine })))
+    expect(other.pending).toEqual([pending])
+  })
+})
