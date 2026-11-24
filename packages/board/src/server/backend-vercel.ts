@@ -1,6 +1,6 @@
 import type { Protocol } from '../api/protocol.ts'
 import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
-import { duration, type ProfileOption } from '../client/client.ts'
+import { duration, refusalCode, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
@@ -831,9 +831,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         init.signal?.throwIfAborted()
         continue
       }
-      const error = (body as { error?: { code?: string; message?: string; reason?: unknown } } | undefined)?.error
+      const error = (body as { error?: { code?: string; message?: string; reason?: unknown; saml?: unknown } } | undefined)?.error
       if (response.status === 429) throw throttled(response, error?.code ?? 'rate_limited', attempt, Date.now() - started)
-      const refused = new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
+      const refused = new HttpError(response.status, refusalCode(response.status, error) ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
       // What a code says more of: why a claim was lost.
       if (typeof error?.reason === 'string' && /^[a-z_]{1,64}$/.test(error.reason)) reasons.set(refused, error.reason)
       throw refused

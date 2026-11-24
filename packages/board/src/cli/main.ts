@@ -1068,21 +1068,9 @@ function failureOf(error: unknown): Failure {
     ])
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
-  if (status === 401)
-    return theirs(
-      'auth',
-      'login_required',
-      "The board didn't accept your credentials.",
-      // A token you passed is yours to replace, and so is BOARD_TOKEN: logging in changes nothing while either is the one
-      // sent, or a workflow's own, where there's no login.
-      sent() === PASSED
-        ? [{ instruction: 'Pass a token it accepts' }]
-        : sent() === 'BOARD_TOKEN'
-          ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }]
-          : sent() === 'GitHub Actions OIDC'
-            ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN' }]
-            : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
-    )
+  if (status === 401) return theirs('auth', 'login_required', "The board didn't accept your credentials.", loginRecoveries())
+  // A team's SAML session that lapsed: a new login reaches it again, where a grant changes nothing.
+  if (status === 403 && code === 'reauthentication_required') return theirs('auth', 'login_required', 'Your team needs you to log in again.', loginRecoveries())
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`, refusedRecoveries())
   if (status === 404) {
     const thing = missing()
@@ -1131,6 +1119,19 @@ const onThisBoard = (): string[] => [
   ...(flags.name !== undefined ? ['--name', flags.name] : []),
   ...(flags.as ? ['--as', flags.as] : []),
 ]
+
+/**
+ * Where to go when the board won't take the credential sent: a token you passed is yours to replace, and so is
+ * BOARD_TOKEN: logging in changes nothing while either is the one sent, or a workflow's own, where there's no login.
+ */
+const loginRecoveries = (): Recovery[] =>
+  sent() === PASSED
+    ? [{ instruction: 'Pass a token it accepts' }]
+    : sent() === 'BOARD_TOKEN'
+      ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }]
+      : sent() === 'GitHub Actions OIDC'
+        ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN' }]
+        : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }]
 
 /** Where to go from a 403: what you may do on this board, and who can let you do more. */
 const refusedRecoveries = (): Recovery[] => [

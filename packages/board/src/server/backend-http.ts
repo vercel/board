@@ -1,6 +1,6 @@
 import { routes, type Discovery, type EventsPage } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
-import { BoardError, createBoardClient, type BoardClient, type ProfileOption } from '../client/client.ts'
+import { BoardError, createBoardClient, refusalCode, type BoardClient, type ProfileOption } from '../client/client.ts'
 import { DERIVED_ID, keyId } from '../client/ids.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { type Backend, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller } from './backend.ts'
@@ -217,9 +217,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
         .catch(rethrow)
     if (response.ok) return response
     try {
-      const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
+      const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown } }
       if (body.error?.message)
-        throw new HttpError(response.status, body.error.code ?? 'error', body.error.message, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
+        throw new HttpError(response.status, refusalCode(response.status, body.error) ?? 'error', body.error.message, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
     } catch (error) {
       if (error instanceof HttpError) throw error
     }

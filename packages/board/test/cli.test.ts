@@ -978,6 +978,26 @@ describe('cli', () => {
     }
   })
 
+  it("says to log in again when a team's SAML session lapsed, as Vercel's API refuses it, instead of asking for a grant", async () => {
+    const lapsed = await serve(async () =>
+      Response.json({ error: { code: 'forbidden', message: 'Not authorized', saml: true, teamId: 'team_acme', scope: 'acme', enforced: true } }, { status: 403 }),
+    )
+    try {
+      const run = await vb(['read', 'dev', '--json'], { BOARD_URL: `${lapsed.origin}/api/board` })
+      expect(run).toMatchObject({ code: 1, stdout: '' })
+      expect(failure(run)).toMatchObject({ reason: 'login_required', message: 'Your team needs you to log in again.' })
+      // A plain 403 is still a grant.
+      const refused = await serve(async () => Response.json({ error: { code: 'forbidden', message: 'Not authorized' } }, { status: 403 }))
+      try {
+        expect(failure(await vb(['read', 'dev', '--json'], { BOARD_URL: `${refused.origin}/api/board` }))).toMatchObject({ reason: 'permission_denied' })
+      } finally {
+        await refused.close()
+      }
+    } finally {
+      await lapsed.close()
+    }
+  })
+
   it("says what a 404 that isn't an old board's says, as Vercel's API does for a team without the board", async () => {
     const off = await serve(async () => Response.json({ error: { code: 'not_found', message: 'Messageboard is not enabled for this team.' } }, { status: 404 }))
     try {

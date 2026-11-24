@@ -948,13 +948,23 @@ export function createBoardClient(options: ClientOptions) {
 
 export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me, MessagesPage, MessageView, ScheduleView, ThreadsPage, ThreadSummaryView, ThreadView }
 
+/**
+ * The code of a refusal, as a board or Vercel's API answered it. Vercel's API refuses a team whose SAML
+ * session has lapsed with a 403 marked `saml`: `reauthentication_required`, which a new login fixes and a grant doesn't.
+ */
+export function refusalCode(status: number, error: { code?: string; saml?: unknown } | undefined): string | undefined {
+  if (status === 403 && error?.saml === true) return 'reauthentication_required'
+  return error?.code
+}
+
 async function toError(response: Response): Promise<BoardError> {
   try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
+    const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown } }
     // Retry-After in seconds, as a 429 says it: its date form isn't one a board sends.
     const retryAfter = response.status === 429 ? /^\d{1,6}$/.exec(response.headers.get('retry-after') ?? '')?.[0] : undefined
+    const code = refusalCode(response.status, body.error)
     if (body.error?.message)
-      return new BoardError(body.error.code ?? 'error', body.error.message, response.status, {
+      return new BoardError(code ?? 'error', body.error.message, response.status, {
         ...(typeof body.error.hint === 'string' ? { hint: body.error.hint } : {}),
         origin: handleErrors.has(response) ? 'handle' : 'board',
         ...(retryAfter !== undefined ? { retryAfter: Number(retryAfter) } : {}),

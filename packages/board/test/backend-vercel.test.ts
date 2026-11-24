@@ -980,6 +980,13 @@ describe('vercel()', () => {
     }
   })
 
+  it("says a lapsed SAML session needs a new login, as Vercel's API refuses a SAML team with, not a grant", async () => {
+    const lapsed = (async () =>
+      Response.json({ error: { code: 'forbidden', message: 'Not authorized', saml: true, teamId: 'team_test', scope: 'test', enforced: true } }, { status: 403 })) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: lapsed, files: fakeMessageboard().files }) })
+    await expect(team.me()).rejects.toMatchObject({ status: 403, code: 'reauthentication_required' })
+  })
+
   it("names a message's channel from the message's own answer where the API sends it, asking for no channel", async () => {
     const api = fakeMessageboard({ channelNames: true })
     const team = handleOn(api)
