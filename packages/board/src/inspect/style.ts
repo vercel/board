@@ -274,6 +274,8 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
   line-height: 16px;
 }
 .badge.slack, .badge.github { border-color: var(--accent-transparent); background: none; color: var(--accent); }
+.chips .label { max-width: 100%; }
+.label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .label:hover, .chip:hover { color: var(--bright); background: var(--shade-hover); }
 .label button { color: var(--faint); display: inline-flex; }
 .label button:hover { color: var(--bright); }

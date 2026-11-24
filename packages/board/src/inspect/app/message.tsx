@@ -398,8 +398,10 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
           {(labels.length > 0 || Object.keys(m.reactions).length > 0) && (
             <div className="chips">
               {labels.map(([key, value]) => (
-                <button key={key} className="label" title="edit labels" onClick={() => setLabelsOpen(true)}>
-                  {key}={value}
+                <button key={key} className="label" title={`${key}=${value}`} onClick={() => setLabelsOpen(true)}>
+                  <span className="label-text">
+                    {key}={value}
+                  </span>
                 </button>
               ))}
               {Object.entries(m.reactions).map(([emoji, actors]) => (
