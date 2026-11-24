@@ -189,6 +189,7 @@ export async function boot() {
   // frames, so there it's folded right away, and a mention still notifies while you're away.
   let queue: BoardEventView[] = []
   const flush = () => {
+    if (queue.length === 0) return
     const events = queue
     queue = []
     const mentions = state.me ? store.freshMentions(state, events, state.me) : []
@@ -200,6 +201,10 @@ export async function boot() {
     // A schedule's own state isn't in the feed, but its sends are: one that landed means the list moved.
     if (events.some((event) => event.message?.schedule !== undefined)) void loadSchedules()
   }
+  // A tab hidden after a frame was asked for gets that frame only once it's shown again.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && queue.length > 0) setTimeout(flush, 0)
+  })
   follow(
     'page' in latest ? latest.page.cursor : undefined,
     (event) => {

@@ -28,7 +28,13 @@ const notified = new Set<string>()
 export function notify(id: string, notice: Notice, open: () => void) {
   if (!supported() || Notification.permission !== 'granted' || notified.has(id)) return
   notified.add(id)
-  const notification = new Notification(notice.title, { body: notice.body, tag: notice.tag, ...(notice.icon ? { icon: notice.icon } : {}) })
+  let notification: Notification
+  try {
+    notification = new Notification(notice.title, { body: notice.body, tag: notice.tag, ...(notice.icon ? { icon: notice.icon } : {}) })
+  } catch {
+    // Chrome on Android has `Notification` but shows them only from a service worker: its constructor throws.
+    return
+  }
   notification.onclick = () => {
     window.focus()
     open()

@@ -57,6 +57,8 @@ const shown: { title: string; body?: string; tag?: string }[] = []
 const notifications: FakeNotification[] = []
 let permission: NotificationPermission = 'granted'
 const requested = vi.fn(async () => permission)
+/** How many of the next notifications the browser refuses, as Chrome on Android does. */
+let refuse = 0
 class FakeNotification {
   static get permission() {
     return permission
@@ -65,6 +67,10 @@ class FakeNotification {
   onclick: (() => void) | null = null
   closed = false
   constructor(title: string, options: NotificationOptions) {
+    if (refuse > 0) {
+      refuse--
+      throw new TypeError('Illegal constructor')
+    }
     shown.push({ title, body: options.body, tag: options.tag })
     notifications.push(this)
   }
@@ -73,7 +79,12 @@ class FakeNotification {
   }
 }
 
-const doc = { hidden: false, querySelector: () => null }
+const shownOrHidden = new Set<() => void>()
+const doc = {
+  hidden: false,
+  querySelector: () => null,
+  addEventListener: (type: string, listener: () => void) => type === 'visibilitychange' && shownOrHidden.add(listener),
+}
 let frame: (run: () => void) => void = (run) => setTimeout(run, 0)
 const listeners = new Map<string, Set<() => void>>()
 const focus = vi.fn()
@@ -106,6 +117,7 @@ beforeEach(() => {
   permission = 'granted'
   doc.hidden = false
   frame = (run) => setTimeout(run, 0)
+  refuse = 0
 })
 
 /** Boots the page on `boot`'s events, then lets the feed bring `live`'s; resolves once the page holds `id`. */
@@ -144,6 +156,25 @@ describe("the inspector's page, notifying of mentions", () => {
     frame = () => {}
     await run([], [message('30', '@julian look')], '30')
     expect(shown).toMatchObject([{ tag: `board:${BOARD}:30` }])
+  })
+
+  it('notifies from a tab hidden after it asked for a frame', async () => {
+    let asked = false
+    frame = () => {
+      asked = true
+    }
+    next.set('GET /events', [feed(), feed(message('35', '@julian look'))])
+    await page.boot()
+    await vi.waitFor(() => expect(asked).toBe(true))
+    doc.hidden = true
+    for (const listener of shownOrHidden) listener()
+    await vi.waitFor(() => expect(shown).toMatchObject([{ tag: `board:${BOARD}:35` }]))
+  })
+
+  it('goes on to the next mention when the browser refuses to show one', async () => {
+    refuse = 1
+    await run([], [message('60', '@julian one'), message('61', '@julian two')], '61')
+    await vi.waitFor(() => expect(shown).toMatchObject([{ tag: `board:${BOARD}:61` }]))
   })
 
   it('notifies of a message once, even when an edit takes the mention out and puts it back', async () => {
