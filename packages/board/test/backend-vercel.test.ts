@@ -3551,6 +3551,24 @@ describe('a request the API puts off', () => {
     expect(await refused(() => ({ 'retry-after': '60', 'x-ratelimit-reset': resetIn(40) }))).toMatchObject({ retryAfter: 40 })
   })
 
+  it("waits through a gateway's 502 or 504 on a read, as a long-poll's wait sees one", async () => {
+    timers()
+    for (const status of [502, 504]) {
+      let refusals = 0
+      const { julian, sent } = throttled((url, init) => ((init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/threads') && refusals-- > 0 ? new Response('Bad Gateway', { status }) : null))
+      await julian.post('dev', { text: 'hi' })
+      refusals = 1
+      const before = sent.length
+      const reading = julian.threads({ channel: 'dev' })
+      await vi.advanceTimersByTimeAsync(2000)
+      const { threads } = await reading
+      expect(threads).toHaveLength(1)
+      // The read it refused went again a second later, and was answered.
+      const [refused, again] = sent.slice(before).filter(({ method, path }) => method === 'GET' && path.endsWith('/threads'))
+      expect(again!.at - refused!.at).toBeGreaterThanOrEqual(1000)
+    }
+  })
+
   it("answers a 503 at once for a write the API couldn't tell it had seen", async () => {
     const { julian, sent } = throttled((url, init) => (init?.method === 'POST' && url.pathname.endsWith('/complete') ? busy() : null))
     await expect(julian.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })).rejects.toMatchObject({ status: 503 })

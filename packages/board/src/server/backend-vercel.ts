@@ -439,6 +439,8 @@ const apiKind = (kind: ApiActorView['kind']): ActorView['kind'] => (kind === 'ap
 
 /** How many more times a request goes out after the API puts it off. */
 const RETRIES = 4
+/** What the API or its gateway answers when it may answer the same request on another try: unavailable, or a gateway's lost answer. */
+const TRANSIENT = new Set([502, 503, 504])
 /** The first wait before sending again, doubling each time. */
 const RETRY_MS = 1000
 
@@ -764,8 +766,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /**
    * One request to the API, as `who`. Its errors are the API's own, with its status and code. One the
-   * API puts off (429, or a 503) waits and goes again as it was, so a write keeps its operation ID
-   * and lands once.
+   * API puts off (429, or a 503), or that its gateway lost (502, 504), waits and goes again as it was,
+   * so a write keeps its operation ID and lands once.
    */
   async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | readonly string[] | undefined>; body?: unknown; signal?: AbortSignal; version?: 2 } = {}): Promise<T> {
     // Everything is at version 1 of the API but its task routes, which are version 2.
@@ -783,7 +785,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const tag = method === 'GET' && TAGGED.test(path) ? JSON.stringify([url.href, headers]) : null
     const kept = tag === null ? undefined : tagged.get(tag)
     if (kept) headers['if-none-match'] = kept.etag
-    // A 429 did nothing. A 503 may have: only a request the API can tell it has seen goes again.
+    // A 429 did nothing. A 502, 503 or 504 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
     const started = Date.now()
     for (let attempt = 0; ; attempt++) {
@@ -826,7 +828,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         }
         return body as T
       }
-      if (attempt < RETRIES && !init.signal?.aborted && (response.status === 429 || (response.status === 503 && repeatable))) {
+      if (attempt < RETRIES && !init.signal?.aborted && (response.status === 429 || (TRANSIENT.has(response.status) && repeatable))) {
         await pause(retryWait(attempt, response.headers.get('retry-after')), init.signal)
         init.signal?.throwIfAborted()
         continue
