@@ -1,4 +1,5 @@
 import type { Discovery, MessageView, PrincipalView, ScheduleView } from '../../api/routes.ts'
+import { replaceMentions } from '../../contract/mentions.ts'
 import type { ScheduleTiming } from '../../server/index.default.ts'
 
 // How the page says things: names, times, and sizes. Each is a few lines any UI on a board writes
@@ -159,4 +160,23 @@ export function boardWords(discovery: Pick<Discovery, 'url' | 'name'> | null): {
   if (discovery.name) return { name: discovery.name, at: url.host }
   const path = url.pathname.replace(/\/+$/, '')
   return { name: url.host, at: path || null }
+}
+
+/** What a notification of a message says: who wrote it and where, its first line, and the author's avatar. */
+export type Notice = { title: string; body: string; icon?: string; tag: string }
+
+/**
+ * A notification of `message`, on the board at `board`. `names` reads each `@[id]` as `@name`. The
+ * tag is the board's and the message's, the same in every tab: a notification shown with a tag
+ * replaces the one shown with it before (WHATWG Notifications, "show steps").
+ */
+export function notice(message: MessageView, names: Record<string, string>, board: string): Notice {
+  const text = replaceMentions(message.text, (token) => (token.kind === 'actor' ? `@${names[token.actor] ?? token.actor}` : null))
+  const avatar = message.author?.avatar
+  return {
+    title: `${authorName(message)} in #${message.channel}`,
+    body: firstLine(text),
+    ...(avatar?.startsWith('https://') ? { icon: avatar } : {}),
+    tag: `board:${board}:${message.id}`,
+  }
 }

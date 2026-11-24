@@ -14,25 +14,59 @@ const current = () => (location.pathname === base || location.pathname.startsWit
 /** Where one of the page's paths is in the address bar. */
 const address = (to: string) => `${base}${to}`
 
+/** `to` without `message`: only `pointAt` points at a message. */
+function unpointed(to: string): string {
+  const at = to.indexOf('?')
+  if (at === -1) return to
+  const params = new URLSearchParams(to.slice(at + 1))
+  params.delete('message')
+  const query = params.toString()
+  return `${to.slice(0, at)}${query ? `?${query}` : ''}`
+}
+
 export function navigate(to: string, replace = false) {
+  to = unpointed(to)
   if (to === current() + location.search) return
   history[replace ? 'replaceState' : 'pushState'](null, '', address(to))
+  dispatchEvent(new PopStateEvent('popstate'))
+}
+
+let pointings = 0
+
+/**
+ * Opens a thread at one of its messages (`?thread=812&message=815`), which its pane scrolls to
+ * and marks. Pointing at the message the URL already points at marks it again.
+ */
+export function pointAt(thread: string, channel: string, message: string) {
+  const to = `/c/${channel}?thread=${thread}&message=${message}`
+  const state = { pointed: ++pointings }
+  if (to === current() + location.search) history.replaceState(state, '', address(to))
+  else history.pushState(state, '', address(to))
   dispatchEvent(new PopStateEvent('popstate'))
 }
 
 import type { Filter } from './store.ts'
 
 /** Where you are: the view's path, an open thread, and the view's filters, all in the URL. */
-export type Where = { path: string; thread: string | null; filter: Filter; params: URLSearchParams }
+export type Where = {
+  path: string
+  thread: string | null
+  /** The message the open thread points at, and which time it was pointed at: each `pointAt` marks it again. */
+  target: { id: string; time: number } | null
+  filter: Filter
+  params: URLSearchParams
+}
 
 export function useLocation(): Where {
   const read = (): Where => {
     const params = new URLSearchParams(location.search)
     const thread = params.get('thread')
+    const target = params.get('message')
     return {
       path: current(),
       params,
       thread: thread || null,
+      target: thread && target ? { id: target, time: (history.state as { pointed?: number } | null)?.pointed ?? 0 } : null,
       filter: {
         ...(params.get('from') ? { from: params.get('from')! } : {}),
         label: params.getAll('label').filter(Boolean),
@@ -57,8 +91,6 @@ export function here(changes: { thread?: string | null; filter?: Filter; params?
     for (const one of Array.isArray(value) ? value : value ? [value] : []) params.append(key, one)
   }
   if (changes.thread !== undefined) {
-    // `message` points at a message in the open thread.
-    params.delete('message')
     if (changes.thread === null) params.delete('thread')
     else params.set('thread', String(changes.thread))
   }

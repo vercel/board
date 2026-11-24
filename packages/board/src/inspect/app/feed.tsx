@@ -5,7 +5,8 @@ import { useToasts } from './chrome.ts'
 
 /**
  * Keeps to the bottom while you're there, holds still while you read history,
- * and keeps your place when older messages load above.
+ * and keeps your place when older messages load above. A `target` message is
+ * scrolled to and marked, and kept where it is until you scroll.
  */
 export function Feed(props: {
   scope: string
@@ -14,6 +15,8 @@ export function Feed(props: {
   /** The last thing shown, as a key: when it changes, something new came in below. */
   last: string
   older?: () => Promise<boolean>
+  /** The message to show: its ID, and which time it was asked for, since asking again marks it again. */
+  target?: { id: string; time: number } | null
   children: ReactNode
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -26,9 +29,35 @@ export function Feed(props: {
   first.current = props.first
   const lastSeen = useRef(props.last)
   const [behind, setBehind] = useState(false)
+  /** The target, while you haven't scrolled: how far from the top it sits, once it's there. */
+  const held = useRef<{ id: string; top: number | null } | null>(null)
+
+  /** Keeps the target where it sits; the first time it's there, in the middle, marked. Whether there's a target. */
+  const hold = (): boolean => {
+    const el = ref.current!
+    const target = held.current
+    if (!target) return false
+    const row = el.querySelector<HTMLElement>(`#m${CSS.escape(target.id)}`)
+    // Not loaded yet: the list holds still until it is.
+    if (!row) return true
+    if (target.top === null) {
+      target.top = Math.max(0, (el.clientHeight - row.offsetHeight) / 2)
+      // Marked again from the start: the animation runs when the attribute is set.
+      delete row.dataset.target
+      void row.offsetWidth
+      row.dataset.target = ''
+      row.addEventListener('animationend', () => delete row.dataset.target, { once: true })
+    }
+    el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - target.top
+    return true
+  }
+  const release = () => {
+    held.current = null
+  }
 
   const toBottom = () => {
     const el = ref.current!
+    release()
     el.scrollTop = el.scrollHeight
     pinned.current = true
     setBehind(false)
@@ -41,7 +70,18 @@ export function Feed(props: {
   }, [props.scope])
 
   useLayoutEffect(() => {
+    if (!props.target) return
+    held.current = { id: props.target.id, top: null }
+    pinned.current = false
+    hold()
+  }, [props.target?.id, props.target?.time])
+
+  useLayoutEffect(() => {
     const el = ref.current!
+    if (hold()) {
+      lastSeen.current = props.last
+      return
+    }
     if (restore.current) {
       el.scrollTop = el.scrollHeight - restore.current.height + restore.current.top
       restore.current = null
@@ -53,6 +93,7 @@ export function Feed(props: {
   // Reactions, edits, and images change heights without changing the list.
   useEffect(() => {
     const observer = new ResizeObserver(() => {
+      if (hold()) return
       if (pinned.current && !restore.current) ref.current!.scrollTop = ref.current!.scrollHeight
     })
     observer.observe(content.current!)
@@ -66,6 +107,10 @@ export function Feed(props: {
       <div
         className="feed"
         ref={ref}
+        // Scrolling yourself lets the target go; the page's own scrolls don't.
+        onWheel={release}
+        onTouchStart={release}
+        onPointerDown={release}
         onScroll={() => {
           const el = ref.current!
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48

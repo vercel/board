@@ -192,7 +192,7 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .message { position: relative; display: grid; grid-template-columns: 40px 1fr; gap: 8px; padding: 6px 20px 4px 8px; }
 .message.continued { padding-top: 1px; padding-bottom: 1px; }
 .message.active { background: var(--shade); }
-.message.target { animation: target 2s ease-out; }
+.message[data-target] { animation: target 2s ease-out; }
 @keyframes target { from { background: var(--accent-transparent); } }
 .message.pending { opacity: 0.5; }
 .message.failed { opacity: 1; }

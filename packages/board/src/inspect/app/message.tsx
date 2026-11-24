@@ -22,8 +22,6 @@ export type RowOptions = {
   me: string
   now: number
   known: KnownLabels
-  /** The message the URL points at (`?message=`): its row scrolls into view and shows it for a moment. */
-  target?: string
   /** Opens a message's thread; unset inside the thread itself. */
   openThread?: (id: string) => void
   /** Shown after the author, e.g. "in #prs" in the activity view. */
@@ -315,10 +313,6 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   const [labelsOpen, setLabelsOpen] = useState(false)
   const row = useRef<HTMLDivElement>(null)
   const editing = useEditing() === m.id
-  const target = options.target === m.id
-  useEffect(() => {
-    if (target) row.current?.scrollIntoView({ block: 'center' })
-  }, [target])
   const name = authorName(m)
   const mine = m.by.actor === options.me
   const reacted = (emoji: string) => (m.reactions[emoji] ?? []).includes(options.me)
@@ -355,7 +349,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
       <div
         ref={row}
         id={`m${m.id}`}
-        className={`message${continued ? ' continued' : ''}${active ? ' active' : ''}${target ? ' target' : ''}`}
+        className={`message${continued ? ' continued' : ''}${active ? ' active' : ''}`}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >

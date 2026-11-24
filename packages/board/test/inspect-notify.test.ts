@@ -8,7 +8,7 @@ const ME = 'local:user:julian'
 const BOARD = 'https://team.example/api/board'
 
 /** What the board answers next for a route, by `METHOD /path`: each is used once, then the route's usual answer. */
-const next = new Map<string, (() => Response)[]>()
+const next = new Map<string, (() => Response | Promise<Response>)[]>()
 const me = (profile: string | null) =>
   Response.json({
     actor: profile ? `${ME}+${profile}` : ME,
@@ -97,15 +97,17 @@ let listeners = new Map<string, Set<() => void>>()
 const activation = { isActive: true }
 const focus = vi.fn()
 const pushState = vi.fn()
+const replaceState = vi.fn()
 
 let page: typeof import('../src/inspect/app/board.ts')
+let notify: typeof import('../src/inspect/app/notify.ts')
 
 beforeAll(() => {
   vi.stubGlobal('document', doc)
   vi.stubGlobal('location', { origin: 'http://127.0.0.1:4747', pathname: '/', search: '' })
   vi.stubGlobal('window', { focus })
   vi.stubGlobal('navigator', { userActivation: activation })
-  vi.stubGlobal('history', { pushState })
+  vi.stubGlobal('history', { pushState, replaceState, state: null })
   vi.stubGlobal('dispatchEvent', () => true)
   vi.stubGlobal('PopStateEvent', class extends Event {})
   vi.stubGlobal('requestAnimationFrame', (run: () => void) => frame(run))
@@ -135,6 +137,7 @@ beforeEach(async () => {
   requested.mockClear()
   focus.mockClear()
   pushState.mockClear()
+  replaceState.mockClear()
   await reload()
 })
 
@@ -142,11 +145,13 @@ beforeEach(async () => {
 async function reload() {
   vi.resetModules()
   page = await import('../src/inspect/app/board.ts')
+  notify = await import('../src/inspect/app/notify.ts')
 }
 
-/** Boots the page on `boot`'s events, then lets the feed bring `live`'s. */
-async function run(boot: MessageView[], live: MessageView[]) {
-  next.set('GET /events', [feed(...boot), feed(...live)])
+/** Boots the page on `boot`'s events, as the page does, notifying of mentions; then lets the feed bring `live`'s. */
+async function run(boot: MessageView[], live: (() => Response | Promise<Response>) | MessageView[]) {
+  next.set('GET /events', [feed(...boot), Array.isArray(live) ? feed(...live) : live])
+  notify.notifyMentions()
   await page.boot()
 }
 
@@ -169,7 +174,7 @@ describe("the inspector's page, notifying of mentions", () => {
     await vi.waitFor(() => expect(notifications).toHaveLength(1))
     notifications[0]!.onclick!()
     expect(focus).toHaveBeenCalled()
-    expect(pushState).toHaveBeenLastCalledWith(null, '', '/c/dev?thread=50&message=51')
+    expect(pushState).toHaveBeenLastCalledWith({ pointed: 1 }, '', '/c/dev?thread=50&message=51')
     expect(notifications[0]!.closed).toBe(true)
   })
 
@@ -193,10 +198,25 @@ describe("the inspector's page, notifying of mentions", () => {
     expect(shown).toMatchObject([{ tag: `board:${BOARD}:61` }])
   })
 
-  it('notifies of a message once, however often the feed brings it', async () => {
-    await run([], [message('40', '@julian look'), message('40', '@julian look')])
-    await folded('40')
-    expect(shown).toHaveLength(1)
+  it('notifies of none this tab posted, as a profile, whether the feed brings it before the board answers or after', async () => {
+    metas['inspect-profile'] = JSON.stringify({ name: 'claude' })
+    await reload()
+    const mine = (id: string, text: string) => message(id, text, `${ME}+claude`)
+    // The first post's answer waits until the feed has brought it.
+    let answer!: () => void
+    const answered = new Promise<void>((resolve) => (answer = resolve))
+    next.set('POST /messages', [async () => (await answered, Response.json({ message: mine('90', '@julian first') }, { status: 201 })), () => Response.json({ message: mine('91', '@julian second') }, { status: 201 })])
+    let second!: () => void
+    const later = new Promise<void>((resolve) => (second = resolve))
+    await run([], async () => (await later, feed(mine('90', '@julian first'), mine('91', '@julian second'), message('92', '@julian from ada'))()))
+    const first = page.send({ channel: 'dev', re: null, text: '@julian first', noSync: false, labels: {} })
+    await vi.waitFor(() => expect(page.getState().pending).toHaveLength(1))
+    await page.send({ channel: 'dev', re: null, text: '@julian second', noSync: false, labels: {} })
+    second()
+    await folded('92')
+    answer()
+    await first
+    expect(shown).toMatchObject([{ tag: `board:${BOARD}:92` }])
   })
 
   it('notifies of mentions of you, not of the profile the page posts as', async () => {
@@ -210,10 +230,12 @@ describe("the inspector's page, notifying of mentions", () => {
 
   it('notifies no one on a page served from an app, which has no visitor to be', async () => {
     metas['inspect-named'] = '1'
+    permission = 'default'
     await reload()
     await run([], [message('80', '@julian look')])
     await folded('80')
     expect(shown).toEqual([])
+    // Nor does it ask to.
     expect(listeners.get('click')?.size ?? 0).toBe(0)
   })
 })

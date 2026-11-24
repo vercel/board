@@ -6,7 +6,8 @@ import { setEditing } from './chrome.ts'
 import { Composer } from './composer.tsx'
 import { Feed, Toasts } from './feed.tsx'
 import { Messages, Pendings, type RowOptions } from './message.tsx'
-import { here, Link, navigate, route, useLocation, useNow, useTypeToFocus } from './nav.tsx'
+import { here, Link, navigate, route, useLocation, useNow, useTypeToFocus, type Where } from './nav.tsx'
+import { notifyMentions } from './notify.ts'
 import { Settings } from './settings.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { actorFor, TaskCard, taskIds } from './task.tsx'
@@ -145,6 +146,8 @@ export function App() {
 
   // Served from an app, the page reads nothing until you've named who you post as.
   const [naming, setNaming] = useState(board.needsName)
+  // Mentions of you notify from the first live event on.
+  useEffect(() => notifyMentions(), [])
   useEffect(() => {
     if (!naming) board.boot().catch((error: Error) => setFailed(error.message))
   }, [naming])
@@ -234,7 +237,7 @@ export function App() {
       {where.thread !== null && (
         <aside className="pane" style={{ width: pane.width }}>
           <ResizeHandle side="left" label="resize the thread" onDrag={pane.drag} onDone={pane.done} onStep={pane.step} />
-          <ThreadPane key={where.thread} id={where.thread} target={where.params.get('message')} state={state} viewer={viewer} now={now} known={known} />
+          <ThreadPane key={where.thread} id={where.thread} target={where.target} state={state} viewer={viewer} now={now} known={known} />
         </aside>
       )}
       <Toasts />
@@ -372,7 +375,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   )
 }
 
-function ThreadPane(props: { id: string; target: string | null; state: State; viewer: Viewer; now: number; known: KnownLabels }) {
+function ThreadPane(props: { id: string; target: Where['target']; state: State; viewer: Viewer; now: number; known: KnownLabels }) {
   const { id, state, viewer } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
@@ -387,7 +390,7 @@ function ThreadPane(props: { id: string; target: string | null; state: State; vi
   const scheduled = threadSchedules(state, id)
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
   const names = namesOf(state)
-  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names, ...(props.target ? { target: props.target } : {}) }
+  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms, schemas: state.schemas, names }
   return (
     <>
       <Header title={isTask(t?.root) ? 'task' : 'thread'} meta={t ? `in #${t.root.channel}` : undefined}>
@@ -446,7 +449,7 @@ function ThreadPane(props: { id: string; target: string | null; state: State; vi
           ))}
         </dl>
       )}
-      <Feed scope={`thread:${id}`} first={id} last={`${t?.replies.at(-1)?.id ?? id}+${t?.pending.length ?? 0}`}>
+      <Feed scope={`thread:${id}`} target={props.target} first={id} last={`${t?.replies.at(-1)?.id ?? id}+${t?.pending.length ?? 0}`}>
         {!t ? (
           <p className="empty">{missing ? 'no such thread' : 'loading…'}</p>
         ) : (

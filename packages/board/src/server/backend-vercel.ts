@@ -5,7 +5,7 @@ import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { blocksIn } from '../contract/blocks.ts'
-import { mentionTerm, mentionTerms, replaceMentions } from '../contract/mentions.ts'
+import { mentionTerm, mentionTerms, meTerms, replaceMentions } from '../contract/mentions.ts'
 import { actorParts, importedHandle, platformProfile, underPrincipal, type Via } from '../contract/profiles.ts'
 import { VERSION } from '../version.ts'
 import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
@@ -1824,7 +1824,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     let prefixes: string[] = []
     if (value === 'me') {
       const found = await api<ApiMe>(who, 'GET', await onBoard(who, '/me'))
-      terms = [found.actor.id, ...(found.view?.handle ? [mentionTerm(found.view.handle)] : [])]
+      terms = meTerms({ id: found.actor.id, handle: found.view?.handle })
     } else {
       terms = [mentionTerm(value)]
       prefixes = [value.includes(':') ? `${value}+` : `${mentionTerm(value)}/`]

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardEventView, MessageView } from '../src/api/routes.ts'
-import { notice } from '../src/inspect/app/notify.ts'
 import * as store from '../src/inspect/app/store.ts'
+import { notice } from '../src/inspect/app/words.ts'
 
 const ME = { actor: 'vercel:user:u_julian', handle: 'julian' }
 const ADA = 'vercel:user:u_ada'

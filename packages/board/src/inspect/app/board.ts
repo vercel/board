@@ -12,8 +12,7 @@ import { http } from '../../backend-http/index.default.ts'
 import { everyChannel } from '../../client/channels.ts'
 import { toast } from './chrome.ts'
 import { listing } from './listing.ts'
-import { base, navigate } from './nav.tsx'
-import { askOnGesture, notice, notify } from './notify.ts'
+import { base } from './nav.tsx'
 import * as store from './store.ts'
 import { refusal, said } from './words.ts'
 
@@ -176,12 +175,14 @@ export async function boot() {
     (error: unknown) => ({ refused: refusal(error) }),
   )
   // Every channel, a page at a time: the sidebar lists them all.
-  const [me, discovery, channels] = await Promise.all([team.me(), team.discovery().catch(() => null), everyChannel(team)])
+  const [me, discovery, channels, unprofiled] = await Promise.all([
+    team.me(),
+    team.discovery().catch(() => null),
+    everyChannel(team),
+    named || team === yourself ? null : yourself.me(),
+  ])
   set((s) => ({ ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])) }))
-  // Mentions are of the person, whichever profile the page posts as. Served from an app, the page
-  // has no visitor to be, so it notifies no one.
-  const person = named ? null : team === yourself ? me : await yourself.me().catch(() => null)
-  if (person) askOnGesture()
+  person = named ? null : (unprofiled ?? me)
   const latest = await recent
   // Folded as live events are, oldest first, so an edit or a delete among them leaves its message as it is now.
   if ('page' in latest) {
@@ -200,8 +201,7 @@ export async function boot() {
   follow(
     'page' in latest ? latest.page.cursor : undefined,
     (event) => {
-      // Here, not in `flush`: a hidden tab gets no animation frames, and a mention still notifies.
-      if (person) mentioned(event, person, discovery?.url ?? location.origin)
+      for (const listener of live) listener(event)
       if (queue.push(event) === 1) requestAnimationFrame(flush)
     },
     (feed) => set((s) => ({ ...s, live: feed === 'live' ? 'live' : 'reconnecting' })),
@@ -213,13 +213,30 @@ export async function boot() {
   void loadTasks({ state: 'open', label: [] }).then((listed) => 'cursor' in listed && !listed.more && set((s) => ({ ...s, tasksCounted: true })))
 }
 
-/** Notifies of a new post that mentions `person`; a click opens its thread at it. */
-function mentioned(event: BoardEventView, person: Me, board: string) {
-  const message = store.mentionOf(event, person)
-  if (!message) return
-  const names = { [person.actor]: person.name, ...store.namesOf(state) }
-  notify(message.id, notice(message, names, board), () => navigate(`/c/${message.channel}?thread=${message.re ?? message.id}&message=${message.id}`))
+/** You as a person, whichever profile the page posts as. None served from an app, which has no visitor to be. */
+let person: Me | null = null
+export const getPerson = () => person
+
+const live = new Set<(event: BoardEventView) => void>()
+
+/**
+ * Hears each live event as the feed brings it, before the page folds it in a frame: on the feed's
+ * own callback, so a hidden tab, which gets no animation frames, hears it too.
+ */
+export function onLive(listener: (event: BoardEventView) => void): () => void {
+  live.add(listener)
+  return () => live.delete(listener)
 }
+
+/** What this tab posted, by ID, and the schedules it made: the feed brings them like anyone's. */
+const written = new Set<string>()
+const scheduledHere = new Set<string>()
+
+/** Whether this tab wrote a message: a post it sent, one on its way that the feed brought first, or a schedule's send. */
+export const wroteHere = (message: MessageView): boolean =>
+  written.has(message.id) ||
+  (message.schedule !== undefined && scheduledHere.has(message.schedule.id)) ||
+  (state.me !== null && store.landed(state.pending.filter((post) => post.later === undefined), message, state.me.actor) !== undefined)
 
 // #region guide inspector/live.ts
 /**
@@ -361,6 +378,7 @@ export async function send(
     if (post.later) {
       // Posts later, as you: a new thread in a channel, or a reply in a thread. Its files go with every send.
       const scheduled = await team.schedule(post.re === null ? post.channel : { re: post.re }, { ...content, ...post.later })
+      scheduledHere.add(scheduled.id)
       outgoing.delete(key)
       set((s) => ({ ...s, pending: s.pending.filter((p) => p.key !== key) }))
       toast(`scheduled for ${new Date(scheduled.next ?? scheduled.first).toLocaleString()}`)
@@ -374,6 +392,7 @@ export async function send(
       ? (await team.tasks.create(post.channel, { ...options, needs: post.task.needs, for: post.task.for })).task
       : await write(post.re === null ? { channel: post.channel } : { re: post.re }, options)
     outgoing.delete(key)
+    written.add(sent.id)
     set((s) => store.sent(s, key, sent))
   } catch (error) {
     set((s) => ({ ...s, pending: s.pending.map((p) => (p.key === key ? { ...p, error: refusal(error) } : p)) }))

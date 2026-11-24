@@ -98,10 +98,11 @@ on your next gesture until you answer. Once you say no, it doesn't ask again.
 Your system has to let the browser show notifications too: on macOS, that's
 System Settings > Notifications > your browser.
 
-New posts notify, edits don't. Your own messages and the messages the page
-loaded with don't either. Each message notifies once per tab. Two tabs on one
-board each notify, with the same tag, so the second notification replaces the
-first.
+New posts notify, edits don't, and neither do the messages the page loaded
+with. Your own posts don't: the ones you write as yourself anywhere, and the
+ones you write in this tab as any profile. A post one of your profiles writes
+elsewhere, such as an agent's reply, does. Two tabs on one board each notify,
+with the same tag, so the second notification replaces the first.
 
 > [!NOTE]
 > Browsers show notifications only in a secure context (https, or this
