@@ -15,7 +15,7 @@ import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
 import { apiThreadRoot, isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, TASK_NOTE_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { ATTACHMENTS_PER_MESSAGE_MAX, DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, patternsIn, principalsIn, type OptionToken } from './grants.ts'
@@ -1044,6 +1044,10 @@ function failureOf(error: unknown): Failure {
       ]),
       details: [],
     }
+  // A task's result or reason over what the board keeps, in its own words (each board says it its way, with its own limit):
+  // the full report goes in a reply in the task's thread, and the note in a line or two.
+  const note = status === 400 ? taskNoteTooLong(message) : null
+  if (note) return { ...theirs('limit', 'payload_too_large', `Can't ${doing()}. Its ${note} is too long for the board.`, note === 'result' ? noteRecovery('report') : noteRecovery('detail')) }
   // A limit on the team's boards, which the team's plan sets: no argument fixes it, and the team's own board is still there.
   if (code === 'too_many_boards')
     return theirs(
@@ -2627,7 +2631,6 @@ async function tasks(args: string[]): Promise<number> {
     const before = rest.slice(0, rest.length - command.length)
     if (before.length > 1) throw usage(`tasks run takes one ${flags.ready ? 'channel' : 'task'} before --: ${before[1]} is one too many.`)
     if (!flags.ready && before[0] === undefined) throw usage('Missing the task to run it on: its ID, or --ready and a channel.', { reason: 'missing_arguments' })
-    if (flags.result !== undefined) fits(flags.result, 'result')
     // It runs a command on this machine, and holds every other call for as long as it runs.
     if (io.board) throw usage("tasks run isn't available in-process: it runs a command on this machine.", { reason: 'not_available', next: [] })
     const { board, claims } = tasksOn()
@@ -2688,7 +2691,7 @@ async function tasks(args: string[]): Promise<number> {
   const reason = (what: string) => {
     const given = rest[1]?.trim()
     if (!given) throw usage(`Missing ${what}, in a line.`, { reason: 'missing_arguments' })
-    return fits(given, 'reason')
+    return given
   }
   const { board, claims } = tasksOn()
 
@@ -2712,9 +2715,8 @@ async function tasks(args: string[]): Promise<number> {
     }
     case 'complete': {
       one(rest[2], 'a task and its result, quoted')
-      const done = rest[1] === undefined ? undefined : fits(rest[1], 'result')
       const held = await heldBy(board, claims, id)
-      const task = await withClaim(claims, id, () => held.complete(done))
+      const task = await withClaim(claims, id, () => held.complete(rest[1]))
       await claims.drop(id)
       printTask(task, 'completed')
       return 0
@@ -2786,16 +2788,25 @@ async function tasks(args: string[]): Promise<number> {
   }
 }
 
-/** A task's result or reason, refused before it's sent when it's over what the board keeps, with where the rest goes. */
-function fits(note: string, what: 'result' | 'reason'): string {
-  if (note.length <= TASK_NOTE_MAX) return note
-  const id = current.args[1] !== undefined && isMessageRef(current.args[1]) ? messageId(current.args[1]) : '<ID>'
-  throw new Failed({
-    class: 'limit',
-    reason: 'payload_too_large',
-    message: `Can't ${doing()}. A task's ${what} is at most ${TASK_NOTE_MAX.toLocaleString('en-US')} characters, and this one is ${note.length.toLocaleString('en-US')}.`,
-    next: [{ instruction: `Reply the full ${what === 'result' ? 'report' : 'detail'} in the task's thread, then run this again with a line or two`, argv: [...cli(), 'reply', id, '-'] }],
-  })
+/** Which note a board refused as too long, from its words: `result: a task's result is at most 1,000 characters` here, `result should NOT be longer than 1000 characters` on Vercel's. Null for anything else, and off a task's settling. */
+function taskNoteTooLong(said: string): 'result' | 'reason' | null {
+  const { command, args } = current
+  if (command !== 'tasks' || !['run', 'complete', 'fail', 'block', 'cancel'].includes(args[0] ?? '')) return null
+  const what = /^\s*(result|reason)\b/i.exec(said)?.[1]?.toLowerCase()
+  if ((what !== 'result' && what !== 'reason') || !/(at most|longer than|too long)/i.test(said)) return null
+  return what
+}
+
+/** Where a too-long task note goes: the whole of it in a reply in the task's thread, then the settling again with a line or two. */
+function noteRecovery(whole: 'report' | 'detail'): Recovery[] {
+  const { args } = current
+  const id = args[1] !== undefined && isMessageRef(args[1]) ? messageId(args[1]) : '<ID>'
+  // A run's command already ran: what's left is completing the task it holds, not running it again.
+  const verb = args[0] === 'run' ? 'complete' : args[0]!
+  return [
+    { instruction: `Reply the full ${whole} in the task's thread`, argv: [...cli(), 'reply', id, '-'] },
+    { instruction: `Then ${verb} it with a line or two`, argv: [...cli(), 'tasks', verb, id, '<A LINE OR TWO>'] },
+  ]
 }
 
 /** How a board's own word about a task reads from here: the headline, and the way on. Null for any other code. */

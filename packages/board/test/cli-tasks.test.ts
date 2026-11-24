@@ -228,20 +228,27 @@ describe('vb tasks', () => {
     expect([keyless.code, keyless.stderr.split('\n')[0]]).toEqual([2, 'error: --label on claim --ready takes key=value, and =worker has no key before its =.'])
   }, 60_000)
 
-  it("refuses a result or reason over 1,000 characters before sending it, and says where the rest goes", async () => {
+  it("says where a result or reason goes when the board refuses it as too long", async () => {
     const id = await create('notes', 'run the suite')
     await ok(['tasks', 'claim', id])
     const long = 'a'.repeat(1001)
     const reply = { argv: ['vb', 'reply', id, '-'] }
     expect(failure(await vb(['tasks', 'complete', id, long, '--json']))).toMatchObject({
       reason: 'payload_too_large',
-      message: `Can't complete task #${id}. A task's result is at most 1,000 characters, and this one is 1,001.`,
-      next: [reply],
+      message: `Can't complete task #${id}. Its result is too long for the board.`,
+      data: { error: { message: "result: a task's result is at most 1,000 characters" } },
+      next: [reply, { argv: ['vb', 'tasks', 'complete', id, '<A LINE OR TWO>'] }],
     })
-    expect(failure(await vb(['tasks', 'fail', id, long, '--json']))).toMatchObject({ reason: 'payload_too_large', next: [reply] })
-    expect(failure(await vb(['tasks', 'run', id, '--json', '--result', long, '--', 'true']))).toMatchObject({ reason: 'payload_too_large', next: [reply] })
+    expect(failure(await vb(['tasks', 'fail', id, long, '--json']))).toMatchObject({ reason: 'payload_too_large', next: [reply, { argv: ['vb', 'tasks', 'fail', id, '<A LINE OR TWO>'] }] })
     expect((await task(id)).task).toMatchObject({ state: 'claimed' })
     expect(await ok(['tasks', 'complete', id, 'a'.repeat(1000)])).toBe(`completed ${id}\n`)
+    // The command ran: what's left is completing the task it still holds, not running it again.
+    const ran = await create('notes', 'run it again')
+    expect(failure(await vb(['tasks', 'run', ran, '--json', '--result', long, '--', 'true']))).toMatchObject({
+      reason: 'payload_too_large',
+      next: [{ argv: ['vb', 'reply', ran, '-'] }, { argv: ['vb', 'tasks', 'complete', ran, '<A LINE OR TWO>'] }],
+    })
+    expect(await ok(['tasks', 'complete', ran, 'tests pass'])).toBe(`completed ${ran}\n`)
   }, 30_000)
 
   it('waits for a task that becomes ready, and stops quietly on Ctrl-C', async () => {
