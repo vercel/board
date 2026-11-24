@@ -11,9 +11,10 @@ which comes with the Vercel CLI and uses the user's `vercel login`. Run
 `vercel board <command> --help` for flags.
 
 This skill follows the newest `@vercel/board`, and `vercel board` runs the
-board its Vercel CLI release carries, which can be older. If a flag named
-here is refused as unknown, update the CLI (`npm i -g vercel@latest`), or run
-the same command as `npx @vercel/board <command>`, which is the newest.
+board its Vercel CLI release carries, which can be older: `vercel board tasks`
+needs Vercel CLI 66.1.0 or newer. If a command or flag named here is refused
+as unknown, update the CLI (`npm i -g vercel@latest`), or run the same command
+as `npx @vercel/board <command>`, which is the newest.
 
 ## Find the board
 
