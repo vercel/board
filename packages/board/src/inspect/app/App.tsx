@@ -12,6 +12,7 @@ import { Settings } from './settings.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { actorFor, TaskCard, taskIds } from './task.tsx'
 import { Tasks } from './tasks.tsx'
+import { Town } from './village.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
 import { byWritten, channelRows, channelThreads, filtering, isTask, knownLabels, listingOf, matches, namesOf, profilesOf, recent, thread as threadOf, threadSchedules, type Filter, type State, type Viewer } from './store.ts'
 import { Ask, Header, nativeMenu, ResizeHandle, type KnownLabels } from './ui.tsx'
@@ -175,7 +176,7 @@ export function App() {
   // The tab says which board too, so two inspectors side by side tell apart.
   const named = boardWords(state.discovery).name
   useEffect(() => {
-    document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'settings' ? `${current.section} · settings` : current.view === 'missing' ? 'nothing here' : current.view} · ${named}`
+    document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'settings' ? `${current.section} · settings` : current.view === 'missing' ? 'nothing here' : current.view === 'town' ? 'boardville' : current.view} · ${named}`
   }, [where.path, named])
 
   const known = useMemo(() => knownLabels(state), [state.messages])
@@ -226,6 +227,13 @@ export function App() {
           <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} filters={filters} />
         )}
         {current.view === 'tasks' && <Tasks state={state} now={now} lead={expand} where={where} known={known} />}
+        {current.view === 'town' && (
+          <Town state={state} lead={expand} house={where.params.get('house') || null} thread={where.thread}>
+            {where.params.get('house') && (
+              <Channel key={where.params.get('house')!} channel={where.params.get('house')!} state={state} options={options} known={known} lead={null} filters={filters} />
+            )}
+          </Town>
+        )}
         {current.view === 'settings' && <Settings state={state} viewer={viewer} now={now} lead={expand} where={where} section={current.section} open={current.open} />}
         {current.view === 'missing' && (
           <>

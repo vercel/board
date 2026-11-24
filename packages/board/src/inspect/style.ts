@@ -628,6 +628,133 @@ button.file:hover { background: var(--shade-hover); color: var(--bright); }
   .composer-footer .send { margin-left: auto; }
 }
 
+/* --- boardville: the board as a village in 3D, its text as page elements over the scene --- */
+.town {
+  --sky: #e6eef3;
+  --ground: #dfe8d4;
+  --street: #cfd4c4;
+  --walls: #fbfaf6;
+  --ink: #4a4a4a;
+  --window: #dfe6ec;
+  --lit: #f3d27a;
+  --smoke: #d0d0d0;
+  --floor: #e2cfae;
+  --table: #a77b52;
+  --chair: #5a6270;
+  --roof-0: #b8604f; --roof-1: #5b7fa6; --roof-2: #6f9363; --roof-3: #c39a4a; --roof-4: #8a72a8; --roof-5: #4f8f8a;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--ground);
+}
+@media (prefers-color-scheme: dark) {
+  .town {
+    --sky: #0e1216;
+    --ground: #1a2219;
+    --street: #3a4239;
+    --walls: #3a3b36;
+    --ink: #8d8d8d;
+    --window: #2c3238;
+    --lit: #e3b955;
+    --smoke: #6a6a6a;
+    --floor: #4a3e2f;
+    --table: #7a5a3c;
+    --chair: #3c424c;
+  }
+}
+/* A house you're in: the scene keeps the top of the page, its channel the rest. */
+.town.inside { flex: 0 0 min(66%, 640px); border-bottom: 1px solid var(--hairline); }
+.town-inside { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.town-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.town .empty { position: relative; }
+.town-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+/* A label sits at its point: the scene moves it there each frame, and its content hangs above it. */
+.town-labels .over { position: absolute; left: 0; top: 0; will-change: transform; }
+.town-labels .over > * { position: absolute; left: 0; bottom: 0; width: max-content; transform: translateX(-50%); }
+/* A label under its point instead, or centered on it: a table's, on its top. */
+.town-labels .over.below > * { bottom: auto; top: 0; }
+.town-labels .over.centered > * { bottom: auto; top: 0; transform: translate(-50%, -50%); }
+.town-labels button { pointer-events: auto; }
+.town .plate {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--ink);
+  background: var(--walls);
+  color: var(--bright);
+  font-size: 12px;
+  white-space: nowrap;
+  /* A long channel name is cut short: its sign stays about its house's width. Its title has it in full. */
+  max-width: 170px;
+}
+.town .plate .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.town .plate:hover, .town .plate.open { border-color: var(--bright); }
+.town .street-sign { display: block; padding: 2px 10px; background: var(--bright); color: var(--bg); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+.town .plate.open .name { text-decoration: underline; text-underline-offset: 3px; }
+.town .plate .count { padding: 0 5px; background: var(--bright); color: var(--bg); font-size: 10px; line-height: 16px; }
+.town .table-label button {
+  display: grid;
+  padding: 1px 4px;
+  background: var(--bg);
+  border: 1px solid var(--ink);
+  color: var(--bright);
+  font-size: 9.5px;
+  line-height: 1.3;
+  text-align: left;
+}
+.town .table-label button:hover { border-color: var(--bright); }
+/* A grid's items don't shrink past their text unless told: without this a long label runs over its neighbors. */
+.town .table-label button { overflow: hidden; }
+.town .table-label .label, .town .table-label .state { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.town .table-label .state { color: var(--muted); font-size: 9px; }
+.town .table-label .state.claimed { color: #2f7fd8; }
+/* Names float as dark pills, as people's do in a virtual office: a dot says who's around. */
+.town .stack { display: grid; justify-items: center; gap: 4px; }
+/* A table's label, its pill, and what's said there are as wide as the table at most: the scene sets --fit as
+   the camera moves. The bubble wraps, the names cut short. */
+.town .over[data-span] .bubble, .town .over[data-span] .roof-pill, .town .over[data-span].table-label button { max-width: var(--fit, 160px); }
+.person-label .tag, .town .roof-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  background: rgba(24, 26, 32, 0.88);
+  color: #f4f4f4;
+  font-size: 11px;
+  line-height: 15px;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.person-label .tag i, .town .roof-pill i { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid #9aa0a8; flex-shrink: 0; }
+.person-label .tag i.on, .town .roof-pill i.on { background: #3ccf6b; border-color: #3ccf6b; }
+.person-label.you .tag { background: #f4f4f4; color: #181a20; font-weight: 600; }
+.town .faces { display: inline-flex; }
+.town .faces img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; outline: 1.5px solid rgba(24, 26, 32, 0.88); }
+.town .faces img + img { margin-left: -5px; }
+.person-label.idle .tag { color: #b0b4ba; }
+.town .roof-pill { padding: 3px 10px 3px 8px; font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.town .roof-pill:hover { background: rgba(24, 26, 32, 1); }
+.bubble .who { display: block; color: var(--muted); font-size: 10px; }
+.bubble {
+  position: relative;
+  width: max-content;
+  max-width: 190px;
+  padding: 4px 8px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--bright);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+}
+.bubble .text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.bubble::after { content: ''; position: absolute; left: calc(50% - 4px); bottom: -5px; width: 8px; height: 8px; background: var(--bg); border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); transform: rotate(45deg); }
+.bubble:hover, .bubble:hover::after { border-color: var(--bright); }
+
 .toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 60; }
 .toast { max-width: 420px; padding: 8px 12px; border: 1px solid var(--dim); background: var(--bg); color: var(--bright); }
 
