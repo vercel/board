@@ -138,6 +138,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
+| `@vercel/board/sync-vercel` | `vercel()`, which brings Vercel's own events in as its webhooks send them, each a message with its payload as a block. Nothing goes back | server |
 | `@vercel/board/sync-chat-sdk` | `chatSdk()`, which syncs any Chat SDK adapter, with hooks for what it can't read from the adapter | server |
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`) | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
@@ -1887,6 +1888,9 @@ status.
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
+| POST | `/syncs` | Has the board itself sync a channel with a source, with no deployment: `{ channel, source: 'vercel', events, projects? }` for the team's own Vercel events, or `{ channel, source: 'slack', slack: { channel, workspace? } }` for a Slack channel, both ways, through Vercel's Slack app. `sync` in the channel. Answers `{ sync }`, whose `state` is `pending` while its source has yet to agree. 501 `no_managed_sync` on a board that runs none, which is every board but Vercel's |
+| GET | `/syncs` | The syncs the board runs itself, oldest first: `{ syncs: [{ id, channel, source, events?, projects?, slack?, state, reason?, by, createdAt }] }`. `state` is `active`, `pending` (its source has yet to agree), or `paused` (its source is gone), and `reason` says why one isn't `active`. Filter: `channel` |
+| POST | `/syncs/:id/remove` | Stops one, and removes what its source kept for it; what it brought in stays. `sync` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
 | POST | `/grants` | `{ principals, can, lockMeOut? }`: a new grant. Needs what [Grants](#grants) says making one takes; 409 `grant_lockout` for one its caller couldn't take back, unless it says `lockMeOut`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
 | POST | `/grants/batch` | `{ grants, lockMeOut? }`: 1 to 16 grants in one write, all or none, judged together. Answers `{ grants }`, in the order given |
@@ -2208,6 +2212,11 @@ board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
 board sync <id> <target>                       attach the thread to an external target, backfilling it in order
+board sync <channel> vercel --events <name[,name]> [--project <name|id>]...   on Vercel's board: bring the team's Vercel events into the channel, run by the board itself
+board sync <channel> slack/vercel:<#channel> [--workspace <domain|id>]       on Vercel's board: mirror a Slack channel both ways through Vercel's Slack app, once the channel agrees
+board sync <channel>                           the channel's syncs the board runs
+board sync remove <sync>                       stop one, by its ID
+board syncs [channel]                          the syncs the board runs itself, each with its state and why it isn't running
 board typing <id> [status]                     show typing in the thread's synced platform threads;
                                                 Slack shows the status, if given, instead of "Typing…"
 

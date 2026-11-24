@@ -37,6 +37,9 @@ import { derivedId, isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
 import { VERSION } from '../version.ts'
 
+/** What a board kept here answers a managed sync's routes: it runs none, and Vercel's board does. */
+const noManagedSync = () => new HttpError(501, 'no_managed_sync', "this board runs no syncs of its own: Vercel's board does, and a board kept here syncs what board({ sync }) names")
+
 /**
  * The engine behind `local()`, internal: a board on A2's log, and what runs it. Who may use it,
  * and what its writes go through, are board()'s: `board({ authenticate, access, middleware })`.
@@ -629,6 +632,16 @@ function build(options: A2Options, binding: BoardBinding) {
       const identity = await identityOf(caller)
       const answer = await schedules.cancel(identity, scheduleAt(id))
       return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
+    },
+    // A board kept here runs no sync of its own: its syncs are the entries `board({ sync })` names, which run where it does.
+    async createSync() {
+      throw noManagedSync()
+    },
+    async syncs() {
+      throw noManagedSync()
+    },
+    async removeSync() {
+      throw noManagedSync()
     },
     tasks: async (caller, query) => tasks.list(await identityOf(caller), query),
     async createTask(caller, body) {

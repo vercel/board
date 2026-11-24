@@ -100,6 +100,10 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/${secret.schedule}/cancel`, status: 404 },
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
+  // A board kept here runs no syncs of its own, so it has none to show or change, whoever asks.
+  createSync: () => [{ method: 'POST', path: '/syncs', body: { channel: 'secret', source: 'vercel', events: ['deployment.error'] }, status: 501 }],
+  syncs: () => ['', '?channel=secret'].map((query) => ({ method: 'GET' as const, path: `/syncs${query}`, status: 501 })),
+  removeSync: () => [{ method: 'POST', path: '/syncs/syn_1/remove', status: 501 }],
   // Tasks are threads: one it can't read isn't there, and where it only reads, it starts, claims, and changes none.
   tasks: () =>
     ['', '?state=all', '?channel=secret', '?owner=keeper', '?label=private'].map((query) => ({ method: 'GET' as const, path: `/tasks${query}`, status: 200, check: nothingFrom('tasks') })),

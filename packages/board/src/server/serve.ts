@@ -31,6 +31,8 @@ import {
   CreateChannelBody,
   Ref,
   RegisterBody,
+  ManagedSyncBody,
+  ManagedSyncsQuery,
   ScheduleBody,
   CreateGrantsBody,
   GrantBody,
@@ -134,6 +136,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'posted':
     case 'synced':
     case 'cancelSchedule':
+    case 'removeSync':
     case 'unblockTask':
     case 'reopenTask':
     case 'schema':
@@ -146,6 +149,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return ThreadsQuery.parse(queryObject(url))
     case 'schedules':
       return SchedulesQuery.parse(queryObject(url))
+    case 'syncs':
+      return ManagedSyncsQuery.parse(queryObject(url))
     case 'matches':
       return MatchesQuery.parse(queryObject(url))
     case 'events': {
@@ -165,6 +170,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return CreateChannelBody.parse(await body())
     case 'schedule':
       return ScheduleBody.parse(await body())
+    case 'createSync':
+      return ManagedSyncBody.parse(await body())
     case 'tasks':
       return TasksQuery.parse(queryObject(url))
     case 'createTask':

@@ -1,4 +1,4 @@
-import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, TaskView, ThreadSummaryView } from '../api/routes.ts'
+import type { BoardEventView, GrantView, ManagedSyncView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, TaskView, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { byVercelBot, displayText } from '../contract/bots.ts'
@@ -359,6 +359,18 @@ const until = (iso: string, now: number) => {
 }
 
 /** One schedule: what it sends, when, where, and how it stops. */
+/**
+ * A sync the board runs itself: its ID, its channel, and what it syncs with, as the command that
+ * made it says it. One that isn't running says so last, and why.
+ */
+export function formatManagedSync(sync: ManagedSyncView): string {
+  const what = sync.slack
+    ? [`slack/vercel:${sync.slack.name ? `#${sync.slack.name}` : sync.slack.channel}`]
+    : [sync.source, ...(sync.events?.length ? [`--events ${sync.events.join(',')}`] : []), ...(sync.projects?.length ? [`--project ${sync.projects.join(',')}`] : [])]
+  const held = sync.state === 'active' ? [] : [sync.reason ? `${sync.state}: ${sync.reason}` : sync.state]
+  return [sync.id, sync.channel, what.join(' '), ...held].join('  ')
+}
+
 export function formatSchedule(schedule: ScheduleView, options: { pad?: string; now?: number } = {}): string {
   const now = options.now ?? Date.now()
   const pad = options.pad ?? ''

@@ -243,6 +243,41 @@ export const SchedulesQuery = z.object({
   all: flag.optional(),
 })
 
+/**
+ * The sources a board that runs syncs itself brings in: `vercel`, the team's own Vercel events,
+ * and `slack`, a Slack channel mirrored both ways through Vercel's Slack app.
+ */
+export const MANAGED_SYNC_SOURCES = ['vercel', 'slack'] as const
+
+/**
+ * A sync the board runs itself: one source into one channel, with no deployment of yours.
+ *
+ * A `vercel` sync names its `events` by the source's own names for them, as Vercel's webhooks
+ * name theirs (`deployment.error`), and with `projects` the projects they're about, each by its
+ * name or its ID: every project's without.
+ *
+ * A `slack` sync names the Slack channel it mirrors: `slack`, with the `channel`'s name or ID,
+ * and the `workspace`'s domain or ID for a team with more than one. It is `pending` until someone
+ * in that channel agrees.
+ */
+export const ManagedSyncBody = z
+  .object({
+    channel: ChannelPath,
+    source: z.enum(MANAGED_SYNC_SOURCES),
+    events: z.array(z.string().min(1).max(100)).min(1).max(50).optional(),
+    projects: z.array(z.string().min(1).max(100)).min(1).max(50).optional(),
+    slack: z
+      .object({ channel: z.string().min(1).max(100), workspace: z.string().min(1).max(100).optional() })
+      .strict()
+      .optional(),
+  })
+  .strict()
+
+export const ManagedSyncsQuery = z.object({
+  /** One channel's syncs. */
+  channel: z.string().optional(),
+})
+
 /** A channel, or with a trailing `/` it and every channel under it: `work`, `work/`. As long as a grant's pattern for either. */
 const ChannelOrSubtree = z.string().max(CHANNEL_PATTERN_MAX).regex(/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/, 'name a channel, or a channel and its subtree (work/)')
 
@@ -799,6 +834,8 @@ export type PostInput = z.input<typeof PostBody>
 export type ScheduleInput = z.input<typeof ScheduleBody>
 export type ScheduleBodyOutput = z.output<typeof ScheduleBody>
 export type SchedulesQueryInput = z.input<typeof SchedulesQuery>
+export type ManagedSyncInput = z.input<typeof ManagedSyncBody>
+export type ManagedSyncsQueryInput = z.input<typeof ManagedSyncsQuery>
 /** A principal as `createGrant` and `updateGrant` take it. */
 /**
  * A principal as a handle takes it. A project's environments, and every project's, are production
@@ -824,6 +861,28 @@ export type SchemaInput = z.input<typeof SchemaBody>
 export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
+/** A sync the board runs itself, as its board's people read it. */
+export type ManagedSyncView = {
+  id: string
+  channel: string
+  source: string
+  events?: string[]
+  /** The projects its events are about, by ID, however it was asked for them. */
+  projects?: string[]
+  /** The Slack channel a `slack` sync mirrors, by ID, and its name when the sync was made: a rename in Slack leaves it behind. */
+  slack?: { workspace: string; channel: string; name?: string }
+  /**
+   * `active` while it runs. `pending` until its source agrees to it, as a Slack channel must, and
+   * `paused` once its source is gone, as a webhook someone deleted is: nothing syncs in either.
+   */
+  state: 'pending' | 'active' | 'paused'
+  /** Why one that isn't `active` isn't, in the board's words. */
+  reason?: string
+  /** The actor that made it. */
+  by: string
+  createdAt: string
+}
+
 export type ScheduleView = {
   id: string
   channel: string
@@ -1242,6 +1301,12 @@ export const routes = {
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
+  /** Brings a source's events into a channel, run by the board itself: `sync` where they land. Only a board that runs syncs takes one. */
+  createSync: { method: 'POST', path: '/syncs', body: ManagedSyncBody },
+  /** The syncs the board runs itself, oldest first. */
+  syncs: { method: 'GET', path: '/syncs', query: ManagedSyncsQuery },
+  /** Removes one, and what its source keeps for it: `sync` where its events land. What it brought in stays. */
+  removeSync: { method: 'POST', path: '/syncs/:id/remove' },
   /** Tasks, oldest first: open ones unless `state` says otherwise. */
   tasks: { method: 'GET', path: '/tasks', query: TasksQuery },
   /** Starts a thread as a task (`post` there, and `label` for its labels), or makes the thread `re` roots one (`label` there). */

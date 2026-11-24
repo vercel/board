@@ -321,6 +321,93 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("asks a Slack channel to mirror a board channel, and shows a sync that isn't running, and why", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const run = (...argv: string[]) => capture(() => app.run([...argv, '--scope', 'acme']))
+      const asked = await run('sync', 'alerts', 'slack/vercel:#alerts', '--workspace', 'acme-corp')
+      const [, id] = /^(syn_\w+)  alerts  slack\/vercel:#alerts  pending: waiting for the channel to agree\n$/.exec(asked.stdout) ?? []
+      expect([asked.code, asked.stderr, typeof id]).toEqual([0, '', 'string'])
+      expect(api.managedSyncs.get(id!)?.slack?.workspaceId).toBe('acme-corp')
+      expect(JSON.parse((await run('sync', 'alerts', 'slack/vercel:#alerts', '--json')).stdout)).toMatchObject({ outcome: 'pending', sync: { state: 'pending' } })
+      // Someone in the Slack channel agrees: it runs, and says nothing more than what it is.
+      api.managedSyncs.set(id!, { ...api.managedSyncs.get(id!)!, state: 'active', reason: undefined })
+      expect((await run('syncs')).stdout.split('\n')[0]).toBe(`${id}  alerts  slack/vercel:#alerts`)
+      // Vercel's Slack app is removed from the channel.
+      api.managedSyncs.set(id!, { ...api.managedSyncs.get(id!)!, state: 'paused', reason: "Vercel's Slack app can no longer reach the channel" })
+      expect((await run('syncs')).stdout.split('\n')[0]).toBe(`${id}  alerts  slack/vercel:#alerts  paused: Vercel's Slack app can no longer reach the channel`)
+      // A thread's target isn't what a board syncs a channel with.
+      const wrong = await run('sync', 'alerts', 'slack:#alerts')
+      expect([wrong.code, wrong.stdout]).toEqual([2, ''])
+      expect(wrong.stderr).toContain('slack/vercel:#channel')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("brings Vercel's events into a channel with one command, lists the board's syncs, and removes one", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const run = (...argv: string[]) => capture(() => app.run([...argv, '--scope', 'acme']))
+      // The project by its name: the sync shows its ID.
+      const made = await run('sync', 'deploys', 'vercel', '--events', 'deployment.error,deployment.succeeded', '--project', 'web')
+      const [, id] = /^syncing (syn_\w+)  deploys  vercel --events deployment.error,deployment.succeeded --project prj_web\n$/.exec(made.stdout) ?? []
+      expect([made.code, made.stderr, typeof id]).toEqual([0, '', 'string'])
+      expect((await run('sync', 'ops/alerts', 'vercel', '--events', 'firewall.attack')).code).toBe(0)
+      const row = `${id}  deploys  vercel --events deployment.error,deployment.succeeded --project prj_web\n`
+      // A channel's own, by naming it either way, and the whole board's.
+      expect((await run('sync', 'deploys')).stdout).toBe(row)
+      expect((await run('syncs', 'deploys')).stdout).toBe(row)
+      expect((await run('syncs')).stdout.split('\n').map((line) => line.split('  ')[1])).toEqual(['deploys', 'ops/alerts', undefined])
+      expect(JSON.parse((await run('syncs', 'deploys', '--json')).stdout).syncs).toMatchObject([{ id, channel: 'deploys', source: 'vercel', projects: ['prj_web'], state: 'active' }])
+      expect(await run('sync', 'remove', id!)).toEqual({ code: 0, stdout: `removed ${row}`, stderr: '' })
+      expect((await run('sync', 'deploys')).stdout).toBe('no syncs in deploys\n')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('makes no sync without events, or from a source no board runs, and says which it does', async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const run = (...argv: string[]) => capture(() => app.run([...argv, '--scope', 'acme']))
+      const noEvents = await run('sync', 'deploys', 'vercel')
+      expect([noEvents.code, noEvents.stdout]).toEqual([2, ''])
+      expect(noEvents.stderr).toContain('--events deployment.error')
+      const noSource = await run('sync', 'deploys', 'datadog', '--events', 'monitor.alert')
+      expect([noSource.code, noSource.stdout]).toEqual([2, ''])
+      expect(noSource.stderr).toContain("datadog isn't something a board syncs a channel with: vercel, or slack/vercel:#channel")
+      expect((await run('syncs')).stdout).toBe('no syncs\n')
+      expect(api.requests.filter((request) => request.startsWith('POST ') && request.includes('/syncs'))).toEqual([])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("lists the team's boards you can use with list or ls, by the names --name takes, its default marked", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')

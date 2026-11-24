@@ -26,6 +26,9 @@ import type {
   MessageView,
   RegisterInput,
   RegistrationView,
+  ManagedSyncInput,
+  ManagedSyncsQueryInput,
+  ManagedSyncView,
   ScheduleView,
   SchedulesQueryInput,
   TaskClaim,
@@ -676,6 +679,18 @@ export function createBoardClient(options: ClientOptions) {
     /** Stops a schedule: yours, or any with manage in its channel. `canceled` is false when it was already done or canceled. */
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
+    /**
+     * Has the board itself sync a channel with a source, with no deployment of yours. Vercel's own
+     * events: `{ channel: 'deploys', source: 'vercel', events: ['deployment.error'] }`. A Slack
+     * channel, both ways, through Vercel's Slack app: `{ channel: 'alerts', source: 'slack', slack:
+     * { channel: '#alerts' } }`, whose `state` is `pending` until someone in that channel agrees.
+     * Only Vercel's board runs one.
+     */
+    createSync: async (input: ManagedSyncInput) => (await call<{ sync: ManagedSyncView }>('POST', '/syncs', { body: input })).sync,
+    /** The syncs the board runs itself, oldest first: every channel's, or one's. Each says its `state`, and one that isn't `active` its `reason`. */
+    syncs: async (query: ManagedSyncsQueryInput = {}) => (await call<{ syncs: ManagedSyncView[] }>('GET', `/syncs${queryString(query)}`)).syncs,
+    /** Removes a sync the board runs, and what its source kept for it. What it brought in stays. */
+    removeSync: async (id: string) => (await call<{ sync: ManagedSyncView }>('POST', `/syncs/${path(id)}/remove`, { body: {} })).sync,
     /**
      * Tasks: threads someone's agents are to do, with a state the board keeps. A task's ID is its
      * root's, and its root's `task` says its state, whose it is, what it waits for, and who holds

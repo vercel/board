@@ -12,7 +12,7 @@ import { createBoard, type Board, type BoardOptions } from './board.ts'
  */
 export function board(options: BoardOptions = {}): Board {
   return createBoard(options, {
-    backend: (fetch) => (process.env.BOARD_URL?.trim() ? http() : vercel(fetch ? { fetch } : {})),
+    backend: (fetch, wakePath) => (process.env.BOARD_URL?.trim() ? http() : vercel({ ...(fetch ? { fetch } : {}), ...(wakePath !== undefined ? { wakePath } : {}) })),
     sync: () => import('../sync/engine.ts'),
     serving: () => import('./serving.ts'),
     sandbox: (url, token) => sandboxHeaders(url, url, token),

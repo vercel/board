@@ -128,15 +128,22 @@ type DefaultOptions = {
    * never `VERCEL_TOKEN`; elsewhere, a browser say, pass one. A board at `BOARD_URL` gets the credentials `vb` sends it instead.
    */
   fetch?: typeof fetch
+  /**
+   * For a board something else wakes, on Vercel's API: it registers its watchers and sync as woken
+   * at this path, and never pulls on its own. Whatever runs it sends `POST <basePath>/wake` to
+   * `fetch` when the API says something matched. A deployment on Vercel is woken at its own path
+   * already, and needs none.
+   */
+  wakePath?: string
 }
 
 /** What a build of board gives board(): Node's finds boards, tokens, and the board's project in the environment. */
 export type Runtime = {
   /**
    * The backend for a board() given none: Vercel's board, through `fetch` when it's given, or in
-   * Node with `BOARD_URL` set, `http()` to that board.
+   * Node with `BOARD_URL` set, `http()` to that board. With `wakePath`, Vercel's board, woken there.
    */
-  backend(fetch: typeof globalThis.fetch | undefined): Backend
+  backend(fetch: typeof globalThis.fetch | undefined, wakePath: string | undefined): Backend
   /** Loads the sync engine, only for a board that syncs. */
   sync: () => Promise<typeof import('../sync/engine.ts')>
   /** Loads what the policy finds in the environment, the first time a board serves: null where nothing does, so pass `authenticate`. */
@@ -259,7 +266,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     throw new Error(`board: ${JSON.stringify(options.name)} isn't a board's name: one is 1 to 64 characters with no /, and another team's board takes its team apart, board({ team, name })`)
   if (options.team !== undefined && !TEAM.test(options.team)) throw new Error(`board: ${JSON.stringify(options.team)} isn't a team: pass its ID (team_…) or its slug`)
   if (options.ensure && options.name === undefined) throw new Error('board: ensure makes the board `name` names: pass name too')
-  const backend = options.backend ?? runtime.backend(options.fetch)
+  const backend = options.backend ?? runtime.backend(options.fetch, options.wakePath)
   const policy = createPolicy(options, backend.keeps, runtime.serving, backend.trust ?? null)
   const watch = options.watch ?? {}
   const entries = options.sync ?? {}

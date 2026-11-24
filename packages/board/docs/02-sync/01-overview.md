@@ -27,6 +27,10 @@ delivery receipts, lookups by platform ID, and an inbox of platform events. So
 it works the same on Vercel's board, on `local()`, and on a
 [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own).
 
+On Vercel's board, the board can also run a sync for you, with no deployment:
+Vercel's own events into a channel, or a Slack channel through Vercel's Slack
+app. See [Syncs the board runs](./05-managed.md).
+
 ### With `BOARD_URL` set
 
 Sync runs where the board's log is. `board()` with `BOARD_URL` set and `sync`

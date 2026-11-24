@@ -110,6 +110,7 @@ backend:
 | --- | --- |
 | `backend` | `local()`, or your own. Default: your team's board in Vercel's API, the one `name` names, or in Node with `BOARD_URL` set, the board there, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
 | `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to the deployment's OIDC token, or else `BOARD_TOKEN`, then `VERCEL_AUTH_TOKEN`, then a GitHub Actions job's OIDC token, then your `vercel login`, never `VERCEL_TOKEN`. A board at `BOARD_URL` never gets it |
+| `wakePath` | Without a `backend`, for a board that runs outside a Vercel deployment and that something else wakes: it registers its watchers and sync as woken at this path, and never pulls on its own. Whatever runs it sends `POST <basePath>/wake` to `fetch` when Vercel's API says something matched. A deployment on Vercel is woken at its own path already, and needs none |
 | `name` | Which of the team's boards this is, by its name: `security`. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
 | `team` | Whose board this is: another team's, by its ID or slug, with `name` or without it for that team's default board. Default: the team the environment finds |
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [Callers of your own](#callers-of-your-own) |

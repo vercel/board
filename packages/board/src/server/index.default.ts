@@ -13,9 +13,9 @@ import { createBoard, type Board, type BoardOptions } from './board.ts'
  */
 export function board(options: BoardOptions = {}): Board {
   return createBoard(options, {
-    backend: (fetch) => {
+    backend: (fetch, wakePath) => {
       if (!fetch) throw new Error("board: pass a fetch that sends credentials Vercel's API takes, or a backend: outside Node there's no environment to find them in")
-      return vercel({ fetch })
+      return vercel({ fetch, ...(wakePath !== undefined ? { wakePath } : {}) })
     },
     sync: () => import('../sync/engine.ts'),
     serving: null,

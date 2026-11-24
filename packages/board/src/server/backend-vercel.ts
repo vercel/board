@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type ManagedSyncView, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
@@ -223,6 +223,19 @@ type ApiRegistration = {
   hash: string
 }
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
+/** A sync the API runs itself: its channel by ID, and its projects by theirs. */
+type ApiManagedSync = {
+  id: string
+  channelId: string
+  source: string
+  events?: string[]
+  projectIds?: string[]
+  slack?: { workspaceId: string; channelId: string; name?: string }
+  state: ManagedSyncView['state']
+  reason?: string
+  createdBy: string
+  createdAt: number
+}
 
 export type VercelOptions = {
   /**
@@ -246,6 +259,8 @@ export type VercelOptions = {
   fetch?: typeof fetch
   /** How files reach Vercel's storage, on URLs the API signs: `fetch` by default, never with credentials. */
   files?: typeof fetch
+  /** The path this board registers as woken at, for one something else wakes: it never pulls on its own. */
+  wakePath?: string
 }
 
 /** What finds the API's credentials and the team, in the Node build. A browser has none. */
@@ -2715,6 +2730,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** This deployment's own: what its config's watchers run as. */
+  /** A sync the API runs, as board shows it: its channel by name. */
+  const managedSyncView = async (who: Who, sync: ApiManagedSync): Promise<ManagedSyncView> => ({
+    id: sync.id,
+    channel: (await channelById(who, sync.channelId)).name,
+    source: sync.source,
+    ...(sync.events ? { events: sync.events } : {}),
+    ...(sync.projectIds ? { projects: sync.projectIds } : {}),
+    ...(sync.slack ? { slack: { workspace: sync.slack.workspaceId, channel: sync.slack.channelId, ...(sync.slack.name ? { name: sync.slack.name } : {}) } } : {}),
+    state: sync.state,
+    ...(sync.reason ? { reason: sync.reason } : {}),
+    by: sync.createdBy,
+    createdAt: iso(sync.createdAt),
+  })
+
   const deployment: Who = { profile: null }
   /** This board's config's watchers, which run here when the API wakes it. */
   let tails: Record<string, WatcherSpec> = {}
@@ -2735,7 +2764,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     // The API wakes a path on this project, through its Deployment Protection, from every deployment
     // on Vercel, and nothing at a URL: off Vercel, it registers no path, and pulls. The API refuses any `url`, even null.
-    wakeAt: async (here) => wakePath(here) ?? {},
+    // A board something else wakes says where itself: it has no project's path, and no URL of its own.
+    wakeAt: async (here) => (options.wakePath !== undefined ? { path: options.wakePath } : (wakePath(here) ?? {})),
+    woken: options.wakePath !== undefined,
     binding: bound,
     hash: () => tagOf(tails, bound().sync),
     hasWork: () => Object.keys(tails).length > 0 || bound().sync.length > 0,
@@ -3559,6 +3590,37 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         signal,
       })
       return { schedule: await scheduleView(who, schedule), canceled }
+    },
+    async createSync(caller, input, signal) {
+      const who = whoOf(caller)
+      const { sync } = await api<{ sync: ApiManagedSync }>(who, 'POST', await onBoard(who, '/syncs'), {
+        body: {
+          operationId: operationId(),
+          channelId: (await channelToPost(who, input.channel)).id,
+          source: input.source,
+          ...(input.events ? { events: input.events } : {}),
+          ...(input.projects ? { projects: input.projects } : {}),
+          ...(input.slack ? { slack: input.slack } : {}),
+        },
+        signal,
+      })
+      return { sync: await managedSyncView(who, sync) }
+    },
+    async syncs(caller, { channel }, signal) {
+      const who = whoOf(caller)
+      // The API lists a channel's by its ID: one that isn't there has none.
+      const found = channel === undefined ? undefined : await channelNamed(who, channel)
+      if (found === null) return { syncs: [] }
+      const { syncs } = await api<{ syncs: ApiManagedSync[] }>(who, 'GET', await onBoard(who, '/syncs'), { query: found ? { channelId: found.id } : {}, signal })
+      return { syncs: await Promise.all(syncs.map((sync) => managedSyncView(who, sync))) }
+    },
+    async removeSync(caller, { id }, signal) {
+      const who = whoOf(caller)
+      const { sync } = await api<{ sync: ApiManagedSync }>(who, 'POST', await onBoard(who, `/syncs/${encodeURIComponent(id)}/remove`), {
+        body: { operationId: operationId() },
+        signal,
+      })
+      return { sync: await managedSyncView(who, sync) }
     },
     // Tasks live on the API's threads: each method is one of its task routes, the task named by its thread.
     async tasks(caller, query, signal) {

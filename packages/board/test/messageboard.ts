@@ -52,6 +52,20 @@ type Message = {
   noSync?: boolean
   links?: { url: string; message?: string | null; snapshot?: unknown; unavailable?: string | null }[]
 }
+/** A sync the API runs itself, as its routes answer it. */
+type ManagedSync = {
+  id: string
+  channelId: string
+  source: string
+  events?: string[]
+  projectIds?: string[]
+  slack?: { workspaceId: string; channelId: string; name?: string }
+  state: 'pending' | 'active' | 'paused'
+  reason?: string
+  createdBy: string
+  createdAt: number
+}
+
 type Schedule = {
   id: string
   channelId: string
@@ -373,6 +387,9 @@ function fakeBoard(shared: Shared, boardId: string) {
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
   const schedules = new Map<string, Schedule>()
+  /** The syncs the API runs itself, by ID, and each by the operation that made it, which a retry names again. */
+  const managedSyncs = new Map<string, ManagedSync>()
+  const managedSyncOperations = new Map<string, string>()
   /**
    * Sync, as Vercel's API keeps it: each key's owner, platform IDs to the board's, copies, bindings, and inboxes, all
    * under the project whose key it is (`<projectId>|…`), or the whole board's with `boardWideKeys` (`|…`).
@@ -1765,6 +1782,70 @@ function fakeBoard(shared: Shared, boardId: string) {
     return message.id
   }
 
+  /** The syncs Vercel's API runs itself: made by a person who may `sync` where its events land, for events Vercel has. */
+  function syncsRoute(method: string, rest: string, actor: Actor, body: Record<string, any>, url: URL): unknown {
+    let found: RegExpExecArray | null
+    if (method === 'POST' && rest === '/syncs') {
+      if (!channels.some((channel) => channel.id === body.channelId)) throw new Refused(404, 'channel_not_found')
+      need(actor, 'sync', body.channelId)
+      const made = managedSyncOperations.get(`${actor.id}|${body.operationId}`)
+      if (made) return { sync: managedSyncs.get(made) }
+      const keep = (sync: ManagedSync) => {
+        managedSyncs.set(sync.id, sync)
+        managedSyncOperations.set(`${actor.id}|${body.operationId}`, sync.id)
+        return { sync }
+      }
+      const id = `syn_${randomUUID().replaceAll('-', '').slice(0, 24)}`
+      if (body.source === 'slack') {
+        if (!body.slack) throw new Refused(400, 'invalid_request', 'A `slack` sync names the channel it mirrors: `slack`, with its `channel`.')
+        // Vercel's Slack app finds the channel and asks it: nothing syncs until someone there agrees.
+        const name = String(body.slack.channel).replace(/^#/, '')
+        return keep({
+          id,
+          channelId: body.channelId,
+          source: 'slack',
+          slack: { workspaceId: body.slack.workspace ?? 'T0ACME', channelId: `C0${name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`, name },
+          state: 'pending',
+          reason: 'waiting for the channel to agree',
+          createdBy: actor.id,
+          createdAt: now(),
+        })
+      }
+      if (!body.events) throw new Refused(400, 'invalid_request', 'A `vercel` sync names the events to bring in: `events`.')
+      if (actor.principal.type !== 'user') throw new Refused(403, 'sync_needs_person', 'A `vercel` sync makes a webhook as whoever asks for it, so a person asks.')
+      const unknown = (body.events as string[]).filter((name) => !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name))
+      if (unknown.length > 0) throw new Refused(400, 'invalid_events', `Vercel has no event named ${unknown.join(', ')}.`)
+      // A project by its ID or its name, as a grant names one: the sync keeps its ID.
+      const named = (body.projects ?? []) as string[]
+      const projectIds = named.map((given) => (given in shared.directory.projects ? given : Object.entries(shared.directory.projects).find(([, name]) => name === given)?.[0]))
+      const missing = named.filter((_, at) => projectIds[at] === undefined)
+      if (missing.length > 0) throw new Refused(400, 'invalid_projects', `This team has no project ${missing.join(', ')}.`)
+      return keep({
+        id,
+        channelId: body.channelId,
+        source: body.source,
+        events: body.events,
+        ...(body.projects ? { projectIds: [...new Set(projectIds as string[])] } : {}),
+        state: 'active',
+        createdBy: actor.id,
+        createdAt: now(),
+      })
+    }
+    if (method === 'GET' && rest === '/syncs') {
+      const channelId = url.searchParams.get('channelId')
+      const listed = [...managedSyncs.values()].sort((a, b) => a.createdAt - b.createdAt)
+      return { syncs: listed.filter((sync) => (channelId === null || sync.channelId === channelId) && may(actor, 'read', sync.channelId)) }
+    }
+    if ((found = /^\/syncs\/([^/]+)\/remove$/.exec(rest)) && method === 'POST') {
+      const target = managedSyncs.get(decodeURIComponent(found[1]!))
+      if (!target || !may(actor, 'read', target.channelId)) throw new Refused(404, 'sync_not_found')
+      need(actor, 'sync', target.channelId)
+      managedSyncs.delete(target.id)
+      return { sync: target }
+    }
+    return undefined
+  }
+
   function schedulesRoute(method: string, rest: string, actor: Actor, body: Record<string, any>, url: URL): unknown {
     let found: RegExpExecArray | null
     if (method === 'POST' && rest === '/schedules') return { schedule: showSchedule(schedule(actor, body)) }
@@ -2256,6 +2337,10 @@ function fakeBoard(shared: Shared, boardId: string) {
       const answered = schedulesRoute(method, rest, actor, body, url)
       if (answered !== undefined) return answered
     }
+    if (rest === '/syncs' || rest.startsWith('/syncs/')) {
+      const answered = syncsRoute(method, rest, actor, body, url)
+      if (answered !== undefined) return answered
+    }
     if (method === 'POST' && rest === '/attachments') {
       const attachment: Attachment = { id: `att_${randomUUID()}`, boardId, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
       attachments.set(attachment.id, attachment)
@@ -2440,6 +2525,8 @@ function fakeBoard(shared: Shared, boardId: string) {
   return {
     route,
     registrations,
+    /** The syncs the board runs itself, for a test to say what a source did: a Slack channel agreed, a webhook is gone. */
+    managedSyncs,
     schedules,
     send,
     grants: access.grants,
@@ -2834,8 +2921,10 @@ export function fakeMessageboard(
     return board.data.route(method, rest, url, body, actor, request.signal, version)
   }
 
-  const { registrations, schedules, send, cutNextCompletion } = general.data
+  const { registrations, managedSyncs, schedules, send, cutNextCompletion } = general.data
   return {
+    /** The default board's own syncs, by ID, for a test to say what a source did: a Slack channel agreed, a webhook is gone. */
+    managedSyncs,
     /**
      * Ends the default board's next completion after its own write, as a request cut off there does: it readies the
      * dependents that fit in that write (15), and the rest wait for the next task request that sees them.

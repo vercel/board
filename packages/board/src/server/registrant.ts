@@ -57,6 +57,8 @@ export type RegistrantOptions = {
   registry: Registry
   /** Where the other board wakes this one, from this board's URL. */
   wakeAt(here: string | null): Promise<WakeAt>
+  /** Whether something else wakes this board: it registers without a URL of its own, and never pulls. */
+  woken?: boolean
   binding(): BoardBinding
   /** What every wake-up carries, so this board can tell the other holds an older registration. */
   hash(): Promise<string>
@@ -139,7 +141,7 @@ export function registrant(options: RegistrantOptions) {
   let polling: AbortController | null = null
   /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
   function poll() {
-    if (polling || deployedOnVercel()) return
+    if (polling || deployedOnVercel() || options.woken) return
     const controller = (polling = new AbortController())
     void (async () => {
       for (let pause = 1000; !controller.signal.aborted; ) {
@@ -173,7 +175,7 @@ export function registrant(options: RegistrantOptions) {
     if (started) return started
     if (!options.hasWork() || Date.now() - failedAt < REGISTER_EVERY_MS) return Promise.resolve()
     const here = wakeable(bound().url())
-    if (!here && deployedOnVercel()) return Promise.resolve()
+    if (!here && deployedOnVercel() && !options.woken) return Promise.resolve()
     started = register(here).then(
       (registration) => {
         if (pulls(registration)) poll()

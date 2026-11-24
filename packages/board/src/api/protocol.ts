@@ -56,6 +56,9 @@ import type {
   ReactBody,
   RegisterBody,
   RegistrationView,
+  ManagedSyncBody,
+  ManagedSyncsQuery,
+  ManagedSyncView,
   ScheduleBody,
   SchedulesQuery,
   ScheduleView,
@@ -115,6 +118,9 @@ export type Protocol = {
   schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; mentions?: Mentioned[] } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
+  createSync: { input: Input<typeof ManagedSyncBody>; output: { sync: ManagedSyncView } }
+  syncs: { input: Input<typeof ManagedSyncsQuery>; output: { syncs: ManagedSyncView[] } }
+  removeSync: { input: Id; output: { sync: ManagedSyncView } }
   /** Tasks, oldest first, each as its thread's summary. 501 `no_tasks` where the board keeps none, as every task method answers there. */
   tasks: { input: Input<typeof TasksQuery>; output: TasksPage }
   /** `task` is the task's root. `claim` comes with a task made with `claim`; a retry of one that landed gets the task without it. */

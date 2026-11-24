@@ -1920,6 +1920,84 @@ describe('vercel()', () => {
     expect(api.requests.filter((request) => request.includes('/watchers/matches'))).toEqual([])
   })
 
+  it("makes, lists, and removes the syncs Vercel's API runs itself, each by its channel's name", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    // A project by its name or its ID: the sync is answered with its ID either way.
+    const made = await team.createSync({ channel: 'deploys', source: 'vercel', events: ['deployment.error'], projects: ['web'] })
+    expect(made).toEqual({
+      id: expect.stringMatching(/^syn_/),
+      channel: 'deploys',
+      source: 'vercel',
+      events: ['deployment.error'],
+      projects: ['prj_web'],
+      state: 'active',
+      by: 'vercel:user:u_jb',
+      createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    })
+    const other = await team.createSync({ channel: 'ops/alerts', source: 'vercel', events: ['firewall.attack'] })
+    expect((await team.syncs()).map((sync) => [sync.id, sync.channel])).toEqual([[made.id, 'deploys'], [other.id, 'ops/alerts']])
+    expect((await team.syncs({ channel: 'deploys' })).map((sync) => sync.id)).toEqual([made.id])
+    // A channel that isn't there has none, and asks the API for none.
+    expect(await team.syncs({ channel: 'nowhere' })).toEqual([])
+    expect(await team.removeSync(made.id)).toMatchObject({ id: made.id, channel: 'deploys' })
+    expect((await team.syncs()).map((sync) => sync.id)).toEqual([other.id])
+    await expect(team.removeSync(made.id)).rejects.toMatchObject({ status: 404, code: 'sync_not_found' })
+  })
+
+  it('mirrors a Slack channel once someone there agrees, and says what state each sync is in, and why', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const mirror = await team.createSync({ channel: 'alerts', source: 'slack', slack: { channel: '#alerts' } })
+    // Asked for from outside the Slack channel: nothing syncs until the channel says yes.
+    expect(mirror).toMatchObject({
+      channel: 'alerts',
+      source: 'slack',
+      slack: { workspace: 'T0ACME', channel: 'C0ALERTS', name: 'alerts' },
+      state: 'pending',
+      reason: 'waiting for the channel to agree',
+    })
+    const events = await team.createSync({ channel: 'deploys', source: 'vercel', events: ['deployment.error'] })
+    // What its sources do next is theirs to say: the channel agrees, and someone deletes the webhook.
+    api.managedSyncs.set(mirror.id, { ...api.managedSyncs.get(mirror.id)!, state: 'active', reason: undefined })
+    api.managedSyncs.set(events.id, { ...api.managedSyncs.get(events.id)!, state: 'paused', reason: 'its webhook is gone' })
+    expect((await team.syncs()).map(({ id, state, reason }) => [id, state, reason])).toEqual([
+      [mirror.id, 'active', undefined],
+      [events.id, 'paused', 'its webhook is gone'],
+    ])
+    await expect(team.createSync({ channel: 'alerts', source: 'slack' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+  })
+
+  it("says what Vercel's API says of a sync it won't make: an event it has none of, a deployment asking, a caller that can't sync there", async () => {
+    const api = fakeMessageboard({ roles: { u_viewer: 'viewer' } })
+    const sync = { channel: 'deploys', source: 'vercel' as const, events: ['deployment.error'] }
+    await handleOn(api).post('deploys', 'the channel is there')
+    await expect(handleOn(api).createSync({ ...sync, events: ['exploded'] })).rejects.toMatchObject({ status: 400, code: 'invalid_events' })
+    await expect(handleOn(api).createSync({ ...sync, projects: ['no-such-project'] })).rejects.toMatchObject({ status: 400, code: 'invalid_projects' })
+    await expect(handleOn(api, 'project:prj_pong:production').createSync(sync)).rejects.toMatchObject({ status: 403, code: 'sync_needs_person' })
+    await expect(handleOn(api, 'user:u_viewer').createSync(sync)).rejects.toMatchObject({ status: 403 })
+    expect(await handleOn(api).syncs()).toEqual([])
+  })
+
+  it('registers a board something else wakes at the path it names, off Vercel, and runs what matched only when it is woken', async () => {
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), wakePath: '/hosted/pong' })
+    onTestFinished(() => backend.close())
+    // No URL and no Vercel environment: without a wake path, this board would register none and pull on its own.
+    const pong = board({ backend, watch: { pings: { tail: 'pings', run: async ({ event }) => void ran.push(event.message!.text) } } })
+    await pong.me()
+    while (!api.registrations.has('vercel:project:prj_pong:production')) await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ path: '/hosted/pong' })
+    await handleOn(api, 'user:u_ada').post('pings', 'ping')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(ran).toEqual([])
+    expect(api.requests.filter((request) => request.includes('/watchers/matches'))).toEqual([])
+    const woken = await pong.fetch(new Request('http://hosted.internal/wake', { method: 'POST' }))
+    expect(await woken.json()).toEqual({ ran: 1 })
+    expect(ran).toEqual(['ping'])
+  })
+
   it('never sends Vercel\'s API a url to wake, and the API takes none', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')

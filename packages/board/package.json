@@ -79,6 +79,10 @@
       "types": "./dist/sync-linear.d.mts",
       "default": "./dist/sync-linear.mjs"
     },
+    "./sync-vercel": {
+      "types": "./dist/sync-vercel.d.mts",
+      "default": "./dist/sync-vercel.mjs"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type ManagedSyncView, type Me, type MessageView } from '../api/routes.ts'
 import { everyChannel } from '../client/channels.ts'
 import { mentionValue, withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
@@ -22,7 +22,7 @@ import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, pa
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
-import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatManagedSync, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { fileClaims, memoryClaims, tokenClaims, type Claims } from './claims.ts'
 import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
@@ -858,7 +858,11 @@ function doing(): string {
     case 'typing':
       return `show typing in ${ref(a)}`
     case 'sync':
+      if (a === 'remove') return `remove sync ${b ?? ''}`.trimEnd()
+      if (a !== undefined && !isMessageRef(a)) return b === undefined ? `list ${a}'s syncs` : `sync ${a} with ${b}`
       return b === undefined ? `list where ${ref(a)} is synced` : `sync ${ref(a)} with ${b}`
+    case 'syncs':
+      return a === undefined ? 'list syncs' : `list ${a}'s syncs`
     case 'schedule':
       return a === 'cancel' ? `cancel schedule ${b}` : `schedule a message in ${message ? ref(a) : (a ?? 'a channel')}`
     case 'channels':
@@ -911,6 +915,9 @@ function missing(): string | undefined {
   const [a, b] = args
   if (a === undefined) return undefined
   if (command === 'read' && /^https?:\/\//i.test(a)) return "that link's message on this board"
+  if (command === 'sync' && a === 'remove') return b === undefined ? undefined : `sync ${b}`
+  // A channel's syncs are the board's own to run: nothing there is a message.
+  if (command === 'sync' && !isMessageRef(a)) return undefined
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
   // A task is its thread: one that isn't there is a message that isn't.
@@ -2000,7 +2007,43 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
+    case 'syncs': {
+      const list = await client().syncs(args[0] !== undefined ? { channel: args[0] } : {})
+      if (flags.json) return result({ syncs: list }), 0
+      out(list.length ? list.map(formatManagedSync).join('\n') : 'no syncs')
+      return 0
+    }
+
     case 'sync': {
+      if (args[0] === 'remove') {
+        if (!args[1]) throw usage(`Missing the sync to remove: its ID, as \`${named()} syncs\` shows it.`, { reason: 'missing_arguments' })
+        const removed = await client().removeSync(args[1])
+        if (flags.json) return result({ sync: removed, outcome: 'removed' }), 0
+        return out(`removed ${formatManagedSync(removed)}`), 0
+      }
+      // A channel's syncs are the board's own to run: a message's thread syncs to a target, as it always has.
+      if (args[0] !== undefined && !isMessageRef(args[0])) {
+        const channel = args[0]
+        if (!args[1]) {
+          const list = await client().syncs({ channel })
+          if (flags.json) return result({ syncs: list }), 0
+          return out(list.length ? list.map(formatManagedSync).join('\n') : `no syncs in ${channel}`), 0
+        }
+        // One that waits on its source, as a Slack channel that has yet to agree, says so in place of `syncing`.
+        const started = (made: ManagedSyncView) => {
+          if (flags.json) return result({ sync: made, outcome: made.state === 'active' ? 'synced' : made.state }), 0
+          return out(made.state === 'active' ? `syncing ${formatManagedSync(made)}` : formatManagedSync(made)), 0
+        }
+        // A Slack channel through Vercel's Slack app: `slack/vercel:#alerts`.
+        const mirrored = /^slack\/vercel:(.+)$/.exec(args[1])?.[1]
+        if (mirrored !== undefined) return started(await client().createSync({ channel, source: 'slack', slack: { channel: mirrored, ...(flags.workspace ? { workspace: flags.workspace } : {}) } }))
+        if (args[1] !== 'vercel')
+          throw usage(`${args[1]} isn't something a board syncs a channel with: vercel, or slack/vercel:#channel. To sync a thread, name a message in it.`, { reason: 'invalid_arguments' })
+        const events = (flags.events ?? []).flatMap((given) => given.split(',')).map((name) => name.trim()).filter(Boolean)
+        if (events.length === 0) throw usage(`Missing the events to bring in: --events deployment.error`, { reason: 'missing_arguments' })
+        const projects = (flags.project ?? []).flatMap((given) => given.split(',')).map((name) => name.trim()).filter(Boolean)
+        return started(await client().createSync({ channel, source: 'vercel', events, ...(projects.length ? { projects } : {}) }))
+      }
       const id = messageId(args[0])
       if (!args[1]) {
         const { targets } = await client().sync(id)

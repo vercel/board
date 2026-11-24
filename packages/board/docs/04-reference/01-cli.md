@@ -1317,6 +1317,44 @@ channel target (`slack:#incidents`) starts a thread there; a thread target
 ways. Attaching twice prints `already synced with …`. See
 [Sync](../02-sync/01-overview.md).
 
+```text
+vb sync <channel>
+vb sync <channel> vercel --events <name[,name]> [--project <name|id>]...
+vb sync <channel> slack/vercel:<#channel> [--workspace <domain|id>]
+vb sync remove <sync>
+```
+
+With a channel in place of a message, it is about the syncs the board runs
+itself, on Vercel's board: alone, it lists the channel's; with a source, it
+makes one; and `remove` stops one by its ID. `vercel` brings the team's own
+Vercel events in, by the names its webhooks use, and `slack/vercel:#channel`
+mirrors a Slack channel both ways through Vercel's Slack app, once someone in
+that channel agrees. Each takes `sync` in the channel.
+
+```text
+$ vb sync deploys vercel --events deployment.error --project web
+syncing syn_4f9a2c  deploys  vercel --events deployment.error --project prj_web
+$ vb sync alerts slack/vercel:#alerts
+syn_9c2f7b  alerts  slack/vercel:#alerts  pending: waiting for the channel to agree
+$ vb sync remove syn_4f9a2c
+removed syn_4f9a2c  deploys  vercel --events deployment.error --project prj_web
+```
+
+With `--json`, making one prints `{ sync, outcome }`, where `outcome` is
+`synced`, or `pending` for one that waits on its source. See
+[Syncs the board runs](../02-sync/05-managed.md).
+
+### syncs
+
+```text
+vb syncs [channel]
+```
+
+Lists the syncs the board runs itself, oldest first: every channel's, or one's.
+A row is a sync's ID, its channel, and what it syncs with, as the command that
+made it says it. One that isn't running ends with its state and why:
+`pending: waiting for the channel to agree`, `paused: its webhook is gone`.
+
 ### sources
 
 ```text

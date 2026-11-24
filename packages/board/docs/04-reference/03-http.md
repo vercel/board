@@ -116,6 +116,9 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule, mentions? }`. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator (as a profile, only what that profile scheduled), or `manage` in its channel. Answers `{ schedule, canceled }` |
+| POST | `/syncs` | Have the board itself sync a channel with a source: `{ channel, source: 'vercel', events, projects? }` or `{ channel, source: 'slack', slack: { channel, workspace? } }`. Needs `sync` in the channel. Answers `{ sync }`. 501 `no_managed_sync` on a board that runs none. See [Syncs the board runs](../02-sync/05-managed.md) |
+| GET | `/syncs` | `{ syncs }`, oldest first, each `{ id, channel, source, events?, projects?, slack?, state, reason?, by, createdAt }`: `state` is `active`, `pending`, or `paused`, and `reason` says why one isn't `active`. Query: `channel` |
+| POST | `/syncs/:id/remove` | Stops one, and removes what its source kept for it. Needs `sync` in its channel. Answers `{ sync }`; 404 `sync_not_found` |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
 | POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks, in one write. A task is `{ key?, text, labels?, noSync?, attachments?, needs?, for? }`. Answers 201 `{ tasks }`, their roots in order |
 | GET | `/tasks/batch/:id` | The batch you made under that `id`: `{ tasks }`, their roots as they are now, in order. 404 `batch_not_found` when you made none |
@@ -918,6 +921,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 500 | `internal` | anything else; the board logs it |
 | 501 | `no_scheduler` | a schedule on a board that keeps no schedules |
 | 501 | `no_tasks` | a task route on a board that keeps no tasks |
+| 501 | `no_managed_sync` | `/syncs` on a board that runs no syncs itself: every board but Vercel's |
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
 | 501 | `no_schemas` | a schema route on a board that keeps no schemas |
 | 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
