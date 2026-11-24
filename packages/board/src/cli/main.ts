@@ -248,6 +248,8 @@ let warnings: Warning[] = []
 let bareMentions: string | undefined
 /** The board this run reached by its URL, for a failure to name. */
 let reached: string | null = null
+/** The task `tasks run` holds, once it's claimed one: with --ready, the command line names only its channel. */
+let runTask: string | undefined
 /** The team whose default board this run reached, nothing naming one of its boards: `--scope`'s, or the one the environment finds. */
 let teamDefault: { team: string | undefined } | null = null
 /** Where the credential this run sent came from, as `whoami` says it, for a refusal to say which to replace. */
@@ -2637,6 +2639,7 @@ async function tasks(args: string[]): Promise<number> {
     const claim = await claimFor(board, claims, before[0], 'run')
     if (typeof claim === 'number') return claim
     const id = claim.task.id
+    runTask = id
     const lease = seconds('lease')
     const ran = await runCommand(command, {
       env: { ...process.env, BOARD_TASK: id },
@@ -2800,12 +2803,14 @@ function taskNoteTooLong(said: string): 'result' | 'reason' | null {
 /** Where a too-long task note goes: the whole of it in a reply in the task's thread, then the settling again with a line or two. */
 function noteRecovery(whole: 'report' | 'detail'): Recovery[] {
   const { args } = current
-  const id = args[1] !== undefined && isMessageRef(args[1]) ? messageId(args[1]) : '<ID>'
+  const named = args[1] !== undefined && isMessageRef(args[1]) ? messageId(args[1]) : '<ID>'
+  const id = args[0] === 'run' ? (runTask ?? named) : named
   // A run's command already ran: what's left is completing the task it holds, not running it again.
   const verb = args[0] === 'run' ? 'complete' : args[0]!
+  // On the same board, as the same profile, whose claim it is.
   return [
-    { instruction: `Reply the full ${whole} in the task's thread`, argv: [...cli(), 'reply', id, '-'] },
-    { instruction: `Then ${verb} it with a line or two`, argv: [...cli(), 'tasks', verb, id, '<A LINE OR TWO>'] },
+    { instruction: `Reply the full ${whole} in the task's thread`, argv: [...cli(), 'reply', id, '-', ...onThisBoard()] },
+    { instruction: `Then ${verb} it with a line or two`, argv: [...cli(), 'tasks', verb, id, '<A LINE OR TWO>', ...onThisBoard()] },
   ]
 }
 
@@ -3008,6 +3013,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
   teamDefault = null
   sent = () => null
   sentLength = 0
+  runTask = undefined
   self = null
   try {
     parse(argv)

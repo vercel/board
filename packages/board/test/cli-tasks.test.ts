@@ -249,6 +249,13 @@ describe('vb tasks', () => {
       next: [{ argv: ['vb', 'reply', ran, '-'] }, { argv: ['vb', 'tasks', 'complete', ran, '<A LINE OR TWO>'] }],
     })
     expect(await ok(['tasks', 'complete', ran, 'tests pass'])).toBe(`completed ${ran}\n`)
+    // With --ready, the command line names a channel: the way on names the task it claimed.
+    const ready = await create('notes', 'one more')
+    expect(failure(await vb(['tasks', 'run', '--ready', 'notes', '--json', '--result', long, '--', 'true']))).toMatchObject({
+      reason: 'payload_too_large',
+      next: [{ argv: ['vb', 'reply', ready, '-'] }, { argv: ['vb', 'tasks', 'complete', ready, '<A LINE OR TWO>'] }],
+    })
+    expect(await ok(['tasks', 'complete', ready, 'tests pass'])).toBe(`completed ${ready}\n`)
   }, 30_000)
 
   it('waits for a task that becomes ready, and stops quietly on Ctrl-C', async () => {
