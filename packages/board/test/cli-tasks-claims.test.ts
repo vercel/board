@@ -47,6 +47,22 @@ describe("vb tasks, with the claim it keeps", () => {
     expect((await vb(['tasks', 'release', id], mine)).stderr).toBe(`error: You hold no claim on task #${id} as migrator. It's completed already.\n\n  See where it stands:\n    vb read ${id}\n`)
   }, 60_000)
 
+  it("says a profile the board won't take is the problem, with the board's rule under it and invalid_profile to branch on", async () => {
+    const id = await create('profile', 'a long name')
+    const long = 'a'.repeat(33)
+    expect(await vb(['tasks', 'claim', id, '--as', long])).toMatchObject({
+      code: 2,
+      stdout: '',
+      stderr: `error: Can't claim task #${id}. The board doesn't take that profile.\n  as: ${long}: profiles start with a letter and use up to 32 letters, numbers, and hyphens\n`,
+    })
+    expect(failure(await vb(['tasks', 'claim', id, '--as', long, '--json']))).toMatchObject({
+      reason: 'invalid_profile',
+      message: `Can't claim task #${id}. The board doesn't take that profile.`,
+      data: { error: { code: 'invalid_profile', status: 400 } },
+    })
+    expect(await state(id)).toBe('ready')
+  }, 60_000)
+
   it('forgets a claim the board says is lost, and says how to take the task again', async () => {
     const id = await create('lost', 'rotate the keys')
     const mine = asProfile('rotator')

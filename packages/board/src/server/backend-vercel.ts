@@ -2066,7 +2066,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const named = (profile: ProfileOption): Who['profile'] => {
       if (profile === null) return null
       const name = typeof profile === 'string' ? profile : profile.name
-      if (!PROFILE.test(name)) throw new HttpError(400, 'invalid_request', `as: ${name}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
+      if (!PROFILE.test(name)) throw new HttpError(400, 'invalid_profile', `as: ${name}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
       return typeof profile === 'string' || !profile.avatar ? { name } : { name, avatar: profile.avatar }
     }
     if (caller.origin.via?.kind === 'client') {

@@ -125,7 +125,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   const profiles = new Map<string, BoardClient>()
   /** This deployment as `profile`: a watcher's ID, or the middleware. */
   function asProfile(profile: string): BoardClient {
-    if (!PROFILE.test(profile)) throw new HttpError(400, 'invalid_request', `as: ${profile}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
+    if (!PROFILE.test(profile)) throw new HttpError(400, 'invalid_profile', `as: ${profile}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
     let client = profiles.get(profile)
     if (!client) profiles.set(profile, (client = sdk(profile)))
     return client

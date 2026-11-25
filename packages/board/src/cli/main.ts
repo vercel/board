@@ -1072,6 +1072,8 @@ function failureOf(error: unknown): Failure {
     return theirs('limit', code, `Can't ${doing()}. This team's plan has no private boards.`, [
       { instruction: 'Keep the board open to the whole team, or move the team to a plan with private boards' },
     ])
+  // A profile the board refused (--as, BOARD_PROFILE): its rule is the board's, in its words under the headline.
+  if (status === 400 && code === 'invalid_profile') return theirs('usage', code, `Can't ${doing()}. The board doesn't take that profile.`)
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
