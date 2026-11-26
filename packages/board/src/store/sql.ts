@@ -109,6 +109,16 @@ const clean = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
  * digit, so it's never a label's.
  */
 const MENTION = '@'
+/**
+ * The longest mention the tables index, in characters: far past any actor ID or handle, and short
+ * enough for Postgres's index, which takes an entry to about 2.7 kB. `@[…]` takes a name of any
+ * length, and one longer names no actor, so no filter needs it.
+ */
+const MENTION_TERM_MAX = 500
+
+/** What `text` mentions, as the tables index it. */
+const indexedMentions = (text: string) => mentionTerms(text).filter((term) => term.length <= MENTION_TERM_MAX)
+
 /** An attachment's term, the same way. */
 const ATTACHMENT = '^'
 
@@ -196,7 +206,7 @@ export function sqlTables(db: Db): MessageTables {
       const unchanged = '(select text_lower from board_messages where id = cast($1 as bigint)) = cast($2 as text)'
       const read = clean(message.text.toLowerCase())
       writes.push({ text: `delete from board_terms where message_id = cast($1 as bigint) and term = '${MENTION}' and ${unchanged}`, values: [message.id, read] })
-      for (const term of mentionTerms(message.text))
+      for (const term of indexedMentions(message.text))
         writes.push({
           text: `insert into board_terms (message_id, term, value) select cast($1 as bigint), '${MENTION}', cast($3 as text) where ${unchanged} on conflict do nothing`,
           values: [message.id, read, clean(term)],
@@ -302,7 +312,7 @@ export function sqlTables(db: Db): MessageTables {
         m && change.message!.terms
           ? [
               ...Object.entries(m.labels).map(([key, value]) => [key, clean(value)] as const),
-              ...mentionTerms(m.text).map((term) => [MENTION, clean(term)] as const),
+              ...indexedMentions(m.text).map((term) => [MENTION, clean(term)] as const),
               ...[...new Set(m.attachments.map((file) => file.id))].map((id) => [ATTACHMENT, clean(id)] as const),
             ]
           : null,

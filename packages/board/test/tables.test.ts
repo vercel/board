@@ -479,6 +479,23 @@ function conformance(open: () => Promise<MessageTables>) {
     await tables.close()
   }, 60_000)
 
+  it("apply a message that mentions a name longer than any actor's, and find it by its other mentions", async () => {
+    // A valid message can hold one: `@[…]` takes any name. Postgres keeps an index entry to about 2.7 kB.
+    const by = AUTHORS[0]
+    // Text that doesn't compress, as an index entry is compressed before it's measured.
+    const name = Array.from({ length: 8_000 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789'[(i * 7919 + ((i * i) % 31)) % 36]).join('')
+    const long = `@[${name}] and @sam`
+    const events = [
+      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: long, re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, by, origin: null, from: null } },
+      { type: 'message.posted', id: 'r', payload: { channel: 'dev', text: 'after it', re: 1, replyTo: null, thread: 'p', labels: {}, noSync: false, by, origin: null, from: null } },
+    ].map((event, i) => ({ ...event, index: i + 1, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString() }) as unknown as BoardEvent)
+    const tables = await applied(events)
+    expect(await tables.position()).toBe(2)
+    expect(await tables.message(1)).toEqual(fold(events).messages.byId[1])
+    expect((await tables.messages({ mentions: { terms: ['sam'], prefixes: [] } }, { limit: 5 })).messages.map((m) => m.id)).toEqual([1])
+    await tables.close()
+  })
+
   it('apply an event that holds NUL or a lone surrogate, and still find it', async () => {
     // The board refuses both now; a log from before may hold them, and a script or a jsonb that can't take one would stop the tables.
     const by = AUTHORS[0]
@@ -526,7 +543,9 @@ let opened = 0
 async function postgresTables(): Promise<MessageTables> {
   const pool = await freshPool()
   await pool.query(postgresSchema())
-  return tablesOf(postgresStore(pool))
+  const store = postgresStore(pool)
+  // Each test's database goes when it's done with it, not with the file: PGlite's are in memory.
+  return { ...store.tables, close: async () => (await store.close(), await pool.end()) }
 }
 
 /** The tables as a board keeps them: SQLite in a file, `memory()`, or Postgres. */
