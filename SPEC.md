@@ -4323,18 +4323,20 @@ mark #812                                   → still listed, as read
 | POST | `/me/inbox/snooze` | `{ id, until }`: an ISO time later than now, or null to end one. Answers `{ item }` |
 | POST | `/me/inbox/follow` | `{ channel }` (a channel, or `www/` for it and its subtree) or `{ thread }` (any message in it). Answers `{ follow }`, as it is when it was followed already |
 | POST | `/me/inbox/unfollow` | The same body. Answers `{ unfollowed }`, false when the caller didn't follow it |
-| GET | `/me/inbox/follows` | `{ follows, older }`: every channel, then the caller's threads, the one last active first, a page at a time (`limit`, `before`). Each is `{ channel }` or `{ thread }`, with `by` (`asked` or `posted`) and `at` |
+| GET | `/me/inbox/follows` | `{ follows, older }`: every channel, then the caller's threads, the one last active first, a page at a time (`limit`, `before`). A page counts the threads posted in, and the ones only asked for come with the page they're active in. Each is `{ channel }` or `{ thread }`, with `by` (`asked` or `posted`) and `at` |
 
 An inbox's events are `{ type: 'inbox.item', cursor, item }`, for an item
 that's new or changed, as it is now, and `{ type: 'inbox.removed', cursor,
-thread, message, reader }` for one its reader removed. Several changes to one
-item between two reads are one event. Their cursors are the inbox's own: not
+thread, message, reader }` for one its reader removed, told only to a caller
+that may read where it was. Several changes to one item between two reads are
+one event. Their cursors are the inbox's own: not
 the board's, and not another reader's.
 
 Errors: 404 `message_not_found` for a message the caller can't read, 404
 `not_in_inbox`, 400 `too_many_follows` past what a board lets one reader
-follow (200 channels and subtrees on the local board), 400 `invalid_cursor`,
-and 501 `no_inbox` on a board that keeps none.
+follow (200 channels and subtrees, and 500 threads asked for, on the local
+board: a thread posted in counts toward neither), 400 `invalid_cursor`, and
+501 `no_inbox` on a board that keeps none.
 
 Sync's own inbox, the raw platform events an entry received, keeps its
 routes (`/inbox/:key…`) and its handle method (`inbox(key)`): the reader's is

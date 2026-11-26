@@ -403,7 +403,8 @@ export const readersContract = contract({
     'arrivals.admitted': z.object({ through: z.number().int().nonnegative() }),
     /** `reader` added it by hand. `last` is the thread's newest message then, which a new item has unread. */
     'item.added': z.object({ ...Item, channel: ChannelPath, last: MessageId }),
-    'item.removed': z.object(Item),
+    /** Its reader took it out of their inbox: `channel` is where its thread is, so only a reader of it is told. */
+    'item.removed': z.object({ ...Item, channel: ChannelPath }),
     /** Read through message `through`: what arrived up to it isn't unread. */
     'item.read': z.object({ ...Item, through: MessageId }),
     /** Unread from message `from` on: `unread` are the messages that makes unread, oldest first. */

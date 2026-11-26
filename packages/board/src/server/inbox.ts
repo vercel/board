@@ -21,6 +21,8 @@ import type { BoardReads } from './reads.ts'
 
 /** How many channels and subtrees one reader follows at most on this board. */
 export const CHANNEL_FOLLOWS_MAX = 200
+/** How many threads one reader follows by asking, at most, on this board: posting in a thread follows it without counting. */
+export const THREAD_FOLLOWS_MAX = 500
 /** How many messages an item keeps as unread: one with more says this many. */
 const UNREAD_MAX = 1000
 /** How many of a reader session's events one read of what changed looks at. */
@@ -486,8 +488,9 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       const { reader, thread, message } = event.payload
       const item = own(own(state.items, reader) ?? {}, keyOf(event.payload))
       if (!item) {
-        // Gone, and only its reader takes one out. One that was never there says nothing.
-        if (event.type === 'item.removed') events.push({ type: 'inbox.removed', cursor: ref(event.index), thread: ref(thread), message: message === null ? null : ref(message), reader })
+        // Gone, and only its reader takes one out: said only to a caller that may read where it was. One that was never there says nothing.
+        if (event.type === 'item.removed' && access.readable(event.payload.channel))
+          events.push({ type: 'inbox.removed', cursor: ref(event.index), thread: ref(thread), message: message === null ? null : ref(message), reader })
         continue
       }
       if (!access.readable(item.channel)) continue
@@ -615,8 +618,8 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       const found = await readable(identity, id, signal)
       const item = await itemOf(identity, found)
       if (!item) return { removed: false }
-      const { reader, thread, message } = item
-      await sessionOf(reader).append({ type: 'item.removed', payload: { reader, thread, message } })
+      const { reader, thread, message, channel } = item
+      await sessionOf(reader).append({ type: 'item.removed', payload: { reader, thread, message, channel } })
       return { removed: true }
     },
 
@@ -674,6 +677,8 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       const by = followsThread(posted?.id, toggles, Number.POSITIVE_INFINITY)
       if (by === 'posted') return { follow: { thread: ref(root), by, at: posted!.createdAt } }
       if (by === 'asked') return { follow: { thread: ref(root), by, at: new Date(toggles!.at(-1)!.when).toISOString() } }
+      const asking = Object.values(state.threads).filter((readers) => onAt(own(readers, reader), Number.POSITIVE_INFINITY)).length
+      if (asking >= THREAD_FOLLOWS_MAX) throw badRequest(`an inbox follows at most ${THREAD_FOLLOWS_MAX} threads it asked for: unfollow one, or post in a thread to follow it`, 'too_many_follows')
       await follows.append({ type: 'thread.followed', payload: { reader, thread: root, at: await head() } })
       return { follow: { thread: ref(root), by: 'asked', at: now() } }
     },
@@ -702,34 +707,41 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       const { state } = await follows.state(followsReducer)
       const listed: FollowView[] = []
       const asked = (root: number) => own(own(state.threads, String(root)) ?? {}, reader)
-      if (query.before === undefined) {
-        // Every channel, by name, then the threads asked for and never posted in: the rest are among the threads posted in.
+      const before = query.before === undefined ? undefined : olderAt(query.before)
+      if (before === undefined) {
+        // Every channel, by name, on the first page.
         for (const channel of Object.keys(state.channels).sort()) {
           const on = onAt(own(own(state.channels, channel) ?? {}, reader), Number.POSITIVE_INFINITY)
           if (on) listed.push({ channel, by: 'asked', at: new Date(on.when).toISOString() })
         }
-        const only: { thread: number; when: number }[] = []
-        for (const [thread, readers] of Object.entries(state.threads)) {
-          const on = onAt(own(readers, reader), Number.POSITIVE_INFINITY)
-          if (!on) continue
-          const root = await reads.message(Number(thread))
-          if (!root || !access.readable(root.channel) || (await newestPost(reader, root.id))) continue
-          only.push({ thread: root.id, when: on.when })
-        }
-        for (const { thread, when } of only.sort((a, b) => b.when - a.when)) listed.push({ thread: ref(thread), by: 'asked', at: new Date(when).toISOString() })
       }
-      // The threads the reader posted in, the one last active first, less the ones they left since.
+      // The threads the reader posted in, the one last active first, less the ones they left since: what a page counts.
       const filter = access.readsAll
         ? { by: { actors: [reader], principals: [] } }
         : readableFilter({ by: { actors: [reader], principals: [] } }, Object.keys((await session.state(channelsReducer)).state), access)
-      const { threads, older } = await reads.threads(filter, { limit: query.limit ?? INBOX_LIMIT_DEFAULT, ...(query.before !== undefined ? { before: olderAt(query.before) } : {}) })
-      for (const { root } of [...threads].reverse()) {
+      const { threads, older } = await reads.threads(filter, { limit: query.limit ?? INBOX_LIMIT_DEFAULT, ...(before !== undefined ? { before } : {}) })
+      /** Where a thread stands by activity, as near as its summary says: its newest message, then its root. */
+      const placed: { at: ThreadPosition; follow: FollowView }[] = []
+      const newer = (a: ThreadPosition, b: ThreadPosition) => a.at > b.at || (a.at === b.at && a.id > b.id)
+      for (const { root, last } of threads) {
         const posted = await newestPost(reader, root.id)
         const toggles = asked(root.id)
         const by = followsThread(posted?.id, toggles, Number.POSITIVE_INFINITY)
-        if (by === 'posted') listed.push({ thread: ref(root.id), by, at: posted!.createdAt })
-        else if (by === 'asked') listed.push({ thread: ref(root.id), by, at: new Date(toggles!.at(-1)!.when).toISOString() })
+        const at = { at: (last ?? root).id, id: root.id }
+        if (by === 'posted') placed.push({ at, follow: { thread: ref(root.id), by, at: posted!.createdAt } })
+        else if (by === 'asked') placed.push({ at, follow: { thread: ref(root.id), by, at: new Date(toggles!.at(-1)!.when).toISOString() } })
       }
+      // The threads asked for and never posted in come with the page they're active in: after its `before`, and not past where the next starts.
+      for (const [thread, readers] of Object.entries(state.threads)) {
+        const on = onAt(own(readers, reader), Number.POSITIVE_INFINITY)
+        if (!on) continue
+        const root = await reads.message(Number(thread))
+        if (!root || !access.readable(root.channel) || (await newestPost(reader, root.id))) continue
+        const summary = (await reads.tables.threads({ re: root.id }, { limit: 1 })).threads[0]
+        const at = { at: (summary?.last ?? root).id, id: root.id }
+        if ((before === undefined || newer(before, at)) && (!older || newer(at, older))) placed.push({ at, follow: { thread: ref(root.id), by: 'asked', at: new Date(on.when).toISOString() } })
+      }
+      for (const { follow } of placed.sort((a, b) => (newer(a.at, b.at) ? -1 : 1))) listed.push(follow)
       return { follows: listed, older: older ? olderRef(older) : null }
     },
   }

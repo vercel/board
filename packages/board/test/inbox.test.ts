@@ -395,6 +395,31 @@ describe('what a reader follows', () => {
     expect(await glance(julian)).toEqual([{ thread: asked.id, message: null, reasons: ['thread'], unread: 1 }])
   })
 
+  it('pages its threads by activity, the ones only asked for among the ones posted in, each once', async () => {
+    const { julian, ada } = await people()
+    const threads: string[] = []
+    for (const text of ['one', 'two', 'three', 'four', 'five', 'six']) threads.push((await ada.post('dev', text)).id)
+    const [one, two, three, four, five, six] = threads as [string, string, string, string, string, string]
+    // Posted in the odd ones, asked for the even ones, and one of each left since.
+    for (const id of [one, three, five]) await julian.reply(id, 'here')
+    for (const id of [two, four, six]) await julian.inbox.follow({ thread: id })
+    await julian.inbox.unfollow({ thread: three })
+    await julian.inbox.unfollow({ thread: four })
+    // What's written in an older one moves it up, asked for or posted in.
+    await ada.reply(two, 'again')
+    await ada.reply(one, 'again')
+    const by = (page: Awaited<ReturnType<typeof julian.inbox.follows>>) => page.follows.map((follow) => `${follow.thread} ${follow.by}`)
+    expect(by(await julian.inbox.follows())).toEqual([`${one} posted`, `${two} asked`, `${five} posted`, `${six} asked`])
+    // A page counts the threads posted in: three of them, one left, a page of one each.
+    const first = await julian.inbox.follows({ limit: 1 })
+    expect(by(first)).toEqual([`${one} posted`])
+    const second = await julian.inbox.follows({ limit: 1, before: first.older! })
+    expect(by(second)).toEqual([`${two} asked`, `${five} posted`])
+    const third = await julian.inbox.follows({ limit: 1, before: second.older! })
+    expect(by(third)).toEqual([`${six} asked`])
+    expect(third.older).toBeNull()
+  })
+
   it('refuses a channel pattern that names no channel or subtree', async () => {
     const { julian } = await people()
     await expect(julian.inbox.follow({ channel: '*' })).rejects.toMatchObject({ status: 400 })
@@ -418,6 +443,19 @@ describe('what changes in an inbox', () => {
     await julian.inbox.remove(root.id)
     const removed = await julian.inbox.poll({ after: read.cursor })
     expect(removed.events).toEqual([{ type: 'inbox.removed', cursor: removed.cursor, thread: root.id, message: null, reader: JULIAN }])
+  })
+
+  it('says an item was removed only to a caller that may read where it was', async () => {
+    const board = testBoard()
+    const { julian, ada } = await people(board)
+    const fetch = ((input: RequestInfo | URL, init?: RequestInit) => board.fetch(new Request(input, init))) as typeof globalThis.fetch
+    // Julian again, as a proxy holding his token narrows it: to another channel, and to this one.
+    const narrowed = async (can: string) => createBoardClient({ url: BOARD_URL, token: await personToken('u_julian'), fetch, profile: null, headers: { 'x-board-can': can } })
+    const root = await ada.post('dev', `@[${JULIAN}] one`)
+    const { cursor } = await julian.inbox.items()
+    await julian.inbox.remove(root.id)
+    expect((await (await narrowed('ops=read')).inbox.poll({ after: cursor })).events).toEqual([])
+    expect((await (await narrowed('dev=read')).inbox.poll({ after: cursor })).events).toMatchObject([{ type: 'inbox.removed', thread: root.id }])
   })
 
   it('holds a read until the next change, and answers nothing when none comes', async () => {

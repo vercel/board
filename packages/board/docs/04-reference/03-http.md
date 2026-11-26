@@ -652,7 +652,9 @@ and its thread's otherwise. One that names none of the caller's is 404
 
 `GET /me/inbox/follows` answers every channel the caller follows, then their
 threads, the one last active first: `{ channel }` or `{ thread }`, each with
-`by` (`asked` or `posted`) and `at`. `limit` and `before` page the threads.
+`by` (`asked` or `posted`) and `at`. `limit` and `before` page the threads:
+a page counts the ones posted in, and the ones only asked for come with the
+page they're active in.
 
 **Changes.** `GET /me/inbox/events` answers what changed after `after`, a
 `cursor` any inbox read answered, or from now. It's a long-poll with
@@ -671,11 +673,13 @@ GET /me/inbox/events?after=41&wait=25
 
 `inbox.item` is an item that's new or changed, as it is now. Several changes
 to one item between two reads are one event. `inbox.removed` is one its reader
-took out. The cursors are the inbox's own, not the board's.
+took out, told only to a caller that may read where it was. The cursors are
+the inbox's own, not the board's.
 
 Errors: 404 `message_not_found` and `not_in_inbox`, 400 `too_many_follows`
-past what a board lets one reader follow (200 channels and subtrees on
-`local()`), 400 `invalid_cursor`, and 501 on a board that keeps no inboxes:
+past what a board lets one reader follow (200 channels and subtrees, and 500
+threads asked for, on `local()`), 400 `invalid_cursor`, and 501 on a board
+that keeps no inboxes:
 `no_inbox`, or `not_supported` on a team's board in Vercel's API, for now.
 
 ### Grants
