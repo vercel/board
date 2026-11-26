@@ -6,10 +6,13 @@ import { mentionTerms } from '../contract/mentions.ts'
 import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
 import type { MessageFilter, MessageTables, Page, ThreadsPage, ThreadSummary } from './types.ts'
 
-/** One statement, with `$1`-style placeholders. */
+/** The SQL a database speaks. */
+export type Dialect = 'sqlite' | 'postgres'
+
+/** One statement, with `$1`-style placeholders on every dialect. */
 export type Sql = { text: string; values: unknown[] }
 
-/** A database the tables run on, SQLite, behind three calls. */
+/** A database the tables run on: SQLite or Postgres, behind three calls. */
 export type Db = {
   all(query: Sql): Promise<Record<string, unknown>[]>
   /** Each query's rows, all from one snapshot. */
@@ -25,28 +28,30 @@ export type Db = {
 /** The projection's name in `board_positions`, and the A2 consumer that runs it. */
 export const TABLES_CONSUMER = 'board-tables'
 
-/** The tables, as statements. */
-export function ddl(): string[] {
+/** The tables, as statements for one dialect. */
+export function ddl(dialect: Dialect): string[] {
+  const big = dialect === 'postgres' ? 'bigint' : 'integer'
+  const bool = dialect === 'postgres' ? 'boolean' : 'integer'
   return [
     `create table if not exists board_positions (
   consumer text primary key,
-  log_index integer not null
+  log_index ${big} not null
 )`,
     `create table if not exists board_messages (
-  id integer primary key,
+  id ${big} primary key,
   event_id text not null unique,
   channel text not null,
-  re integer,
+  re ${big},
   by_actor text not null,
   by_principal text not null,
   by_profile text,
   from_key text,
-  no_sync integer not null,
+  no_sync ${bool} not null,
   text_lower text not null,
-  deleted integer not null,
-  created_at integer not null,
+  deleted ${bool} not null,
+  created_at ${big} not null,
   replies integer not null default 0,
-  at integer,
+  at ${big},
   data text not null
 )`,
     'create index if not exists board_messages_channel on board_messages (channel, id)',
@@ -56,13 +61,13 @@ export function ddl(): string[] {
     'create index if not exists board_threads_at on board_messages (at) where re is null',
     'create index if not exists board_threads_channel on board_messages (channel, at) where re is null',
     `create table if not exists board_versions (
-  log_index integer primary key,
-  message_id integer not null,
+  log_index ${big} primary key,
+  message_id ${big} not null,
   data text not null
 )`,
     'create index if not exists board_versions_message on board_versions (message_id, log_index)',
     `create table if not exists board_terms (
-  message_id integer not null,
+  message_id ${big} not null,
   term text not null,
   value text not null,
   primary key (message_id, term, value)
@@ -72,14 +77,14 @@ export function ddl(): string[] {
     'create table if not exists board_sync_threads (\n  thread text primary key,\n  data text not null\n)',
     'create table if not exists board_external_threads (\n  external text primary key,\n  thread text not null\n)',
     `create table if not exists board_copies (
-  message_id integer not null,
+  message_id ${big} not null,
   target text not null,
   data text not null,
   primary key (message_id, target)
 )`,
     `create table if not exists board_external_messages (
   key text primary key,
-  message_id integer not null
+  message_id ${big} not null
 )`,
     // A person's recent roots were for telling their own posts' echoes apart, which nothing does now.
     'drop index if exists board_messages_recent',
@@ -186,10 +191,16 @@ export function sqlTables(db: Db): MessageTables {
     const writes: Sql[] = []
     for (const row of rows) {
       const message = parse(row)!
-      const unchanged = "json_extract((select data from board_messages where id = $1), '$.text') = $2"
-      writes.push({ text: `delete from board_terms where message_id = $1 and term = '${MENTION}' and ${unchanged}`, values: [message.id, message.text] })
+      // The text as it was read: a writer that changed it since rewrote its terms. Compared lowercased,
+      // as the table keeps it, so the check reads no JSON and runs the same on every dialect.
+      const unchanged = '(select text_lower from board_messages where id = cast($1 as bigint)) = cast($2 as text)'
+      const read = clean(message.text.toLowerCase())
+      writes.push({ text: `delete from board_terms where message_id = cast($1 as bigint) and term = '${MENTION}' and ${unchanged}`, values: [message.id, read] })
       for (const term of mentionTerms(message.text))
-        writes.push({ text: `insert or ignore into board_terms (message_id, term, value) select $1, '${MENTION}', $3 where ${unchanged}`, values: [message.id, message.text, clean(term)] })
+        writes.push({
+          text: `insert into board_terms (message_id, term, value) select cast($1 as bigint), '${MENTION}', cast($3 as text) where ${unchanged} on conflict do nothing`,
+          values: [message.id, read, clean(term)],
+        })
     }
     await db.commit({ text: "insert into board_meta (key, value) values ($1, 'text') on conflict (key) do nothing returning 1 as claimed", values: [MENTION_TERMS] }, writes)
   }

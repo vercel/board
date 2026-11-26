@@ -12,6 +12,9 @@ import { sqliteDb } from '../src/store/sqlite-db.ts'
 import { sqlite } from '../src/store/sqlite.ts'
 import { project } from '../src/store/project.ts'
 import { sqlTables } from '../src/store/sql.ts'
+import { postgresSchema } from '../src/store/postgres-db.ts'
+import { postgresStore } from '../src/store/postgres.ts'
+import { freshPool, POSTGRES } from './postgres-harness.ts'
 import type { BoardStore, MessageTables } from '../src/store/types.ts'
 
 /** A small seeded generator, so a failing history can be replayed. */
@@ -519,10 +522,18 @@ const tablesOf = (store: BoardStore): MessageTables => ({ ...store.tables, close
 const dir = mkdtempSync(join(tmpdir(), 'board-tables-'))
 let opened = 0
 
-/** The tables as a local board keeps them: SQLite in a file, or `memory()`. */
+/** The tables on a database of their own, as `postgres()` keeps them. */
+async function postgresTables(): Promise<MessageTables> {
+  const pool = await freshPool()
+  await pool.query(postgresSchema())
+  return tablesOf(postgresStore(pool))
+}
+
+/** The tables as a board keeps them: SQLite in a file, `memory()`, or Postgres. */
 const BACKENDS: { name: string; open: () => Promise<MessageTables>; enabled: boolean }[] = [
   { name: 'SQLite, in a file', open: async () => tablesOf(sqlite({ path: join(dir, `${++opened}.db`) })), enabled: true },
   { name: 'memory()', open: async () => tablesOf(memory()), enabled: true },
+  { name: POSTGRES, open: postgresTables, enabled: true },
 ]
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -612,4 +623,5 @@ describe('the SQL tables', () => {
   })
 })
 
-for (const backend of BACKENDS) describe.skipIf(!backend.enabled)(`the tables on ${backend.name}`, () => conformance(backend.open))
+// PGlite runs Postgres in this process, slower than a server: a long history takes it seconds.
+for (const backend of BACKENDS) describe.skipIf(!backend.enabled)(`the tables on ${backend.name}`, { timeout: 30_000 }, () => conformance(backend.open))

@@ -205,6 +205,15 @@ const inboxesReducer = reducer({
 
 /** A platform event in an inbox. */
 type Received = Extract<InboxEvent, { type: 'external.received' }>
+
+/**
+ * A platform event's raw payload as the inbox keeps it: its JSON text, so a store that keeps JSON
+ * its own way gives the same payload back, its keys' order included (Postgres's jsonb sorts them).
+ * One kept before that is `raw` itself.
+ */
+type KeptRaw = { raw?: unknown; rawText?: string }
+const keepRaw = (raw: unknown): KeptRaw => (raw === undefined ? {} : { rawText: JSON.stringify(raw) })
+const rawOf = (kept: KeptRaw): unknown => (kept.rawText !== undefined ? JSON.parse(kept.rawText) : kept.raw)
 type PlatformEvent = Received['payload']['event']
 
 /** An append that holds an event ID already in the log. */
@@ -296,7 +305,7 @@ function build(options: A2Options, binding: BoardBinding) {
     lane: ({ event }) => `thread:${event.payload.event.thread}`,
   }).run(async (ctx) => {
     const { payload } = ctx.event as Received
-    await binding.receive(payload.sync, { event: payload.event, raw: payload.raw }, { id: ctx.event.id, attempt: ctx.attempt, signal: ctx.signal })
+    await binding.receive(payload.sync, { event: payload.event, raw: rawOf(payload) }, { id: ctx.event.id, attempt: ctx.attempt, signal: ctx.signal })
   })
   const inboxServer = createServer({
     contract: inboxContract,
@@ -1092,7 +1101,7 @@ function build(options: A2Options, binding: BoardBinding) {
           await inboxServer.session(inboxSession(event.channel)).append({
             type: 'external.received',
             id: await idempotentId('board-inbox', key, id),
-            payload: { sync: key, event, raw },
+            payload: { sync: key, event, ...keepRaw(raw) },
           }).catch(alreadyReceived)
         }
         return { ok: true }
@@ -1103,7 +1112,7 @@ function build(options: A2Options, binding: BoardBinding) {
         events.map(async ({ id, event, raw }) => ({
           type: 'watch.matched' as const,
           id: await idempotentId('board-inbox', key, id),
-          payload: { thread: event.thread, inbox: key, event: { sync: key, event, raw } },
+          payload: { thread: event.thread, inbox: key, event: { sync: key, event, ...keepRaw(raw) } },
         })),
       )
       await queue.append(...matched).catch(async (error: unknown) => {
@@ -1120,8 +1129,8 @@ function build(options: A2Options, binding: BoardBinding) {
       const leased = await pullInbox(queueOf(principal.id) as unknown as QueueSession, key, { access: principal.access, limit: limit ?? 10, now: Date.now() })
       return {
         items: leased.map(({ id, thread, lease, attempt, event }) => {
-          const item = event as { event: PlatformEvent; raw: unknown }
-          return { id, key, thread, lease, attempt, event: item.event, raw: item.raw }
+          const item = event as { event: PlatformEvent } & KeptRaw
+          return { id, key, thread, lease, attempt, event: item.event, raw: rawOf(item) }
         }),
       }
     },
@@ -1146,15 +1155,15 @@ function build(options: A2Options, binding: BoardBinding) {
         for (const found of channels)
           for (const event of await inboxServer.session(inboxSession(found)).history())
             if (event.type === 'external.received' && event.payload.sync === key)
-              entries.push({ id: event.id, channel: found, createdAt: new Date(event.createdAt).toISOString(), ...event.payload } as InboxEntry)
+              entries.push({ id: event.id, channel: found, createdAt: new Date(event.createdAt).toISOString(), sync: key, event: event.payload.event, raw: rawOf(event.payload) } as InboxEntry)
       }
       const pushers = new Set([principal.id, ...(everywhere ? Object.keys((await registry.state()).byOwner) : [])])
       for (const pusher of pushers)
         for (const event of await queueOf(pusher).history()) {
-          const pushed = event.payload as { inbox?: string; event?: { sync: string; event: PlatformEvent; raw: unknown } }
+          const pushed = event.payload as { inbox?: string; event?: { sync: string; event: PlatformEvent } & KeptRaw }
           if (event.type !== 'watch.matched' || pushed.inbox !== key || !pushed.event) continue
           if (channel !== undefined && pushed.event.event.channel !== channel) continue
-          entries.push({ id: event.id, channel: pushed.event.event.channel, createdAt: new Date(event.createdAt).toISOString(), ...pushed.event } as InboxEntry)
+          entries.push({ id: event.id, channel: pushed.event.event.channel, createdAt: new Date(event.createdAt).toISOString(), sync: pushed.event.sync, event: pushed.event.event, raw: rawOf(pushed.event) } as InboxEntry)
         }
       return { events: entries.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit ?? 50) }
     },
