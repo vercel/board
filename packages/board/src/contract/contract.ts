@@ -354,3 +354,63 @@ export const schemasContract = contract({
 
 export type SchemasEvent = ContractEvent<typeof schemasContract.events>
 export const SCHEMAS_SESSION = 'schemas'
+
+/** Who reads: an actor's ID. */
+const Reader = ActorId
+/** An inbox item: a thread by its root, or with `message`, that one message by itself. */
+const Item = { reader: Reader, thread: MessageId, message: MessageId.nullable() }
+/** Why an item is in an inbox. */
+const Reason = z.enum(['mention', 'channel', 'thread', 'added'])
+/** A channel, or with a trailing `/` it and every channel under it. */
+const Followed = z.string().min(1).max(CHANNEL_PATTERN_MAX)
+/** A board log index: what's written after it is what a follow, or the end of one, holds for. */
+const At = z.number().int().nonnegative()
+
+/**
+ * Readers' inboxes, outside the board log: what each actor follows, and what reached them. Nobody
+ * but its reader reads an inbox, and reading never adds to the board log.
+ *
+ * Session `follows` holds what readers asked to follow and what they left, for every reader, so a
+ * message finds who follows its thread and its channel in one read. A reader who posts in a thread
+ * follows it with no event here: the thread's own messages say so.
+ *
+ * Session `reader:<principal>` holds the inbox of a principal and of each of its profiles, in one
+ * order, so one read follows a person's and their agents'.
+ */
+export const readersContract = contract({
+  name: 'board-readers',
+  events: {
+    /** `reader` follows `channel` from board index `at` on. */
+    'channel.followed': z.object({ reader: Reader, channel: Followed, at: At }),
+    'channel.unfollowed': z.object({ reader: Reader, channel: Followed, at: At }),
+    /** `reader` asked to follow the thread rooted at `thread`, from board index `at` on. */
+    'thread.followed': z.object({ reader: Reader, thread: MessageId, at: At }),
+    /** `reader` left it at `at`: a post of theirs after that follows it again. */
+    'thread.unfollowed': z.object({ reader: Reader, thread: MessageId, at: At }),
+    /**
+     * (server) Message `arrived` reached `reader`, in the thread rooted at `thread`, for `reasons`:
+     * the item is there, unread, and no longer snoozed.
+     */
+    'item.arrived': z.object({ ...Item, channel: ChannelPath, arrived: MessageId, reasons: z.array(Reason).min(1) }),
+    /** `reader` added it by hand. `last` is the thread's newest message then, which a new item has unread. */
+    'item.added': z.object({ ...Item, channel: ChannelPath, last: MessageId }),
+    'item.removed': z.object(Item),
+    /** Read through message `through`: what arrived up to it isn't unread. */
+    'item.read': z.object({ ...Item, through: MessageId }),
+    /** Unread from message `from` on: `unread` are the messages that makes unread, oldest first. */
+    'item.unread': z.object({ ...Item, from: MessageId, unread: z.array(MessageId).max(1000) }),
+    /** Hidden until `until`, or until something arrives: null ends a snooze. */
+    'item.snoozed': z.object({ ...Item, until: Millis.nullable() }),
+    /** (server) The snooze that ended at `until` is over, and the item is back. */
+    'item.woke': z.object({ ...Item, until: Millis }),
+  },
+})
+
+export type ReaderEvents = typeof readersContract.events
+export type ReaderEvent = ContractEvent<ReaderEvents>
+
+/** The session of what every reader follows. */
+export const FOLLOWS_SESSION = 'follows'
+
+/** `reader:vercel:user:u_1`: the inbox of a principal and of each of its profiles. */
+export const readerSession = (principal: string) => `reader:${principal}`

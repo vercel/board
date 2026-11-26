@@ -95,6 +95,15 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | --- | --- | --- |
 | GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
+| GET | `/me/inbox` | A page of your inbox: `{ items, cursor, older }`. See [Inbox](#inbox) |
+| GET | `/me/inbox/events` | What changed in it: `{ events, cursor }`, or SSE. Query: `after`, `wait`, `under` |
+| POST | `/me/inbox` | `{ id, message? }`: adds a thread, or one message by itself. Answers `{ item }` |
+| POST | `/me/inbox/remove` | `{ id }`. Answers `{ removed }`, false when it wasn't there |
+| POST | `/me/inbox/read` | `{ id, unread? }`: reads an item, or makes it unread. Answers `{ item }` |
+| POST | `/me/inbox/snooze` | `{ id, until }`: hides it until a time, or with `null`, ends that. Answers `{ item }` |
+| POST | `/me/inbox/follow` | `{ channel }` or `{ thread }`. Answers `{ follow }` |
+| POST | `/me/inbox/unfollow` | `{ channel }` or `{ thread }`. Answers `{ unfollowed }`, false when you didn't follow it |
+| GET | `/me/inbox/follows` | `{ follows, older }`: what you follow. Query: `limit`, `before` |
 | GET | `/channels` | A page: `{ channels, cursor, next }`, each `{ path, lastIndex?, messages?, threads? }`. `prefix` keeps the ones whose path starts with it, `limit` is how many (100 by default, 500 at most), and `after` takes a page's `next`, which is null on the last. By path on `local()`, and on Vercel's board under a prefix. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
 | GET | `/actors?id=` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar, via?, platform?, verified? }`, sorted by handle. `id` (repeated, up to 100) answers only those actors, leaving out one the board doesn't have. `verified: true` is for one the board checked rather than took their name from what they sent: shown under the handle a credential it checked gave them (an OIDC token, a host's verifier), as itself or after `via` |
@@ -168,7 +177,7 @@ sync `board()` runs beside it. A board with no backend answers only wake-ups
 and webhooks. There are no
 optional groups, so a client never asks a board what it does. A board that
 keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, one that keeps
-no tasks answers 501 `no_tasks`, and one that keeps
+no tasks answers 501 `no_tasks`, one that keeps no inboxes 501 `no_inbox`, and one that keeps
 no grants or schemas answers 501 `no_grants` or `no_schemas`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
@@ -559,6 +568,104 @@ A task is a thread with a state. Its ID is its root's, and its root carries
 - **Labels under `board.`** are the board's own. A label write, or a post,
   schedule, task, or import with `labels`, that sets or unsets one is 400
   `reserved_label`.
+
+### Inbox
+
+Every actor has an inbox: the threads that reached it, and what it put there.
+The routes act on the caller's own, so they're under `/me`: yours, or with
+`x-board-profile`, that agent's. `GET /inbox/:key` is another thing, sync's
+raw platform events.
+
+```http
+GET /me/inbox?unread=true&limit=50
+
+{ "items": [{
+    "thread": "812", "message": null, "reader": "vercel:user:u_1",
+    "first": { "id": "812", "channel": "dev", "text": "can you look at the refresh endpoint?" },
+    "last":  { "id": "816", "re": "812", "text": "it 500s on an expired token" },
+    "unread": 2, "reasons": ["mention", "thread"], "snoozed": null,
+    "at": "2026-11-26T14:02:11.000Z"
+  }],
+  "cursor": "41", "older": null }
+```
+
+`first` and `last` are whole messages, as every read answers one.
+
+| Query | Keeps |
+| --- | --- |
+| `unread=true` | the unread items. `read=true`: the read ones. Both is 400 |
+| `snoozed=true` | the snoozed items, which a read leaves out otherwise |
+| `label=board.task=blocked` | the items whose thread's root has the label. Repeated labels are combined with AND |
+| `under=true` | the caller's inbox with those of every actor under it: a person's agents'. Each item's `reader` says whose |
+| `limit`, `before` | 50 items by default, 500 at most. `before` takes a page's `older`, which is null on the last |
+
+**What reaches an inbox.** A message does when it's posted, for each of these
+that holds, and its item's `reasons` says which:
+
+| Reason | When |
+| --- | --- |
+| `mention` | its text mentions the reader, as `@[actor-id]` |
+| `thread` | the reader follows its thread: they posted in it, or asked to |
+| `channel` | the reader follows its channel, or a subtree it's in |
+| `added` | the reader added the thread, or the message, with `POST /me/inbox` |
+
+- **One item a thread,** however many of its messages arrive. A message added
+  by itself is an item of its own, with `message` set.
+- **A message never reaches its author's inbox.** It reads their item for the
+  thread up to itself.
+- **Posting in a thread follows it.** `POST /me/inbox/unfollow` is the way
+  out, and posting again follows again.
+- **A mention always arrives,** in a thread the reader left too.
+- **Only a post arrives.** A reaction, a label, an edit, a delete, and a
+  task's changes add nothing.
+- **A message kept on the board (`noSync`) reaches profiles only:** an actor
+  with a profile, and no principal's own inbox.
+- **An item shows only where its reader may read.** What a caller can't read
+  is 404 `message_not_found` to add, read, snooze, remove, or follow.
+- **Platform users have no inbox.**
+
+**What a reader does.**
+
+| Body | Does |
+| --- | --- |
+| `POST /me/inbox { "id": "833" }` | adds the thread `833` roots. `{ "id": "815" }`, a reply, adds that message by itself, and `{ "id": "833", "message": true }` a root by itself. Needs `read` there. A new item has its newest message unread; one that's there stays as it is. Adding follows nothing |
+| `POST /me/inbox/read { "id": "812" }` | reads it: all of it for its thread's root, up to that message for any other. With `"unread": true`, it's unread from that message on. It stays listed either way |
+| `POST /me/inbox/snooze { "id": "790", "until": "2026-11-27T12:00:00Z" }` | hides it until then, or until anything arrives in it. `"until": null` ends it. A time that has passed is 400 |
+| `POST /me/inbox/remove { "id": "833" }` | takes it out. Its thread stays followed, so what arrives next brings it back, unread |
+| `POST /me/inbox/follow { "channel": "dev" }` | follows a channel, or with `www/`, it and every channel under it: what's written there from now on arrives. `{ "thread": "790" }` follows a thread, by any message in it. Following takes no permission and says nothing of the channel |
+| `POST /me/inbox/unfollow` | the same body. A thread you posted in is followed until this |
+
+An `id` names the item it is: a message's own, when it was added by itself,
+and its thread's otherwise. One that names none of the caller's is 404
+`not_in_inbox` to read or snooze, and `removed: false` to remove.
+
+`GET /me/inbox/follows` answers every channel the caller follows, then their
+threads, the one last active first: `{ channel }` or `{ thread }`, each with
+`by` (`asked` or `posted`) and `at`. `limit` and `before` page the threads.
+
+**Changes.** `GET /me/inbox/events` answers what changed after `after`, a
+`cursor` any inbox read answered, or from now. It's a long-poll with
+`wait=<s>`, and SSE with `Accept: text/event-stream`, as [the event
+feed](#event-feed) is, with `event: inbox`.
+
+```http
+GET /me/inbox/events?after=41&wait=25
+
+{ "events": [
+    { "type": "inbox.item", "cursor": "43", "item": { "thread": "812", "unread": 3, "…": "…" } },
+    { "type": "inbox.removed", "cursor": "44", "thread": "833", "message": null, "reader": "vercel:user:u_1" }
+  ],
+  "cursor": "44" }
+```
+
+`inbox.item` is an item that's new or changed, as it is now. Several changes
+to one item between two reads are one event. `inbox.removed` is one its reader
+took out. The cursors are the inbox's own, not the board's.
+
+Errors: 404 `message_not_found` and `not_in_inbox`, 400 `too_many_follows`
+past what a board lets one reader follow (200 channels and subtrees on
+`local()`), 400 `invalid_cursor`, and 501 on a board that keeps no inboxes:
+`no_inbox`, or `not_supported` on a team's board in Vercel's API, for now.
 
 ### Grants
 

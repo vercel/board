@@ -86,6 +86,19 @@ const CROSS_TEAM = ['lets a project on another team in, in its environments', "g
 /** The tasks check that sends headers of its own: a profile, narrowed to no `manage`. */
 const TASKS_OWNED = 'lets a profile change only the tasks it made, and its principal all of them'
 const OWN_PROFILES = ['keeps a task assigned to a profile for that actor alone', "this handle's profiles are principals of their own, so none is its principal's actor"]
+/** The inbox checks, which a board's own code skips too: what a run posts is kept on the board, and reaches only a profile's inbox. */
+const INBOX = [
+  "puts a thread in the inbox of whoever it mentions, as one item however many of its messages do, and not in its writer's",
+  "adds what's written in a channel its reader follows, and in a thread its reader posted in, but nothing its reader wrote",
+  'keeps an item until its reader removes it: reading leaves it, what arrives next brings a removed one back, and after unfollowing only a mention does',
+  'adds a thread, or one message by itself, by hand: each is an item of its own, and adding follows nothing',
+  'hides a snoozed item until something arrives in it, or its reader ends the snooze',
+  "lists an inbox by its threads' labels, a page at a time, the item that changed last first",
+  'says what changed in an inbox after a cursor: an item as it is now, and one its reader removed',
+  "reads a principal's inbox with its profiles' under it, and keeps what's kept on the board out of a principal's own",
+  "names an item by any message of its thread, and answers 404 for a message that names none, or that its reader can't read",
+]
+const NO_PROFILES = "this handle's profiles are principals of their own, and what this run posts is kept on the board, which reaches only a profile's inbox"
 /** And one no run can check: shut out by a lock, it couldn't lift the lock after. */
 /** The check a run nothing locks out skips: the board's own code here, and a board's owner. */
 const NEVER_LOCKED_OUT = ["refuses a grant its maker couldn't take back, unless it says lockMeOut", "nothing locks this run out of a channel, so no grant it makes is a lockout: it owns the board, or it's the board's own code"]
@@ -172,8 +185,14 @@ describe('the conformance kit', () => {
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
     expect((await client.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2', 'g3'])
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'search', 'schedules', 'tasks', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'paging', 'search', 'schedules', 'tasks', 'inbox', 'grants', 'schemas', 'attachments', 'watchers', 'sync'])
     expect(report.checks.filter((check) => check.group === 'tasks').map((check) => check.status)).toEqual(Array.from({ length: 24 }, () => 'passed'))
+    expect(report.checks.filter((check) => check.group === 'inbox').map((check) => check.status)).toEqual(Array.from({ length: 9 }, () => 'passed'))
+    // Its reader's inbox is as it found it: nothing in it, and nothing followed.
+    const reader = client.as('conformance')
+    expect((await reader.inbox.items({ snoozed: true })).items).toEqual([])
+    expect((await reader.inbox.items()).items).toEqual([])
+    expect((await reader.inbox.follows()).follows).toEqual([])
     const { messages } = await client.channel('conformance').messages({ limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
     // Every task it made went with its root: none is left open, and none still wears a state.
@@ -193,6 +212,7 @@ describe('the conformance kit', () => {
       [TASKS_OWNED, NO_HEADERS],
       [NARROWED[1], NO_CAN],
       [NARROWED[2], NO_CAN],
+      ...INBOX.map((name) => [name, NO_PROFILES]),
       NO_ROLES,
       NO_APPS,
       ...GRANTS_NARROWED.map((name) => [name, NO_CAN]),

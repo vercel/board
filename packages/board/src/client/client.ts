@@ -5,7 +5,13 @@ import type {
   Discovery,
   EventsPage,
   FiltersInput,
+  FollowInput,
+  FollowView,
   InboxEntry,
+  InboxEventsPage,
+  InboxEventView,
+  InboxItemView,
+  InboxPage,
   InboxItem,
   SyncCopiesView,
   SyncFindInput,
@@ -298,6 +304,23 @@ export type Filters = Omit<FiltersInput, 'label'> & {
   label?: Record<string, string> | string[]
 }
 
+/** Which of an inbox's items to list. */
+export type InboxQuery = {
+  /** Only the unread ones. */
+  unread?: boolean
+  /** Only the read ones. */
+  read?: boolean
+  /** The snoozed ones, which a list leaves out otherwise. */
+  snoozed?: boolean
+  /** With the inboxes of every actor under you: your agents'. */
+  under?: boolean
+  /** Those whose thread's root has each label: `{ 'board.task': 'blocked' }` or `['board.task=blocked']`. */
+  label?: Record<string, string> | string[]
+  /** A page's `older`: the page before it. */
+  before?: string
+  limit?: number
+}
+
 export type BoardClient = ReturnType<typeof createBoardClient>
 
 /** A `can` as the wire takes it: `'none'` at a pattern is `[]`. */
@@ -409,6 +432,10 @@ export function createBoardClient(options: ClientOptions) {
     signal?: AbortSignal,
   ): Promise<EventsPage> {
     return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
+  }
+
+  async function inboxPoll(query: { after?: string; wait?: number; under?: boolean } = {}, signal?: AbortSignal): Promise<InboxEventsPage> {
+    return call<InboxEventsPage>('GET', `/me/inbox/events${queryString(query)}`, signal ? { signal } : {})
   }
 
   /** One write to task `id`, which answers its root. */
@@ -849,9 +876,107 @@ export function createBoardClient(options: ClientOptions) {
      * URL), from what the board synced: the platform is never asked. 404 for one it didn't sync.
      */
     linked: (url: string) => call<ThreadView>('GET', `/links${queryString({ url })}`),
-    /** Raw platform events for a sync entry, newest first. */
-    inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
-      (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
+    /**
+     * Your inbox: `inbox.items()` and what's beside it. Called with a sync entry's key, sync's own
+     * inbox instead: the raw platform events that entry received, newest first.
+     */
+    inbox: Object.assign(
+      async (key: string, opts: { channel?: string; limit?: number } = {}) => (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
+      {
+        /**
+         * A page of your inbox, the item that changed last first: the threads that reached you (a
+         * mention, a thread or a channel you follow) and what you added. `unread` keeps the unread
+         * ones, and `read` the read ones; `label`, those whose thread's root has each label;
+         * `snoozed`, the snoozed ones instead; `under` adds the inboxes of the actors under you, your
+         * agents'. `older` reads the page before, as `before`.
+         */
+        items: (query: InboxQuery = {}) => call<InboxPage>('GET', `/me/inbox${queryString(query)}`),
+        /** Puts a thread in your inbox, by its root, or one message by itself: a reply by its own ID, a root with `message`. Adding follows nothing. */
+        add: async (id: string, opts: { message?: boolean } = {}) => (await call<{ item: InboxItemView }>('POST', '/me/inbox', { body: { id, ...opts } })).item,
+        /** Takes an item out: false when there was none. Its thread stays followed, so what arrives next brings it back. */
+        remove: async (id: string) => (await call<{ removed: boolean }>('POST', '/me/inbox/remove', { body: { id } })).removed,
+        /** Reads an item up to message `id`, all of it for its thread's root, or with `unread`, makes it unread from that message on. It stays either way. */
+        mark: async (id: string, opts: { unread?: boolean } = {}) => (await call<{ item: InboxItemView }>('POST', '/me/inbox/read', { body: { id, ...opts } })).item,
+        /** Hides an item until `until`, or until something arrives in it: null ends a snooze. */
+        snooze: async (id: string, until: string | Date | null) =>
+          (await call<{ item: InboxItemView }>('POST', '/me/inbox/snooze', { body: { id, until: until instanceof Date ? until.toISOString() : until } })).item,
+        /** Follows a channel, a subtree (`www/`), or a thread, by any message in it: what's written there from now on reaches your inbox. */
+        follow: async (target: FollowInput) => (await call<{ follow: FollowView }>('POST', '/me/inbox/follow', { body: target })).follow,
+        /** Stops following it: false when you didn't. A mention there still arrives, and posting in a thread follows it again. */
+        unfollow: async (target: FollowInput) => (await call<{ unfollowed: boolean }>('POST', '/me/inbox/unfollow', { body: target })).unfollowed,
+        /** What you follow: every channel, then your threads a page at a time, the one last active first. */
+        follows: (query: { before?: string; limit?: number } = {}) => call<{ follows: FollowView[]; older: string | null }>('GET', `/me/inbox/follows${queryString(query)}`),
+        /** One read of what changed in your inbox after `after`: `wait` holds it, in seconds, for the first change. */
+        poll: inboxPoll,
+        /** Changes to your inbox as they happen, from `after` or from now: it reconnects from the last one seen, and tells `onState` whether it's live or retrying. */
+        async *events(query: { after?: string; under?: boolean } = {}, opts: EventsOptions = {}): AsyncGenerator<InboxEventView> {
+          let after = query.after
+          let failures = 0
+          const state = eventsState(opts.onState)
+          while (!opts.signal?.aborted) {
+            let response: Response
+            try {
+              response = await raw('GET', `/me/inbox/events${queryString({ ...query, after })}`, { headers: { accept: 'text/event-stream' }, ...(opts.signal ? { signal: opts.signal } : {}) })
+            } catch (error) {
+              if (opts.signal?.aborted) return
+              // A refusal isn't an outage: what the board doesn't keep (501) is said, as what the caller got wrong is, and not retried.
+              if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
+              state.failed()
+              await pause(Math.min(30_000, 500 * 2 ** failures++), opts.signal)
+              continue
+            }
+            failures = 0
+            state.answered()
+            try {
+              for await (const message of parseSse(response.body!, opts.signal)) {
+                if (message.id !== undefined) after = message.id
+                if (message.event === 'inbox' && message.data) yield JSON.parse(message.data) as InboxEventView
+              }
+            } catch (error) {
+              if (opts.signal?.aborted) return
+              state.failed()
+              await pause(Math.min(30_000, 500 * 2 ** failures++), opts.signal)
+            }
+          }
+        },
+        /** The next change to your inbox after `after` (default: now), or null on timeout. */
+        async wait(query: { after?: string; under?: boolean } = {}, opts: WaitOptions = {}): Promise<InboxEventView | null> {
+          const deadline = Date.now() + duration(opts.timeout ?? '30m')
+          let failures = 0
+          // An outage isn't an answer: a poll that failed for it goes again after a backoff, until the deadline.
+          const again = async (error: unknown) => {
+            if (opts.signal?.aborted) return
+            if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
+            if (error instanceof Error && error.name === 'AbortError') throw error
+            const backoff = Math.min(30_000, 500 * 2 ** failures++)
+            if (Date.now() + backoff >= deadline) throw error
+            await pause(backoff, opts.signal)
+          }
+          let after = query.after
+          while (after === undefined && !opts.signal?.aborted) {
+            try {
+              after = (await inboxPoll({ ...query, wait: 0 }, opts.signal)).cursor
+            } catch (error) {
+              await again(error)
+            }
+          }
+          while (Date.now() < deadline && !opts.signal?.aborted) {
+            const wait = Math.max(0, Math.min(25, Math.ceil((deadline - Date.now()) / 1000)))
+            let page: InboxEventsPage
+            try {
+              page = await inboxPoll({ ...query, after, wait }, opts.signal)
+            } catch (error) {
+              await again(error)
+              continue
+            }
+            failures = 0
+            if (page.events.length > 0) return page.events[0]!
+            after = page.cursor
+          }
+          return null
+        },
+      },
+    ),
     /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
     register: (input: RegisterInput) =>
       call<RegistrationView>('POST', '/watchers', { body: input }),

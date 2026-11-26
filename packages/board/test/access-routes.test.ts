@@ -28,6 +28,29 @@ const WALK: Record<RouteName, Walk> = {
   webhook: 'public',
   // About the caller.
   me: () => [{ method: 'GET', path: '/me', status: 200, check: (body) => expect(body.can).toEqual({ open: ['read'] }) }],
+  // An inbox holds only what its reader may read: what reached it from a channel it follows and can't read stays out of sight.
+  inboxItems: () => ['', '?under=1', '?unread=1', '?snoozed=1', '?label=private'].map((query) => ({ method: 'GET' as const, path: `/me/inbox${query}`, status: 200, check: nothingFrom('items') })),
+  inboxEvents: () => [{ method: 'GET', path: '/me/inbox/events?after=0', status: 200, check: nothingFrom('events') }],
+  // By ID: what it can't read is 404. What it reads it may put in its own inbox, which changes nothing on the board.
+  addInboxItem: ({ secret }) => [
+    { method: 'POST', path: '/me/inbox', body: { id: String(secret.root) }, status: 404 },
+    { method: 'POST', path: '/me/inbox', body: { id: String(secret.reply), message: true }, status: 404 },
+  ],
+  removeInboxItem: ({ secret }) => [{ method: 'POST', path: '/me/inbox/remove', body: { id: String(secret.root) }, status: 404 }],
+  markInboxItem: ({ secret }) => [
+    { method: 'POST', path: '/me/inbox/read', body: { id: String(secret.root) }, status: 404 },
+    { method: 'POST', path: '/me/inbox/read', body: { id: String(secret.reply), unread: true }, status: 404 },
+  ],
+  snoozeInboxItem: ({ secret }) => [{ method: 'POST', path: '/me/inbox/snooze', body: { id: String(secret.root), until: null }, status: 404 }],
+  // Following a channel answers the same whether it's there or not, and whether the caller reads it or not: it says nothing of it.
+  follow: ({ secret }) => [
+    { method: 'POST', path: '/me/inbox/follow', body: { channel: 'secret' }, status: 200 },
+    { method: 'POST', path: '/me/inbox/follow', body: { channel: 'secret/never-posted' }, status: 200 },
+    { method: 'POST', path: '/me/inbox/follow', body: { thread: String(secret.root) }, status: 404 },
+  ],
+  unfollow: ({ secret }) => [{ method: 'POST', path: '/me/inbox/unfollow', body: { thread: String(secret.reply) }, status: 404 }],
+  // Its own follows, and no thread it can't read.
+  follows: () => [{ method: 'GET', path: '/me/inbox/follows', status: 200, check: (body) => expect(body.follows.filter((follow: any) => follow.thread !== undefined)).toEqual([]) }],
   // Lists drop what the caller can't read.
   channels: () => [
     { method: 'GET', path: '/channels', status: 200, check: (body) => expect(body.channels.map((c: any) => c.path)).toEqual(['open']) },
@@ -275,7 +298,11 @@ async function setup() {
     }),
   )
   const file = ((await upload.json()) as { attachment: { id: string } }).attachment.id
-  const root = (await keeper('POST', '/messages', { channel: 'secret', text: 'hush @keeper', labels: { private: 'yes' }, attachments: [file], id: 'secret-one' })).body.message.id
+  // The walker follows the channel it can't read before anything is written there, and is mentioned in it: none of it may reach its inbox.
+  const outsider = caller(board.fetch, await workflowToken())
+  const walker = (await outsider('GET', '/me')).body.actor
+  expect((await outsider('POST', '/me/inbox/follow', { channel: 'secret/' })).status).toBe(200)
+  const root = (await keeper('POST', '/messages', { channel: 'secret', text: `hush @keeper @[${walker}]`, labels: { private: 'yes' }, attachments: [file], id: 'secret-one' })).body.message.id
   const reply = (await keeper('POST', '/messages', { re: root, text: 'still hush' })).body.message.id
   await keeper('POST', `/messages/${root}/reactions`, { emoji: 'eyes' })
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id
@@ -292,7 +319,7 @@ async function setup() {
   expect((await keeper('POST', '/tasks/batch', { channel: 'secret', id: 'secret-plan', tasks: [{ text: 'hush, a plan', labels: { private: 'yes' } }] })).status).toBe(201)
   expect((await keeper('GET', '/tasks/batch/secret-plan')).body.tasks).toMatchObject([{ text: 'hush, a plan' }])
   const fixture: Fixture = { secret: { root, reply, schedule, file, task }, open: { root: openRoot, schedule: openSchedule, task: openTask } }
-  return { board, fixture, outsider: caller(board.fetch, await workflowToken()) }
+  return { board, fixture, outsider }
 }
 
 describe('every route', () => {
