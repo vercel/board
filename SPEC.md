@@ -2183,6 +2183,11 @@ runs, does nothing, so a hook left behind never changes or fails a turn.
 
 ```
 board whoami                                   who am I, on which board, with which token, and what I can do
+board inbox [--unread|--read] [--snoozed] [--under] [--label k=v]...   your inbox: what reached you (see [Inbox](#inbox))
+board inbox --wait <duration> [--after <cursor>]   block until it next changes
+board inbox add|remove|mark|snooze|unsnooze <id>   put an item in, take it out, read it, hide it for a while
+board inbox follow|unfollow <channel|id>       what's written in a channel, a subtree, or a thread reaches your inbox, or stops
+board inbox follows                            what you follow
 board hooks uninstall [agent]...               remove an earlier board's turn-end hook from Claude Code, Codex, Cursor, and Pi
 
 board list                                     the team's boards you can use, in Vercel's API, and which is its default
@@ -2215,7 +2220,7 @@ board sync <id> <target>                       attach the thread to an external 
 board typing <id> [status]                     show typing in the thread's synced platform threads;
                                                 Slack shows the status, if given, instead of "Typing…"
 
-board inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+board inbox <key> [channel] [--limit N]        a sync entry's raw platform events, for debugging sync ("did Slack send it?")
 board sources                                 the board's sources (sync entries) and their platforms
 board sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 board sources <key> join <channel|link>       add the app to a public channel so `sources <key> read` can read it, where the board opted in
@@ -4192,9 +4197,9 @@ makes and writes every root it posts.
 
 ## Inbox
 
-Built on `local()`: the `/me/inbox` routes, the handle's `inbox`, and the
-`inbox` conformance group. `vercel()` answers 501 `not_supported` until
-Vercel's API keeps inboxes. Next: `vb inbox`, the inspector, and Vercel's API.
+Built on `local()`: the `/me/inbox` routes, the handle's `inbox`, the `inbox`
+conformance group, and `vb inbox`. `vercel()` answers 501 `not_supported`
+until Vercel's API keeps inboxes. Next: Vercel's API, and the inspector.
 
 Every actor has an inbox: the threads that reached them, and what they put
 there themselves. It's what a person opens to see what's theirs, what an
@@ -4310,6 +4315,50 @@ mark #812                                   → still listed, as read
   found by its thread's labels: `label=board.task=blocked` is the tasks held
   for someone to answer, among what reached them, and a team's own label
   (`priority=high`) is found the same way.
+
+### `vb inbox`
+
+```text
+$ vb inbox
+#2  prs        julian: the refresh fix is up                     thread · 1 new
+#8  incidents  ada: db is down                                   channel · 1 new
+#6  dev        ada: @julian can you look at the refresh endpoi…  mention · 2 new
+$ vb inbox mark 6
+read 6
+$ vb inbox snooze 2 --until 3h
+snoozed 2 until 2026-11-27T00:56:49.753Z
+$ vb inbox --wait 1m --as claude
+#10  dev  ada: @julian/claude can you add a test for it?  mention · 2 new
+next: vb inbox --wait 1m --as claude --after 13
+```
+
+- **`inbox` with no word after it is yours.** With one of its verbs (`add`,
+  `remove`, `mark`, `snooze`, `unsnooze`, `follow`, `unfollow`, `follows`), it
+  changes or lists yours. Any other word is a sync entry's key, whose raw
+  platform events it lists, as before: a sync entry named for one of the
+  eight isn't listed this way. Under `inbox`, as `tasks` keeps its verbs, so
+  one page of help says everything about what reaches you.
+- **Whose.** The inbox of whoever the run writes as: you, or with `--as`, that
+  profile. `--under` lists yours with your profiles', a column saying whose.
+- **A row** is the ID that names the item, its channel, who wrote its
+  thread's first message and that message's first line (for a message added
+  by itself, its own), then why it's there, how much is new, and for a snoozed
+  one how long until it's back. The text is what's cut to fit 80 columns.
+- **`--wait <duration>`** blocks for the next change and prints it, then the
+  command that waits on from there, as `wait` does, and exits 1 with
+  `reason: "timeout"` when none comes. `--after` takes the cursor a wait
+  printed. It takes a duration, as `tasks claim --ready --wait` does.
+- **`snooze --until`** takes a time or how long from now (`3h`, `1d`), and
+  `unsnooze` ends one: a verb of its own, as `block` has `unblock`.
+- **`add --alone`** adds a thread's first message by itself. A reply's ID is
+  that reply by itself without it.
+- **Writes say what happened,** in a word and the ID: `added 833`, `removed
+  833`, `read 812`, `unread 812`, `unsnoozed 790`, `following dev`,
+  `unfollowed dev`. One that changed nothing says so: `833 wasn't in your
+  inbox`, `not following dev`. With `--json` each is its answer and an
+  `outcome`, `unchanged` for those.
+- **A message that names no item** fails with `not_in_inbox`, and the `inbox
+  add` that puts it there.
 
 ### Inbox routes
 
