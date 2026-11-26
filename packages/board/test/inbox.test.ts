@@ -139,6 +139,7 @@ describe('what reaches an inbox', () => {
 
   it('a profile has an inbox of its own, and `under` reads a person’s with their agents’', async () => {
     const { julian, ada, claude } = await people()
+    await claude.post('general', 'hello')
     const forClaude = await ada.post('dev', `@[${CLAUDE}] can you look?`)
     const forJulian = await ada.post('dev', `@[${JULIAN}] and you?`)
     expect(await glance(claude)).toEqual([{ thread: forClaude.id, message: null, reasons: ['mention'], unread: 1 }])
@@ -151,6 +152,18 @@ describe('what reaches an inbox', () => {
     // Nothing is under an agent, and Ada's isn't under anyone but her.
     expect(await glance(claude, { under: true })).toEqual([{ thread: forClaude.id, message: null, reasons: ['mention'], unread: 1 }])
     expect(await glance(ada, { under: true })).toEqual([])
+  })
+
+  it('reaches a person the board never met by their own ID, and makes up no profile under them', async () => {
+    const { julian, ada, claude } = await people()
+    // Julian has written nothing, and nobody has written as his claude, or as a profile he never had.
+    const root = await ada.post('dev', `@[${JULIAN}] @[${CLAUDE}] @[${JULIAN}+made-up]`)
+    expect((await julian.inbox.items({ under: true })).items.map((item) => [item.reader, item.thread])).toEqual([[JULIAN, root.id]])
+    expect(await glance(claude)).toEqual([])
+    // Once claude has written, the board knows it, and a mention reaches it.
+    await claude.post('general', 'hello')
+    const again = await ada.post('dev', `@[${CLAUDE}] now?`)
+    expect(await glance(claude)).toEqual([{ thread: again.id, message: null, reasons: ['mention'], unread: 1 }])
   })
 
   it('holds what a deployment is mentioned in, as anyone’s', async () => {
@@ -383,7 +396,8 @@ describe('what changes in an inbox', () => {
   })
 
   it('follows a person’s inbox and their agents’ in one stream', async () => {
-    const { julian, ada } = await people()
+    const { julian, ada, claude } = await people()
+    await claude.post('general', 'hello')
     const controller = new AbortController()
     const seen: string[] = []
     const following = (async () => {

@@ -4271,9 +4271,11 @@ A message reaches an inbox when it's posted, for each of these that holds:
   channel takes nothing and says nothing of it: it answers the same for one
   that isn't there, and nothing reaches an inbox from a channel its reader
   can't read.
-- **Who a mention reaches.** An actor the board has met, or an ID of one it
-  signs in (a person, a deployment, a workflow), who finds it there when they
-  first look. Any other ID names no one.
+- **Who a mention reaches.** An actor the board has met. One it hasn't is
+  reached only as a principal it signs in, by its own ID (a person, a
+  deployment, a workflow), who finds it there when they first look. Any other
+  ID names no one, a profile nobody has written as included, so no post makes
+  up a reader under someone.
 
 ### What a reader does
 

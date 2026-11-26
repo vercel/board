@@ -160,6 +160,8 @@ type Context = {
   principals: Principals
   /** The board's own Vercel team, as its discovery names it. */
   team: string | null
+  /** The message the inbox checks' reader wrote, so the board has met it: the reader's own to delete when the run ends. */
+  inboxReader?: string
   /** Set once an inbox didn't have what it was waited for: the checks after it look once, so a board that keeps none right is told so without a wait for each. */
   inboxLate?: true
 }
@@ -458,6 +460,10 @@ async function inboxOf(ctx: Context): Promise<{ reader: Board; actor: string } |
   const who = await reader.me()
   if (who.principal !== ctx.me.principal) return "this handle's profiles are principals of their own, and what this run posts is kept on the board, which reaches only a profile's inbox"
   if (who.actor === ctx.me.actor) return 'this credential writes as one actor only, so no other actor can write to its inbox'
+  // A mention reaches an actor the board has met: the reader writes once, so it has, on a board where it never did.
+  if (!ctx.inboxReader) {
+    ctx.inboxReader = (await reader.post(ctx.channel, { text: 'conformance: the reader of its inbox checks', labels: ctx.labels, noSync: true })).id
+  }
   return { reader, actor: who.actor }
 }
 
@@ -2915,6 +2921,12 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
   } finally {
     // What it posted goes, replies first. A failure here leaves a tombstone short, not a wrong report.
     for (const id of [...ctx.posted].reverse()) await board.delete(id).catch(() => {})
+    // And what its inbox's reader wrote, which follows the thread it started by having posted in it.
+    if (ctx.inboxReader) {
+      const reader = board.as('conformance')
+      await reader.inbox.unfollow({ thread: ctx.inboxReader }).catch(() => {})
+      await reader.delete(ctx.inboxReader).catch(() => {})
+    }
   }
   return { url, checks, ok: checks.every((c) => c.status !== 'failed') }
 }

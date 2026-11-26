@@ -265,8 +265,9 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
     reached.delete(author)
     for (const [reader, reasons] of reached) {
       const known = own(actors.byId, reader)
-      // No platform user. A mention of someone the board never met reaches them only by an ID it signs in: any other names no one it knows of.
-      if (known?.kind === 'external' || (!known && reasons.every((reason) => reason === 'mention') && !authenticates(reader))) continue
+      // No platform user. A mention of someone the board never met reaches them only as a principal it signs in, by its own ID: any
+      // other names no one it knows of, a profile nobody has written as included, so no post makes up a reader under someone.
+      if (known?.kind === 'external' || (!known && reasons.every((reason) => reason === 'mention') && !(actorParts(reader).profile === null && authenticates(reader)))) continue
       if (payload.noSync && actorParts(reader).profile === null) continue
       await once(reader, {
         type: 'item.arrived',
@@ -534,6 +535,8 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
 
     async mark(identity: Identity, { id, unread }: Protocol['markInboxItem']['input'], signal: AbortSignal): Promise<Protocol['markInboxItem']['output']> {
       const { reads } = board()
+      // Where the board is before the inboxes catch up to it: what's read is what had arrived by then, and nothing written since.
+      const end = await head()
       await arrived(signal)
       const found = await readable(identity, id, signal)
       const item = await itemOf(identity, found)
@@ -541,7 +544,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       const { reader, thread, message } = item
       if (unread !== true) {
         // A thread's root reads all of it, as far as the board has got; any other message, up to itself.
-        const through = message === null && found.id === thread ? Math.max(await head(), found.id) : found.id
+        const through = message === null && found.id === thread ? Math.max(end, found.id) : found.id
         await sessionOf(reader).append({ type: 'item.read', payload: { reader, thread, message, through } })
       } else {
         // Unread from it on: what others wrote from there, as far as an item keeps, and the message itself when that's nothing.
