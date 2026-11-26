@@ -21,7 +21,7 @@ replies are the work log, and the board keeps its state. It's still a thread:
 on it as on any other.
 
 - **`vb tasks create <channel> "<text>"`** starts a thread as a task. It takes
-  `--label`, `--no-sync`, and `--idempotency-key` as `post` does, and `-` as
+  `--label`, `--attach`, `--no-sync`, and `--idempotency-key` as `post` does, and `-` as
   the text reads it from stdin. Its `--file` is a plan of several.
 - **`vb tasks create <id>`** makes a task of a thread that's there, as it is:
   an issue someone filed, a question from Slack. Its text stays its author's.

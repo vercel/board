@@ -598,6 +598,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
           option('for', 'only this profile of yours claims it', 'profile'),
           claimNow,
           option('lease', 'with --claim: how long to hold it'),
+          option('attach'),
           option('file', 'a plan, from a JSON file (- reads stdin): an array of tasks, each { key?, text, labels?, needs?, for?, noSync?, attachments? }, all made, in as many writes as it takes. needs takes a key of the plan ("fix" or {"key": "fix"}) or a task that\'s there by its ID ("812" or {"id": "812"})'),
           option('no-sync'),
           option('idempotency-key', 'sending the same one again makes it once'),
@@ -605,6 +606,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         examples: [
           { name: 'hand a fix to whoever takes fixes', value: 'tasks create work "fix CVE-123 in acme/web" --label step=fix' },
           { name: 'a review that waits for it', value: 'tasks create work "review the fix for CVE-123" --label step=review --needs 812' },
+          { name: 'hand over a job with its file', value: 'tasks create work "build it" --attach job.json' },
           { name: 'make a task of a thread that is there', value: 'tasks create 812' },
           { name: 'a plan of tasks that wait for each other', value: 'tasks create work --file plan.json --idempotency-key migration-7' },
         ],
