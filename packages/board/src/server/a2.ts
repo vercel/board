@@ -324,7 +324,7 @@ function build(options: A2Options, binding: BoardBinding) {
   // posts as its creator, through board(), so the middleware sees it.
   schedules.bind({ writes, accessNow: binding.accessNow, send: async (identity, origin, input) => sendAs(identity, origin, input) })
   tasks.bind({ writes })
-  inbox.bind({ session, reads })
+  inbox.bind({ session, reads, accessNow: (principal) => binding.accessNow(principal) })
   watchers.bind({ reads })
 
   /**

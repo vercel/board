@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createBoardClient, type BoardClient } from '../src/client/client.ts'
 import { memory } from '../src/store/memory.ts'
-import { BOARD_URL, deploymentToken, localBoard, personToken, testBoard } from './harness.ts'
+import { BOARD_URL, deploymentToken, localBoard, personToken, testBoard, workflowToken } from './harness.ts'
 
 type Team = Pick<ReturnType<typeof testBoard>, 'fetch'>
 
@@ -164,6 +164,40 @@ describe('what reaches an inbox', () => {
     await claude.post('general', 'hello')
     const again = await ada.post('dev', `@[${CLAUDE}] now?`)
     expect(await glance(claude)).toEqual([{ thread: again.id, message: null, reasons: ['mention'], unread: 1 }])
+  })
+
+  it('goes on reaching inboxes after a post whose mentions name nothing a board could keep', async () => {
+    const { julian, ada } = await people()
+    await julian.inbox.follow({ channel: 'dev' })
+    // An ID longer than any actor's, and one with a character no log holds: neither is anyone, and neither stops what comes after.
+    await ada.post('ops', `@[vercel:user:${'x'.repeat(300)}] @[vercel:user:a\u001fb] @[__proto__] @[constructor]`)
+    const after = await ada.post('dev', 'written after it')
+    expect(await glance(julian)).toEqual([{ thread: after.id, message: null, reasons: ['channel'], unread: 1 }])
+  })
+
+  it('leaves out what is written where its reader can’t read, and counts none of it in their cursor', async () => {
+    const board = testBoard()
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
+    const fetch = ((input: RequestInfo | URL, init?: RequestInit) => board.fetch(new Request(input, init))) as typeof globalThis.fetch
+    const outsider = createBoardClient({ url: BOARD_URL, token: await workflowToken(), fetch, profile: null })
+    const { ada } = await people(board)
+    const me = (await outsider.me()).actor
+    await outsider.inbox.follow({ channel: 'secret/' })
+    await outsider.inbox.follow({ channel: 'open' })
+    const { cursor } = await outsider.inbox.items()
+    // Followed, and mentioned in it too: nothing of it reaches an inbox whose reader can't read it, and its cursor doesn't move.
+    for (const text of ['one', 'two', 'three']) await ada.post('secret', `${text} @[${me}]`)
+    expect(await outsider.inbox.items()).toEqual({ items: [], cursor, older: null })
+    expect(await outsider.inbox.poll({ after: cursor })).toEqual({ events: [], cursor })
+    // What's written where it reads arrives, and is all its cursor counts.
+    const open = await ada.post('open', 'for everyone')
+    const page = await outsider.inbox.items()
+    expect(page.items.map((item) => item.thread)).toEqual([open.id])
+    expect((await outsider.inbox.poll({ after: cursor })).events.map((event) => event.type)).toEqual(['inbox.item'])
+    // Let in later, it gets what's written from then on, and none of what it was kept out of.
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { secret: ['read'] } })
+    const later = await ada.post('secret', 'four')
+    expect((await outsider.inbox.items()).items.map((item) => item.thread)).toEqual([later.id, open.id])
   })
 
   it('holds what a deployment is mentioned in, as anyone’s', async () => {
@@ -416,11 +450,12 @@ describe('what changes in an inbox', () => {
   it('says a snooze is over to whoever is waiting when its time comes', async () => {
     const { julian, ada } = await people()
     const root = await ada.post('dev', `@[${JULIAN}] one`)
-    await julian.inbox.snooze(root.id, new Date(Date.now() + 300).toISOString())
+    // Long enough that the read after it comes first, however busy the runner.
+    await julian.inbox.snooze(root.id, new Date(Date.now() + 2000).toISOString())
     const { cursor } = await julian.inbox.items()
-    const woke = await julian.inbox.poll({ after: cursor, wait: 5 })
+    const woke = await julian.inbox.poll({ after: cursor, wait: 10 })
     expect(woke.events).toMatchObject([{ type: 'inbox.item', item: { thread: root.id, snoozed: null } }])
-  })
+  }, 15_000)
 })
 
 describe('an inbox on a board with a scheduler', () => {

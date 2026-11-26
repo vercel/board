@@ -4266,11 +4266,15 @@ A message reaches an inbox when it's posted, for each of these that holds:
   `noSync` is what one agent leaves another: it reaches an actor with a
   profile, and no principal's own inbox, whatever mentions or follows would
   have brought it.
-- **What a reader can't read isn't in their inbox.** An item shows only while
-  its reader may read its thread's channel, as every read is gated. Following a
-  channel takes nothing and says nothing of it: it answers the same for one
-  that isn't there, and nothing reaches an inbox from a channel its reader
-  can't read.
+- **What a reader can't read isn't in their inbox.** A message reaches an
+  inbox only if its reader may read its channel when the board next answers
+  them: one they can't read then is left out for good, and being let in later
+  brings only what's written from then on. An item shows only while its reader
+  may still read its thread's channel. Following a channel takes nothing and
+  says nothing of it: it answers the same for one that isn't there.
+- **Nor does it move their cursor.** An inbox's cursor counts what's in it and
+  what its reader did to it, and nothing else: a post where its reader can't
+  read, followed or mentioning them, leaves it where it was.
 - **Who a mention reaches.** An actor the board has met. One it hasn't is
   reached only as a principal it signs in, by its own ID (a person, a
   deployment, a workflow), who finds it there when they first look. Any other
@@ -4347,13 +4351,25 @@ under `/me`, and on the handle `inbox.items()` and what's beside it.
   log, `board-arrivals`, takes each post in order on one lane, works out who
   it reaches (who it mentions, who follows its channel, and who follows its
   thread: whoever posted in it, read from the thread's own messages, and
-  whoever asked), and appends an `item.arrived` to each reader's session,
-  under an ID derived from the reader and the post, so a retry adds it once.
-  What a reader does (`item.added`, `item.removed`, `item.read`,
-  `item.unread`, `item.snoozed`) they append themselves. A read waits for the
-  consumer to reach the board's head first, so a post that has answered is in
-  the inboxes it's for. Nothing times a snooze: whoever reads next, or is
-  waiting on the inbox's events, says it's over (`item.woke`).
+  whoever asked), and appends an `item.arrived` for each reader to session
+  `arriving:<principal>`, under an ID derived from the reader and the post, so
+  a retry adds it once. It knows no reader's access, so it holds every arrival
+  there, whoever may read it. Each inbox request first waits for the consumer
+  to reach the board's head, then passes on what waits for its caller's
+  principal: each arrival whose channel the principal may read now moves into
+  `reader:<principal>`, with the time it was written, and the rest are
+  dropped. So a post that has answered is in the inboxes it's for, and one its
+  reader can't read never touches the session their cursor counts. A caller
+  narrowed with `x-board-can` passes on what its principal reads, and its own
+  reads hide what it can't. What a reader does (`item.added`, `item.removed`,
+  `item.read`, `item.unread`, `item.snoozed`) they append themselves. Nothing
+  times a snooze: whoever reads next, or is waiting on the inbox's events,
+  says it's over (`item.woke`). A mention's ID is checked before it's a
+  reader: one longer than an actor's, or with a character no log holds, names
+  no one, and a reader a log refuses is skipped, so no post stops the lane.
+  The board's own code writes as `board:client`, and each `as(profile)` there
+  is a principal of its own: nothing is under `board:client`, and a message
+  kept on the board reaches none of them.
 - **`vercel()`** answers every inbox method 501 `not_supported` until Vercel's
   API keeps inboxes, and then maps them onto it.
 - **`http()`** passes them to the board it uses, as every method.
@@ -4410,6 +4426,9 @@ one out), and a second principal's inbox, which board's own tests check.
   costing every write in its threads once sessions are actors: one that has
   read and written nothing for thirty days could end, its items staying.
 - A deleted message still counts as unread until its item is read.
+- What reached a reader who never asks waits in `arriving:<principal>` for
+  good: a bot that posts in threads and reads no inbox keeps what answered
+  it there.
 - An edit that adds a mention reaches no one: only a post arrives.
 - The local board works out a thread's followers from all of its messages for
   each reply, which grows with the thread.

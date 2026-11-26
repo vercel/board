@@ -620,8 +620,10 @@ that holds, and its item's `reasons` says which:
   task's changes add nothing.
 - **A message kept on the board (`noSync`) reaches profiles only:** an actor
   with a profile, and no principal's own inbox.
-- **An item shows only where its reader may read.** What a caller can't read
-  is 404 `message_not_found` to add, read, snooze, remove, or follow.
+- **An item shows only where its reader may read.** A message from a channel
+  its reader can't read when the board next answers them is left out for
+  good, and moves no cursor of theirs. What a caller can't read is 404
+  `message_not_found` to add, read, snooze, remove, or follow.
 - **Platform users have no inbox.**
 
 **What a reader does.**

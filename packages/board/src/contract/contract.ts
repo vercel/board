@@ -375,7 +375,13 @@ const At = z.number().int().nonnegative()
  * follows it with no event here: the thread's own messages say so.
  *
  * Session `reader:<principal>` holds the inbox of a principal and of each of its profiles, in one
- * order, so one read follows a person's and their agents'.
+ * order, so one read follows a person's and their agents'. Its index is what an inbox's cursor
+ * counts, so it holds only what its readers may read.
+ *
+ * Session `arriving:<principal>` holds what has reached those readers and hasn't been passed on
+ * yet: a post is added here whoever may read it, and moves into `reader:<principal>` when the
+ * board next answers its reader, if they may read its channel then. So what's written where a
+ * reader can't read never moves their cursor.
  */
 export const readersContract = contract({
   name: 'board-readers',
@@ -389,9 +395,12 @@ export const readersContract = contract({
     'thread.unfollowed': z.object({ reader: Reader, thread: MessageId, at: At }),
     /**
      * (server) Message `arrived` reached `reader`, in the thread rooted at `thread`, for `reasons`:
-     * the item is there, unread, and no longer snoozed.
+     * the item is there, unread, and no longer snoozed. `at` is when it was written, where that
+     * isn't when this event was: one passed on from `arriving:<principal>`.
      */
-    'item.arrived': z.object({ ...Item, channel: ChannelPath, arrived: MessageId, reasons: z.array(Reason).min(1) }),
+    'item.arrived': z.object({ ...Item, channel: ChannelPath, arrived: MessageId, reasons: z.array(Reason).min(1), at: Millis.optional() }),
+    /** (server) In `arriving:<principal>`: what arrived through index `through` there has been passed on to its readers' inboxes, or left out. */
+    'arrivals.admitted': z.object({ through: z.number().int().nonnegative() }),
     /** `reader` added it by hand. `last` is the thread's newest message then, which a new item has unread. */
     'item.added': z.object({ ...Item, channel: ChannelPath, last: MessageId }),
     'item.removed': z.object(Item),
@@ -414,3 +423,6 @@ export const FOLLOWS_SESSION = 'follows'
 
 /** `reader:vercel:user:u_1`: the inbox of a principal and of each of its profiles. */
 export const readerSession = (principal: string) => `reader:${principal}`
+
+/** `arriving:vercel:user:u_1`: what reached a principal's readers and hasn't been passed on to their inboxes yet. */
+export const arrivingSession = (principal: string) => `arriving:${principal}`

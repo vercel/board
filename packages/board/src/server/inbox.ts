@@ -2,16 +2,17 @@ import { idempotentId, reducer } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { Protocol } from '../api/protocol.ts'
 import { INBOX_LIMIT_DEFAULT, type FollowView, type InboxEventView, type InboxItemView, type InboxReason } from '../api/routes.ts'
-import { boardContract, FOLLOWS_SESSION, readersContract, readerSession, type ReaderEvent } from '../contract/contract.ts'
+import { arrivingSession, boardContract, FOLLOWS_SESSION, readersContract, readerSession, type ReaderEvent } from '../contract/contract.ts'
 import { BOARD_SESSION, type BoardEvent, type BoardEvents } from '../contract/events.ts'
 import type { Message } from '../contract/folds.ts'
 import { extractMentions, isEmail } from '../contract/mentions.ts'
 import { own, setOwn } from '../contract/own.ts'
 import { actorParts } from '../contract/profiles.ts'
+import { ActorId, storable } from '../contract/schemas.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import type { ThreadPosition } from '../store/types.ts'
 import type { Access } from './access.ts'
-import { authenticates } from './auth.ts'
+import { authenticates, type Known } from './auth.ts'
 import type { BoardSession } from './a2.ts'
 import type { Identity } from './backend.ts'
 import { badRequest, notFound } from './errors.ts'
@@ -108,6 +109,8 @@ const readerReducer = reducer({
   switch (event.type) {
     case 'item.arrived': {
       const { arrived } = event.payload
+      // When it was written: an arrival passed on later says so itself.
+      const at = event.payload.at ?? new Date(event.createdAt).getTime()
       const item = found ?? setOwn(items, key, { reader: payload.reader, thread: payload.thread, message: null, channel: event.payload.channel, reasons: [], read: arrived - 1, unread: [], snoozed: null, at, order: event.index })
       if (arrived > item.read && !item.unread.includes(arrived)) item.unread = [...item.unread, arrived].slice(-UNREAD_MAX)
       item.reasons = withReasons(item.reasons, event.payload.reasons)
@@ -154,6 +157,26 @@ const readerReducer = reducer({
   }
   return state
 })
+
+/** An arrival that waits to be passed on to its reader's inbox: where it is in its session, when it was written, and what it says. */
+type Arriving = { index: number; at: number; arrival: Extract<ReaderEvent, { type: 'item.arrived' }>['payload'] }
+
+/** What reached a principal's readers and hasn't been passed on yet, oldest first. */
+const arrivingReducer = reducer({
+  contract: readersContract,
+  name: 'board.arriving.v1',
+  initialState: { waiting: [] as Arriving[] },
+}).fold((state, event) => {
+  if (event.type === 'item.arrived') state.waiting.push({ index: event.index, at: new Date(event.createdAt).getTime(), arrival: event.payload })
+  else if (event.type === 'arrivals.admitted') state.waiting = state.waiting.filter((arriving) => arriving.index > event.payload.through)
+  return state
+})
+
+/**
+ * Whether a mention's ID could be an actor's: as long as one may be, and nothing a session or a
+ * log can't hold. Message text holds anything, so what it names is checked before it's a reader.
+ */
+const nameable = (id: string) => ActorId.safeParse(id).success && storable(id) && !/[\u0000-\u001f\u007f]/.test(id)
 
 /** Whether the last of `toggles` before board index `at` is a follow. */
 const onAt = (toggles: readonly Toggle[] | undefined, at: number): Toggle | null => {
@@ -210,7 +233,7 @@ function olderAt(value: string): ThreadPosition {
  * inboxes; what a reader does to their own (add, remove, read, snooze) they append themselves.
  */
 export function createInbox(options: { store?: A2Store | undefined; scheduler?: A2Scheduler | undefined }) {
-  let bound: { session: BoardSession; reads: BoardReads } | null = null
+  let bound: { session: BoardSession; reads: BoardReads; accessNow: (principal: Known) => Promise<Access | null> } | null = null
   const board = () => {
     if (!bound) throw new Error('inboxes used before the board bound them')
     return bound
@@ -225,9 +248,12 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
   /** The session that holds `reader`'s inbox: its principal's. */
   const sessionOf = (reader: string) => server.session(readerSession(actorParts(reader).principal))
 
-  /** Appends to a reader's session an event whose ID says what it's for: a retry's lands nothing more. */
-  async function once(reader: string, event: Parameters<ReturnType<typeof sessionOf>['append']>[0]) {
-    await sessionOf(reader).append(event).catch((error: unknown) => {
+  /** The session that holds what has reached `reader` and hasn't been passed on to its inbox: its principal's. */
+  const arrivingOf = (reader: string) => server.session(arrivingSession(actorParts(reader).principal))
+
+  /** Appends to a session an event whose ID says what it's for: a retry's lands nothing more. */
+  async function once(session: ReturnType<typeof sessionOf>, event: Parameters<ReturnType<typeof sessionOf>['append']>[0]) {
+    await session.append(event).catch((error: unknown) => {
       if (!duplicate(error)) throw error
     })
   }
@@ -255,7 +281,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
     const [{ state: followed }, { state: actors }] = await Promise.all([follows.state(followsReducer), session.state(actorsReducer, { through: at })])
     const reached = new Map<string, InboxReason[]>()
     const reach = (reader: string, reason: InboxReason) => reached.set(reader, withReasons(reached.get(reader) ?? [], [reason]))
-    for (const token of extractMentions(payload.text)) if (token.kind === 'actor' && !isEmail(token.actor)) reach(token.actor, 'mention')
+    for (const token of extractMentions(payload.text)) if (token.kind === 'actor' && !isEmail(token.actor) && nameable(token.actor)) reach(token.actor, 'mention')
     const asked = own(followed.threads, String(root)) ?? {}
     for (const reader of new Set([...posted.keys(), ...Object.keys(asked)])) if (followsThread(posted.get(reader), own(asked, reader), at)) reach(reader, 'thread')
     for (const [channel, readers] of Object.entries(followed.channels)) {
@@ -269,16 +295,23 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       // other names no one it knows of, a profile nobody has written as included, so no post makes up a reader under someone.
       if (known?.kind === 'external' || (!known && reasons.every((reason) => reason === 'mention') && !(actorParts(reader).profile === null && authenticates(reader)))) continue
       if (payload.noSync && actorParts(reader).profile === null) continue
-      await once(reader, {
-        type: 'item.arrived',
-        id: await idempotentId('board-arrival', reader, event.id),
-        payload: { reader, thread: root, message: null, channel: payload.channel, arrived: at, reasons },
-      })
+      try {
+        // Whoever may read it: it's passed on to the reader's inbox when the board next answers them, if they may read it then.
+        await once(arrivingOf(reader), {
+          type: 'item.arrived',
+          id: await idempotentId('board-arrival', reader, event.id),
+          payload: { reader, thread: root, message: null, channel: payload.channel, arrived: at, reasons },
+        })
+      } catch (error) {
+        // What a log won't hold is no reader's: one post must never stop every inbox behind it.
+        if ((error as { code?: string } | null)?.code !== 'INVALID_PAYLOAD' && !(error instanceof TypeError)) throw error
+        console.error(`[board] left #${at} out of an inbox it can't be written to:`, (error as Error).message)
+      }
     }
     // Its author has read their thread up to what they just wrote.
     const mine = own(own((await sessionOf(author).state(readerReducer)).state.items, author) ?? {}, keyOf({ thread: root, message: null }))
     if (mine && mine.read < at)
-      await once(author, { type: 'item.read', id: await idempotentId('board-arrival-read', author, event.id), payload: { reader: author, thread: root, message: null, through: at } })
+      await once(sessionOf(author), { type: 'item.read', id: await idempotentId('board-arrival-read', author, event.id), payload: { reader: author, thread: root, message: null, through: at } })
   }
 
   /** One lane, so each reader's items arrive in the board's order, and a read can wait for it by index. */
@@ -293,6 +326,44 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       if (signal.aborted) throw error
       console.warn("[board] an inbox read didn't wait for the newest messages to arrive:", (error as Error).message)
     }
+  }
+
+  /**
+   * Passes on to the caller's principal's inboxes what has reached them since they last asked: each
+   * arrival from a channel the principal may read now, in the order it came, and none of the rest.
+   * A thread its reader posted in since is read up to that post. Whoever asks is the principal,
+   * whatever narrows this request: a narrowed caller's own reads hide what it can't read.
+   */
+  async function admit(identity: Identity) {
+    const { accessNow } = board()
+    const me = identity.actor.id
+    const waiting = arrivingOf(me)
+    const { state } = await waiting.state(arrivingReducer)
+    if (state.waiting.length === 0) return
+    const { id, kind, handle, facts } = identity.principal
+    const access = identity.principal.scope === undefined ? identity.principal.access : ((await accessNow({ id, kind, handle, ...(facts ? { facts } : {}) })) ?? identity.principal.access)
+    const principal = actorParts(me).principal
+    /** Each reader's threads that something was passed on in, with the first message of it. */
+    const threads = new Map<string, { reader: string; thread: number; first: number }>()
+    for (const { index, at, arrival } of state.waiting) {
+      if (!access.readable(arrival.channel)) continue
+      await once(sessionOf(me), { type: 'item.arrived', id: await idempotentId('board-admitted', principal, String(index)), payload: { ...arrival, at } })
+      const key = `${arrival.reader}\u001f${arrival.thread}`
+      if (!threads.has(key)) threads.set(key, { reader: arrival.reader, thread: arrival.thread, first: arrival.arrived })
+    }
+    // What its reader wrote after it arrived read it: their newest post in the thread says up to where.
+    for (const { reader, thread, first } of threads.values()) {
+      const posted = await newestPost(reader, thread)
+      if (posted && posted.id > first)
+        await once(sessionOf(me), { type: 'item.read', id: await idempotentId('board-admitted-read', reader, String(thread), String(posted.id)), payload: { reader, thread, message: null, through: posted.id } })
+    }
+    await waiting.append({ type: 'arrivals.admitted', payload: { through: state.waiting.at(-1)!.index } })
+  }
+
+  /** What every inbox request does first: waits for the board's messages to have reached who they're for, and passes the caller's on. */
+  async function current(identity: Identity, signal: AbortSignal) {
+    await arrived(signal)
+    await admit(identity)
   }
 
   /** Whose inboxes a read is of: the caller's own, or with `under`, every reader's under it too. */
@@ -323,7 +394,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       for (const item of Object.values(items)) {
         if (item.snoozed === null || item.snoozed > now) continue
         const { thread, message, snoozed: until } = item
-        await once(reader, { type: 'item.woke', id: await idempotentId('board-woke', reader, keyOf(item), String(until)), payload: { reader, thread, message, until } })
+        await once(sessionOf(reader), { type: 'item.woke', id: await idempotentId('board-woke', reader, keyOf(item), String(until)), payload: { reader, thread, message, until } })
       }
     }
   }
@@ -429,13 +500,13 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
   return {
     server,
     boardConsumer,
-    bind(binding: { session: BoardSession; reads: BoardReads }) {
+    bind(binding: { session: BoardSession; reads: BoardReads; accessNow: (principal: Known) => Promise<Access | null> }) {
       bound = binding
     },
 
     async items(identity: Identity, query: Protocol['inboxItems']['input'], signal: AbortSignal): Promise<Protocol['inboxItems']['output']> {
       const scope = scopeOf(identity, query.under)
-      await arrived(signal)
+      await current(identity, signal)
       await wake(identity, scope)
       const { state, index } = await stateOf(identity)
       const before = query.before === undefined ? undefined : indexOf(query.before)
@@ -469,7 +540,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
 
     async events(identity: Identity, query: Protocol['inboxEvents']['input'], signal: AbortSignal): Promise<Protocol['inboxEvents']['output']> {
       const scope = scopeOf(identity, query.under)
-      await arrived(signal)
+      await current(identity, signal)
       await wake(identity, scope)
       const session = sessionOf(identity.actor.id)
       const { index: end } = await stateOf(identity)
@@ -484,31 +555,47 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       }
       const first = await page()
       if (first.events.length > 0 || first.full || Date.now() >= deadline) return { events: first.events, cursor: ref(cursor) }
-      // Held for the first change: an event in the session, or a snooze of the caller's running out.
-      const iterator = session.stream({ startAfter: cursor })[Symbol.asyncIterator]()
+      // Held for the first change: an event in the session, something reaching the caller's readers, or a snooze of theirs running out.
+      const waiting = arrivingOf(identity.actor.id)
+      const changed = session.stream({ startAfter: cursor })[Symbol.asyncIterator]()
+      const reached = waiting.stream({ startAfter: (await waiting.state(arrivingReducer)).index })[Symbol.asyncIterator]()
       let next: Promise<unknown> | null = null
+      let arriving: Promise<unknown> | null = null
       try {
+        // What reached them between the first look and now is passed on before the wait, which only hears what comes after.
+        await admit(identity)
+        const since = await page()
+        if (since.events.length > 0 || since.full) return { events: since.events, cursor: ref(cursor) }
         for (;;) {
           const { state } = await stateOf(identity)
           const due = Math.min(...itemsOf(state, scope, identity.principal.access).flatMap((item) => (item.snoozed === null ? [] : [item.snoozed])))
           const wait = Math.min(deadline, due) - Date.now()
-          next ??= iterator.next()
+          next ??= changed.next()
+          arriving ??= reached.next()
           const timer = new AbortController()
-          const woken = await Promise.race([next.then(() => true), paused(Math.max(0, Math.min(wait, TIMER_MAX_MS)), AbortSignal.any([signal, timer.signal])).then(() => false)])
+          const woken = await Promise.race([
+            next.then(() => 'changed' as const),
+            arriving.then(() => 'reached' as const),
+            paused(Math.max(0, Math.min(wait, TIMER_MAX_MS)), AbortSignal.any([signal, timer.signal])).then(() => 'timer' as const),
+          ])
           timer.abort()
-          if (woken) next = null
-          else await wake(identity, scope)
+          if (woken === 'changed') next = null
+          else if (woken === 'reached') {
+            arriving = null
+            await admit(identity)
+          } else await wake(identity, scope)
           const read = await page()
           if (read.events.length > 0 || read.full || signal.aborted || Date.now() >= deadline) return { events: read.events, cursor: ref(cursor) }
         }
       } finally {
-        void iterator.return?.()
+        void changed.return?.()
+        void reached.return?.()
       }
     },
 
     async add(identity: Identity, { id, message: alone }: Protocol['addInboxItem']['input'], signal: AbortSignal): Promise<Protocol['addInboxItem']['output']> {
       const { reads } = board()
-      await arrived(signal)
+      await current(identity, signal)
       const found = await readable(identity, id, signal)
       const reader = identity.actor.id
       const root = found.re ?? found.id
@@ -524,7 +611,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
     },
 
     async remove(identity: Identity, { id }: Protocol['removeInboxItem']['input'], signal: AbortSignal): Promise<Protocol['removeInboxItem']['output']> {
-      await arrived(signal)
+      await current(identity, signal)
       const found = await readable(identity, id, signal)
       const item = await itemOf(identity, found)
       if (!item) return { removed: false }
@@ -537,7 +624,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
       const { reads } = board()
       // Where the board is before the inboxes catch up to it: what's read is what had arrived by then, and nothing written since.
       const end = await head()
-      await arrived(signal)
+      await current(identity, signal)
       const found = await readable(identity, id, signal)
       const item = await itemOf(identity, found)
       if (!item) throw notInInbox(id)
@@ -556,7 +643,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
     },
 
     async snooze(identity: Identity, { id, until }: Protocol['snoozeInboxItem']['input'], signal: AbortSignal): Promise<Protocol['snoozeInboxItem']['output']> {
-      await arrived(signal)
+      await current(identity, signal)
       const found = await readable(identity, id, signal)
       const item = await itemOf(identity, found)
       if (!item) throw notInInbox(id)
