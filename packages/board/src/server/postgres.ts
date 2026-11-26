@@ -6,7 +6,8 @@ import type { Backend, BoardBinding, Caller, ProtocolMethods, Trust } from './ba
 import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
-import { checkSchema, ensureSchema, type PgPool } from '../store/postgres-db.ts'
+import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
+import { checkSchema, type PgPool } from '../store/postgres-db.ts'
 import { postgresBlob, postgresStore } from '../store/postgres.ts'
 
 export type PostgresOptions = {
@@ -20,25 +21,28 @@ export type PostgresOptions = {
   /** Connections the pool it makes may open. Default 10. */
   max?: number
   /**
-   * Whether it applies its tables, `postgresSchema()`, on its first call, when the database doesn't
-   * have this release's: true by default. False when a migration of yours applies them.
+   * What runs the board's timers: scheduled messages, leases running out, and watchers' and sync's
+   * retries. `vercelQueues()` from `@vercel/board/backend-postgres/scheduler-vercel`, with the
+   * backend's `scheduler` mounted in a route of its own. Default: timers in this process.
    */
-  schema?: boolean
+  scheduler?: Scheduler
 }
 
 /** A board on Postgres. `close()` stops its timers and ends the pool it made. */
 export type PostgresBackend = Backend & {
+  /** The scheduler's callback, for `vercelQueues()`: `export { scheduler as POST }` from a route its topic triggers. */
+  scheduler(request: Request): Promise<Response>
   /** Stops its timers, and ends the pool if it made it. What's still to send stays in the database. */
   close(): Promise<void>
 }
 
-/** Why the database couldn't be reached or set up, in a few words. */
+/** Why the database couldn't be reached or used, in a few words. */
 const unreachable = (error: unknown) => String((error as { message?: unknown }).message ?? error).split('\n')[0]!
 
 /**
  * A board on Postgres (`npm i pg`): its log, its tables, and its files in one database, which any
- * number of instances share. It applies its tables on its first call, and keeps one board, whatever
- * `board({ name })` says.
+ * number of instances share. Apply `sql/postgres/schema.sql` from the package first. It keeps one
+ * board, whatever `board({ name })` says.
  */
 export function postgres(options: PostgresOptions = {}): PostgresBackend {
   let binding: BoardBinding | null = null
@@ -63,22 +67,22 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
     opening ??= (async () => {
       const pool = poolOf()
       try {
-        // A database without this release's tables gets them, or, with schema: false, says so.
-        await (options.schema === false ? checkSchema(pool) : ensureSchema(pool))
+        // A database without the tables says which file to apply, before the first query that needs them.
+        await checkSchema(pool)
       } catch (error) {
         throw new HttpError(500, 'no_store', `postgres: ${unreachable(error)}`)
       }
       const store = postgresStore(pool)
-      // Timers in this process: scheduled messages, leases running out, and retries of watchers and
-      // sync. What was due while no instance ran, the next one to start catches up on.
-      const scheduler = localScheduler()
-      const backend = a2({ store, scheduler, blob: postgresBlob(pool) })
+      // Timers in this process, unless it's given a scheduler: what came due while no instance ran, the
+      // next one on Vercel catches up on.
+      const own = options.scheduler ? null : localScheduler()
+      const backend = a2({ store, scheduler: own ?? engineScheduler(options.scheduler!), blob: postgresBlob(pool) })
       backend.bind(bound)
       return {
         backend,
         async close() {
           // Its timers first: one that fired after would run against a closed pool.
-          scheduler.stop()
+          own?.stop()
           await store.close()
         },
       }
@@ -108,6 +112,7 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
       if (binding) throw new Error('postgres: this backend already serves a board: create one postgres() per board()')
       binding = given
     },
+    scheduler: async (request: Request) => (await open()).backend.scheduler(request),
     async close() {
       const opened = opening
       opening = null

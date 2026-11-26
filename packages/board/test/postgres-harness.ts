@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 import pg from 'pg'
 import { afterAll } from 'vitest'
@@ -11,6 +13,9 @@ export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
 
 /** Where a test's databases are: a server, or PGlite. */
 export const POSTGRES = TEST_DATABASE_URL ? 'Postgres' : 'PGlite'
+
+/** The schema the package ships, `sql/postgres/schema.sql`. */
+export const SCHEMA = readFileSync(join(import.meta.dirname, '..', 'sql', 'postgres', 'schema.sql'), 'utf8')
 
 const made: string[] = []
 const opened: { end(): Promise<void> }[] = []
@@ -94,3 +99,10 @@ afterAll(async () => {
   for (const pool of opened.splice(0)) await pool.end().catch(() => {})
   for (const name of made.splice(0)) await admin(`drop database if exists ${name} with (force)`)
 })
+
+/** A pool on an empty database of its own with the package's schema applied, as a deploy would. */
+export async function freshPoolWithTables(): Promise<PgPool> {
+  const pool = await freshPool()
+  await pool.query(SCHEMA)
+  return pool
+}

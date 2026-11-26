@@ -15,24 +15,23 @@ export const GET = team.fetch, POST = team.fetch
 ```
 
 Install `pg` beside it (`npm i pg`). On Vercel, connect a Postgres database to
-the project, from the Marketplace: it sets `DATABASE_URL`.
+the project, from the Marketplace: it sets `DATABASE_URL`. Then apply the
+board's tables, before the first deploy:
+
+```sh
+psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
+```
 
 - **One database is one board.** Every instance that points at it serves the
   same board, so it runs on serverless functions as well as on one server.
   `name` and `team` are ignored.
-- **It makes its tables on its first call,** in one transaction, under a lock,
-  so instances starting together make them once. A database that has this
-  release's tables skips it with one read. A role that can't create tables
-  fails that call with 500 `no_store`: see [Applying the tables yourself](#applying-the-tables-yourself).
+- **It creates no tables.** [`schema.sql`](#the-tables) does, and a database
+  without them fails the board's first call with 500 `no_store`, which names
+  the file.
 - **Attachments live in the database,** each at most 4 MB, in `board_files`.
-- **Timers run in the process:** scheduled messages, leases running out, and
-  watchers' and sync's retries. On Vercel, each instance arms the pending ones
-  again on its first call, so a send that came due while nothing ran goes out
-  with the next request. Elsewhere, a restart drops what's pending, as on
-  [`local()`](./10-local.md).
 - **It passes the whole [conformance](../04-reference/05-conformance.md) kit,**
-  schedules, tasks, and attachments included, so the `vb` and `vercel board`
-  CLIs work against it with `--url` or `BOARD_URL`.
+  schedules, tasks, and attachments included, so `vb` and `vercel board` work
+  against it with `--url` or `BOARD_URL`.
 
 Who may use it is `board()`'s, as on any board this deployment keeps: on
 Vercel, the team's people and the project's own deployments. Off Vercel, set
@@ -45,29 +44,62 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 | `connectionString` | The database. Default `DATABASE_URL`, or else `POSTGRES_URL` |
 | `pool` | A `pg` Pool you made, instead: for a password from a callback, say. The board leaves it open |
 | `max` | Connections the pool it makes may open. Default 10 |
-| `schema` | `false` to leave its tables to your migrations: see below. Default `true` |
+| `scheduler` | What runs its timers: `vercelQueues()`, see [On Vercel Queues](#on-vercel-queues). Default: timers in this process |
 
 `close()` stops its timers and ends the pool it made, as a test does at its
 end.
 
-## Applying the tables yourself
+## Timers
 
-`postgresSchema()` is the SQL for every table the board needs. Each statement
-creates only what's missing and leaves existing data alone, so it's safe to
-apply again, and a breakpoint comment after each one splits it for migration
-tools that send one statement per query. Apply it again when a release's
+Scheduled messages, leases running out, and watchers' and sync's retries run
+on timers. Without a `scheduler`, they run in the process: on one server, a
+restart drops what's pending, as on [`local()`](./10-local.md). On Vercel, each
+instance arms the pending ones again on its first call, so a send that came
+due while nothing ran goes out with the next request.
+
+## On Vercel Queues
+
+`vercelQueues()` sends each timer through Vercel Queues (`npm i @vercel/queue`),
+so it goes out on time with nothing running:
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from '@vercel/board'
+import { postgres } from '@vercel/board/backend-postgres'
+import { vercelQueues } from '@vercel/board/backend-postgres/scheduler-vercel'
+
+const backend = postgres({ scheduler: vercelQueues({ topic: 'board' }) })
+
+export const team = board({ backend })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
+```
+
+Mount the backend's `scheduler` as `POST` in a route of its own, which the
+topic triggers:
+
+```ts app/api/board-scheduler/route.ts
+export { scheduler as POST } from '@/app/api/board/[[...path]]/route'
+```
+
+```json vercel.json
+{
+  "functions": {
+    "app/api/board-scheduler/route.ts": {
+      "experimentalTriggers": [{ "type": "queue/v2beta", "topic": "board", "retryAfterSeconds": 30 }]
+    }
+  }
+}
+```
+
+Keep it out of the board's catch-all route: a queue trigger makes its function
+private, and the board's routes must stay public, for people, CI, and platform
+webhooks.
+
+## The tables
+
+`sql/postgres/schema.sql`, in the package, is every table the
+board needs, in one file. Each statement creates only what's missing and leaves
+existing data alone, so it's safe to apply again, and a breakpoint comment
+after each one splits it for migration tools that send one statement per
+query: copy it into your migrations as it is. Apply it again when a release's
 changelog says the tables changed.
-
-```ts scripts/board-schema.ts
-import { writeFileSync } from 'node:fs'
-import { postgresSchema } from '@vercel/board/backend-postgres'
-
-writeFileSync('migrations/0001_board.sql', postgresSchema())
-```
-
-Then pass `schema: false`, and a database without the tables fails the
-board's first call with 500 `no_store`, which says to apply them.
-
-```ts
-board({ backend: postgres({ schema: false }) })
-```

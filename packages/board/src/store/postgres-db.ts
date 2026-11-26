@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-import { A2_POSTGRES_SCHEMA } from './a2-postgres-schema.ts'
 import { ddl, type Db, type Sql } from './sql.ts'
 
 /** What the tables need of a `pg` Pool, or of anything shaped like one. */
@@ -20,7 +18,7 @@ export class TablesNotConfiguredError extends Error {
 function explain(error: unknown): unknown {
   const code = (error as { code?: unknown } | null)?.code
   if (code === '42P01' || code === '42703')
-    return new TablesNotConfiguredError("board's tables aren't in this database, or are from an older release: apply postgresSchema()", { cause: error })
+    return new TablesNotConfiguredError(`board's tables aren't in this database, or are from an older release: apply ${SCHEMA_FILE}`, { cause: error })
   if (code === '42501')
     return new TablesNotConfiguredError("this database role can't use board's tables: grant it select, insert, update, and delete on them", { cause: error })
   return error
@@ -80,67 +78,28 @@ const FILES_DDL = `create table if not exists board_files (
   data bytea not null
 )`
 
-/**
- * Everything a board on Postgres needs, as one file: the tables that keep its log, then those it
- * reads from, and its files. Every statement creates only what's missing and leaves existing
- * data alone, so it's safe to apply again, and it works as a migration as it is: the breakpoint after
- * each statement splits it for tools that send one statement per query.
- */
-export function postgresSchema(): string {
-  return `-- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
--- its log, then those it reads from, and its files. postgres() applies this
--- itself unless it's given schema: false. Every statement creates only what is missing
--- and leaves existing data alone, so it's safe to re-run.
+/** Where the package ships the schema, as an app that installs it finds it. */
+export const SCHEMA_FILE = 'node_modules/@vercel/board/sql/postgres/schema.sql'
 
-${A2_POSTGRES_SCHEMA.trimEnd()}${BREAKPOINT}
+/**
+ * `sql/postgres/schema.sql`: `a2`, the bundled A2 release's schema.sql, whose tables keep the log,
+ * then board's tables and its files, so a database needs one file.
+ */
+export function postgresSchemaSql(a2: string): string {
+  return `-- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
+-- its log, then those it reads from, and its files. Apply this file before the first
+-- deploy, and again when a board release says the tables changed. Every statement
+-- creates only what is missing and leaves existing data alone, so it's safe to re-run.
+-- The breakpoint after each statement splits it for migration tools that send one
+-- statement per query; to every other tool it's only a comment.
+
+${a2.trimEnd()}${BREAKPOINT}
 ${[...ddl('postgres'), FILES_DDL].join(`;${BREAKPOINT}`)};
 `
 }
 
-/** The schema's own version: a database that has it skips applying it. */
-export const SCHEMA_VERSION = createHash('sha256').update(postgresSchema()).digest('hex').slice(0, 16)
-
-/** `board_meta`'s key for the schema version applied. */
-const SCHEMA_KEY = 'postgres_schema'
-
-/** One lock for every instance applying the schema at once, whatever board: two would race on the catalog. */
-const SCHEMA_LOCK = 0x626f617264
-
-/**
- * Applies the schema unless the database has this version of it: one read when it does. It runs in
- * one transaction under an advisory lock, so instances starting together apply it once, and a
- * failure leaves the database as it was.
- */
-export async function ensureSchema(pool: PgPool): Promise<void> {
-  const applied = async (client: PgQueryable) => {
-    // Checked before it's read: a failed read would end the transaction it's in.
-    const { rows: present } = await client.query("select to_regclass('board_meta') is not null as present")
-    if (present[0]?.present !== true) return false
-    const { rows } = await client.query('select value from board_meta where key = $1', [SCHEMA_KEY])
-    return rows[0]?.value === SCHEMA_VERSION
-  }
-  if (await applied(pool)) return
-  try {
-    await transaction(pool, 'begin', async (client) => {
-      await client.query('select pg_advisory_xact_lock($1)', [SCHEMA_LOCK])
-      // Another instance may have applied it while this one waited.
-      if (await applied(client)) return true
-      await client.query(postgresSchema())
-      await client.query('insert into board_meta (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value', [SCHEMA_KEY, SCHEMA_VERSION])
-      return true
-    })
-  } catch (error) {
-    if ((error as { code?: unknown }).code === '42501')
-      throw new TablesNotConfiguredError(
-        "this database role can't create board's tables: apply postgresSchema() as a role that can, and pass postgres({ schema: false })",
-        { cause: error },
-      )
-    throw error
-  }
-}
-
-/** The tables a board's first calls need, each of A2's, board's, and its files': whether they're all there. */
+/** Whether the tables a board's first calls need are there: the log's, board's, and its files'. */
 export async function checkSchema(pool: PgPool): Promise<void> {
   const { rows } = await pool.query("select to_regclass('a2_events') is not null and to_regclass('board_messages') is not null and to_regclass('board_files') is not null as present")
-  if (rows[0]?.present !== true) throw new TablesNotConfiguredError("board's tables aren't in this database: apply postgresSchema(), or leave out schema: false")
+  if (rows[0]?.present !== true) throw new TablesNotConfiguredError(`board's tables aren't in this database: apply ${SCHEMA_FILE}`)
 }

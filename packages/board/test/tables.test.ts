@@ -12,9 +12,8 @@ import { sqliteDb } from '../src/store/sqlite-db.ts'
 import { sqlite } from '../src/store/sqlite.ts'
 import { project } from '../src/store/project.ts'
 import { sqlTables } from '../src/store/sql.ts'
-import { postgresSchema } from '../src/store/postgres-db.ts'
 import { postgresStore } from '../src/store/postgres.ts'
-import { freshPool, POSTGRES } from './postgres-harness.ts'
+import { freshPoolWithTables, POSTGRES } from './postgres-harness.ts'
 import type { BoardStore, MessageTables } from '../src/store/types.ts'
 
 /** A small seeded generator, so a failing history can be replayed. */
@@ -541,8 +540,7 @@ let opened = 0
 
 /** The tables on a database of their own, as `postgres()` keeps them. */
 async function postgresTables(): Promise<MessageTables> {
-  const pool = await freshPool()
-  await pool.query(postgresSchema())
+  const pool = await freshPoolWithTables()
   const store = postgresStore(pool)
   // Each test's database goes when it's done with it, not with the file: PGlite's are in memory.
   return { ...store.tables, close: async () => (await store.close(), await pool.end()) }

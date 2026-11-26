@@ -19,6 +19,7 @@
   "files": [
     "dist",
     "docs",
+    "sql",
     "README.md"
   ],
   "bin": {
@@ -63,6 +64,10 @@
       "types": "./dist/backend-postgres.d.mts",
       "default": "./dist/backend-postgres.mjs"
     },
+    "./backend-postgres/scheduler-vercel": {
+      "types": "./dist/backend-postgres/scheduler-vercel.d.mts",
+      "default": "./dist/backend-postgres/scheduler-vercel.mjs"
+    },
     "./sync": {
       "types": "./dist/sync.d.mts",
       "default": "./dist/sync.mjs"
@@ -102,6 +107,7 @@
     "@chat-adapter/linear": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@vercel/connect": "^2.3.4",
+    "@vercel/queue": "*",
     "chat": "^4.41.1",
     "pg": "^8.11.0"
   },
@@ -151,6 +157,9 @@
       "optional": true
     },
     "@vercel/connect": {
+      "optional": true
+    },
+    "@vercel/queue": {
       "optional": true
     },
     "chat": {
