@@ -626,6 +626,15 @@ that holds, and its item's `reasons` says which:
   `message_not_found` to add, read, snooze, remove, or follow.
 - **Platform users have no inbox.**
 
+A server that answers this protocol itself reads who a text mentions as a
+board does, with `mentionedActors` from `@vercel/board/schemas`:
+
+```ts
+import { mentionedActors } from '@vercel/board/schemas'
+
+mentionedActors('@[vercel:user:u_1] can you look? cc `@[vercel:user:u_2]`') // ['vercel:user:u_1']
+```
+
 **What a reader does.**
 
 | Body | Does |

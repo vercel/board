@@ -32,6 +32,19 @@ describe('@vercel/board/schemas', () => {
     await walk(entry)
   })
 
+  it('reads who a text mentions by ID as a board on the same version does, for its inboxes', async () => {
+    const { mentionedActors } = await rules()
+    const julian = 'vercel:user:u_julian'
+    // Twice by ID, then where nothing counts: in code, as an email, as a handle typed, and in a fence.
+    const text = `for @[${julian}], and @[${julian}] again: not \`@[vercel:user:u_val]\`, @[val@example.com], or @val\n\`\`\`\n@[vercel:user:u_val]\n\`\`\``
+    expect(mentionedActors(text)).toEqual([julian])
+    const board = testBoard()
+    const posted = await caller(board.fetch, await personToken('u_ada'))('POST', '/messages', { channel: 'dev', text })
+    const inboxOf = async (user: string) => (await caller(board.fetch, await personToken(user))('GET', '/me/inbox')).body.items.map((item: { thread: string }) => item.thread)
+    expect(await inboxOf('u_julian')).toEqual([posted.body.message.id])
+    expect(await inboxOf('u_val')).toEqual([])
+  })
+
   it('decides what a board on the same version decides: a definition, a block, and a value', async () => {
     const { canonical, checkDefinition, checkValue, findBlocks, block, parseSchemaId, BUILT_IN_SCHEMAS } = await rules()
     const board = testBoard()

@@ -5,7 +5,7 @@ import { INBOX_LIMIT_DEFAULT, type FollowView, type InboxEventView, type InboxIt
 import { arrivingSession, boardContract, FOLLOWS_SESSION, readersContract, readerSession, type ReaderEvent } from '../contract/contract.ts'
 import { BOARD_SESSION, type BoardEvent, type BoardEvents } from '../contract/events.ts'
 import type { Message } from '../contract/folds.ts'
-import { extractMentions, isEmail } from '../contract/mentions.ts'
+import { mentionedActors } from '../contract/mentions.ts'
 import { own, setOwn } from '../contract/own.ts'
 import { actorParts } from '../contract/profiles.ts'
 import { ActorId, storable } from '../contract/schemas.ts'
@@ -281,7 +281,7 @@ export function createInbox(options: { store?: A2Store | undefined; scheduler?: 
     const [{ state: followed }, { state: actors }] = await Promise.all([follows.state(followsReducer), session.state(actorsReducer, { through: at })])
     const reached = new Map<string, InboxReason[]>()
     const reach = (reader: string, reason: InboxReason) => reached.set(reader, withReasons(reached.get(reader) ?? [], [reason]))
-    for (const token of extractMentions(payload.text)) if (token.kind === 'actor' && !isEmail(token.actor) && nameable(token.actor)) reach(token.actor, 'mention')
+    for (const actor of mentionedActors(payload.text)) if (nameable(actor)) reach(actor, 'mention')
     const asked = own(followed.threads, String(root)) ?? {}
     for (const reader of new Set([...posted.keys(), ...Object.keys(asked)])) if (followsThread(posted.get(reader), own(asked, reader), at)) reach(reader, 'thread')
     for (const [channel, readers] of Object.entries(followed.channels)) {
