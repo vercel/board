@@ -153,6 +153,42 @@ describe('a handle on a board over http()', () => {
     expect(await client.wait({ re: root.id }, { timeout: 200 })).toBeNull()
   })
 
+  it('waits through a board that answers 502 for a while, and gives up on what retrying cannot fix', async () => {
+    const team = testBoard()
+    const token = await personToken()
+    let outage = 0
+    let status = 502
+    const fetch = bearer((input, init) => {
+      const url = new URL(String(input instanceof Request ? input.url : input))
+      if (url.pathname.endsWith('/events') && outage > 0) {
+        outage--
+        return Promise.resolve(Response.json({ error: { code: status === 502 ? 'unreachable' : 'no_access', message: 'not now' } }, { status }))
+      }
+      return team.fetch(new Request(input, init))
+    }, token)
+    const client = board({ backend: http(BOARD_URL, { fetch }) })
+    const root = await client.post('x', 'question')
+    await client.reply(root.id, 'answer')
+    outage = 2
+    expect((await client.wait({ re: root.id, after: root.id }, { timeout: '10s' }))?.message?.text).toBe('answer')
+    expect(outage).toBe(0)
+    // An outage that outlasts the wait is said, not taken for nothing having matched.
+    outage = 100
+    await expect(client.wait({ re: root.id }, { timeout: 1000 })).rejects.toMatchObject({ status: 502 })
+    outage = 1
+    status = 403
+    await expect(client.wait({ re: root.id, after: root.id }, { timeout: '5s' })).rejects.toMatchObject({ status: 403 })
+    expect(outage).toBe(0)
+    // Aborting during a backoff stops the wait then, not when the backoff would have ended.
+    outage = 100
+    status = 502
+    const controller = new AbortController()
+    const started = Date.now()
+    setTimeout(() => controller.abort(), 1500)
+    expect(await client.wait({ re: root.id, after: root.id }, { timeout: '1m', signal: controller.signal })).toBeNull()
+    expect(Date.now() - started).toBeLessThan(2500)
+  }, 15_000)
+
   it('streams live events and resumes after the server closes the stream', async () => {
     const team = testBoard({ streamMaxMs: 150 })
     const fetch = bearer((input, init) => team.fetch(new Request(input, init)), await personToken())
