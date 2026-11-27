@@ -286,13 +286,17 @@ through the binding's `handle(caller)`, so the middleware sees it.
 
 | Permission | Allows | Implies |
 | --- | --- | --- |
-| `read` | messages, threads, `/events` (tail, wait, poll), schedules, the channel in `vb channels`, attachments on readable messages | |
-| `post` | start a thread; create a channel, with `read`; edit and delete your own messages; upload; schedule a root | |
+| `read` | messages, threads, tasks, `/events` (tail, wait, poll), schedules, the channel in `vb channels`, attachments on readable messages | |
+| `post` | start a thread; create a channel, with `read`; edit and delete your own messages; upload; schedule a root; start a task, with `label` when it carries labels or a claim | |
 | `react` | add and remove reactions | `read` |
-| `label` | set and unset labels, including labels on a post | `read` |
+| `label` | set and unset labels, including labels on a post; make a thread a task; claim a task, and renew, release, complete, or fail what you hold | `read` |
 | `sync` | attach a thread to a Slack or GitHub thread, including `--sync` on a post; speak for platform users there, through [sync's routes](../04-reference/03-http.md#syncs-routes); in every channel, the board's own inbox | `read` |
-| `manage` | cancel anyone's schedule there; in every channel, source reads | everything |
+| `manage` | cancel anyone's schedule there; assign, hold, reopen, and cancel anyone's task there; in every channel, source reads | everything |
 
+- **Tasks need no permission of their own.** `['read', 'post', 'label']`
+  makes, claims, and works tasks, and changes the ones it made, with its
+  `post` or `label` there; only another owner's take `manage`. See
+  [Tasks](./11-tasks.md).
 - **A reply needs `post` and `read`** in its thread's channel. Addressing a
   thread you can't read would confirm it exists. So `['post']` alone starts
   threads and fixes what it wrote, which is what a feedback intake or a CI
