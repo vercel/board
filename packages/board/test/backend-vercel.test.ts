@@ -760,11 +760,12 @@ describe('vercel()', () => {
     const team = handleOn(api)
     for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
     const root = await team.post('questions', { text: 'anyone?' })
-    // A process that has listed nothing, as each `vb` run is: the thread, twice.
+    // A process that has listed nothing, as each `vb` run is: the thread a message is in, which reads the message, twice.
     const fresh = handleOn(api)
+    const channelOf = async (team: ReturnType<typeof handleOn>) => (await team.threads({ re: root.id })).threads.map((thread) => thread.message.channel)
     api.requests.length = 0
-    expect((await fresh.thread(root.id)).message.channel).toBe('questions')
-    expect((await fresh.thread(root.id)).message.channel).toBe('questions')
+    expect(await channelOf(fresh)).toEqual(['questions'])
+    expect(await channelOf(fresh)).toEqual(['questions'])
     // One request for the one channel, asked once: the list is a page of the API's at a time, however many the board has.
     expect(api.requests.filter((r) => /^GET .*\/channels$/.test(r))).toEqual([])
     expect(api.requests.filter((r) => /^GET .*\/channels\/[^/]+$/.test(r))).toHaveLength(1)
@@ -780,7 +781,7 @@ describe('vercel()', () => {
         : fetching(input, init)) as typeof fetch
     const older = board({ backend: vercel({ team: 'team_test', api: API, fetch: refused, files: api.files }) })
     api.requests.length = 0
-    expect((await older.thread(root.id)).message.channel).toBe('questions')
+    expect(await channelOf(older)).toEqual(['questions'])
     expect(api.requests.filter((r) => /^GET .*\/channels$/.test(r))).toHaveLength(1)
   })
 
@@ -807,6 +808,40 @@ describe('vercel()', () => {
     for (const id of ['msg_00000000-0000-4000-8000-000000000000_1', root.id.replace(/_1$/, '_9'), 'nope'])
       await expect(team.reply(id, { text: 'hello?' }), id).rejects.toMatchObject({ status: 404, code: 'message_not_found', message: `message not found: ${id}` })
     expect((await team.thread(root.id)).replies).toEqual([])
+  })
+
+  it('reads a thread in one request: its messages answer their channel and who wrote them, so no message is read first', async () => {
+    const api = fakeMessageboard({ inlineActors: true })
+    const team = handleOn(api, 'user:u_ada')
+    const root = await team.post('dev', { text: 'deploy failed' })
+    const first = await team.reply(root.id, { text: 'looking' })
+    // A process that has read nothing, as each `vb` run is, and the thread by a reply's ID.
+    const fresh = handleOn(api)
+    api.requests.length = 0
+    const read = await fresh.thread(first.id)
+    expect([read.message, ...read.replies].map((message) => [message.id, message.channel, message.text, message.author?.handle])).toEqual([
+      [root.id, 'dev', 'deploy failed', 'ada'],
+      [first.id, 'dev', 'looking', 'ada'],
+    ])
+    // Beside finding the team's board, the thread's messages are all it asks: no message, channel, or actor is read for them.
+    expect(api.requests.filter((request) => request !== 'GET /boards')).toEqual([`GET /boards/brd_test/threads/${root.thread}/messages`])
+  })
+
+  it("says so when the API answers a thread's messages without their channel, and reads nothing in its place", async () => {
+    const api = fakeMessageboard({ inlineActors: true })
+    const root = await handleOn(api).post('dev', { text: 'deploy failed' })
+    const fetching = as(api, 'user:u_jb')
+    // An API that takes `include=channel` on a thread's messages and answers no channel.
+    const without = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetching(input, init)
+      if (!/\/threads\/[^/]+\/messages$/.test(new URL(String(input instanceof Request ? input.url : input)).pathname)) return response
+      const { channel: _channel, ...answer } = (await response.json()) as Record<string, unknown>
+      return Response.json(answer, { status: response.status })
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: without, files: api.files }) })
+    api.requests.length = 0
+    await expect(team.thread(root.id)).rejects.toMatchObject({ status: 502, code: 'remote_error' })
+    expect(api.requests.filter((request) => request !== 'GET /boards')).toEqual([`GET /boards/brd_test/threads/${root.thread}/messages`])
   })
 
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
@@ -978,12 +1013,13 @@ describe('vercel()', () => {
     // With the name, the channel, and the authors all in the read's own answers, nothing else is asked.
     expect(all.threads).toMatchObject({ sent: ['/changes', '/threads'], refused: [] })
     expect(all.messages).toMatchObject({ sent: ['/messages'], refused: [] })
-    expect(all.thread).toMatchObject({ sent: ['/messages/:id', '/threads/:id/messages'], refused: [] })
+    expect(all.thread).toMatchObject({ sent: ['/threads/:id/messages'], refused: [] })
     // An API that takes none of them answers the same, and refuses each parameter once, not once for each of the others.
     for (const read of ['threads', 'messages', 'thread']) expect([read, today[read]!.answer]).toEqual([read, all[read]!.answer])
     expect([...today.threads!.refused].sort()).toEqual(['/changes channel', '/threads include', '/threads with'])
     expect([...today.messages!.refused].sort()).toEqual(['/messages channel', '/messages with'])
-    expect([...today.thread!.refused].sort()).toEqual(['/messages/:id include', '/messages/:id with'])
+    // A thread's messages answer their channel whichever API it is.
+    expect([...today.thread!.refused].sort()).toEqual(['/threads/:id/messages with'])
   })
 
   it("reads as it did before names whatever the API refuses a name or a message's channel with", async () => {
@@ -1003,7 +1039,7 @@ describe('vercel()', () => {
       expect((await team.channel('dev/web').messages()).messages.map((m) => m.text)).toEqual(['first'])
       expect((await team.poll({ channel: 'dev/web' })).events).toEqual([])
       expect((await team.schedules({ channel: 'dev/web' })).map((s) => s.channel)).toEqual(['dev/web'])
-      expect((await team.thread(root.id)).message.channel).toBe('dev/web')
+      expect((await team.threads({ re: root.id })).threads.map((t) => t.message.channel)).toEqual(['dev/web'])
       // And a channel that isn't there is still nothing, not the refusal.
       expect((await team.threads({ channel: 'nope' })).threads).toEqual([])
       expect((await team.channel('nope').messages()).messages).toEqual([])
