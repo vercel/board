@@ -1255,7 +1255,7 @@ describe('vercel()', () => {
     expect(latest.messages.map((m) => m.text)).toEqual(['two', 'three'])
     expect(latest.cursor).toMatch(/^c1\./)
     // One page of the channel's messages: no thread is read message by message.
-    expect(api.requests.filter((r) => r.endsWith('/messages'))).toEqual(['GET /boards/brd_test/messages'])
+    expect(api.requests.filter((r) => r.endsWith('/messages'))).toEqual(['GET /boards/General/messages'])
     // A cursor is the API's, so a handle in another process, which keeps no positions, goes on from it.
     const other = handleOn(api)
     await other.post('busy', { text: 'four' })
@@ -1278,7 +1278,7 @@ describe('vercel()', () => {
     // Across its threads, oldest first, and nothing of another channel.
     expect(latest.messages.map((m) => [m.channel, m.text])).toEqual([['dev', 'dev reply'], ['dev', 'dev two']])
     // One page of the channel's messages: no thread is read message by message, and no other channel is asked for.
-    expect(api.requests).toEqual(['GET /boards/brd_test/messages'])
+    expect(api.requests).toEqual(['GET /boards/General/messages'])
     // Both go on from what it read: the next post there, and nothing it already had.
     await team.post('ops', { text: 'ops later' })
     await team.post('dev', { text: 'later' })
@@ -1308,7 +1308,7 @@ describe('vercel()', () => {
     const next = await team.channel('busy').messages({ after: start.cursor, limit: 150 })
     expect(next.messages.map((m) => m.text)).toEqual(texts(61, 130))
     // One page has them all, and the API says it caught up: no page is asked for past it.
-    expect(api.requests).toEqual(['GET /boards/brd_test/messages'])
+    expect(api.requests).toEqual(['GET /boards/General/messages'])
     const some = await team.channel('busy').messages({ after: start.cursor, limit: 30 })
     expect(some.messages.map((m) => m.text)).toEqual(texts(61, 90))
     expect((await team.channel('busy').messages({ after: some.cursor, limit: 500 })).messages.map((m) => m.text)).toEqual(texts(91, 130))
@@ -1381,7 +1381,7 @@ describe('vercel()', () => {
   it('asks its board what its credentials may do there, and tells a project the board shuts out that it needs a grant', async () => {
     const api = fakeMessageboard()
     await handleOn(api, 'user:u_jb').me()
-    expect(api.requests.filter((request) => request.endsWith('/me'))).toEqual(['GET /boards/brd_test/me'])
+    expect(api.requests.filter((request) => request.endsWith('/me'))).toEqual(['GET /boards/General/me'])
     await expect(handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production').me()).rejects.toMatchObject({ status: 403, code: 'board_not_granted' })
   })
 
@@ -1419,17 +1419,48 @@ describe('vercel()', () => {
       board({ name, backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
     const lookups = (api: ReturnType<typeof fakeMessageboard>, request: string) => api.requests.filter((made) => made === request).length
 
-    it('uses the board with that name, whatever its case, apart from the default board, and looks it up once', async () => {
+    it('uses the board with that name, whatever its case, apart from the default board, and asks nothing to find it', async () => {
       const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
       const security = named(api, 'security')
       await security.post('dev', { text: 'rotate the keys' })
       await security.post('dev', { text: 'done' })
-      expect(lookups(api, 'GET /boards')).toBe(1)
       expect((await named(api, 'SECURITY').channel('dev').messages()).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
       expect((await handleOn(api).channel('dev').messages()).messages).toEqual([])
+      // Where the board is says its ID, which the read of the board gave.
       expect(await security.discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_sec?teamId=team_test` })
       // The default board is named General, so its name finds it too.
       expect(await named(api, 'general').discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
+      // Each path named its board, as the API takes one: none of it asked for the board's ID first.
+      expect(lookups(api, 'GET /boards')).toBe(0)
+    })
+
+    it('finds or makes a board the API knows none by the name for, once, and goes on by its ID', async () => {
+      const api = fakeMessageboard()
+      const security = named(api, 'security')
+      await security.post('dev', { text: 'rotate the keys' })
+      await security.post('dev', { text: 'done' })
+      const [first, ...rest] = api.requests.filter((made) => !made.endsWith('/me'))
+      // The first request names it and is told there's none: it's looked up, made, and asked again.
+      expect(first).toBe('POST /boards/security/threads')
+      expect(rest.slice(0, 2)).toEqual(['GET /boards', 'POST /boards/ensure'])
+      const { url } = await security.discovery()
+      const id = /\/boards\/(brd_[^?]+)\?/.exec(url)![1]
+      expect(rest.slice(2).filter((made) => made.endsWith('/threads'))).toEqual([`POST /boards/${id}/threads`, `POST /boards/${id}/threads`])
+      expect(lookups(api, 'GET /boards')).toBe(1)
+      expect((await security.channel('dev').messages()).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+    })
+
+    it('asks for the ID of a board named . or .., which a path would read as a step', async () => {
+      const api = fakeMessageboard({ boards: [{ name: '..', id: 'brd_up' }, { name: '.', id: 'brd_here' }] })
+      for (const [name, id] of [['..', 'brd_up'], ['.', 'brd_here']] as const) {
+        api.requests.length = 0
+        const dots = named(api, name)
+        await dots.post('dev', { text: `on ${id}` })
+        // Looked up, as a name was before a path took one, and never put in a path.
+        expect(api.requests.slice(0, 2)).toEqual(['GET /boards', `POST /boards/${id}/threads`])
+        expect(api.requests.filter((made) => made.includes('/boards/.'))).toEqual([])
+        expect((await dots.channel('dev').messages()).messages.map((m) => m.text)).toEqual([`on ${id}`])
+      }
     })
 
     it('makes the board the first time its project uses it, granted to that project in its environment', async () => {
@@ -1549,7 +1580,7 @@ describe('vercel()', () => {
     const team = handleOn(api)
     expect(await team.as('fixer', { can: { 'dev/': ['read'] } }).discovery()).toMatchObject({ name: 'General' })
     // One that reads nowhere gets none, whatever the API would answer: the board isn't read for it.
-    const reads = () => api.requests.filter((made) => made === 'GET /boards/brd_test').length
+    const reads = () => api.requests.filter((made) => /^GET \/boards\/[^/]+$/.test(made)).length
     const asked = reads()
     expect(await team.as('fixer', { can: { 'dev/': ['post'] } }).discovery()).not.toHaveProperty('name')
     expect(await team.as('fixer', { can: {} }).discovery()).not.toHaveProperty('name')
@@ -2233,7 +2264,7 @@ describe('vercel()', () => {
     const pong = handleOn(api, 'project:prj_pong:production')
     for (let n = 0; n < 9; n++) await pong.schedule('ops', { text: `ops ${n}`, in: '1h' })
     const claude = await pong.as('claude').schedule('ops', { text: 'claude', in: '1h' })
-    const listing = (request: string) => request === 'GET /boards/brd_test/schedules'
+    const listing = (request: string) => request === 'GET /boards/General/schedules'
     api.requests.length = 0
     expect((await pong.schedules({})).map((s) => s.id)).toHaveLength(10)
     const everyones = api.requests.filter(listing).length
@@ -2998,10 +3029,10 @@ describe('vercel()', () => {
     expect((await jb.revokeGrant(grant.id)).revoked).toBe(true)
     expect(api.requests).toEqual(
       expect.arrayContaining([
-        'POST /boards/brd_test/grants',
-        `PATCH /boards/brd_test/grants/${grant.id}`,
-        'GET /boards/brd_test/grants/explain',
-        `POST /boards/brd_test/grants/${grant.id}/revoke`,
+        'POST /boards/General/grants',
+        `PATCH /boards/General/grants/${grant.id}`,
+        'GET /boards/General/grants/explain',
+        `POST /boards/General/grants/${grant.id}/revoke`,
       ]),
     )
   })
@@ -3415,7 +3446,7 @@ describe("callers on Vercel's API", () => {
     const before = api.requests.length
     for (const [handle, channel] of [[jb, 'ops'], [jb, 'ops'], [ci, 'ci'], [ci, 'ci']] as const) expect(await handle.post(channel, { text: 'hi' })).toMatchObject({ channel })
     // Neither looks the channel up, makes it, or lists channels to name it.
-    expect(api.requests.slice(before).filter((request) => /\/(channels|threads)/.test(request))).toEqual(Array(4).fill('POST /boards/brd_test/threads'))
+    expect(api.requests.slice(before).filter((request) => /\/(channels|threads)/.test(request))).toEqual(Array(4).fill('POST /boards/General/threads'))
   })
 
   it("says plainly that only a deployment's own credentials register watchers, to a person and an app", async () => {

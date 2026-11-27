@@ -2716,6 +2716,17 @@ export function fakeMessageboard(
   let made = options.boardId !== null
   const others = (options.boards ?? []).map((board) => kept(board.id ?? `brd_${randomUUID()}`, board.name, new Set(board.granted ?? []), board.members ? new Set(board.members) : null))
   const boards = () => [...(made ? [general] : []), ...others]
+  /**
+   * The board a path names: by its ID, which starts with brd_, or by its name, whatever its case, trimmed and
+   * NFC-normalized. General is the team's default board, whatever else has the name. It checks no access, and makes none.
+   */
+  const inPath = (idOrName: string): Kept | undefined => {
+    if (idOrName.startsWith('brd_')) return boards().find((board) => board.id === idOrName)
+    const name = idOrName.trim().normalize('NFC')
+    if (!BOARD_NAME.test(name)) throw new Refused(400, 'invalid_board_name', 'A board name is 1 to 64 characters, with no slash.')
+    if (name.toLowerCase() === 'general') return made ? general : undefined
+    return others.find((board) => board.name.toLowerCase() === name.toLowerCase())
+  }
   /** What each ensure made, by its caller and operation ID, for a retry to answer again. */
   const ensured = new Map<string, Kept>()
 
@@ -2804,6 +2815,8 @@ export function fakeMessageboard(
         return { board: show(found[0]), created: false }
       }
       if (options.oneBoard) throw new Refused(400, 'too_many_boards', "This team's plan includes only its General board: use General.")
+      // A path tells an ID from a name by how an ID starts, so no new board is named that way.
+      if (body.name.toLowerCase().startsWith('brd_')) throw new Refused(400, 'invalid_board_name', "A board name can't start with brd_, as a board's ID does.")
       // A new team-visible board, granted to the project that made it, in its own environment.
       const board = kept(`brd_${randomUUID()}`, body.name, new Set(actor.principal.type === 'project' ? [grantOf(actor.principal)] : []))
       others.push(board)
@@ -2814,7 +2827,7 @@ export function fakeMessageboard(
     const registry = schemas.route(method, path, body, actor)
     if (registry !== undefined) return registry
     const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
-    const board = onBoard ? boards().find((candidate) => candidate.id === decodeURIComponent(onBoard[1]!)) : undefined
+    const board = onBoard ? inPath(decodeURIComponent(onBoard[1]!)) : undefined
     if (!onBoard || !board || !mayUse(actor, board)) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''
     // A narrowed caller is never its principal's integration: a narrowed register would replace its registration.
