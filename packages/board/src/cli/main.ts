@@ -568,16 +568,22 @@ function labelPairs(
 }
 
 /**
- * A post or reply takes one text. What follows it was meant to be part of the message, or a label,
+ * A post, reply, edit, or schedule takes one text. What follows it was meant to be part of the message, or a label,
  * and would be dropped without a word: say so, and how each is written.
  */
 function oneText(command: string, target: string, extra: string[]) {
   const [first] = extra
   if (first === undefined) return
-  if (/^[\w.-]+=/.test(first))
+  if (/^[\w.-]+=/.test(first)) {
+    // An edit changes the text alone: a message's labels are `label`'s.
+    if (command === 'edit')
+      throw usage(`${first} looks like a label, and edit changes only the text.`, {
+        next: [{ instruction: 'Label the message', argv: [...cli(), 'label', target, first] }],
+      })
     throw usage(`${first} looks like a label, and ${command} takes labels with --label.`, {
       next: [{ instruction: 'Label it as you post it', argv: [...cli(), command, target, '<TEXT>', '--label', first] }],
     })
+  }
   // With --schema the text is the JSON alone, so quoting both as one fails as not JSON: say where prose goes.
   if (flags.schema !== undefined && first !== '-')
     throw usage(
@@ -1781,6 +1787,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       const [target, body] = args
       if (!target) throw usage('Missing the channel or message to schedule a message in.', { reason: 'missing_arguments' })
+      oneText('schedule', target, args.slice(2))
       if (!flags.in && !flags.at && !flags.every) throw usage("Can't schedule a message without a time: pass --in 1d, --at <time>, or --every 30m.", { reason: 'missing_arguments' })
       const times = flags.times === undefined ? undefined : Number(flags.times)
       if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw usage(`--times takes a count, and ${flags.times} isn't one.`)
@@ -1976,6 +1983,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'edit': {
       const id = messageId(args[0])
+      oneText('edit', args[0]!, args.slice(2))
       const { mentions } = await client().edit(id, await content(args[1]), ifRevision())
       printDone(id, 'edited', mentions)
       return 0

@@ -119,6 +119,11 @@ describe('cli', () => {
     expect((await vb(['read', id, '--attach', attach])).stderr).toMatch(/^error: Unknown option --attach for vb read\./)
     // Where it means something else, it says so: --text filters reads, and a schedule doesn't sync.
     expect((await vb(['schedule', 'notes', 'hi', '--sync', 'slack:#x'])).stderr).toMatch(/^error: Can't use --sync with schedule\. A schedule posts where you point it\.\n/)
+    // An edit or a schedule of an unquoted message would keep its first word: neither runs.
+    expect(await vb(['edit', id, 'replacement', 'complete', 'message'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: edit takes one text, and complete is one too many\. Quote the whole message/) })
+    expect((await vb(['edit', id, 'edited', 'q=launch'])).stderr).toMatch(/^error: q=launch looks like a label, and edit changes only the text\.\n\n {2}Label the message:\n {4}vb label \S+ q=launch\n/)
+    expect(await vb(['schedule', 'notes', 'status', 'update', '--in', '1d'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: schedule takes one text, and update is one too many\./) })
+    expect(JSON.parse((await vb(['schedules', '--json'])).stdout).schedules).toEqual([])
     expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message).toMatchObject({ text: 'root', labels: {} })
     // Stdin is the text's, never an attachment's.
     expect((await vb(['reply', id, 'see attached', '--attach', '-'])).stderr).toMatch(/^error: Can't attach -: stdin is for the message's text\./)
