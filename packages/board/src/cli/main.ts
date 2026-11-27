@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
-import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type GrantInput, type Me, type MessageView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_MAX, GRANT_BATCH_MAX, THREADS_LIMIT_DEFAULT, THREADS_LIMIT_MAX, type FollowView, type GrantInput, type InboxItemView, type Me, type MessageView } from '../api/routes.ts'
 import { everyChannel } from '../client/channels.ts'
 import { mentionValue, withMentions } from '../api/tail.ts'
 import { BoardError, type ClaimedTask, type Filters, type ProfileOption, type TaskInBatch, type Written } from '../client/client.ts'
@@ -22,7 +22,7 @@ import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, pa
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
-import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatFollows, formatGrants, formatInbox, inboxShown, grantRow, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { fileClaims, memoryClaims, tokenClaims, type Claims } from './claims.ts'
 import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
@@ -313,7 +313,8 @@ function parse(argv: string[]) {
   if (foreign) throw foreignOption(foreign.name, word!)
   // And one only another task verb takes (`tasks complete --file`, a plan's for `tasks create`), which
   // that verb would drop. grants says itself where each of its subcommands' options goes.
-  const sub = word === 'tasks' ? subcommandOf(word) : undefined
+  // An inbox verb's too, and the list's own: `inbox --until` would snooze nothing, and `inbox follow --unread` list nothing.
+  const sub = word === 'tasks' || word === 'inbox' ? subcommandOf(word) : undefined
   const theirs = sub && new Set([...sub.options, ...(sub.filters ? filterOptions : []), ...globalOptions].map((option) => option.name))
   const elsewhere = theirs && ordered.find((option) => !theirs.has(option.name))
   if (elsewhere)
@@ -321,6 +322,9 @@ function parse(argv: string[]) {
       reason: 'unknown_option',
       next: [{ instruction: 'See all options', argv: [...cli(), word!, sub.name, '--help'] }],
     })
+  const lists = word === 'inbox' && !sub ? new Set([...specOf(word)!.options, ...globalOptions].map((option) => option.name)) : undefined
+  const verbs = lists && ordered.find((option) => !lists.has(option.name))
+  if (verbs) throw foreignOption(verbs.name, word!)
   // What was found is what runs. A command's own reading of an option can leave another word first
   // (`--claim delete tasks`: a value until `tasks` is found, none after), and whoever screened the
   // command, as vb() does for the ones it refuses, screened the one found.
@@ -907,8 +911,17 @@ function doing(): string {
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
     case 'download':
       return `download ${a ?? 'the attachment'}`
-    case 'inbox':
-      return `read ${a}'s inbox`
+    case 'inbox': {
+      const whose = flags.as ? `${flags.as}'s` : 'your'
+      if (a === undefined) return flags.wait !== undefined ? `wait on ${whose} inbox` : `read ${whose} inbox`
+      if (!INBOX_VERBS.has(a)) return `read ${a}'s inbox`
+      if (a === 'follows') return `list what ${flags.as ?? 'you'} ${flags.as ? 'follows' : 'follow'}`
+      const what = b === undefined ? 'it' : isMessageRef(b) ? ref(b) : b
+      if (a === 'add') return `add ${what} to ${whose} inbox`
+      if (a === 'remove') return `remove ${what} from ${whose} inbox`
+      if (a === 'mark') return `mark ${what} ${flags.unread ? 'unread' : 'read'}`
+      return `${a} ${what}`
+    }
     case 'tail':
       return `follow ${a ?? 'the board'}`
     case 'wait':
@@ -935,6 +948,7 @@ function missing(): string | undefined {
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
   // A task is its thread: one that isn't there is a message that isn't.
   if (command === 'tasks' && TASK_VERBS.has(a) && b !== undefined && isMessageRef(b)) return `message ${ref(b)}`
+  if (command === 'inbox' && INBOX_VERBS.has(a) && b !== undefined && isMessageRef(b)) return `message ${ref(b)}`
   if (command === 'grants' && (a === 'revoke' || a === 'update') && b !== undefined) return `grant ${b}`
   if (command === 'schemas' && a === 'inspect' && b !== undefined) return `schema ${b}`
   if (command === 'download') return `attachment ${a}`
@@ -1098,6 +1112,14 @@ function failureOf(error: unknown): Failure {
   // A team's SAML session that lapsed: a new login reaches it again, where a grant changes nothing.
   if (status === 403 && code === 'reauthentication_required') return theirs('auth', 'login_required', 'Your team needs you to log in again.', loginRecoveries())
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`, refusedRecoveries())
+  // A message that's there, and names no item of this inbox: adding it is what puts one there.
+  if (status === 404 && code === 'not_in_inbox' && current.command === 'inbox' && current.args[1] !== undefined)
+    return {
+      ...theirs('not_found', code, `${ref(current.args[1])} isn't in ${flags.as ? `${flags.as}'s` : 'your'} inbox.`, [
+        { instruction: 'Add it', argv: [...cli(), 'inbox', 'add', current.args[1].replace(/^#/, ''), ...onThisBoard()] },
+      ]),
+      details: [],
+    }
   if (status === 404) {
     const thing = missing()
     // What it names says it, and the board's "message not found: 812" says no more.
@@ -2074,7 +2096,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'inbox': {
       const key = args[0]
-      if (!key) throw usage('Missing the sync entry whose inbox to read, such as slack.', { reason: 'missing_arguments' })
+      // No word after it, or one of its verbs: your own. Any other word is a sync entry's key.
+      if (key === undefined || INBOX_VERBS.has(key)) return inbox(args)
       const events = await client().inbox(key, {
         ...(args[1] ? { channel: args[1] } : {}),
         ...(flags.limit ? { limit: Number(flags.limit) } : {}),
@@ -2192,6 +2215,155 @@ function unknownCommand(command: string): Failed {
       { instruction: 'See all commands', argv: [...cli(), '--help'] },
     ],
   })
+}
+
+/** What `inbox` does to yours, by the word after it: any other word is a sync entry's key, whose raw events it lists. */
+const INBOX_VERBS = new Set(['add', 'remove', 'mark', 'snooze', 'unsnooze', 'follow', 'unfollow', 'follows'])
+
+/** Whose inbox this run is on, as a line says it: `your`, or the profile it runs as. */
+const whoseInbox = () => (writesAs() ? `${writesAs()}'s` : 'your')
+
+/** `--until` on a snooze: a time `Date` reads, or how long from now (`3h`, `1d`), as ISO. */
+function snoozeUntil(value: string): string {
+  const found = /^(\d+(?:\.\d+)?)(s|m|h|d)$/.exec(value)
+  if (found) return new Date(Date.now() + Number(found[1]) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[found[2] as 's' | 'm' | 'h' | 'd']).toISOString()
+  const time = new Date(value)
+  if (Number.isNaN(time.getTime())) throw usage(`--until takes a time like 2026-10-08T09:00:00Z, or how long from now like 3h, and ${value} isn't one.`)
+  return time.toISOString()
+}
+
+/** What `inbox follow` and `unfollow` name: a thread by any message of it, or a channel, or with a trailing `/`, it and its subtree. */
+function followTarget(value: string | undefined, verb: string): { channel: string } | { thread: string } {
+  if (value === undefined) throw usage(`Missing what to ${verb}: a channel, a path prefix (www/), or a message's ID.`, { reason: 'missing_arguments' })
+  return isMessageRef(value) ? { thread: messageId(value) } : { channel: value }
+}
+
+/** `items` as rows, with who each row's text mentions by ID shown by handle: the caller, and whoever wrote none of it. */
+async function inboxRows(board: Board, items: InboxItemView[]): Promise<string> {
+  const me = await board.me()
+  const wrote = new Set(items.flatMap((item) => [item.first.by.actor, item.last.by.actor]))
+  const unnamed = mentionedIn(items.map(inboxShown)).filter((id) => !wrote.has(id) && id !== me.actor)
+  const handles = new Map([[me.actor, me.handle], ...(unnamed.length ? (await board.actors({ id: unnamed }).catch(() => [])).map((actor) => [actor.id, actor.handle] as [string, string]) : [])])
+  return formatInbox(items, { me: me.actor, under: flags.under === true, handles })
+}
+
+/** A follow as a line names it: `dev`, `www/`, or a thread by its ID. */
+const followed = (follow: FollowView) => (follow.channel !== undefined ? follow.channel : messageRef(follow.thread))
+
+/**
+ * `inbox`, and what follows it: your inbox's items, or with `--wait` its next change, and the verbs
+ * that change it. It's the inbox of whoever the run writes as: you, or with `--as`, that profile.
+ */
+async function inbox(args: string[]): Promise<number> {
+  const [verb, ...rest] = args
+  const board = client()
+  const extra = rest[verb === 'follows' ? 0 : 1]
+  if (extra !== undefined) throw usage(`${named()} inbox${verb ? ` ${verb}` : ''} takes ${verb === undefined || verb === 'follows' ? 'no more arguments' : 'one argument'}, and got ${extra} too.`)
+  if (verb === undefined) {
+    if (flags.unread && flags.read) throw usage('--unread and --read contradict each other: pass one.')
+    const under = flags.under ? { under: true } : {}
+    if (flags.wait !== undefined) {
+      for (const option of ['unread', 'read', 'snoozed', 'label', 'before', 'limit'] as const)
+        if (flags[option] !== undefined && flags[option] !== false && !(Array.isArray(flags[option]) && flags[option].length === 0)) throw usage(`--${option} is for the list: --wait answers the next change, whatever it is.`)
+      const wait = seconds('wait')!
+      const controller = new AbortController()
+      const stop = stopOn(controller)
+      const event = await board.inbox.wait({ ...under, ...(flags.after !== undefined ? { after: flags.after } : {}) }, { timeout: wait * 1000, signal: controller.signal }).finally(stop.release)
+      if (!event) {
+        if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
+        throw new Failed({
+          class: 'timeout',
+          reason: 'timeout',
+          message: `Nothing changed in ${whoseInbox()} inbox within ${flags.wait}.`,
+          details: [flags.after === undefined ? '--wait sees only what changes after it starts. For what is already there, list it.' : `Nothing changed after ${flags.after}.`],
+          next: [{ instruction: 'See what is there now', argv: [...cli(), 'inbox', ...onThisBoard()] }],
+        })
+      }
+      if (flags.json) result({ event })
+      else {
+        out(event.type === 'inbox.item' ? await inboxRows(board, [event.item]) : `removed ${messageRef(event.message ?? event.thread)}`)
+        // One change a wait: this is where it stopped, so the next wait misses nothing after it.
+        out(`next: ${commandLine(rerunWithout(['--after'], '--after', event.cursor))}`)
+      }
+      return 0
+    }
+    if (flags.after !== undefined) throw usage('--after goes with --wait: it names where the last wait stopped.')
+    const page = await board.inbox.items({
+      ...(flags.unread ? { unread: true } : {}),
+      ...(flags.read ? { read: true } : {}),
+      ...(flags.snoozed ? { snoozed: true } : {}),
+      ...under,
+      ...(flags.label?.length ? { label: flags.label } : {}),
+      ...(flags.before !== undefined ? { before: flags.before } : {}),
+      ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+    })
+    if (flags.json) return result(page), 0
+    if (page.items.length === 0) {
+      const which = flags.snoozed ? ' snoozed' : flags.unread ? ' unread' : flags.read ? ' read' : ''
+      return out(`nothing${which} in ${whoseInbox()} inbox${flags.label?.length ? ` with ${flags.label.join(' ')}` : ''}`), 0
+    }
+    out(await inboxRows(board, page.items))
+    // A command to paste for the page before, as `read` prints its own.
+    if (page.older !== null) out(`(more not shown: ${commandLine(rerunWithout(['--before'], '--before', page.older))})`)
+    return 0
+  }
+  if (verb === 'follows') {
+    const page = await board.inbox.follows({ ...(flags.before !== undefined ? { before: flags.before } : {}), ...(flags.limit ? { limit: Number(flags.limit) } : {}) })
+    if (flags.json) return result(page), 0
+    // A page can hold none and not be the last: its threads were all left since. Only the last one says there's nothing.
+    if (page.follows.length === 0 && page.older === null) return out(flags.before === undefined ? 'following nothing' : 'no more'), 0
+    if (page.follows.length > 0) out(formatFollows(page.follows))
+    if (page.older !== null) out(`(more not shown: ${commandLine(rerunWithout(['--before'], '--before', page.older))})`)
+    return 0
+  }
+  if (verb === 'follow' || verb === 'unfollow') {
+    const target = followTarget(rest[0], verb)
+    if (verb === 'follow') {
+      const follow = await board.inbox.follow(target)
+      if (flags.json) result({ follow, outcome: 'followed' })
+      else out(`following ${followed(follow)}`)
+      return 0
+    }
+    const unfollowed = await board.inbox.unfollow(target)
+    if (flags.json) result({ unfollowed, outcome: unfollowed ? 'unfollowed' : 'unchanged' })
+    else out(unfollowed ? `unfollowed ${rest[0]!.replace(/^#/, '')}` : `not following ${rest[0]!.replace(/^#/, '')}`)
+    return 0
+  }
+  const id = messageId(rest[0])
+  switch (verb) {
+    case 'add': {
+      const item = await board.inbox.add(id, flags.alone ? { message: true } : {})
+      if (flags.json) result({ item, outcome: 'added' })
+      else out(`added ${messageRef(item.message ?? item.thread)}`)
+      return 0
+    }
+    case 'remove': {
+      const removed = await board.inbox.remove(id)
+      if (flags.json) result({ removed, outcome: removed ? 'removed' : 'unchanged' })
+      else out(removed ? `removed ${messageRef(id)}` : `${messageRef(id)} wasn't in ${whoseInbox()} inbox`)
+      return 0
+    }
+    case 'mark': {
+      const unread = flags.unread === true
+      const item = await board.inbox.mark(id, unread ? { unread: true } : {})
+      if (flags.json) result({ item, outcome: unread ? 'unread' : 'read' })
+      else out(`${unread ? 'unread' : 'read'} ${messageRef(item.message ?? item.thread)}`)
+      return 0
+    }
+    case 'snooze': {
+      if (flags.until === undefined) throw usage('Missing --until: when it comes back, as a time or how long from now (3h, 1d).', { reason: 'missing_arguments', next: [{ instruction: 'Bring it back now instead', argv: [...cli(), 'inbox', 'unsnooze', id, ...onThisBoard()] }] })
+      const item = await board.inbox.snooze(id, snoozeUntil(flags.until))
+      if (flags.json) result({ item, outcome: 'snoozed' })
+      else out(`snoozed ${messageRef(item.message ?? item.thread)} until ${item.snoozed}`)
+      return 0
+    }
+    default: {
+      const item = await board.inbox.snooze(id, null)
+      if (flags.json) result({ item, outcome: 'unsnoozed' })
+      else out(`unsnoozed ${messageRef(item.message ?? item.thread)}`)
+      return 0
+    }
+  }
 }
 
 /** What `tasks` does to a task, by the word after it: any other word is a channel to list. */

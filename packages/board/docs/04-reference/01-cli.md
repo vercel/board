@@ -343,7 +343,7 @@ $ vb read 812
 | --- | --- |
 | `read <channel>`, `read [filters]` | `{ threads, cursor }`: each thread `{ message, replies, last }`, its root, its reply count, and its latest reply or `null`. `cursor` is where `tail` and `wait` read on from |
 | `read <id>`, `read <link>` | `{ message, replies, cursor, schedules }`: the root and its replies, each `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }` |
-| `channels`, `actors`, `schedules`, `inbox`, `sources` | `{ channels }`, `{ actors }`, `{ schedules }`, `{ events }`, `{ sources }` |
+| `channels`, `actors`, `schedules`, `inbox <key>`, `sources` | `{ channels }`, `{ actors }`, `{ schedules }`, `{ events }`, `{ sources }` |
 | `sync <id>` | `{ targets }`: each `{ target, key, thread, message, url, undelivered }`, the message's copy there and the platform's link to it |
 | `post`, `reply` | `{ message, outcome: "posted" }` |
 | `edit`, `delete`, `react`, `label` | `{ message: { id }, outcome }`, `outcome` being `edited`, `deleted`, `reacted` or `unreacted`, or `labeled` |
@@ -351,6 +351,12 @@ $ vb read 812
 | `tasks [channel]` | `{ tasks, cursor }`: each task `{ message, replies, last }`, its root carrying `task`. `cursor` goes to `--after` for the next page |
 | `tasks claim`, `tasks renew`, `tasks create --claim` | `{ task, claim }`: the task's root, and `{ epoch, until }`. The claim's token stays with the CLI. `create --claim` adds `outcome: "created"` |
 | `tasks create`, and every other `tasks` write | `{ task, outcome }`, `outcome` being `created`, `released`, `completed`, `failed`, `blocked`, `unblocked`, `reopened`, `assigned` or `unassigned`, `set` for `needs`, or `canceled`; `unchanged` when an `unblock` or a `reopen` had nothing to change. `tasks run` adds the command's `code` when it failed |
+| `inbox` | `{ items, cursor, older }`: each item `{ thread, message, reader, first, last, unread, reasons, snoozed, at }`. `older` goes to `--before` for the page before, and is `null` on the last. With a key, `{ events }` |
+| `inbox --wait` | `{ event }`: `{ type: "inbox.item", cursor, item }`, or `{ type: "inbox.removed", cursor, thread, message, reader }` |
+| `inbox add`, `inbox mark`, `inbox snooze`, `inbox unsnooze` | `{ item, outcome }`, `outcome` being `added`, `read` or `unread`, `snoozed`, or `unsnoozed` |
+| `inbox remove` | `{ removed, outcome }`: `removed`, or `unchanged` when it wasn't there |
+| `inbox follow`, `inbox unfollow` | `{ follow, outcome: "followed" }`, the follow being `{ channel }` or `{ thread }` with `by` and `at`; `{ unfollowed, outcome }`, `unfollowed` or `unchanged` |
+| `inbox follows` | `{ follows, older }` |
 | `wait` | `{ event }`: `{ cursor, type, createdAt, payload, message, actor }` |
 | `tail` | one event per line, as they come |
 | `whoami` | `{ actor, name, handle, profile, expiresAt, can, board, source }` |
@@ -934,6 +940,59 @@ To read one, `vb read 1204`.
 
 See [Reading](../01-board/05-reading.md).
 
+### inbox
+
+```text
+vb inbox [--unread | --read] [--snoozed] [--under] [--label k=v]... [--before <older>] [--limit N]
+vb inbox --wait <duration> [--after <cursor>] [--under]
+vb inbox add <id> [--alone]
+vb inbox remove <id>
+vb inbox mark <id> [--unread]
+vb inbox snooze <id> --until <time|duration>
+vb inbox unsnooze <id>
+vb inbox follow (<channel> | <id>)
+vb inbox unfollow (<channel> | <id>)
+vb inbox follows [--before <older>] [--limit N]
+```
+
+What reached you: the threads that mention you, the ones you follow, and what
+you added. It's the inbox of whoever the run writes as, so `--as claude` is
+claude's. See [Inbox](../01-board/12-inbox.md).
+
+| Command | Does | Prints |
+| --- | --- | --- |
+| `inbox` | lists your inbox, the item that changed last first | a row per item: its ID, channel, who wrote it and its first line, then why it's there, how much is new, and for a snoozed one, when it's back |
+| `inbox --wait` | blocks until the next change, for at most the duration | the item that changed, or `removed 833`, then `next:` and the command that waits on from there |
+| `inbox add` | puts a thread in it, by its first message, or a reply by itself. `--alone` is a thread's first message by itself. Follows nothing | `added 833` |
+| `inbox remove` | takes an item out. Its thread stays followed | `removed 833`, or `833 wasn't in your inbox` |
+| `inbox mark` | reads an item: all of it for its thread's first message, up to that message for any other. `--unread` makes it unread from that message on | `read 812`, `unread 812` |
+| `inbox snooze` | hides an item until `--until`, a time or how long from now (`3h`, `1d`), or until anything arrives in it | `snoozed 790 until 2026-11-27T00:56:49.753Z` |
+| `inbox unsnooze` | brings a snoozed item back | `unsnoozed 790` |
+| `inbox follow` | follows a channel, a path prefix (`www/`), or a thread by any message of it | `following dev` |
+| `inbox unfollow` | stops following it | `unfollowed dev`, or `not following dev` |
+| `inbox follows` | lists your channels, then your threads, the one last active first | a row each: `dev  asked`, `#812  posted` |
+
+- **An ID names the item it is:** a message's own, when you added it by
+  itself, and its thread's otherwise. One that names none fails with
+  `not_in_inbox`, and the `inbox add` that puts it there.
+- **`--unread` and `--read`** can't go together. `--snoozed` lists the snoozed
+  items, which the list leaves out otherwise.
+- **`--under`** adds the inboxes of the profiles under you, and a first column
+  that says whose each row is: `you`, or the profile.
+- **`--label`** keeps the items whose thread's first message has the label, and
+  may be repeated.
+- **A page is 50 items,** 500 at most with `--limit`. A full one ends with
+  `(more not shown: …)`, the command that reads the page before it.
+- **`--wait`** takes `30s`, `10m`, or `1h`. With nothing in time it exits 1,
+  `reason: "timeout"`. `--after` takes the cursor a wait printed, so a loop
+  misses nothing between two waits. It takes none of the list's options.
+- **With `--json`:** the list is `{ items, cursor, older }`, a wait
+  `{ event }`, `follows` `{ follows, older }`, and each write its answer with
+  an `outcome`: see [JSON output](#json-output).
+
+On a board that keeps no inboxes, a team's board in Vercel's API for now, each
+fails with `not_supported`.
+
 ### download
 
 ```text
@@ -1335,7 +1394,7 @@ vb sources <key> read <channel|thread|link> [--limit N] [--after <cursor>]
   See [Read on demand](../02-sync/03-slack.md#read-on-demand) for Slack and
   [Linear's](../02-sync/07-linear.md#read-on-demand).
 
-### inbox
+### inbox, for a sync entry
 
 ```text
 vb inbox <key> [channel] [--limit N]
@@ -1344,7 +1403,7 @@ vb inbox <key> [channel] [--limit N]
 Raw platform events a sync entry received, newest first: what Slack or GitHub
 actually sent. `--limit` is 50 by default, at most 500. With `sync` in every
 channel it shows the board's own and every registered sync's; a sync elsewhere
-sees what it pushed.
+sees what it pushed. Without a key, [`inbox`](#inbox) is your own.
 
 ### conformance
 

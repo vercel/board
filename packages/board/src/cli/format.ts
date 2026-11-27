@@ -1,4 +1,4 @@
-import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, TaskView, ThreadSummaryView } from '../api/routes.ts'
+import type { BoardEventView, FollowView, GrantView, InboxItemView, Me, MessageView, PrincipalView, ScheduleView, SourceRead, SyncedView, TaskView, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { byVercelBot, displayText } from '../contract/bots.ts'
@@ -207,6 +207,41 @@ export function formatTasks(tasks: ThreadSummaryView[]): string {
   const rows = tasks.map(({ message }) => [`#${message.id}`, (message.task?.state ?? '').padEnd(STATE_WIDTH), firstLine(message, TASK_TEXT_MAX).padEnd(TASK_TEXT_MIN)])
   const room = Math.max(TASK_NOTE_MIN, 80 - rows.reduce((widest, row) => Math.max(widest, row.join('  ').length), 0) - 2)
   return table(rows.map((row, at) => [...row, tasks[at]!.message.task ? taskNote(tasks[at]!.message, tasks[at]!.message.task!, room) : '']))
+}
+
+/** The fewest columns an inbox row's text gets, however wide the rest of its row. */
+const INBOX_TEXT_MIN = 24
+
+/**
+ * An inbox's items, one a row: the ID that names it, its channel, who wrote its thread's first
+ * message and that message's first line (for a message added by itself, its own), then why it's
+ * there, how much of it is unread, and for a snoozed one, how long until it's back. With `under`,
+ * whose inbox it's in comes first: `you`, or the profile. The text is cut so a row fits 80 columns.
+ */
+export function formatInbox(items: InboxItemView[], options: { me?: string; under?: boolean; handles?: Map<string, string> } = {}): string {
+  const handles = handlesOf(items.flatMap((item) => [item.first, item.last]), options.handles)
+  const cells = items.map((item) => {
+    const shown = inboxShown(item)
+    const note = [item.reasons.join(', '), ...(item.unread > 0 ? [`${item.unread} new`] : []), ...(item.snoozed ? [`back in ${leaseLeft(item.snoozed)}`] : [])].join(' · ')
+    return { whose: options.under ? [item.reader === options.me ? 'you' : profileOf(item.reader)] : [], id: `#${item.message ?? item.thread}`, channel: item.first.channel, shown, note }
+  })
+  const widest = (of: (cell: (typeof cells)[number]) => string) => cells.reduce((most, cell) => Math.max(most, of(cell).length), 0)
+  const taken = widest((cell) => cell.whose.join('')) + (options.under ? 2 : 0) + widest((cell) => cell.id) + 2 + widest((cell) => cell.channel) + 2 + 2 + widest((cell) => cell.note)
+  const room = Math.max(INBOX_TEXT_MIN, 80 - taken)
+  return table(
+    cells.map((cell) => {
+      const text = `${authorName(cell.shown)}: ${firstLine(cell.shown, room, handles)}`
+      return [...cell.whose, cell.id, cell.channel, text.length > room ? `${text.slice(0, room - 1)}…` : text, cell.note]
+    }),
+  )
+}
+
+/** The message an inbox item's row shows: its thread's first, or for a message added by itself, that message. */
+export const inboxShown = (item: InboxItemView): MessageView => (item.message === null ? item.first : item.last)
+
+/** What a reader follows, one a row: the channel, or the thread by its ID, and whether they asked or posted in it. */
+export function formatFollows(follows: FollowView[]): string {
+  return table(follows.map((follow) => [follow.channel !== undefined ? follow.channel : `#${follow.thread}`, follow.by]))
 }
 
 /** Threads in order, each root followed by its replies. */

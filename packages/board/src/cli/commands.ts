@@ -158,6 +158,12 @@ export const options = {
   kind: { type: 'string', value: 'kind', description: 'what the hold is for: needs_input, awaiting_approval' },
   pool: { type: 'boolean', description: 'back to anyone who may claim it' },
   none: { type: 'boolean', description: 'wait for nothing' },
+  // Your inbox.
+  unread: { type: 'boolean', description: 'only what is unread' },
+  read: { type: 'boolean', description: 'only what is read' },
+  snoozed: { type: 'boolean', description: 'what is snoozed, which the list leaves out otherwise' },
+  under: { type: 'boolean', description: "with the inboxes of the actors under you: your agents'" },
+  alone: { type: 'boolean', description: "the message by itself, not its thread: a thread's first message, which is its thread otherwise" },
   // What a turn-end hook an earlier board installed still passes to `hook`.
   agent: { type: 'string', value: 'name', description: "the agent whose turn ended", hidden: true },
 } as const satisfies Record<string, Spec>
@@ -208,6 +214,106 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     arguments: [],
     options: [],
     examples: [{ name: 'see who you are on the board', value: 'whoami' }],
+  },
+  {
+    group: 'you',
+    name: 'inbox',
+    description: 'your inbox: the threads that reached you, the one that changed last first',
+    brief: '[--unread] [--wait <duration>]',
+    arguments: [
+      { name: 'key', required: false, description: "a sync entry, e.g. slack: its raw platform events instead, for debugging sync" },
+      { name: 'channel', required: false, description: "with a key: the board channel its events went to" },
+    ],
+    options: [
+      option('unread'),
+      option('read'),
+      option('snoozed'),
+      option('under'),
+      option('label', "whose thread's root has a label", 'k[=v|w]'),
+      option('wait', 'block until the next change, this long at most, e.g. 30m'),
+      option('after', 'with --wait: what changed after a cursor the last wait printed', 'cursor'),
+      option('before', 'the page before one: the older it printed'),
+      option('limit', 'items to list (default: 50), or with a key, events'),
+    ],
+    runsWithoutSubcommand: true,
+    examples: [
+      { name: 'see what reached you and is unread', value: 'inbox --unread' },
+      { name: "see your agent's", value: 'inbox --as claude' },
+      { name: 'see what is held for someone to answer', value: 'inbox --label board.task=blocked' },
+      { name: 'wait for the next thing', value: 'inbox --wait 30m' },
+      { name: "list Slack's latest events", value: 'inbox slack' },
+    ],
+    subcommands: [
+      {
+        name: 'add',
+        description: 'put a thread, or one message by itself, in your inbox',
+        arguments: [id("a thread's first message, for the thread, or a reply's ID, for that message by itself")],
+        options: [option('alone')],
+        examples: [
+          { name: 'add a thread', value: 'inbox add 833' },
+          { name: 'add one reply', value: 'inbox add 815' },
+        ],
+      },
+      {
+        name: 'remove',
+        description: 'take an item out of your inbox',
+        arguments: [id('any message of its thread, or the message added by itself')],
+        options: [],
+        examples: [{ name: 'take a thread out', value: 'inbox remove 833' }],
+      },
+      {
+        name: 'mark',
+        description: 'read an item, or with --unread, make it unread',
+        arguments: [id("its thread's first message, for all of it, or the message to read up to, or with --unread, from")],
+        options: [option('unread', 'unread instead, from that message on')],
+        examples: [
+          { name: 'read a thread', value: 'inbox mark 812' },
+          { name: 'make it unread again', value: 'inbox mark 812 --unread' },
+        ],
+      },
+      {
+        name: 'snooze',
+        description: 'hide an item until a time, or until something arrives in it',
+        arguments: [id('any message of its thread, or the message added by itself')],
+        options: [option('until', 'when it comes back: a time, or how long from now (3h, 1d)', 'time|duration')],
+        examples: [
+          { name: 'snooze a thread for three hours', value: 'inbox snooze 790 --until 3h' },
+          { name: 'snooze it until a time', value: 'inbox snooze 790 --until 2026-11-27T09:00:00Z' },
+        ],
+      },
+      {
+        name: 'unsnooze',
+        description: 'bring a snoozed item back',
+        arguments: [id('any message of its thread, or the message added by itself')],
+        options: [],
+        examples: [{ name: 'bring a thread back', value: 'inbox unsnooze 790' }],
+      },
+      {
+        name: 'follow',
+        description: 'follow a channel, a subtree, or a thread: what is written there reaches you',
+        arguments: [{ name: 'channel|id', required: true, description: 'a channel, a path prefix (www/), or any message of a thread' }],
+        options: [],
+        examples: [
+          { name: 'follow a channel', value: 'inbox follow dev' },
+          { name: 'follow a channel and everything under it', value: 'inbox follow www/' },
+          { name: 'follow a thread', value: 'inbox follow 790' },
+        ],
+      },
+      {
+        name: 'unfollow',
+        description: 'stop following a channel, a subtree, or a thread',
+        arguments: [{ name: 'channel|id', required: true, description: 'a channel, a path prefix (www/), or any message of a thread' }],
+        options: [],
+        examples: [{ name: 'leave a thread', value: 'inbox unfollow 790' }],
+      },
+      {
+        name: 'follows',
+        description: 'what you follow: your channels, then your threads',
+        arguments: [],
+        options: [option('before', 'the page before one: the older it printed'), option('limit', 'threads to list (default: 50)')],
+        examples: [{ name: 'list what you follow', value: 'inbox follows' }],
+      },
+    ],
   },
   {
     group: 'the board',
@@ -509,17 +615,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       { name: 'list where a thread is synced', value: 'sync 812' },
       { name: 'sync a thread to a Slack channel', value: 'sync 812 slack:#incidents' },
     ],
-  },
-  {
-    group: 'messages',
-    name: 'inbox',
-    description: 'raw platform events, for debugging sync',
-    arguments: [
-      { name: 'key', required: true, description: 'the sync entry, e.g. slack' },
-      { name: 'channel', required: false, description: 'the board channel its events went to' },
-    ],
-    options: [option('limit', 'events to list')],
-    examples: [{ name: "list Slack's latest events", value: 'inbox slack' }],
   },
   {
     group: 'messages',
