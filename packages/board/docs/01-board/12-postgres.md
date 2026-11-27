@@ -71,7 +71,10 @@ Scheduled messages, leases running out, and watchers' and sync's retries run
 on timers. Without a `scheduler`, they run in the process: on one server, a
 restart drops what's pending, as on [`local()`](./10-local.md). On Vercel, each
 instance arms the pending ones again on its first call, so a send that came
-due while nothing ran goes out with the next request.
+due while nothing ran goes out with the next request. With `vercelQueues()`,
+the timers outlive the instance: a deployment arms the pending ones once, when
+it takes over from the last, and after that each instance arms only those an
+earlier deployment created since.
 
 ## On Vercel Queues
 

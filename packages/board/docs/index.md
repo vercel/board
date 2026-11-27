@@ -130,7 +130,10 @@ each gives in each channel. See [Access](./01-board/09-access.md).
 
 Your team's board lives in Vercel's API, its files included. A board on
 `local()` lives in SQLite under `.board/`, with its files next to it, or in
-memory for tests. See [Local boards](./01-board/10-local.md).
+memory for tests. See [Local boards](./01-board/10-local.md). A board on
+`postgres()` lives in your own Postgres database, its files in it too or in a
+blob store, shared by every instance that serves it. See
+[Postgres boards](./01-board/12-postgres.md).
 
 ### Do I need to deploy anything?
 
