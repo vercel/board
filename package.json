@@ -13,6 +13,7 @@
     "check": "pnpm build && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
-    "@changesets/cli": "^3.0.3"
+    "@changesets/cli": "^3.0.3",
+    "turbo": "2.11.11"
   }
 }

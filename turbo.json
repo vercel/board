@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": ["tsconfig.base.json"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "tags": ["ci"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "tags": ["ci"]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "tags": ["ci", "ci:cpus:4"]
+    }
+  }
+}
