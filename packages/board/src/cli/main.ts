@@ -23,7 +23,7 @@ import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
 import { block } from '../contract/blocks.ts'
 import { actorName, claimLine, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTasks, mentionedIn, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
-import { fileClaims, memoryClaims, tokenClaims, type Claims } from './claims.ts'
+import { claimsDir, fileClaims, memoryClaims, tokenClaims, type Claims } from './claims.ts'
 import { runCommand } from './run.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
@@ -2481,13 +2481,36 @@ function readyLabels(values: string[], target: string, verb: 'claim' | 'run'): R
  * keeps the claim. With nothing ready it fails: `nothing_ready`, or `timeout` once `--wait` ran
  * out, as `wait` does. Stopped while it waits, it answers the exit code instead.
  */
+/**
+ * Keeps a claim this run just took, for the commands after it. A claim it can't keep (its file
+ * can't be written) is one no later command could settle, and the board would hold the task
+ * for no one until its lease ended: it's released, and the run says why.
+ */
+async function keepClaim(claims: Claims, claim: ClaimedTask, done: string) {
+  try {
+    await claims.put(claim.task.id, { epoch: claim.epoch, token: claim.token, until: claim.until })
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error)
+    const released = await claim.release().then(() => true, () => false)
+    throw new Failed({
+      class: 'unknown',
+      reason: 'claim_not_kept',
+      message: released
+        ? `${done}, but couldn't keep its claim on this machine, so it was released.`
+        : `${done}, but couldn't keep its claim on this machine, or release it: it's held until ${claim.until}.`,
+      details: [why, `Claims are kept in ${claimsDir()}.`],
+      next: [{ instruction: `Make ${claimsDir()} writable, then claim it again`, argv: [...cli(), 'tasks', 'claim', claim.task.id, ...asTyped()] }],
+    })
+  }
+}
+
 async function claimFor(board: Board, claims: Claims, target: string | undefined, verb: 'claim' | 'run'): Promise<ClaimedTask | number> {
   const lease = seconds('lease')
   if (!flags.ready) {
     for (const given of ['label', 'from', 'wait'] as const)
       if (flags[given] !== undefined) throw usage(`--${given} goes with --ready, which claims the next ready task in a channel.`)
     const claim = await board.tasks.claim(taskId(target), { ...(lease !== undefined ? { lease } : {}), ...(io.claimToken !== undefined ? { token: io.claimToken } : {}) })
-    await claims.put(claim.task.id, { epoch: claim.epoch, token: claim.token, until: claim.until })
+    await keepClaim(claims, claim, `Claimed task ${ref(claim.task.id)}`)
     return claim
   }
   if (target === undefined) throw usage('Missing the channel to claim a task in: work, or work/ for all under it.', { reason: 'missing_arguments' })
@@ -2519,7 +2542,7 @@ async function claimFor(board: Board, claims: Claims, target: string | undefined
     stop.release()
   }
   if (claim) {
-    await claims.put(claim.task.id, { epoch: claim.epoch, token: claim.token, until: claim.until })
+    await keepClaim(claims, claim, `Claimed task ${ref(claim.task.id)}`)
     return claim
   }
   if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
@@ -2627,7 +2650,7 @@ async function tasks(args: string[]): Promise<number> {
     const mentions = made.mentions ? { mentions: made.mentions } : {}
     if (flags.json) sayMentions(made.mentions)
     if (made.claim) {
-      await claims.put(made.task.id, { epoch: made.claim.epoch, token: made.claim.token, until: made.claim.until })
+      await keepClaim(claims, made.claim, `Started task ${ref(made.task.id)}`)
       printClaim(made.task, made.claim, { outcome: 'created', ...mentions })
     } else if (flags.json) result({ task: made.task, outcome: 'created', ...mentions })
     else out(messageRef(made.task.id))

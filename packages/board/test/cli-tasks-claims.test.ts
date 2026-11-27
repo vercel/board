@@ -1,4 +1,5 @@
-import { cp, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { MessageView } from '../src/api/routes.ts'
@@ -249,6 +250,35 @@ describe("vb tasks, with the claim it keeps", () => {
     expect(await claimOn(id)).toEqual([])
     expect((await task(id)).task).toMatchObject({ state: 'canceled', reason: 'superseded by the nightly job', claim: null })
     expect(failure(await vb(['tasks', 'cancel', id, 'again', '--json']))).toMatchObject({ reason: 'task_finished', message: `Can't cancel task #${id}. It's finished.` })
+  }, 60_000)
+
+  it("releases a claim it can't keep, so the same profile can claim the task again", async () => {
+    const mine = asProfile('keeper')
+    // Where claims are kept can't be written: a sandbox that keeps the agent out of its config, say.
+    await rm(claimsDir(), { recursive: true, force: true })
+    await mkdir(dirname(claimsDir()), { recursive: true })
+    await writeFile(claimsDir(), 'not a directory')
+    try {
+      const id = await create('unkept', 'ship the fix')
+      const refused = failure(await vb(['tasks', 'claim', id, '--json'], mine))
+      expect(refused).toMatchObject({
+        reason: 'claim_not_kept',
+        message: `Claimed task #${id}, but couldn't keep its claim on this machine, so it was released.`,
+        next: [{ argv: ['vb', 'tasks', 'claim', id] }],
+      })
+      expect(await state(id)).toBe('ready')
+
+      const started = failure(await vb(['tasks', 'create', 'unkept', 'and another', '--claim', '--json'], mine))
+      expect(started.reason).toBe('claim_not_kept')
+      expect(started.message).toMatch(/^Started task #\d+, but couldn't keep its claim on this machine, so it was released\.$/)
+
+      // Once it can keep it, the same profile claims the task and settles it.
+      await rm(claimsDir(), { force: true })
+      await ok(['tasks', 'claim', id], mine)
+      expect(await ok(['tasks', 'complete', id, 'shipped'], mine)).toBe(`completed ${id}\n`)
+    } finally {
+      await rm(claimsDir(), { recursive: true, force: true })
+    }
   }, 60_000)
 })
 
