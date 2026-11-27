@@ -735,6 +735,51 @@ export const InboxPushBody = z.object({
 export const InboxNextQuery = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() })
 export const InboxAckBody = z.object({ lease: z.string().min(1).max(64), error: z.string().min(1).max(500).optional() })
 
+/** How many of an inbox's items a read lists without a `limit`, and with one at most. */
+export const INBOX_LIMIT_DEFAULT = 50
+export const INBOX_LIMIT_MAX = 500
+
+/**
+ * A page of the caller's inbox, the item that changed last first: only the unread ones (`unread`) or
+ * only the read ones (`read`), only those whose thread's root has every `label`, or the snoozed ones
+ * (`snoozed`), which a read leaves out otherwise. `under` adds the inboxes of every actor under the
+ * caller: a person's agents. `before` is a page's `older`.
+ */
+export const InboxItemsQuery = z
+  .strictObject({
+    unread: flag.optional(),
+    read: flag.optional(),
+    snoozed: flag.optional(),
+    under: flag.optional(),
+    label: repeated.pipe(z.array(LabelFilter)).optional(),
+    before: z.string().min(1).max(1024).optional(),
+    limit: z.coerce.number().int().min(1).max(INBOX_LIMIT_MAX).optional(),
+  })
+  .refine((query) => !(query.unread && query.read), { message: '`unread` and `read` contradict each other: pass one', path: ['read'] })
+
+/** What changed in the caller's inbox after `after`, a `cursor` an inbox read answered, or from now: `wait` holds the request for the first change. */
+export const InboxEventsQuery = z.strictObject({
+  after: Ref.optional(),
+  wait: z.coerce.number().min(0).max(300).optional(),
+  under: flag.optional(),
+})
+
+/** A thread to put in the caller's inbox, by any message in it, or with `message`, that one message as an item of its own. */
+export const AddInboxItemBody = z.strictObject({ id: Ref, message: z.boolean().optional() })
+/** The item `id` names: the message's own, when it was added by itself, and its thread's otherwise. */
+export const RemoveInboxItemBody = z.strictObject({ id: Ref })
+/** Reads the item up to message `id`, the whole of it for a thread's root, or with `unread`, makes it unread from that message on. */
+export const MarkInboxItemBody = z.strictObject({ id: Ref, unread: z.boolean().optional() })
+/** Hides the item until `until`, or until something new arrives in it: null ends a snooze. */
+export const SnoozeInboxItemBody = z.strictObject({ id: Ref, until: Instant.nullable() })
+/** What to follow: a channel, a channel and its subtree (`www/`), or a thread, by any message in it. */
+export const FollowBody = z.union([z.strictObject({ channel: ChannelOrSubtree }), z.strictObject({ thread: Ref })])
+/** What the caller follows: every channel, and its threads a page at a time, the one last active first. `before` is a page's `older`. */
+export const FollowsQuery = z.strictObject({
+  before: z.string().min(1).max(1024).optional(),
+  limit: z.coerce.number().int().min(1).max(INBOX_LIMIT_MAX).optional(),
+})
+
 
 /**
  * A direct upload, before its bytes: what the file will be called, its type, its exact size, and
@@ -795,6 +840,8 @@ export type ChannelsQueryInput = z.input<typeof ChannelsQuery>
 export type ActorsQueryInput = z.input<typeof ActorsQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
+export type InboxItemsQueryInput = z.input<typeof InboxItemsQuery>
+export type FollowInput = z.input<typeof FollowBody>
 export type PostInput = z.input<typeof PostBody>
 export type ScheduleInput = z.input<typeof ScheduleBody>
 export type ScheduleBodyOutput = z.output<typeof ScheduleBody>
@@ -1197,6 +1244,51 @@ export type SourceJoin = {
   joined: boolean
 }
 
+/** Why an item is in an inbox: its thread mentioned the reader, is in a channel they follow, is one they follow, or they added it. */
+export type InboxReason = 'mention' | 'channel' | 'thread' | 'added'
+
+/**
+ * One item of an inbox: a thread, however many of its messages arrived, or one message its reader
+ * added by itself. It stays, read or not, until its reader removes it.
+ */
+export type InboxItemView = {
+  /** The thread's root. */
+  thread: string
+  /** The one message it is, when it was added by itself: null for a thread. */
+  message: string | null
+  /** Whose inbox it's in: an actor's ID. */
+  reader: string
+  /** The thread's root. */
+  first: MessageView
+  /** The thread's newest message, or for a message's own item, the message. */
+  last: MessageView
+  /** How many of the messages that arrived in it its reader hasn't read. */
+  unread: number
+  reasons: InboxReason[]
+  /** Until when it's snoozed: null for one that isn't. */
+  snoozed: string | null
+  /** When something last arrived in it, or it was added. */
+  at: string
+}
+
+/** A page of an inbox. `cursor` is where the inbox is now, for `inboxEvents`; `older` reads the page before, as `before`, and is null on the last. */
+export type InboxPage = { items: InboxItemView[]; cursor: string; older: string | null }
+
+/** A change to an inbox: an item that's new or changed, as it is now, or one that's gone. */
+export type InboxEventView =
+  | { type: 'inbox.item'; cursor: string; item: InboxItemView }
+  /** Its reader removed it. */
+  | { type: 'inbox.removed'; cursor: string; thread: string; message: string | null; reader: string }
+
+export type InboxEventsPage = { events: InboxEventView[]; cursor: string }
+
+/** What a reader follows: a channel (or `www/`, it and its subtree) or a thread, because they asked or because they posted in it. */
+export type FollowView = ({ channel: string; thread?: undefined } | { thread: string; channel?: undefined }) & {
+  by: 'asked' | 'posted'
+  /** When they asked, or of their newest post in the thread. */
+  at: string
+}
+
 /** A failure: `code` to branch on, `message` to read, and `hint`, when the board knows one, for what fixes it. */
 export type ApiError = { error: { code: string; message: string; hint?: string } }
 
@@ -1215,6 +1307,22 @@ export const routes = {
   /** Where the board is, its project, and its sync entries. No token. */
   discovery: { method: 'GET', path: '/' },
   me: { method: 'GET', path: '/me' },
+  /** The caller's inbox, a page at a time: the threads that reached them and what they added, the item that changed last first. */
+  inboxItems: { method: 'GET', path: '/me/inbox', query: InboxItemsQuery },
+  /** What changed in the caller's inbox, as `/events` says what changed on the board. */
+  inboxEvents: { method: 'GET', path: '/me/inbox/events', query: InboxEventsQuery },
+  /** Puts a thread, or one message by itself, in the caller's inbox: `read` where it is. Adding follows nothing. */
+  addInboxItem: { method: 'POST', path: '/me/inbox', body: AddInboxItemBody },
+  /** Takes an item out. Its thread stays followed, so what arrives next brings it back. */
+  removeInboxItem: { method: 'POST', path: '/me/inbox/remove', body: RemoveInboxItemBody },
+  /** Marks an item read, or unread. It stays in the inbox either way. */
+  markInboxItem: { method: 'POST', path: '/me/inbox/read', body: MarkInboxItemBody },
+  snoozeInboxItem: { method: 'POST', path: '/me/inbox/snooze', body: SnoozeInboxItemBody },
+  /** Follows a channel, a subtree, or a thread: what's written there from now on reaches the caller's inbox. */
+  follow: { method: 'POST', path: '/me/inbox/follow', body: FollowBody },
+  /** Stops following it. A mention there still arrives, and posting in a thread follows it again. */
+  unfollow: { method: 'POST', path: '/me/inbox/unfollow', body: FollowBody },
+  follows: { method: 'GET', path: '/me/inbox/follows', query: FollowsQuery },
   channels: { method: 'GET', path: '/channels', query: ChannelsQuery },
   /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is. */
   createChannel: { method: 'POST', path: '/channels', body: CreateChannelBody },

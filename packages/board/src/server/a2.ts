@@ -26,6 +26,7 @@ import { eventView, foldEvent, indexOf, lastFeed, loadBefore, OWN_CODE, pollFeed
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { createTasks, taskLimits } from './tasks.ts'
+import { createInbox } from './inbox.ts'
 import type { BoardStore, MessageFilter, ThreadPosition } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
@@ -246,6 +247,7 @@ function build(options: A2Options, binding: BoardBinding) {
   })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
   const tasks = createTasks({ store: log, scheduler: options.scheduler })
+  const inbox = createInbox({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
 
   /** Sync's delivery in progress here: its receipts are its consumer's appends, fenced by its attempt. */
@@ -276,8 +278,8 @@ function build(options: A2Options, binding: BoardBinding) {
       })
     : undefined
 
-  // The tables, watchers, and sync each keep their own place in the board's log.
-  const consumers = [projection, watchers.boardConsumer, outbound].filter((consumer) => consumer !== undefined)
+  // The tables, watchers, inboxes, and sync each keep their own place in the board's log.
+  const consumers = [projection, watchers.boardConsumer, inbox.boardConsumer, outbound].filter((consumer) => consumer !== undefined)
   const server = createServer({
     contract: boardContract,
     store: log,
@@ -322,6 +324,7 @@ function build(options: A2Options, binding: BoardBinding) {
   // posts as its creator, through board(), so the middleware sees it.
   schedules.bind({ writes, accessNow: binding.accessNow, send: async (identity, origin, input) => sendAs(identity, origin, input) })
   tasks.bind({ writes })
+  inbox.bind({ session, reads, accessNow: (principal) => binding.accessNow(principal) })
   watchers.bind({ reads })
 
   /**
@@ -484,6 +487,15 @@ function build(options: A2Options, binding: BoardBinding) {
       }
       return body
     },
+    inboxItems: async (caller, query, signal) => inbox.items(await identityOf(caller), query, signal),
+    inboxEvents: async (caller, query, signal) => inbox.events(await identityOf(caller), query, signal),
+    addInboxItem: async (caller, body, signal) => inbox.add(await identityOf(caller), body, signal),
+    removeInboxItem: async (caller, body, signal) => inbox.remove(await identityOf(caller), body, signal),
+    markInboxItem: async (caller, body, signal) => inbox.mark(await identityOf(caller), body, signal),
+    snoozeInboxItem: async (caller, body, signal) => inbox.snooze(await identityOf(caller), body, signal),
+    follow: async (caller, body, signal) => inbox.follow(await identityOf(caller), body, signal),
+    unfollow: async (caller, body, signal) => inbox.unfollow(await identityOf(caller), body, signal),
+    follows: async (caller, query) => inbox.follows(await identityOf(caller), query),
     async channels(caller, { prefix, after, limit = CHANNELS_LIMIT_DEFAULT }) {
       const { principal } = (await identityOf(caller))
       const { state, index } = await session.state(channelsReducer)
@@ -1364,7 +1376,7 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   // The inbox's second and the watchers' last, where tests and tools look for them.
-  const servers = [server, inboxServer, schedules.server, registry.server, tasks.server, watchers.server]
+  const servers = [server, inboxServer, schedules.server, registry.server, tasks.server, inbox.server, watchers.server]
   return {
     methods,
     schedules,

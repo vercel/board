@@ -21,6 +21,14 @@ import {
   InboxNextQuery,
   InboxPushBody,
   InboxQuery,
+  InboxItemsQuery,
+  InboxEventsQuery,
+  AddInboxItemBody,
+  RemoveInboxItemBody,
+  MarkInboxItemBody,
+  SnoozeInboxItemBody,
+  FollowBody,
+  FollowsQuery,
   LabelBody,
   MatchesQuery,
   PostBody,
@@ -253,6 +261,28 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return { key, id, ...InboxAckBody.parse(await body()) }
     case 'inbox':
       return { key, ...InboxQuery.parse(queryObject(url)) }
+    case 'inboxItems':
+      return InboxItemsQuery.parse(queryObject(url))
+    case 'inboxEvents': {
+      const query = InboxEventsQuery.parse(queryObject(url))
+      // SSE's own resume header, as on `/events`.
+      const last = request.headers.get('last-event-id')
+      if (query.after === undefined && last && Ref.safeParse(last).success) query.after = last
+      return query
+    }
+    case 'addInboxItem':
+      return AddInboxItemBody.parse(await body())
+    case 'removeInboxItem':
+      return RemoveInboxItemBody.parse(await body())
+    case 'markInboxItem':
+      return MarkInboxItemBody.parse(await body())
+    case 'snoozeInboxItem':
+      return SnoozeInboxItemBody.parse(await body())
+    case 'follow':
+    case 'unfollow':
+      return FollowBody.parse(await body())
+    case 'follows':
+      return FollowsQuery.parse(queryObject(url))
     case 'typing':
       return { id, ...(TypingBody.parse(await body()) ?? {}) }
     case 'readSource':
@@ -1089,11 +1119,15 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * `Last-Event-ID` resumes exactly. A request's caller is worked out again for each page, so what
    * `access` says now holds, and a token that runs out ends it.
    */
-  async function sse(caller: Caller, query: Protocol['events']['input'], request: Request, identify: (() => Promise<Caller>) | null): Promise<Response> {
+  async function sse<Name extends 'events' | 'inboxEvents'>(name: Name, caller: Caller, query: Protocol[Name]['input'], request: Request, identify: (() => Promise<Caller>) | null): Promise<Response> {
+    // The board's feed as `board` events, an inbox's as `inbox` events.
+    const kind = name === 'events' ? 'board' : 'inbox'
+    type Page = { events: readonly { cursor: string }[]; cursor: string }
+    const read = (as: Caller, input: object, signal: AbortSignal) => (backend[name] as (caller: Caller, input: object, signal: AbortSignal) => Promise<Page>).call(backend, as, input, signal)
     // The first page now, so a bad cursor or a refusal answers as an error instead of a stream.
     // The feed's newest events (`last`) are the stream's first page, and it goes on from their cursor.
-    const { last, ...following } = query
-    const first = await backend.events(caller, last !== undefined ? query : { ...query, wait: 0 }, request.signal)
+    const { last, ...following } = query as { last?: number }
+    const first = await read(caller, last !== undefined ? query : { ...query, wait: 0 }, request.signal)
     const encoder = new TextEncoder()
     const controller = new AbortController()
     const deadline = Date.now() + streamMaxMs
@@ -1111,13 +1145,13 @@ export async function createServe(context: BoardContext): Promise<Serve> {
           let page = first
           let after: string | undefined
           for (;;) {
-            for (const event of page.events) send(`id: ${event.cursor}\nevent: board\ndata: ${JSON.stringify(event)}\n\n`)
+            for (const event of page.events) send(`id: ${event.cursor}\nevent: ${kind}\ndata: ${JSON.stringify(event)}\n\n`)
             // Filtered-out events still advance the client's cursor with a bare `id:`, the first page's included.
             if (page.cursor !== (page.events.at(-1)?.cursor ?? after)) send(`id: ${page.cursor}\n\n`)
             after = page.cursor
             const left = deadline - Date.now()
             if (signal.aborted || left <= 0) break
-            page = await backend.events(identify ? await identify() : caller, { ...following, after, wait: Math.min(300, left / 1000) }, signal)
+            page = await read(identify ? await identify() : caller, { ...following, after, wait: Math.min(300, left / 1000) }, signal)
           }
         } catch (error) {
           if (!signal.aborted) console.error('[board] feed failed', error)
@@ -1193,8 +1227,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       if (target.kind === 'board') return await serve(target.name, caller, request, url, match.params)
 
       const input = await inputOf(target.name, request, url, match.params)
-      if (target.name === 'events' && (request.headers.get('accept') ?? '').includes('text/event-stream'))
-        return await sse(caller, input as Protocol['events']['input'], request, asked ? () => callerOf(asked) : null)
+      if ((target.name === 'events' || target.name === 'inboxEvents') && (request.headers.get('accept') ?? '').includes('text/event-stream'))
+        return await sse(target.name, caller, input as Protocol['events' | 'inboxEvents']['input'], request, asked ? () => callerOf(asked) : null)
       const output = injected && 'platform' in injected ? await asPlatform(target.name, injected, input, request.signal) : await invoke(target.name, caller, input, request.signal)
       if (target.name === 'attachment') return attachmentResponse(output as Protocol['attachment']['output'])
       // A channel that was there already is answered, not created.

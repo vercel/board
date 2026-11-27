@@ -857,8 +857,9 @@ readSource(key: string, target: string, opts?: { limit?: number }): Promise<Sour
 joinSource(key: string, target: string): Promise<SourceJoin>
 ```
 
-`inbox` returns the raw platform events a sync entry received, newest first:
-the board's own with `sync` in every channel, and what you pushed.
+`inbox(key)` is sync's: the raw platform events a sync entry received, newest
+first, the board's own with `sync` in every channel, and what you pushed.
+Your own inbox is [`inbox.items()`](#your-inbox) and what's beside it.
 `readSource` reads a platform channel, thread, or message permalink without
 syncing or storing it, with entry `key`'s app. The board that keeps the log
 reads it through the sync it runs, so the CLI reads the board it links. A
@@ -904,6 +905,163 @@ for 5 minutes; `ack` says how one went (done, an `error` to try again, or
 `manage` in every channel. `board()` does all of it for its watchers, so you
 need them only to run watchers yourself. See
 [Watchers](../01-board/06-watchers.md#woken-by-the-board).
+
+## Your inbox
+
+Every actor has an inbox: the threads that reached it, and what it put there
+itself. A handle reads and changes its own: yours, or with
+`team.as('claude')`, that agent's.
+
+### inbox.items
+
+```ts
+inbox.items(query?: InboxQuery): Promise<{ items: InboxItemView[]; cursor: string; older: string | null }>
+
+type InboxQuery = {
+  unread?: boolean
+  read?: boolean
+  snoozed?: boolean
+  under?: boolean
+  label?: Record<string, string> | string[]
+  before?: string
+  limit?: number
+}
+
+type InboxItemView = {
+  thread: string
+  message: string | null
+  reader: string
+  first: MessageView
+  last: MessageView
+  unread: number
+  reasons: ('mention' | 'thread' | 'channel' | 'added')[]
+  snoozed: string | null
+  at: string
+}
+```
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+const { items, older } = await team.inbox.items({ unread: true })
+for (const item of items) console.log(item.first.channel, item.last.text, item.reasons, item.unread)
+if (older) await team.inbox.items({ unread: true, before: older })
+
+// What's held for someone to answer, among what reached you.
+await team.inbox.items({ label: { 'board.task': 'blocked' } })
+```
+
+- **An item is a thread,** however many of its messages reached you: `thread`
+  is its root's ID, `first` its root, `last` its newest message, and `unread`
+  how many of the messages that arrived you haven't read. A message you added
+  by itself is an item of its own: `message` is its ID, and `last` is it.
+- **`reasons`** says why it's there: its thread mentioned you (`mention`), you
+  follow the thread (`thread`) or its channel (`channel`), or you added it
+  (`added`).
+- **A page is 50 items,** 500 at most with `limit`, the item that changed last
+  first. `older` reads the page before, as `before`, and is null on the last.
+- **`unread`** keeps the unread ones, and **`read`** the read ones.
+  **`snoozed`** lists the snoozed ones, which a read leaves out otherwise.
+  **`label`** keeps the items whose thread's root has each label.
+- **`under`** adds the inboxes of every actor under you: your agents'. Each
+  item's `reader` says whose it is.
+- **`cursor`** is where the inbox is now: pass it to
+  [`inbox.events`](#inboxevents-and-wait) as `after`.
+
+What reaches an inbox, and what doesn't, is in [HTTP](./03-http.md#inbox). A
+board that keeps no inboxes throws 501: a team's board in Vercel's API does,
+for now.
+
+### inbox.follow and unfollow
+
+```ts
+inbox.follow(target: { channel: string } | { thread: string }): Promise<FollowView>
+inbox.unfollow(target: { channel: string } | { thread: string }): Promise<boolean>
+inbox.follows(query?: { before?: string; limit?: number }): Promise<{ follows: FollowView[]; older: string | null }>
+
+type FollowView = ({ channel: string } | { thread: string }) & { by: 'asked' | 'posted'; at: string }
+```
+
+```ts
+await team.inbox.follow({ channel: 'dev' }) // what's written in dev reaches you
+await team.inbox.follow({ channel: 'www/' }) // www, and every channel under it
+await team.inbox.follow({ thread: '790' }) // a thread, by any message in it
+await team.inbox.unfollow({ thread: '790' }) // false when you didn't follow it
+const { follows } = await team.inbox.follows()
+```
+
+- **Posting in a thread follows it,** with no call. `by` says which:
+  `posted`, or `asked`.
+- **Unfollowing a thread stops it,** until you post in it again. A mention
+  there still arrives.
+- **A follow holds from when it's made:** what was written before it adds
+  nothing.
+- **`follows`** lists every channel you follow, then your threads, the one
+  last active first, 50 a page.
+
+### inbox.add, mark, snooze, and remove
+
+```ts
+inbox.add(id: string, opts?: { message?: boolean }): Promise<InboxItemView>
+inbox.mark(id: string, opts?: { unread?: boolean }): Promise<InboxItemView>
+inbox.snooze(id: string, until: string | Date | null): Promise<InboxItemView>
+inbox.remove(id: string): Promise<boolean>
+```
+
+```ts
+await team.inbox.add('833') // a thread, by its root
+await team.inbox.add('815') // a reply, by itself
+await team.inbox.add('833', { message: true }) // a root, by itself
+await team.inbox.mark('812') // read
+await team.inbox.mark('815', { unread: true }) // unread, from that message on
+await team.inbox.snooze('790', '2026-11-27T12:00:00Z') // null ends it
+await team.inbox.remove('833') // false when it wasn't there
+```
+
+- **An ID names the item it is:** a message's own, when you added it by
+  itself, and its thread's otherwise. One that names none throws 404
+  `not_in_inbox`.
+- **`add`** takes a thread by its root, or one message by its own ID. Adding
+  follows nothing, and adding what's there leaves it as it is.
+- **`mark`** reads all of an item for its thread's root, and up to that
+  message for any other. It stays in the inbox.
+- **`snooze`** hides it until `until`, or until anything arrives in it.
+- **`remove`** takes it out. Its thread stays followed, so what arrives next
+  brings it back.
+
+### inbox.events and wait
+
+```ts
+inbox.events(query?: { after?: string; under?: boolean }, opts?: EventsOptions): AsyncGenerator<InboxEventView>
+inbox.wait(query?: { after?: string; under?: boolean }, opts?: { timeout?: string | number; signal?: AbortSignal }): Promise<InboxEventView | null>
+inbox.poll(query?: { after?: string; wait?: number; under?: boolean }, signal?: AbortSignal): Promise<{ events: InboxEventView[]; cursor: string }>
+
+type InboxEventView =
+  | { type: 'inbox.item'; cursor: string; item: InboxItemView }
+  | { type: 'inbox.removed'; cursor: string; thread: string; message: string | null; reader: string }
+```
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+// Yours and your agents', as they change.
+for await (const event of team.inbox.events({ under: true })) {
+  if (event.type === 'inbox.item' && event.item.unread > 0) console.log(event.item.reader, event.item.thread)
+}
+
+// An agent, until something is for it.
+const next = await team.as('claude').inbox.wait({}, { timeout: '30m' }) // null on timeout
+```
+
+`events` follows the inbox from `after` (now by default), as
+[`events`](#events) follows the board, and `wait` answers its next change.
+`inbox.item` carries the item as it is now, for one that's new or changed, and
+`inbox.removed` says one is gone. An inbox's cursors are its own: not the
+board's.
 
 ## Live
 

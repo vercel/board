@@ -15,7 +15,7 @@ import { uploadName } from './file-names.ts'
 import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
 import { carried } from './carried.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
-import { METHODS } from './routing.ts'
+import { INBOX_METHODS, METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
@@ -3088,7 +3088,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
-        throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
+        throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : INBOX_METHODS.includes(method) ? 'inboxes' : method)
       },
     ]),
   ) as unknown as ProtocolMethods

@@ -58,6 +58,13 @@ export function extractMentions(text: string): MentionToken[] {
 /** An email, as `@[ada@vercel.com]` names one: no actor ID has an `@` without a `:`. */
 export const isEmail = (value: string) => /^[^\s@:]+@[^\s@:]+$/.test(value)
 
+/**
+ * The actors `text` mentions by ID (`@[actor-id]`), in order and each once: who a message is
+ * written to, as an inbox takes it. A handle as typed and an email name no actor, and nothing in
+ * code or in a block's data counts.
+ */
+export const mentionedActors = (text: string): string[] => extractMentions(text).flatMap((token) => (token.kind === 'actor' && !isEmail(token.actor) ? [token.actor] : []))
+
 /** A mention as filters match it: an actor ID (it has a colon) as written, anything else (a handle, an email) lowercased. */
 export const mentionTerm = (name: string): string => (name.includes(':') ? name : name.toLowerCase())
 

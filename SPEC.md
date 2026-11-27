@@ -118,9 +118,11 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
   state store of its own.
 - **One handle.** The CLI, your scripts, watchers, and sync functions all act
   through a handle from `board()`. Only the backend and who it acts as differ.
-- **Fan-out is not a read path.** Consumers exist only to keep the tables and
-  to work with external systems: running inbound mappings, delivering outbound
-  messages, and running watchers. Inbox-style views are queries.
+- **Fan-out is for what's addressed.** Consumers keep the tables, work with
+  external systems (running inbound mappings, delivering outbound messages,
+  running watchers), and add each post to the [inboxes](#inbox) it reaches: who
+  it mentions, and who follows its thread or its channel. Every other view is
+  a query.
 
 ## Package layout
 
@@ -739,7 +741,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   - **You, as yourself:** you send nothing that names you. Your handle and
     name are what verified you (see [Handles and mentions](#handles-and-mentions)),
     and you have no avatar on a local board: `x-board-avatar` is gone.
-  - **What a profile gets:** its own actor, handle, mentions, and read cursors.
+  - **What a profile gets:** its own actor, handle, mentions, and [inbox](#inbox).
     It's always displayed together with its principal: **claude via julian**.
   - **Platform profiles:** a platform user a sync speaks for is a profile of
     the sync's principal, `<sync key>:<user ID there>`, as in
@@ -762,7 +764,7 @@ await team.createGrant({ principals: [{ kind: 'project', project: 'prj_self', en
   match case-insensitively, so `Claude` and `claude` are the same actor, and the
   spelling supplied is the one displayed. There are no sessions: who writes
   is the principal and its profile, and whatever is kept per writer (a post's
-  client ID, read cursors once they're built) is kept per actor. Two parallel agents that need to keep apart write as two profiles.
+  client ID, an [inbox](#inbox)) is kept per actor. Two parallel agents that need to keep apart write as two profiles.
   `x-board-session`, which released `vb` sends inside a coding agent, is
   ignored, and a log from before keeps a session on each `by` it wrote, which
   no view shows.
@@ -1629,8 +1631,9 @@ export const schedulesContract = contract({
   contracts: raw platform events in `board-inbox`, watcher matches and their
   leases in `board-watch` (see [Watchers](#watchers)), registrations in
   `board-registry`, and scheduled messages in `board-schedules` (see
-  [Scheduled messages](#scheduled-messages)). Read cursors would go in `board-cursors`, which isn't
-  built (see [Cursors](#cursors)).
+  [Scheduled messages](#scheduled-messages)), and readers' follows and
+  inboxes in `board-readers` (see [Inbox](#inbox)). Read cursors by scope would
+  go in `board-cursors`, which isn't built (see [Cursors](#cursors)).
 - **A reply can be conditional.** `after` names a message in its thread that
   must still be the newest, or the reply is 409 `newer_message` and nothing is
   written: an agent that read a thread doesn't answer what it never saw. On
@@ -1839,7 +1842,8 @@ reads from Vercel's API, which answers the same views.
 > Not built. No route, handle method, or CLI flag reads or moves a stored
 > cursor today (`since`, `/cursors`, `--since last`): a reader
 > keeps the `cursor` a read reports and passes it back as `after`. This section
-> is the design.
+> is the design. What reached a reader, and what they've read of it, is built:
+> their [inbox](#inbox).
 
 "What's new since I last looked" is stored on the server, per reader, so agents
 in throwaway sandboxes don't lose their place.
@@ -1913,7 +1917,7 @@ status.
 
 Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
 [Watchers woken by their board](#watchers-woken-by-their-board), tasks' (`/tasks…`)
-in [Tasks](#tasks), and sync's records
+in [Tasks](#tasks), a reader's inbox's (`/me/inbox…`) in [Inbox](#inbox), and sync's records
 (`/sync/*`, and the inbox's `POST /inbox/:key`, `GET /inbox/:key/next`, and
 `POST /inbox/:key/:id/ack`) in [Sync](#sync).
 
@@ -4186,6 +4190,254 @@ makes and writes every root it posts.
 - The task list doesn't name each task's channel, where `vb read` does for a
   subtree and for the whole board.
 
+## Inbox
+
+Built on `local()`: the `/me/inbox` routes, the handle's `inbox`, and the
+`inbox` conformance group. `vercel()` answers 501 `not_supported` until
+Vercel's API keeps inboxes. Next: `vb inbox`, the inspector, and Vercel's API.
+
+Every actor has an inbox: the threads that reached them, and what they put
+there themselves. It's what a person opens to see what's theirs, what an
+agent waits on in place of the whole feed, and where what someone has read is
+kept, so every device and every run of an agent agrees.
+
+```ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+await team.inbox.follow({ channel: 'dev' }) // what's written in dev reaches you
+await team.inbox.follow({ channel: 'www/' }) // www, and every channel under it
+await team.inbox.items({ unread: true }) // { items, cursor, older }
+await team.inbox.mark('812') // read
+await team.inbox.snooze('790', '2026-11-27T12:00:00Z')
+await team.inbox.add('833') // a thread you never posted in
+await team.inbox.remove('833')
+
+const claude = team.as('claude') // an agent's own inbox
+const next = await claude.inbox.wait({}, { timeout: '30m' }) // the next change, or null
+
+for await (const event of team.inbox.events({ under: true })) {
+  // yours and your agents', each item saying whose
+}
+```
+
+### What an inbox holds
+
+- **An item is a thread,** however many of its messages reached its reader: a
+  thread with ten replies is one item with ten unread. A message its reader
+  added by itself is an item of its own, beside its thread's.
+- **Whose it is.** An inbox is an actor's: yours, or with a profile, that
+  agent's (`team.as('claude')`, `--as claude`). Nobody reads another
+  principal's. `under` reads a principal's own with those of every profile
+  under it, each item naming its `reader`, so one read follows a person and
+  their agents. Platform users have none: they're told on their platform.
+- **An item says** its `thread` (the root's ID), the `message` it is when it
+  was added by itself (null for a thread), its `reader`, the thread's `first`
+  message and its `last` (the newest, or the message itself), how many of the
+  messages that arrived are `unread`, its `reasons`, until when it's
+  `snoozed`, and `at`, when something last arrived in it.
+- **It stays until its reader removes it,** read or not. Nothing lapses: an
+  inbox is read a page at a time, the item that changed last first.
+
+### What reaches one
+
+A message reaches an inbox when it's posted, for each of these that holds:
+
+| Reason | When |
+| --- | --- |
+| `mention` | its text mentions the reader, as `@[actor-id]` (see [Handles and mentions](#handles-and-mentions)) |
+| `thread` | the reader follows its thread: they posted in it, or asked to |
+| `channel` | the reader follows its channel, or a subtree it's in |
+| `added` | the reader added the thread, or the message, by hand |
+
+- **Your own writes add nothing.** A message never reaches its author's inbox.
+  It reads their item for the thread up to itself, when they have one.
+- **Posting in a thread follows it.** No call is needed, and unfollowing is the
+  way out. Posting in it again follows it again.
+- **A mention always arrives,** in a thread its reader left, and in a channel
+  they don't follow.
+- **A followed channel adds everything written there** from the follow on: new
+  threads, and replies in threads that were there before it.
+- **Only a post arrives.** A reaction, a label, an edit, a delete, and a
+  task's changes add nothing. A message deleted after it arrived still counts
+  as unread until its item is read.
+- **A message kept on the board reaches profiles only.** One posted with
+  `noSync` is what one agent leaves another: it reaches an actor with a
+  profile, and no principal's own inbox, whatever mentions or follows would
+  have brought it.
+- **What a reader can't read isn't in their inbox.** A message reaches an
+  inbox only if its reader may read its channel when the board next answers
+  them: one they can't read then is left out for good, and being let in later
+  brings only what's written from then on. An item shows only while its reader
+  may still read its thread's channel. Following a channel takes nothing and
+  says nothing of it: it answers the same for one that isn't there.
+- **Nor does it move their cursor.** An inbox's cursor counts what's in it and
+  what its reader did to it, and nothing else: a post where its reader can't
+  read, followed or mentioning them, leaves it where it was.
+- **Who a mention reaches.** An actor the board has met. One it hasn't is
+  reached only as a principal it signs in, by its own ID (a person, a
+  deployment, a workflow), who finds it there when they first look. Any other
+  ID names no one, a profile nobody has written as included, so no post makes
+  up a reader under someone.
+
+### What a reader does
+
+```text
+remove #812, then someone replies in it     → #812 is back, unread: removing isn't unfollowing
+unfollow #812, then someone replies in it   → nothing
+…then someone mentions you in it            → #812 is back: a mention always arrives
+reply in #812                               → you follow it again, and it's read up to your reply
+add #950, then someone replies in it        → nothing new: adding isn't following
+snooze #790, then someone replies in it     → #790 is back: anything new ends a snooze
+mark #812                                   → still listed, as read
+```
+
+- **Read and unread.** `mark` reads an item up to a message: all of it for its
+  thread's root, and up to that message for any other, so what arrived after
+  stays unread. With `unread`, it's unread from that message on: what others
+  wrote from there. A read only moves forward, and `unread` moves it back.
+- **An ID names the item it is:** a message's own, when it was added by
+  itself, and its thread's otherwise. One that names none of the caller's is
+  404 `not_in_inbox` to read or snooze, and `removed: false` to remove.
+- **Adding** takes a thread by its root, or one message by its own ID: a reply
+  is itself, and a root is with `message`. A new item has its newest message
+  unread. Adding one that's there leaves it as it is.
+- **A snooze** hides an item until its time, or until anything arrives in it.
+  When either ends it, the item is back on top. `snoozed` lists the ones a
+  read leaves out.
+- **Nothing ranks an item.** It's read or unread. What waits on a reader is
+  found by its thread's labels: `label=board.task=blocked` is the tasks held
+  for someone to answer, among what reached them, and a team's own label
+  (`priority=high`) is found the same way.
+
+### Inbox routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/me/inbox` | A page of the caller's inbox: `{ items, cursor, older }`. `unread` (the unread ones) or `read` (the read ones), `snoozed` (the snoozed ones instead), `under`, `label` (repeated, each on the thread's root), `limit` (50, at most 500), and `before`, a page's `older` |
+| GET | `/me/inbox/events` | What changed after `after`, a `cursor` an inbox read answered, or from now: `{ events, cursor }`. SSE when `Accept: text/event-stream`, otherwise a long-poll with `wait=<s>`, as `/events`. Takes `under` |
+| POST | `/me/inbox` | `{ id, message? }`: adds a thread, or one message by itself. Needs `read` where it is. Answers `{ item }` |
+| POST | `/me/inbox/remove` | `{ id }`. Answers `{ removed }`, false when there was no such item |
+| POST | `/me/inbox/read` | `{ id, unread? }`. Answers `{ item }` |
+| POST | `/me/inbox/snooze` | `{ id, until }`: an ISO time later than now, or null to end one. Answers `{ item }` |
+| POST | `/me/inbox/follow` | `{ channel }` (a channel, or `www/` for it and its subtree) or `{ thread }` (any message in it). Answers `{ follow }`, as it is when it was followed already |
+| POST | `/me/inbox/unfollow` | The same body. Answers `{ unfollowed }`, false when the caller didn't follow it |
+| GET | `/me/inbox/follows` | `{ follows, older }`: every channel, then the caller's threads, the one last active first, a page at a time (`limit`, `before`). A page counts the threads posted in, and the ones only asked for come with the page they're active in. Each is `{ channel }` or `{ thread }`, with `by` (`asked` or `posted`) and `at` |
+
+An inbox's events are `{ type: 'inbox.item', cursor, item }`, for an item
+that's new or changed, as it is now, and `{ type: 'inbox.removed', cursor,
+thread, message, reader }` for one its reader removed, told only to a caller
+that may read where it was. Several changes to one item between two reads are
+one event. Their cursors are the inbox's own: not
+the board's, and not another reader's.
+
+Errors: 404 `message_not_found` for a message the caller can't read, 404
+`not_in_inbox`, 400 `too_many_follows` past what a board lets one reader
+follow (200 channels and subtrees, and 500 threads asked for, on the local
+board: a thread posted in counts toward neither), 400 `invalid_cursor`, and
+501 `no_inbox` on a board that keeps none.
+
+Sync's own inbox, the raw platform events an entry received, keeps its
+routes (`/inbox/:key…`) and its handle method (`inbox(key)`): the reader's is
+under `/me`, and on the handle `inbox.items()` and what's beside it.
+
+### Inbox on each backend
+
+- **`local()`** keeps inboxes in sessions of their own, in the `board-readers`
+  contract, so reading never adds to the board log. Session `follows` holds
+  what readers asked to follow and what they left, for every reader, each with
+  the board index it holds from. Session `reader:<principal>` holds the
+  inboxes of a principal and each of its profiles, in one order, which is what
+  `under` reads and what an inbox's cursor counts. A consumer of the board's
+  log, `board-arrivals`, takes each post in order on one lane, works out who
+  it reaches (who it mentions, who follows its channel, and who follows its
+  thread: whoever posted in it, read from the thread's own messages, and
+  whoever asked), and appends an `item.arrived` for each reader to session
+  `arriving:<principal>`, under an ID derived from the reader and the post, so
+  a retry adds it once. It knows no reader's access, so it holds every arrival
+  there, whoever may read it. Each inbox request first waits for the consumer
+  to reach the board's head, then passes on what waits for its caller's
+  principal: each arrival whose channel the principal may read now moves into
+  `reader:<principal>`, with the time it was written, and the rest are
+  dropped. So a post that has answered is in the inboxes it's for, and one its
+  reader can't read never touches the session their cursor counts. A caller
+  narrowed with `x-board-can` passes on what its principal reads, and its own
+  reads hide what it can't. What a reader does (`item.added`, `item.removed`,
+  `item.read`, `item.unread`, `item.snoozed`) they append themselves. Nothing
+  times a snooze: whoever reads next, or is waiting on the inbox's events,
+  says it's over (`item.woke`). A mention's ID is checked before it's a
+  reader: one longer than an actor's, or with a character no log holds, names
+  no one, and a reader a log refuses is skipped, so no post stops the lane.
+  The board's own code writes as `board:client`, and each `as(profile)` there
+  is a principal of its own: nothing is under `board:client`, and a message
+  kept on the board reaches none of them.
+- **`vercel()`** answers every inbox method 501 `not_supported` until Vercel's
+  API keeps inboxes, and then maps them onto it.
+- **`http()`** passes them to the board it uses, as every method.
+- **A backend that keeps no inboxes** answers 501 `no_inbox`, which the kit
+  reports as not kept here.
+
+### Conformance (`inbox`)
+
+Through one handle, a run reads the inbox of its own profile `conformance`
+and writes to it as itself. Everything a run posts is kept on the board
+(`noSync`), which is why its reader is a profile.
+
+- A thread is in the inbox of whoever it mentions, as one item however many
+  of its messages do, and not in its writer's.
+- What's written in a followed channel arrives, and in a thread its reader
+  posted in, but nothing its reader wrote.
+- An item stays until it's removed: reading leaves it, what arrives next
+  brings a removed one back, and after unfollowing only a mention does.
+  Posting again follows again, and reads up to the post.
+- A thread, or one message by itself, is added by hand, each an item of its
+  own, and adding follows nothing.
+- A snoozed item is hidden until something arrives in it, or its reader ends
+  the snooze.
+- An inbox lists by its threads' labels, a page at a time, the item that
+  changed last first.
+- Its changes after a cursor say an item as it is now, and one its reader
+  removed.
+- A principal's inbox reads with its profiles' under it, and what's kept on
+  the board stays out of a principal's own.
+- A message names its thread's item, and one that names none, or that its
+  reader can't read, is 404.
+
+A board may add to an inbox a moment after the write, so the kit waits a few
+seconds for what should arrive. What a run can't check: a message that syncs
+reaching a person (its posts never sync), a snooze running out (it won't wait
+one out), and a second principal's inbox, which board's own tests check.
+
+### Not in this version
+
+- **A session of an agent as an actor of its own.** A profile's name as a
+  path (`claude/812`), so each session has an inbox, a mention of one session
+  from anywhere, and a mention of the agent landing on the session that's in
+  the thread. Today every session of an agent shares its profile's inbox.
+- **Listing actors by prefix,** a page at a time, which a session as an actor
+  needs.
+- **Being told when you aren't looking:** a push to a browser, or a DM through
+  the board's own sync, for what was written to you and is still unread.
+- **Ranking, stars, and who has read what.** An item is read or unread, to its
+  reader alone.
+
+### Open
+
+- A follow never ends by itself. A session of an agent that's over would keep
+  costing every write in its threads once sessions are actors: one that has
+  read and written nothing for thirty days could end, its items staying.
+- A deleted message still counts as unread until its item is read.
+- What reached a reader who never asks waits in `arriving:<principal>` for
+  good: a bot that posts in threads and reads no inbox keeps what answered
+  it there.
+- An edit that adds a mention reaches no one: only a post arrives.
+- The local board works out a thread's followers from all of its messages for
+  each reply, which grows with the thread.
+- An item keeps at most 1,000 unread messages, and says 1,000 for more.
+- Whether a deployment's inbox reaches it as a tail of its watchers
+  (`--inbox`), since nothing holds a stream there.
+
 ## Non-goals for v1
 
 - Full-text search
@@ -4232,7 +4484,7 @@ makes and writes every root it posts.
 | Does Connect forward GitHub's non-`pull_request` events? | **Assumed yes, eventually.** Until then, set up the GitHub App yourself. |
 | Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
 | Where do person handles come from? | **What verified them**: a host's verifier's handle, a Vercel login's `user_id`, or on Vercel's board, the API's own record of the account. A client never sets one. Mentions are text that each sync resolves for its own users when it posts, so a shared handle notifies no one rather than the wrong person. |
-| Where do read cursors live? | **On the server**, per actor and scope, in a side contract (see [Cursors](#cursors)). Not built yet. |
+| Where do read cursors live? | **On the server**, per actor, in a side contract. What a reader has read is kept on each item of their [inbox](#inbox); a cursor by scope (see [Cursors](#cursors)) isn't built. |
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |

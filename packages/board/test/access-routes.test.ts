@@ -12,6 +12,8 @@ import { fakeQueue } from './queue.ts'
 type Fixture = {
   secret: { root: number; reply: number; schedule: number; file: string; task: number }
   open: { root: number; schedule: number; task: number }
+  /** Where the walker's inbox stood when it could last read what's in it. */
+  inbox: string
 }
 type Call = { method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown; status: number; check?: (body: any) => void }
 type Walk = 'public' | ((fixture: Fixture) => Call[])
@@ -28,6 +30,50 @@ const WALK: Record<RouteName, Walk> = {
   webhook: 'public',
   // About the caller.
   me: () => [{ method: 'GET', path: '/me', status: 200, check: (body) => expect(body.can).toEqual({ open: ['read'] }) }],
+  // An inbox holds only what its reader may read: what reached it from a channel it follows and can't read stays out of sight.
+  // Nor does it move its cursor: where an inbox stands says nothing of a channel its reader can't read.
+  inboxItems: ({ inbox }) =>
+    ['', '?under=1', '?unread=1', '?snoozed=1', '?label=private'].map((query) => ({
+      method: 'GET' as const,
+      path: `/me/inbox${query}`,
+      status: 200,
+      check: (body) => {
+        nothingFrom('items')(body)
+        expect(body.cursor).toBe(inbox)
+      },
+    })),
+  inboxEvents: ({ inbox }) => [
+    { method: 'GET', path: '/me/inbox/events?after=0', status: 200, check: nothingFrom('events') },
+    { method: 'GET', path: `/me/inbox/events?after=${inbox}`, status: 200, check: (body) => expect(body).toEqual({ events: [], cursor: inbox }) },
+  ],
+  // By ID: what it can't read is 404. What it reads it may put in its own inbox, which changes nothing on the board.
+  addInboxItem: ({ secret }) => [
+    { method: 'POST', path: '/me/inbox', body: { id: String(secret.root) }, status: 404 },
+    { method: 'POST', path: '/me/inbox', body: { id: String(secret.reply), message: true }, status: 404 },
+  ],
+  removeInboxItem: ({ secret }) => [{ method: 'POST', path: '/me/inbox/remove', body: { id: String(secret.root) }, status: 404 }],
+  markInboxItem: ({ secret }) => [
+    { method: 'POST', path: '/me/inbox/read', body: { id: String(secret.root) }, status: 404 },
+    { method: 'POST', path: '/me/inbox/read', body: { id: String(secret.reply), unread: true }, status: 404 },
+  ],
+  snoozeInboxItem: ({ secret }) => [{ method: 'POST', path: '/me/inbox/snooze', body: { id: String(secret.root), until: null }, status: 404 }],
+  // Following a channel answers the same whether it's there or not, and whether the caller reads it or not: it says nothing of it.
+  follow: ({ secret }) => [
+    { method: 'POST', path: '/me/inbox/follow', body: { channel: 'secret' }, status: 200 },
+    { method: 'POST', path: '/me/inbox/follow', body: { channel: 'secret/never-posted' }, status: 200 },
+    { method: 'POST', path: '/me/inbox/follow', body: { thread: String(secret.root) }, status: 404 },
+  ],
+  unfollow: ({ secret }) => [{ method: 'POST', path: '/me/inbox/unfollow', body: { thread: String(secret.reply) }, status: 404 }],
+  // Its own follows, and no thread it can't read.
+  follows: () => [
+    {
+      method: 'GET',
+      path: '/me/inbox/follows',
+      status: 200,
+      // The channels it asked for, here and above, and not the thread it posted in and asked for where it no longer reads.
+      check: (body) => expect(body.follows.map((follow: any) => follow.thread ?? follow.channel).sort()).toEqual(['secret', 'secret/', 'secret/never-posted']),
+    },
+  ],
   // Lists drop what the caller can't read.
   channels: () => [
     { method: 'GET', path: '/channels', status: 200, check: (body) => expect(body.channels.map((c: any) => c.path)).toEqual(['open']) },
@@ -275,7 +321,24 @@ async function setup() {
     }),
   )
   const file = ((await upload.json()) as { attachment: { id: string } }).attachment.id
-  const root = (await keeper('POST', '/messages', { channel: 'secret', text: 'hush @keeper', labels: { private: 'yes' }, attachments: [file], id: 'secret-one' })).body.message.id
+  // The walker follows the channel it can't read before anything is written there, and is mentioned in it: none of it may reach its inbox.
+  const outsider = caller(board.fetch, await workflowToken())
+  const walker = (await outsider('GET', '/me')).body.actor
+  expect((await outsider('POST', '/me/inbox/follow', { channel: 'secret/' })).status).toBe(200)
+  // It was let into a channel once, where it has a thread it posted in, asked to follow, and snoozed, and an item for each: all out of sight once it's kept out.
+  const once = (await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'secret/was-open': ['read', 'post'] } })).grant.id
+  const was = (await keeper('POST', '/messages', { channel: 'secret/was-open', text: `hush, for a while @[${walker}]`, labels: { private: 'yes' } })).body.message.id
+  expect((await outsider('POST', '/messages', { re: was, text: 'here' })).status).toBe(201)
+  expect((await outsider('POST', '/me/inbox/follow', { thread: was })).status).toBe(200)
+  const other = (await keeper('POST', '/messages', { channel: 'secret/was-open', text: `hush, and another @[${walker}]`, labels: { private: 'yes' } })).body.message.id
+  expect((await outsider('GET', '/me/inbox')).body.items.map((item: any) => item.thread)).toEqual([other, was])
+  expect((await outsider('POST', '/me/inbox/snooze', { id: other, until: new Date(Date.now() + 3_600_000).toISOString() })).status).toBe(200)
+  // One thread it posted in and asked for, and one it only asked for.
+  expect((await outsider('POST', '/me/inbox/follow', { thread: other })).status).toBe(200)
+  expect((await outsider('GET', '/me/inbox/follows')).body.follows.map((follow: any) => follow.thread ?? follow.channel)).toEqual(['secret/', other, was])
+  const inbox = (await outsider('GET', '/me/inbox')).body.cursor
+  expect((await board.revokeGrant(once)).revoked).toBe(true)
+  const root = (await keeper('POST', '/messages', { channel: 'secret', text: `hush @keeper @[${walker}]`, labels: { private: 'yes' }, attachments: [file], id: 'secret-one' })).body.message.id
   const reply = (await keeper('POST', '/messages', { re: root, text: 'still hush' })).body.message.id
   await keeper('POST', `/messages/${root}/reactions`, { emoji: 'eyes' })
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id
@@ -291,8 +354,10 @@ async function setup() {
   // And a batch of them under an id, which finds it again for whoever made it, and no one else.
   expect((await keeper('POST', '/tasks/batch', { channel: 'secret', id: 'secret-plan', tasks: [{ text: 'hush, a plan', labels: { private: 'yes' } }] })).status).toBe(201)
   expect((await keeper('GET', '/tasks/batch/secret-plan')).body.tasks).toMatchObject([{ text: 'hush, a plan' }])
-  const fixture: Fixture = { secret: { root, reply, schedule, file, task }, open: { root: openRoot, schedule: openSchedule, task: openTask } }
-  return { board, fixture, outsider: caller(board.fetch, await workflowToken()) }
+  // And more is written where it once read, which it still follows: none of that may reach it now.
+  await keeper('POST', '/messages', { re: was, text: `hush, since @[${walker}]` })
+  const fixture: Fixture = { secret: { root, reply, schedule, file, task }, open: { root: openRoot, schedule: openSchedule, task: openTask }, inbox }
+  return { board, fixture, outsider }
 }
 
 describe('every route', () => {

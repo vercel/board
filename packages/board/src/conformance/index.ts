@@ -1,6 +1,6 @@
 import { everyChannel } from '../client/channels.ts'
-import { INBOX_EVENT_ID_MAX, type Explanation, type GrantView, type Me, type MessageView, type RegistrationView } from '../api/routes.ts'
-import { BoardError, type ExplainPrincipal, type TaskInBatch, type TaskOptions } from '../client/client.ts'
+import { INBOX_EVENT_ID_MAX, type Explanation, type GrantView, type InboxEventView, type InboxItemView, type Me, type MessageView, type RegistrationView } from '../api/routes.ts'
+import { BoardError, type ExplainPrincipal, type InboxQuery, type TaskInBatch, type TaskOptions } from '../client/client.ts'
 import { block } from '../contract/blocks.ts'
 import { canonical } from '../contract/data-schemas.ts'
 import { canText, compileAccess, type Permission } from '../server/access.ts'
@@ -8,16 +8,16 @@ import type { Board } from '../server/board.ts'
 
 /**
  * Checks that a board speaks the protocol, through a handle on it (`conformance(board())`), as
- * `vb` and agents use it: every board answers all of it. A board may keep no schedules, tasks, or
- * files, or no index to find threads by what their messages say or who wrote them, and says so with a
- * 501, which the kit reports as not kept here. It writes to one channel
+ * `vb` and agents use it: every board answers all of it. A board may keep no schedules, tasks,
+ * inboxes, or files, or no index to find threads by what their messages say or who wrote them, and
+ * says so with a 501, which the kit reports as not kept here. It writes to one channel
  * (`conformance` by default), and for the tasks checks that need two, to `tasks` under it, keeps
  * every post on the board, and deletes what it posted. The one
  * schema it registers, `conformance@1`, stays: a schema version is never removed.
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'paging' | 'search' | 'schedules' | 'tasks' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'paging' | 'search' | 'schedules' | 'tasks' | 'inbox' | 'grants' | 'schemas' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -160,6 +160,10 @@ type Context = {
   principals: Principals
   /** The board's own Vercel team, as its discovery names it. */
   team: string | null
+  /** The message the inbox checks' reader wrote, so the board has met it: the reader's own to delete when the run ends. */
+  inboxReader?: string
+  /** Set once an inbox didn't have what it was waited for: the checks after it look once, so a board that keeps none right is told so without a wait for each. */
+  inboxLate?: true
 }
 
 type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) => Promise<void | string> }
@@ -167,12 +171,13 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 /**
  * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
  * `no_scheduler`, and without a blob store `no_files`; one that keeps no tasks answers `no_tasks`,
+ * one that keeps no inboxes `no_inbox`,
  * a backend of one's own that keeps no grants `no_grants`, and one that keeps no schemas
  * `no_schemas`. `search` is finding threads by what their messages say, and reading every channel
  * under a pattern at once: a board with no index for either, as Vercel's has none, answers
  * `not_supported`. A board that's meant to keep something and doesn't yet answers otherwise, and fails.
  */
-const OPTIONAL = new Set<CheckGroup>(['search', 'schedules', 'tasks', 'grants', 'schemas', 'attachments'])
+const OPTIONAL = new Set<CheckGroup>(['search', 'schedules', 'tasks', 'inbox', 'grants', 'schemas', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
@@ -441,6 +446,74 @@ async function soon(found: () => Promise<boolean>, what: string) {
     if (Date.now() >= deadline) throw new Mismatch(`${what}, within a few seconds`)
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
+}
+
+/**
+ * The inbox checks' reader: this run's credential as its profile `conformance`, an actor of its own
+ * under the run's principal, whose inbox the run writes to. What the run posts is kept on the
+ * board (`noSync`), which reaches a profile's inbox and no one else's, so the reader has to be one.
+ */
+async function inboxOf(ctx: Context): Promise<{ reader: Board; actor: string } | string> {
+  const reader = ctx.board.as('conformance')
+  // A board that keeps no inboxes says so first, whatever this run writes as.
+  await reader.inbox.items({ limit: 1 })
+  const who = await reader.me()
+  if (who.principal !== ctx.me.principal) return "this handle's profiles are principals of their own, and what this run posts is kept on the board, which reaches only a profile's inbox"
+  if (who.actor === ctx.me.actor) return 'this credential writes as one actor only, so no other actor can write to its inbox'
+  // A mention reaches an actor the board has met: the reader writes once, so it has, on a board where it never did.
+  if (!ctx.inboxReader) {
+    ctx.inboxReader = (await reader.post(ctx.channel, { text: 'conformance: the reader of its inbox checks', labels: ctx.labels, noSync: true })).id
+  }
+  return { reader, actor: who.actor }
+}
+
+/** A reader's item for a thread, among its inbox's newest. */
+const inboxItem = async (reader: Board, thread: string, query: InboxQuery = {}) =>
+  (await reader.inbox.items({ limit: 100, ...query })).items.find((item) => item.thread === thread && item.message === null)
+
+/** As `soon`, for what a board adds to an inbox a moment after a write: once a wait has run out, the checks after it look once. */
+async function inboxSoon(ctx: Context, found: () => Promise<boolean>, what: string) {
+  if (ctx.inboxLate) {
+    if (!(await found())) throw new Mismatch(what)
+    return
+  }
+  await soon(found, what).catch((error: unknown) => {
+    if (error instanceof Mismatch) ctx.inboxLate = true
+    throw error
+  })
+}
+
+/** A reader's item for a thread, once it's as `how` says: a board may add to an inbox a moment after the write. */
+async function arrives(ctx: Context, reader: Board, thread: string, how: (item: InboxItemView) => boolean, what: string): Promise<InboxItemView> {
+  let found: InboxItemView | undefined
+  await inboxSoon(ctx, async () => {
+    found = await inboxItem(reader, thread)
+    return found !== undefined && how(found)
+  }, what)
+  return found!
+}
+
+/** The first change after `after` in a reader's inbox that `match` takes, and the cursor past it. */
+async function changes(ctx: Context, reader: Board, after: string, match: (event: InboxEventView) => boolean, what: string): Promise<{ event: InboxEventView; cursor: string }> {
+  let found: InboxEventView | undefined
+  let cursor = after
+  await inboxSoon(ctx, async () => {
+    const page = await reader.inbox.poll({ after: cursor, wait: ctx.inboxLate ? 0 : 2 })
+    cursor = page.cursor
+    found = page.events.find(match)
+    return found !== undefined
+  }, what)
+  return { event: found!, cursor }
+}
+
+/** Takes what a check left in its reader's inbox and on the board: its items, the threads it followed by posting in them, and the reader's own posts. */
+async function leaveInbox(reader: Board, items: readonly string[], posts: readonly string[] = []) {
+  for (const id of items) {
+    // A message with an item of its own names it first, and its thread's after.
+    for (let left = 2; left > 0 && (await reader.inbox.remove(id).catch(() => false)); left--);
+    await reader.inbox.unfollow({ thread: id }).catch(() => {})
+  }
+  for (const id of [...posts].reverse()) await reader.delete(id).catch(() => {})
 }
 
 /** That each claim that lost a race was told the task is claimed. */
@@ -1720,6 +1793,286 @@ const CHECKS: Check[] = [
     },
   },
   {
+    group: 'inbox',
+    name: "puts a thread in the inbox of whoever it mentions, as one item however many of its messages do, and not in its writer's",
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const root = await post(ctx, `conformance: one for @[${actor}]`)
+      try {
+        const answer = await reply(ctx, root.id, `conformance: and another for @[${actor}]`)
+        const item = await arrives(ctx, reader, root.id, (found) => found.unread === 2, `#${root.id} should be in the inbox of who it mentions, with both messages unread`)
+        same(item.reader, actor, "the item's reader")
+        same(item.message, null, "a thread's item's message")
+        same(item.first.id, root.id, "the item's first message")
+        same(item.last.id, answer.id, "the item's last message")
+        check(item.reasons.includes('mention'), `its reasons should include mention, got ${show(item.reasons)}`)
+        same(item.snoozed, null, 'until when a new item is snoozed')
+        check(!Number.isNaN(Date.parse(item.at)), `an item's at should be a time, got ${show(item.at)}`)
+        check(!(await inboxItem(ctx.board, root.id)), "a thread shouldn't be in its own writer's inbox")
+      } finally {
+        await leaveInbox(reader, [root.id])
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: "adds what's written in a channel its reader follows, and in a thread its reader posted in, but nothing its reader wrote",
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader } = inbox
+      const followed = await reader.inbox.follow({ channel: ctx.channel })
+      same(followed.channel, ctx.channel, 'the channel followed')
+      same(followed.by, 'asked', 'how a channel is followed')
+      const root = await post(ctx, 'conformance: written where its reader follows')
+      const mine: string[] = []
+      try {
+        const item = await arrives(ctx, reader, root.id, (found) => found.unread === 1, `#${root.id}, written in a followed channel, should be in the inbox`)
+        check(item.reasons.includes('channel'), `its reasons should include channel, got ${show(item.reasons)}`)
+        check((await reader.inbox.follows()).follows.some((follow) => follow.channel === ctx.channel && follow.by === 'asked'), 'its follows should list the channel')
+        same(await reader.inbox.unfollow({ channel: ctx.channel }), true, 'unfollowing a followed channel')
+        same(await reader.inbox.unfollow({ channel: ctx.channel }), false, 'unfollowing it again')
+        same(await reader.inbox.remove(root.id), true, 'removing its item')
+        // Posting in the thread follows it: its reader's own replies add nothing, the second in a thread it follows by then, and the next from someone else arrives.
+        mine.push((await reader.reply(root.id, { text: 'conformance: its reader, replying', noSync: true })).id)
+        mine.push((await reader.reply(root.id, { text: 'conformance: its reader, replying again', noSync: true })).id)
+        check(!(await inboxItem(reader, root.id)), "a reader's own replies shouldn't put their thread in its inbox")
+        await reply(ctx, root.id, 'conformance: for whoever follows the thread')
+        const back = await arrives(ctx, reader, root.id, (found) => found.unread >= 1, `#${root.id} should be back once someone replies in a thread its reader posted in`)
+        same(back.unread, 1, "its unread, which its reader's own replies add nothing to")
+        check(back.reasons.includes('thread') && !back.reasons.includes('channel'), `its reasons should be the thread and not the channel it unfollowed, got ${show(back.reasons)}`)
+        same((await reader.inbox.follows()).follows.find((follow) => follow.thread === root.id)?.by, 'posted', 'how a thread its reader posted in is followed')
+      } finally {
+        await reader.inbox.unfollow({ channel: ctx.channel }).catch(() => {})
+        await leaveInbox(reader, [root.id], mine)
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: 'keeps an item until its reader removes it: reading leaves it, what arrives next brings a removed one back, and after unfollowing only a mention does',
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const root = await post(ctx, 'conformance: a thread to follow')
+      const mine: string[] = []
+      try {
+        mine.push((await reader.reply(root.id, { text: 'conformance: its reader, following', noSync: true })).id)
+        await reply(ctx, root.id, 'conformance: one')
+        await arrives(ctx, reader, root.id, (found) => found.unread === 1, `#${root.id} should be in the inbox of who posted in it`)
+        // Reading leaves it there.
+        same((await reader.inbox.mark(root.id)).unread, 0, 'its unread, once read')
+        check(await inboxItem(reader, root.id), 'a read item should stay in the inbox')
+        check(!(await inboxItem(reader, root.id, { unread: true })), "a read item shouldn't be among the unread ones")
+        check(await inboxItem(reader, root.id, { read: true }), 'a read item should be among the read ones')
+        check((await reader.inbox.mark(root.id, { unread: true })).unread > 0, 'an item marked unread should have something unread')
+        check(await inboxItem(reader, root.id, { unread: true }), 'an item marked unread should be among the unread ones')
+        check(!(await inboxItem(reader, root.id, { read: true })), "an item marked unread shouldn't be among the read ones")
+        await refused(reader.inbox.items({ unread: true, read: true }), 400, 'listing the items that are both read and unread')
+        // Removing isn't unfollowing.
+        same(await reader.inbox.remove(root.id), true, 'removing an item')
+        same(await reader.inbox.remove(root.id), false, 'removing it again')
+        check(!(await inboxItem(reader, root.id)), "a removed item shouldn't be in the inbox")
+        await reply(ctx, root.id, 'conformance: two')
+        same((await arrives(ctx, reader, root.id, () => true, `#${root.id} should be back with what arrived after it was removed`)).unread, 1, 'its unread, back after being removed')
+        // After unfollowing, a reply reaches no one, and a mention still does.
+        same(await reader.inbox.unfollow({ thread: root.id }), true, 'unfollowing a thread its reader posted in')
+        same(await reader.inbox.unfollow({ thread: root.id }), false, 'unfollowing it again')
+        same(await reader.inbox.remove(root.id), true, 'removing its item')
+        await reply(ctx, root.id, 'conformance: three, for no one')
+        await reply(ctx, root.id, `conformance: four, for @[${actor}]`)
+        const mentioned = await arrives(ctx, reader, root.id, () => true, `#${root.id} should be back with the mention`)
+        same(mentioned.unread, 1, "its unread: the mention, and not the reply before it in a thread it doesn't follow")
+        check(!mentioned.reasons.includes('thread'), `its reasons shouldn't include the thread it unfollowed, got ${show(mentioned.reasons)}`)
+        // Posting follows it again, and reads it up to the post.
+        mine.push((await reader.reply(root.id, { text: 'conformance: its reader, back', noSync: true })).id)
+        await reply(ctx, root.id, 'conformance: five')
+        const again = await arrives(ctx, reader, root.id, (found) => found.reasons.includes('thread'), `#${root.id} should be followed again once its reader posts in it`)
+        same(again.unread, 1, "its unread: what arrived after its reader's own post, which read it up to there")
+      } finally {
+        await leaveInbox(reader, [root.id], mine)
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: 'adds a thread, or one message by itself, by hand: each is an item of its own, and adding follows nothing',
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const root = await post(ctx, 'conformance: a thread its reader never posted in')
+      const answer = await reply(ctx, root.id, 'conformance: its reply')
+      try {
+        const thread = await reader.inbox.add(root.id)
+        same(thread.thread, root.id, "the item's thread")
+        same(thread.message, null, "a thread's item's message")
+        same(thread.last.id, answer.id, "a thread's item's last message")
+        same(thread.unread, 1, "a new item's unread")
+        check(thread.reasons.includes('added'), `its reasons should include added, got ${show(thread.reasons)}`)
+        // A reply by its own ID is that message, by itself; a root is with `message`.
+        const alone = await reader.inbox.add(answer.id)
+        same(alone.thread, root.id, "a message's item's thread")
+        same(alone.message, answer.id, "a message's item's message")
+        same(alone.last.id, answer.id, "a message's item's last message")
+        same((await reader.inbox.add(root.id, { message: true })).message, root.id, "a root's own item's message")
+        same((await reader.inbox.items({ limit: 100 })).items.filter((item) => item.thread === root.id).length, 3, 'the items of one thread: its own, and two of its messages by themselves')
+        // Adding follows nothing: a reply reaches no one, and the mention after it is the second thing unread.
+        await reply(ctx, root.id, 'conformance: for no one')
+        await reply(ctx, root.id, `conformance: for @[${actor}]`)
+        same((await arrives(ctx, reader, root.id, (found) => found.reasons.includes('mention'), `#${root.id} should have the mention`)).unread, 2, "its unread: what it was added with and the mention, and not the reply between them")
+        // Each is its own to read and to remove.
+        const read = await reader.inbox.mark(answer.id)
+        same(read.message, answer.id, 'the item a message with one of its own names')
+        same(read.unread, 0, "a message's item's unread, once read")
+        same(await reader.inbox.remove(answer.id), true, "removing a message's own item")
+        check(await inboxItem(reader, root.id), "removing a message's own item should leave its thread's")
+      } finally {
+        await leaveInbox(reader, [root.id, answer.id])
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: 'hides a snoozed item until something arrives in it, or its reader ends the snooze',
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const root = await post(ctx, `conformance: one to snooze, for @[${actor}]`)
+      try {
+        await arrives(ctx, reader, root.id, () => true, `#${root.id} should be in the inbox of who it mentions`)
+        const until = new Date(Date.now() + 3_600_000).toISOString()
+        same(Date.parse((await reader.inbox.snooze(root.id, until)).snoozed ?? ''), Date.parse(until), 'until when it is snoozed')
+        check(!(await inboxItem(reader, root.id)), "a snoozed item shouldn't be in the inbox")
+        check(await inboxItem(reader, root.id, { snoozed: true }), 'a snoozed item should be among the snoozed ones')
+        await reply(ctx, root.id, `conformance: and another for @[${actor}]`)
+        const woken = await arrives(ctx, reader, root.id, () => true, `#${root.id} should be back once something arrives in it`)
+        same(woken.snoozed, null, 'until when it is snoozed, once something arrived')
+        same(woken.unread, 2, 'its unread, back from a snooze')
+        await reader.inbox.snooze(root.id, until)
+        same((await reader.inbox.snooze(root.id, null)).snoozed, null, 'until when it is snoozed, once its reader ended it')
+        check(await inboxItem(reader, root.id), 'an item whose snooze was ended should be in the inbox')
+        await refused(reader.inbox.snooze(root.id, new Date(Date.now() - 60_000).toISOString()), 400, 'snoozing until a time that has passed')
+      } finally {
+        await leaveInbox(reader, [root.id])
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: "lists an inbox by its threads' labels, a page at a time, the item that changed last first",
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const roots: MessageView[] = []
+      try {
+        for (const n of ['one', 'two', 'three']) {
+          const root = await post(ctx, `conformance: ${n} of three for @[${actor}]`)
+          roots.push(root)
+          // Each before the next, so their order in the inbox is the order they were written in.
+          await arrives(ctx, reader, root.id, () => true, `#${root.id} should be in the inbox of who it mentions`)
+        }
+        const order = roots.map((root) => root.id).reverse()
+        const all = await reader.inbox.items({ label: ctx.labels })
+        same(show(all.items.map((item) => item.thread)), show(order), "the items of this run's threads, by its label")
+        same(all.older, null, 'the page before the last')
+        isRef(all.cursor, "an inbox's cursor")
+        const first = await reader.inbox.items({ label: ctx.labels, limit: 2 })
+        same(show(first.items.map((item) => item.thread)), show(order.slice(0, 2)), 'the first page')
+        check(typeof first.older === 'string', `a page with more before it should say where, got ${show(first.older)}`)
+        const second = await reader.inbox.items({ label: ctx.labels, limit: 2, before: first.older! })
+        same(show(second.items.map((item) => item.thread)), show(order.slice(2)), 'the page before it')
+        same(second.older, null, 'the page before the last')
+        same((await reader.inbox.items({ label: { ...ctx.labels, 'conformance-none': 'yes' } })).items.length, 0, 'the items whose thread has a label none has')
+      } finally {
+        await leaveInbox(reader, roots.map((root) => root.id))
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: 'says what changed in an inbox after a cursor: an item as it is now, and one its reader removed',
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const { cursor } = await reader.inbox.items({ limit: 1 })
+      const root = await post(ctx, `conformance: one to hear of, for @[${actor}]`)
+      try {
+        const arrived = await changes(ctx, reader, cursor, (event) => event.type === 'inbox.item' && event.item.thread === root.id, `an inbox's changes should have #${root.id} arriving`)
+        check(arrived.event.type === 'inbox.item', 'an arrival should be an inbox.item')
+        same(arrived.event.item.reader, actor, "the changed item's reader")
+        same(arrived.event.item.unread, 1, "the changed item's unread")
+        isRef(arrived.event.cursor, "a change's cursor")
+        await reader.inbox.remove(root.id)
+        const removed = await changes(ctx, reader, arrived.cursor, (event) => event.type === 'inbox.removed' && event.thread === root.id, `an inbox's changes should have #${root.id} removed`)
+        check(removed.event.type === 'inbox.removed', 'a removal should be an inbox.removed')
+        same(removed.event.message, null, "the removed item's message")
+        same(removed.event.reader, actor, "the removed item's reader")
+        same((await reader.inbox.poll({ after: removed.cursor })).events.length, 0, 'the changes after the last one')
+      } finally {
+        await leaveInbox(reader, [root.id])
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: "reads a principal's inbox with its profiles' under it, and keeps what's kept on the board out of a principal's own",
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      if (ctx.me.actor !== ctx.me.principal) return 'this run writes as a profile, so no inbox is under its own'
+      // The reader starts a thread, kept on the board, that mentions the run: a note, which reaches no principal's own inbox.
+      const root = await reader.post(ctx.channel, { text: `conformance: a note for @[${ctx.me.actor}]`, labels: ctx.labels, noSync: true })
+      try {
+        await reply(ctx, root.id, `conformance: and one back for @[${actor}]`)
+        // The reply came after the note, so once it has arrived, the note has too, wherever it was going.
+        await arrives(ctx, reader, root.id, () => true, `#${root.id} should be in the inbox of the profile it mentions`)
+        check(!(await inboxItem(ctx.board, root.id)), "a message kept on the board shouldn't reach the inbox of an actor with no profile")
+        const under = (await ctx.board.inbox.items({ under: true, limit: 100 })).items.find((item) => item.thread === root.id)
+        check(under, `a principal's inbox with what's under it should have its profile's #${root.id}`)
+        same(under.reader, actor, 'whose inbox the item is in')
+      } finally {
+        await leaveInbox(reader, [root.id], [root.id])
+      }
+    },
+  },
+  {
+    group: 'inbox',
+    name: "names an item by any message of its thread, and answers 404 for a message that names none, or that its reader can't read",
+    run: async (ctx) => {
+      const inbox = await inboxOf(ctx)
+      if (typeof inbox === 'string') return inbox
+      const { reader, actor } = inbox
+      const root = await post(ctx, `conformance: one to name, for @[${actor}]`)
+      const answer = await reply(ctx, root.id, 'conformance: its reply')
+      const elsewhere = await post(ctx, "conformance: one that isn't in the inbox")
+      try {
+        await arrives(ctx, reader, root.id, () => true, `#${root.id} should be in the inbox of who it mentions`)
+        const named = await reader.inbox.mark(answer.id)
+        same(named.thread, root.id, "the item a reply names: its thread's")
+        same(named.message, null, "the item a reply names: its thread's")
+        await rejects(reader.inbox.mark(elsewhere.id), 404, 'not_in_inbox', "reading a message that isn't in the inbox")
+        await rejects(reader.inbox.snooze(elsewhere.id, new Date(Date.now() + 3_600_000).toISOString()), 404, 'not_in_inbox', "snoozing a message that isn't in the inbox")
+        same(await reader.inbox.remove(elsewhere.id), false, "removing a message that isn't in the inbox")
+        if (!ctx.withHeaders) return NO_HEADERS
+        // The same reader, narrowed to another channel: what it can't read isn't in its inbox, and isn't there to add or follow.
+        const narrowed = ctx.withHeaders({ 'x-board-profile': 'conformance', 'x-board-can': `${ctx.channel}/elsewhere=read` })
+        check(!(await inboxItem(narrowed, root.id)), "an item whose thread its reader can't read shouldn't be in the inbox")
+        await rejects(narrowed.inbox.add(root.id), 404, 'message_not_found', "adding a message its reader can't read")
+        await rejects(narrowed.inbox.follow({ thread: root.id }), 404, 'message_not_found', "following a thread its reader can't read")
+      } finally {
+        await leaveInbox(reader, [root.id])
+      }
+    },
+  },
+  {
     group: 'grants',
     name: 'grants a principal, lists it, and revokes it',
     run: (ctx) =>
@@ -2568,6 +2921,12 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
   } finally {
     // What it posted goes, replies first. A failure here leaves a tombstone short, not a wrong report.
     for (const id of [...ctx.posted].reverse()) await board.delete(id).catch(() => {})
+    // And what its inbox's reader wrote, which follows the thread it started by having posted in it.
+    if (ctx.inboxReader) {
+      const reader = board.as('conformance')
+      await reader.inbox.unfollow({ thread: ctx.inboxReader }).catch(() => {})
+      await reader.delete(ctx.inboxReader).catch(() => {})
+    }
   }
   return { url, checks, ok: checks.every((c) => c.status !== 'failed') }
 }

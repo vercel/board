@@ -5,6 +5,7 @@ import type { Attachment } from '../contract/schemas.ts'
 import type {
   AckBody,
   ActorsQuery,
+  AddInboxItemBody,
   ActorView,
   AssignTaskBody,
   TaskNeedsBody,
@@ -37,16 +38,25 @@ import type {
   GrantView,
   UpdateGrantBody,
   ExplainQuery,
+  FollowBody,
+  FollowsQuery,
+  FollowView,
   Explanation,
   EventsQuery,
   InboxAckBody,
   InboxEntry,
+  InboxEventsPage,
+  InboxEventsQuery,
   InboxItem,
+  InboxItemsQuery,
+  InboxItemView,
+  InboxPage,
   InboxNextQuery,
   InboxPushBody,
   InboxQuery,
   LinkedQuery,
   LabelBody,
+  MarkInboxItemBody,
   MatchesQuery,
   MatchView,
   Me,
@@ -56,11 +66,13 @@ import type {
   ReactBody,
   RegisterBody,
   RegistrationView,
+  RemoveInboxItemBody,
   ScheduleBody,
   SchedulesQuery,
   ScheduleView,
   SchemaBody,
   SchemaView,
+  SnoozeInboxItemBody,
   SourceJoin,
   SourceJoinBody,
   SourceRead,
@@ -95,6 +107,26 @@ export type Protocol = {
   /** Where the board is and what it syncs, for a client to mint a token from: it needs none itself. */
   discovery: { input: Nothing; output: Discovery }
   me: { input: Nothing; output: Me }
+  /**
+   * The caller's inbox: the threads that reached them (a mention, a thread or a channel they follow) and
+   * what they added, one item a thread, the item that changed last first. 501 `no_inbox` where the board
+   * keeps none, as every inbox method answers there.
+   */
+  inboxItems: { input: Input<typeof InboxItemsQuery>; output: InboxPage }
+  /** Long-polls with `wait`, as `events` does: board() serves SSE from it. */
+  inboxEvents: { input: Input<typeof InboxEventsQuery>; output: InboxEventsPage }
+  /** The item, as it is now: adding one that's there leaves it as it is. 404 `message_not_found` for what the caller can't read. */
+  addInboxItem: { input: Input<typeof AddInboxItemBody>; output: { item: InboxItemView } }
+  /** `removed` is false when there was no such item. */
+  removeInboxItem: { input: Input<typeof RemoveInboxItemBody>; output: { removed: boolean } }
+  /** 404 `not_in_inbox` for a message that names no item of the caller's, as snoozing one answers. */
+  markInboxItem: { input: Input<typeof MarkInboxItemBody>; output: { item: InboxItemView } }
+  snoozeInboxItem: { input: Input<typeof SnoozeInboxItemBody>; output: { item: InboxItemView } }
+  /** Following what's followed already answers the follow as it is. */
+  follow: { input: Input<typeof FollowBody>; output: { follow: FollowView } }
+  /** `unfollowed` is false when the caller didn't follow it. */
+  unfollow: { input: Input<typeof FollowBody>; output: { unfollowed: boolean } }
+  follows: { input: Input<typeof FollowsQuery>; output: { follows: FollowView[]; older: string | null } }
   channels: { input: Input<typeof ChannelsQuery>; output: ChannelsPage }
   /** `created` is false for a channel that was there already, made by a post or another create. */
   createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
