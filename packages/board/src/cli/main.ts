@@ -2224,7 +2224,11 @@ async function createPlan(target: string, text: string | undefined, path: string
   // What the file holds comes first: one task's text in it means these options are that task's, on stdin.
   const parsed = await planSource(path)
   const own = (['label', 'needs', 'for', 'claim', 'lease', 'no-sync'] as const).find((name) => (flags as Record<string, unknown>)[name] !== undefined && (flags as Record<string, unknown>)[name] !== false)
-  if (own !== undefined) throw usage(`--${own} is one task's: with --file, each task in the file has its own.`)
+  if (own !== undefined) {
+    const key = PLAN_KEY_OF_FLAG[own]
+    if (key === undefined) throw usage(`--${own} is one task's: with --file, each task in the file has its own.`)
+    throw usage(`--${own} is one task's: with --file, set ${key} on each task in the file.`)
+  }
   const board = client()
   const tasks = await planFrom(parsed, path, board)
   // Each root is a message: the longest says what a backend's refusal of one's text means, as for a task made alone.
@@ -2261,6 +2265,14 @@ async function createPlan(target: string, text: string | undefined, path: string
 
 /** What a task of a plan's `--file` takes, as `tasks.createMany` does. */
 const PLAN_KEYS = ['key', 'text', 'labels', 'needs', 'for', 'noSync', 'attachments']
+
+/** The key of a plan's task that says what a task's own option does, as the error naming it shows it. */
+const PLAN_KEY_OF_FLAG: Partial<Record<'label' | 'needs' | 'for' | 'claim' | 'lease' | 'no-sync', string>> = {
+  label: '"labels": {…}',
+  needs: '"needs": […]',
+  for: '"for": "…"',
+  'no-sync': '"noSync": true',
+}
 
 /** The help page that says what a plan holds. */
 const planHelp = (): Recovery => ({ instruction: 'See what a plan takes', argv: [...cli(), 'tasks', 'create', '--help'] })

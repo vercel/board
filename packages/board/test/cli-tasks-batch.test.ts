@@ -96,8 +96,9 @@ describe('vb tasks create --file', () => {
     expect(await misused(['none', '--file', await planFile(['a task'])])).toMatch(/ holds no tasks\. A plan is a JSON array of tasks/)
     // What says one task's own text, labels, or needs goes in the file.
     expect(await misused(['none', 'a task of its own', '--file', plan])).toBe("error: Text is one task's: with --file, each task in the file has its own.")
-    for (const flag of [['--label', 'step=fix'], ['--needs', '812'], ['--for', 'fixer'], ['--claim'], ['--no-sync']])
-      expect(await misused(['none', '--file', plan, ...flag])).toBe(`error: ${flag[0]} is one task's: with --file, each task in the file has its own.`)
+    for (const [flag, key] of [[['--label', 'step=fix'], '"labels": {…}'], [['--needs', '812'], '"needs": […]'], [['--for', 'fixer'], '"for": "…"'], [['--no-sync'], '"noSync": true']] as const)
+      expect(await misused(['none', '--file', plan, ...flag])).toBe(`error: ${flag[0]} is one task's: with --file, set ${key} on each task in the file.`)
+    expect(await misused(['none', '--file', plan, '--claim'])).toBe("error: --claim is one task's: with --file, each task in the file has its own.")
     // The options' old names say what they are now, and make nothing.
     expect(await misused(['none', '--tasks-file', plan])).toBe('error: --tasks-file is --file now.')
     expect(await misused(['none', '--text-file', plan])).toBe('error: --text-file is gone from tasks create.')
