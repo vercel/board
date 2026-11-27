@@ -12,7 +12,7 @@ import { compileAccess, parseCan, parsePattern, PERMISSIONS, type AccessSummary,
 import { type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { mediaType } from '../contract/files.ts'
 import { uploadName } from './file-names.ts'
-import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
+import { badRequest, BATCH_IN_PARTS, duplicateId, HttpError, json, notFound } from './errors.ts'
 import { carried } from './carried.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
@@ -3702,8 +3702,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const made = await api<{ tasks: (ApiTaskOf | { id: string })[] }>(who, 'POST', await onBoard(who, '/tasks/batch'), { version: 2, body, signal }).catch((error: unknown) => {
         // An `id` sent again with other tasks, or for another channel, is another write's, as on any board.
         if (error instanceof HttpError && error.code === 'idempotency_key_reused') throw duplicateId()
-        // More bytes than one of the API's requests holds: none was made and less of it fits, as with more than it counts for one write.
-        if (error instanceof HttpError && error.code === 'entity_too_large') throw new HttpError(400, 'batch_too_large', error.message)
+        // More bytes than one of the API's requests holds, or more than it counts for one write: none was made, and less of it fits.
+        if (error instanceof HttpError && (error.code === 'entity_too_large' || error.code === 'batch_too_large'))
+          throw new HttpError(400, 'batch_too_large', error.message, { hint: BATCH_IN_PARTS })
         throw taskRefusal(error)
       })
       const threads = made.tasks.map((task) => task.id)
