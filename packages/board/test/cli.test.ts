@@ -583,6 +583,7 @@ describe('cli', () => {
     expect((await vb(['channels'])).stdout).not.toContain('Made Early')
   })
 
+  // Some forty CLI runs: past the harness's 20s whenever the runner is busy.
   it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
     const second = (await vb(['post', 'open-work', 'docs typo'])).stdout.trim()
@@ -653,7 +654,7 @@ describe('cli', () => {
     expect(await vb(['read', 'alerts/errors'])).toMatchObject({ code: 1, stdout: '', stderr: expect.stringMatching(/^error: Couldn't find channel alerts\/errors\. Did you mean team\/alerts\/errors\?\n/) })
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n\nnew since then: vb read open-work --text 'nothing like this' --after \d+\n$/) })
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
-  })
+  }, 60_000)
 
   it("posts once for an idempotency key, and reads by a message's source", async () => {
     const once = await vb(['post', 'retries', 'deploy failed', '--idempotency-key', 'deploy-a1b2c3'])
