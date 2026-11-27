@@ -109,13 +109,11 @@ ${[...ddl('postgres'), FILES_DDL].join(`;${BREAKPOINT}`)};
 
 /** The version of `schema.sql` the database last had applied, or null when it has none. */
 export async function appliedVersion(client: PgQueryable): Promise<string | null> {
-  try {
-    const { rows } = await client.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])
-    return rows.length > 0 ? String(rows[0]!.value) : null
-  } catch (error) {
-    if ((error as { code?: unknown } | null)?.code === '42P01') return null
-    throw error
-  }
+  // Asked first, so a new database answers null without a failed query.
+  const { rows: present } = await client.query("select to_regclass('board_meta') is not null as present")
+  if (present[0]?.present !== true) return null
+  const { rows } = await client.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])
+  return rows.length > 0 ? String(rows[0]!.value) : null
 }
 
 /** The advisory lock key instances take while one applies the schema: "board" in ASCII. */
