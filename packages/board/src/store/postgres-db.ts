@@ -120,23 +120,19 @@ export async function appliedVersion(client: PgQueryable): Promise<string | null
 const MIGRATION_LOCK = 0x626f617264
 
 /**
- * Applies `schema.sql` when the database's recorded version isn't `version`, under an advisory lock,
- * so instances that start together apply it once. A database already on it costs one read.
+ * Applies `schema.sql` when the database's recorded version isn't `version`, in one transaction under
+ * a transaction-scoped advisory lock, so instances that start together apply it once, and a
+ * transaction pooler (which may run each statement outside a transaction on another connection)
+ * can't leave the lock held. A database already on it costs one read.
  */
 export async function migrateSchema(pool: PgPool, schema: { sql: string; version: string }): Promise<void> {
-  const client = await pool.connect()
-  try {
-    if ((await appliedVersion(client)) === schema.version) return
-    await client.query('select pg_advisory_lock($1)', [MIGRATION_LOCK])
-    try {
-      // Another instance may have applied it while this one waited for the lock.
-      if ((await appliedVersion(client)) !== schema.version) await client.query(schema.sql)
-    } finally {
-      await client.query('select pg_advisory_unlock($1)', [MIGRATION_LOCK])
-    }
-  } finally {
-    client.release()
-  }
+  if ((await appliedVersion(pool)) === schema.version) return
+  await transaction(pool, 'begin', async (client) => {
+    await client.query('select pg_advisory_xact_lock($1)', [MIGRATION_LOCK])
+    // Another instance may have applied it while this one waited for the lock.
+    if ((await appliedVersion(client)) !== schema.version) await client.query(schema.sql)
+    return true
+  })
 }
 
 /** Whether the tables a board's first calls need are there: the log's, board's, and its files'. */
