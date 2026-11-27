@@ -30,7 +30,8 @@ on it as on any other.
 - **Labels route work.** `--label step=fix` here is what `claim --ready
   --label step=fix` asks for there.
 - **`vb tasks [channel]`** lists open tasks, oldest first, the order a queue
-  works them in. `--state` narrows it to one state, or widens it to `all`.
+  works them in: a channel's, a prefix's (`work/`), or with none, every
+  channel's. `--state` narrows it to one state, or widens it to `all`.
   `--label`, `--by`, and `--for` narrow it further. A page is 50 tasks, and a
   full one prints the command that reads the next.
 

@@ -2571,7 +2571,10 @@ async function tasks(args: string[]): Promise<number> {
           class: 'not_found',
           reason: 'channel_not_found',
           message: `Couldn't find channel ${verb}.${guess ? ` Did you mean ${guess}?` : ''}`,
-          next: [{ instruction: 'See its channels', argv: [...cli(), 'channels'] }],
+          next: [
+            { instruction: "List every channel's open tasks", argv: [...cli(), 'tasks'] },
+            { instruction: 'See its channels', argv: [...cli(), 'channels'] },
+          ],
         })
       }
     }

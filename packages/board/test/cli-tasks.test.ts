@@ -78,7 +78,11 @@ describe('vb tasks', () => {
     // A channel that's there with nothing in what's asked for is an empty list, as itself and as its subtree, which has no channel under it.
     expect(await ok(['tasks', 'queue', '--state', 'failed'])).toBe('no failed tasks in queue\n')
     expect(await ok(['tasks', 'queue/', '--state', 'failed'])).toBe('no failed tasks in queue/\n')
-    expect(failure(await vb(['tasks', 'no-such-queue/', '--json']))).toMatchObject({ reason: 'channel_not_found', message: "Couldn't find channel no-such-queue/." })
+    expect(failure(await vb(['tasks', 'no-such-queue/', '--json']))).toMatchObject({
+      reason: 'channel_not_found',
+      message: "Couldn't find channel no-such-queue/.",
+      next: [{ argv: ['vb', 'tasks'] }, { argv: ['vb', 'channels'] }],
+    })
     // A word that's nearly a command is a command mistyped, not a channel.
     expect(failure(await vb(['tasks', 'clam', '--json']))).toMatchObject({ reason: 'unknown_command', message: 'Unknown command clam for vb tasks. Did you mean claim?' })
     expect(failure(await vb(['tasks', 'finish', ids[0]!, '--json']))).toMatchObject({ reason: 'unknown_command', message: 'Unknown command finish for vb tasks.' })

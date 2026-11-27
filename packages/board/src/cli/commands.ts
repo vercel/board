@@ -581,6 +581,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     ],
     runsWithoutSubcommand: true,
     examples: [
+      { name: "list every channel's open tasks", value: 'tasks' },
       { name: "list a queue's open tasks", value: 'tasks work/' },
       { name: 'list what is ready to fix', value: 'tasks work/ --state ready --label step=fix' },
     ],
