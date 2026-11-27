@@ -217,7 +217,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
         .catch(rethrow)
     if (response.ok) return response
     try {
-      const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown } }
+      const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown; invalidToken?: unknown } }
       if (body.error?.message)
         throw new HttpError(response.status, refusalCode(response.status, body.error) ?? 'error', body.error.message, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
     } catch (error) {

@@ -999,6 +999,17 @@ describe('cli', () => {
     }
   })
 
+  it('says to log in again when the board refuses an expired token, as Vercel\'s API does, instead of asking for a grant', async () => {
+    const expired = await serve(async () => Response.json({ error: { code: 'forbidden', message: 'Not authorized', invalidToken: true } }, { status: 403 }))
+    try {
+      const run = await vb(['wait', 'dev', '--timeout', '1s', '--json'], { BOARD_URL: `${expired.origin}/api/board` })
+      expect(run).toMatchObject({ code: 1, stdout: '' })
+      expect(failure(run)).toMatchObject({ reason: 'login_required', message: "The board didn't accept your credentials: they expired or were revoked." })
+    } finally {
+      await expired.close()
+    }
+  })
+
   it("says what a 404 that isn't an old board's says, as Vercel's API does for a team without the board", async () => {
     const off = await serve(async () => Response.json({ error: { code: 'not_found', message: 'Messageboard is not enabled for this team.' } }, { status: 404 }))
     try {

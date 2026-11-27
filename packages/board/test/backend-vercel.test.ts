@@ -987,6 +987,35 @@ describe('vercel()', () => {
     await expect(team.me()).rejects.toMatchObject({ status: 403, code: 'reauthentication_required' })
   })
 
+  it("asks for the credential again once when Vercel's API says it expired, as a long wait outlives a login's access token", async () => {
+    const api = fakeMessageboard()
+    // The credential is asked for on each request, as a login is: the first has expired, and asking again refreshes it.
+    const logins = ['expired', 'user:u_jb']
+    const sent: string[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const login = logins.length > 1 ? logins.shift()! : logins[0]!
+      sent.push(String(input))
+      if (login === 'expired') return Response.json({ error: { code: 'forbidden', message: 'Not authorized', invalidToken: true } }, { status: 403 })
+      return as(api, login)(input, init)
+    }) as typeof globalThis.fetch
+    const handle = board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) })
+    const posted = await handle.post('dev', { text: 'still here' })
+    // The refused request goes again, as it was.
+    expect(sent[1]).toBe(sent[0])
+    expect((await handleOn(api).channel('dev').messages()).messages.map((message) => message.id)).toEqual([posted.id])
+  })
+
+  it("says a token Vercel's API won't take as expired needs a new login, after one more try", async () => {
+    let tries = 0
+    const dead = (async () => {
+      tries++
+      return Response.json({ error: { code: 'forbidden', message: 'Not authorized', invalidToken: true } }, { status: 403 })
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: dead, files: fakeMessageboard().files }) })
+    await expect(team.me()).rejects.toMatchObject({ status: 403, code: 'invalid_token' })
+    expect(tries).toBe(2)
+  })
+
   it("names a message's channel from the message's own answer where the API sends it, asking for no channel", async () => {
     const api = fakeMessageboard({ channelNames: true })
     const team = handleOn(api)

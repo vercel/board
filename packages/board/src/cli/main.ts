@@ -1097,6 +1097,8 @@ function failureOf(error: unknown): Failure {
   if (status === 401) return theirs('auth', 'login_required', "The board didn't accept your credentials.", loginRecoveries())
   // A team's SAML session that lapsed: a new login reaches it again, where a grant changes nothing.
   if (status === 403 && code === 'reauthentication_required') return theirs('auth', 'login_required', 'Your team needs you to log in again.', loginRecoveries())
+  // A token that expired or was revoked: logging in again fixes it, where a grant changes nothing.
+  if (status === 403 && code === 'invalid_token') return theirs('auth', 'login_required', "The board didn't accept your credentials: they expired or were revoked.", loginRecoveries())
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`, refusedRecoveries())
   if (status === 404) {
     const thing = missing()

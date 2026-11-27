@@ -989,15 +989,18 @@ export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me,
 /**
  * The code of a refusal, as a board or Vercel's API answered it. Vercel's API refuses a team whose SAML
  * session has lapsed with a 403 marked `saml`: `reauthentication_required`, which a new login fixes and a grant doesn't.
+ * It refuses a token that expired or was revoked with a 403 marked `invalidToken`: `invalid_token`, which a
+ * refreshed or new login fixes, and a grant doesn't either.
  */
-export function refusalCode(status: number, error: { code?: string; saml?: unknown } | undefined): string | undefined {
+export function refusalCode(status: number, error: { code?: string; saml?: unknown; invalidToken?: unknown } | undefined): string | undefined {
   if (status === 403 && error?.saml === true) return 'reauthentication_required'
+  if (status === 403 && error?.invalidToken === true) return 'invalid_token'
   return error?.code
 }
 
 async function toError(response: Response): Promise<BoardError> {
   try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown } }
+    const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown; invalidToken?: unknown } }
     // Retry-After in seconds, as a 429 says it: its date form isn't one a board sends.
     const retryAfter = response.status === 429 ? /^\d{1,6}$/.exec(response.headers.get('retry-after') ?? '')?.[0] : undefined
     const code = refusalCode(response.status, body.error)

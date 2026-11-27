@@ -788,6 +788,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // A 429 did nothing. A 502, 503 or 504 may have: only a request the API can tell it has seen goes again.
     const repeatable = (method !== 'POST' && method !== 'PATCH') || typeof (init.body as { operationId?: unknown } | undefined)?.operationId === 'string'
     const started = Date.now()
+    let renewed = false
     for (let attempt = 0; ; attempt++) {
       let response: Response
       try {
@@ -833,7 +834,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         init.signal?.throwIfAborted()
         continue
       }
-      const error = (body as { error?: { code?: string; message?: string; reason?: unknown; saml?: unknown } } | undefined)?.error
+      const error = (body as { error?: { code?: string; message?: string; reason?: unknown; saml?: unknown; invalidToken?: unknown } } | undefined)?.error
+      // A token that expired while this ran, as a long wait outlives a login's access token: the API did nothing
+      // with it, and the credential is asked for again on each try, which refreshes a login. Once, so a token
+      // that's revoked or the one passed fails here as it is.
+      if (response.status === 403 && error?.invalidToken === true && !renewed && !init.signal?.aborted) {
+        renewed = true
+        await pause(retryWait(0, null), init.signal)
+        init.signal?.throwIfAborted()
+        continue
+      }
       if (response.status === 429) throw throttled(response, error?.code ?? 'rate_limited', attempt, Date.now() - started)
       const refused = new HttpError(response.status, refusalCode(response.status, error) ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
       // What a code says more of: why a claim was lost.
