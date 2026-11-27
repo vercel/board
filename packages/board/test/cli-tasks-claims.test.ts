@@ -103,6 +103,12 @@ describe("vb tasks, with the claim it keeps", () => {
     expect(JSON.parse(await ok(['tasks', 'reopen', id, '--json']))).toMatchObject({ outcome: 'unchanged', task: { task: { state: 'ready' } } })
 
     await ok(['tasks', 'claim', id])
+    // An option another task verb takes is refused, not dropped: --file is a plan's, for tasks create.
+    const filed = await vb(['tasks', 'complete', id, '--file', 'result.txt'])
+    expect(filed).toMatchObject({ code: 2, stdout: '' })
+    expect(filed.stderr.split('\n')[0]).toBe('error: Unknown option --file for vb tasks complete.')
+    expect((await vb(['tasks', 'fail', id, 'flaky', '--label', 'step=fix'])).stderr.split('\n')[0]).toBe('error: Unknown option --label for vb tasks fail.')
+    expect(await state(id)).toBe('claimed')
     expect(JSON.parse(await ok(['tasks', 'complete', id, 'green on the third run', '--json']))).toMatchObject({ outcome: 'completed', task: { task: { state: 'completed', result: 'green on the third run' } } })
     const finished = await vb(['tasks', 'claim', id])
     expect(finished.stderr).toMatch(new RegExp(`^error: Can't claim task #${id}\\. It's finished\\.\\n  [^\\n]+\\n\\n  See how it ended:\\n    vb read ${id}\\n$`))

@@ -311,6 +311,16 @@ function parse(argv: string[]) {
   const known = specOf(word) && new Set(optionsOf(word))
   const foreign = known && ordered.find((option) => !known.has(option.name))
   if (foreign) throw foreignOption(foreign.name, word!)
+  // And one only another task verb takes (`tasks complete --file`, a plan's for `tasks create`), which
+  // that verb would drop. grants says itself where each of its subcommands' options goes.
+  const sub = word === 'tasks' ? subcommandOf(word) : undefined
+  const theirs = sub && new Set([...sub.options, ...(sub.filters ? filterOptions : []), ...globalOptions].map((option) => option.name))
+  const elsewhere = theirs && ordered.find((option) => !theirs.has(option.name))
+  if (elsewhere)
+    throw usage(`Unknown option --${elsewhere.name} for ${named()} ${word} ${sub.name}.`, {
+      reason: 'unknown_option',
+      next: [{ instruction: 'See all options', argv: [...cli(), word!, sub.name, '--help'] }],
+    })
   // What was found is what runs. A command's own reading of an option can leave another word first
   // (`--claim delete tasks`: a value until `tasks` is found, none after), and whoever screened the
   // command, as vb() does for the ones it refuses, screened the one found.
@@ -398,6 +408,14 @@ function parseFailure(error: Error & { code?: string }, argv: string[], word: st
 /** The command `word` names, board's or the app's, as help shows it. */
 const specOf = (word: string | undefined): CliCommand | undefined =>
   word === undefined ? undefined : [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+
+/** The subcommand of `word`'s command this run names, right after the command, by its name or an alias. */
+function subcommandOf(word: string | undefined): CliCommand | undefined {
+  const command = specOf(word)
+  if (!command?.subcommands || command.argumentsBeforeSubcommand) return undefined
+  const named = positionals[1]
+  return command.subcommands.find((sub) => sub.name === named || (sub.aliases ?? []).includes(named ?? ''))
+}
 
 function optionsOf(word: string | undefined): string[] {
   const command = specOf(word)
