@@ -105,6 +105,18 @@ describe('vb inbox', () => {
     expect(said(await vb(['inbox', 'follows']))).toBe('following nothing')
   })
 
+  it('says where the rest of what you follow is when a page of it holds none', async () => {
+    // Two threads Julian posted in, the newer one left since: a page of one holds nothing, and isn't the last.
+    const kept = await adaPosts('inbox-pages', 'one')
+    const left = await adaPosts('inbox-pages', 'two')
+    for (const id of [kept, left]) said(await vb(['reply', id, 'here']))
+    said(await vb(['inbox', 'unfollow', left]))
+    const first = said(await vb(['inbox', 'follows', '--limit', '1']))
+    expect(first).toMatch(/^\(more not shown: vb inbox follows --limit 1 --before \S+\)$/)
+    const before = first.match(/--before (\S+)\)$/)![1]!
+    expect(said(await vb(['inbox', 'follows', '--limit', '1', '--before', before]))).toBe(`#${kept}  posted`)
+  })
+
   it('reads the inbox of the profile it runs as, and with --under, yours with your agents’', async () => {
     // Claude has written, so the board knows the handle a mention of it shows by.
     said(await vb(['post', 'inbox-elsewhere', 'here', '--as', 'claude']))

@@ -2310,8 +2310,9 @@ async function inbox(args: string[]): Promise<number> {
   if (verb === 'follows') {
     const page = await board.inbox.follows({ ...(flags.before !== undefined ? { before: flags.before } : {}), ...(flags.limit ? { limit: Number(flags.limit) } : {}) })
     if (flags.json) return result(page), 0
-    if (page.follows.length === 0) return out(flags.before === undefined ? 'following nothing' : 'no more'), 0
-    out(formatFollows(page.follows))
+    // A page can hold none and not be the last: its threads were all left since. Only the last one says there's nothing.
+    if (page.follows.length === 0 && page.older === null) return out(flags.before === undefined ? 'following nothing' : 'no more'), 0
+    if (page.follows.length > 0) out(formatFollows(page.follows))
     if (page.older !== null) out(`(more not shown: ${commandLine(rerunWithout(['--before'], '--before', page.older))})`)
     return 0
   }
