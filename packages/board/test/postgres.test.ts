@@ -5,6 +5,7 @@ import { http } from '../src/backend-http/index.ts'
 import { oidcTokens } from '../src/access/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { postgres, type Scheduler } from '../src/backend-postgres/index.ts'
+import { poolConfig } from '../src/server/postgres.ts'
 import { postgresSchema, SCHEMA_VERSION_KEY } from '../src/store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../src/store/postgres-schema.generated.ts'
 import { vercelQueues } from '../src/backend-postgres/scheduler-vercel.ts'
@@ -209,9 +210,24 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     await backend.close()
   })
 
+  it("takes pg's PG* variables without a URL, with the deployment's OIDC token as the password unless PGPASSWORD is set", async () => {
+    expect(poolConfig({}, { DATABASE_URL: 'postgres://a@h/d', PGHOST: 'other' })).toEqual({ connectionString: 'postgres://a@h/d', max: 10 })
+    expect(poolConfig({}, { PGHOST: 'db.example', PGPASSWORD: 'secret' })).toEqual({ max: 10, password: 'secret' })
+    expect(poolConfig({}, {})).toBeNull()
+    const token = `e30.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.sig`
+    vi.stubEnv('VERCEL_OIDC_TOKEN', token)
+    try {
+      const { password } = poolConfig({ max: 2 }, { PGHOST: 'db.example' })!
+      expect(typeof password).toBe('function')
+      expect(await (password as () => Promise<string>)()).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('says it has no database when it has no connection string', async () => {
     const backend = postgres({ connectionString: '' })
-    await expect(on(backend).post('dev', 'hello')).rejects.toThrow(/no database: pass connectionString, or set DATABASE_URL/)
+    await expect(on(backend).post('dev', 'hello')).rejects.toThrow(/no database: pass connectionString, or set DATABASE_URL or PGHOST/)
     await backend.close()
   })
 })

@@ -1,5 +1,6 @@
 // A board on Postgres, which `@vercel/board/backend-postgres` exports: on the board's log and its
 // engine, as `local()` is, with its log, tables, and files in one database.
+import { getVercelOidcToken } from '@vercel/oidc'
 import pg from 'pg'
 import { a2 } from './a2.ts'
 import type { Backend, BoardBinding, Caller, ProtocolMethods, Trust } from './backend.ts'
@@ -14,7 +15,9 @@ import { postgresBlob, postgresStore } from '../store/postgres.ts'
 export type PostgresOptions = {
   /**
    * The database, as a connection string: `DATABASE_URL`, or else `POSTGRES_URL`, by default, which
-   * a Postgres database connected to a Vercel project sets. Leave it out when you pass `pool`.
+   * a Postgres database connected to a Vercel project sets. Without either, `pg`'s `PG*` variables
+   * when `PGHOST` is set, with this deployment's OIDC token as the password unless `PGPASSWORD` is.
+   * Leave it out when you pass `pool`.
    */
   connectionString?: string
   /** A `pg` Pool you made, for a password from a callback, say. The board uses it and leaves it open. */
@@ -43,6 +46,19 @@ export type PostgresBackend = Backend & {
   close(): Promise<void>
 }
 
+/**
+ * The pool `postgres()` makes: on `connectionString`, `DATABASE_URL`, or `POSTGRES_URL`, or else on
+ * pg's own `PG*` variables when `PGHOST` is set, whose password is this deployment's OIDC token,
+ * fetched for each connection, unless `PGPASSWORD` is set. Null when it has no database.
+ */
+export function poolConfig(options: Pick<PostgresOptions, 'connectionString' | 'max'>, env: Record<string, string | undefined>): pg.PoolConfig | null {
+  const max = options.max ?? 10
+  const connectionString = options.connectionString ?? env.DATABASE_URL ?? env.POSTGRES_URL
+  if (connectionString) return { connectionString, max }
+  if (env.PGHOST) return { max, password: env.PGPASSWORD ?? (() => getVercelOidcToken()) }
+  return null
+}
+
 /** Why the database couldn't be reached or used, in a few words. */
 const unreachable = (error: unknown) => String((error as { message?: unknown }).message ?? error).split('\n')[0]!
 
@@ -58,9 +74,9 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
 
   function poolOf(): PgPool {
     if (options.pool) return options.pool
-    const connectionString = options.connectionString ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL
-    if (!connectionString) throw new HttpError(500, 'no_store', 'postgres: no database: pass connectionString, or set DATABASE_URL')
-    made = new pg.Pool({ connectionString, max: options.max ?? 10 })
+    const config = poolConfig(options, process.env)
+    if (!config) throw new HttpError(500, 'no_store', 'postgres: no database: pass connectionString, or set DATABASE_URL or PGHOST')
+    made = new pg.Pool(config)
     // A connection the server closes (a restart, a database that scales to zero) is reported here;
     // unheard, it ends the process. The query it cut off fails on its own.
     made.on('error', () => {})
