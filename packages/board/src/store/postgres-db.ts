@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { ddl, type Db, type Sql } from './sql.ts'
 
 /** What the tables need of a `pg` Pool, or of anything shaped like one. */
@@ -81,21 +82,63 @@ const FILES_DDL = `create table if not exists board_files (
 /** Where the package ships the schema, as an app that installs it finds it. */
 export const SCHEMA_FILE = 'node_modules/@vercel/board/sql/postgres/schema.sql'
 
+/** `board_meta`'s key for the version of `schema.sql` last applied to the database. */
+export const SCHEMA_VERSION_KEY = 'postgres_schema'
+
 /**
  * `sql/postgres/schema.sql`: `a2`, the bundled A2 release's schema.sql, whose tables keep the log,
- * then board's tables and its files, so a database needs one file.
+ * then board's tables and its files, so a database needs one file. Its last statement records
+ * `version`, a hash of the rest, so `postgres({ autoMigrate: true })` applies it only when it changed.
  */
-export function postgresSchemaSql(a2: string): string {
-  return `-- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
+export function postgresSchema(a2: string): { sql: string; version: string } {
+  const body = `-- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
 -- its log, then those it reads from, and its files. Apply this file before the first
--- deploy, and again when a board release says the tables changed. Every statement
--- creates only what is missing and leaves existing data alone, so it's safe to re-run.
+-- deploy, and again when a board release says the tables changed, or pass
+-- postgres({ autoMigrate: true }) to have the board apply it. Every statement creates
+-- only what is missing and leaves existing data alone, so it's safe to re-run.
 -- The breakpoint after each statement splits it for migration tools that send one
 -- statement per query; to every other tool it's only a comment.
 
 ${a2.trimEnd()}${BREAKPOINT}
 ${[...ddl('postgres'), FILES_DDL].join(`;${BREAKPOINT}`)};
 `
+  const version = createHash('sha256').update(body).digest('hex').slice(0, 16)
+  const stamp = `insert into board_meta (key, value) values ('${SCHEMA_VERSION_KEY}', '${version}') on conflict (key) do update set value = excluded.value;\n`
+  return { sql: `${body}${BREAKPOINT.slice(1)}${stamp}`, version }
+}
+
+/** The version of `schema.sql` the database last had applied, or null when it has none. */
+async function appliedVersion(client: PgQueryable): Promise<string | null> {
+  try {
+    const { rows } = await client.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])
+    return rows.length > 0 ? String(rows[0]!.value) : null
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === '42P01') return null
+    throw error
+  }
+}
+
+/** The advisory lock key instances take while one applies the schema: "board" in ASCII. */
+const MIGRATION_LOCK = 0x626f617264
+
+/**
+ * Applies `schema.sql` when the database's recorded version isn't `version`, under an advisory lock,
+ * so instances that start together apply it once. A database already on it costs one read.
+ */
+export async function migrateSchema(pool: PgPool, schema: { sql: string; version: string }): Promise<void> {
+  const client = await pool.connect()
+  try {
+    if ((await appliedVersion(client)) === schema.version) return
+    await client.query('select pg_advisory_lock($1)', [MIGRATION_LOCK])
+    try {
+      // Another instance may have applied it while this one waited for the lock.
+      if ((await appliedVersion(client)) !== schema.version) await client.query(schema.sql)
+    } finally {
+      await client.query('select pg_advisory_unlock($1)', [MIGRATION_LOCK])
+    }
+  } finally {
+    client.release()
+  }
 }
 
 /** Whether the tables a board's first calls need are there: the log's, board's, and its files'. */

@@ -331,6 +331,13 @@ Neither reaches a handle on Vercel's board, its types included (`test/browser.te
 - **Folds mutate in place.** A2 clones state at every read and snapshot
   boundary, so an event costs O(1). Never share a fold's state object outside
   the fold.
+- **Postgres's schema only adds.** `postgres({ autoMigrate: true })` applies
+  `sql/postgres/schema.sql` while the last release's deployments still run, so
+  from one release to the next it adds tables, defaulted or nullable columns,
+  and indexes, and a drop or rename goes over two releases. A2's part is ours
+  too, since it's bundled. `test/postgres-schema-released.sql` is the last
+  release's file: the tests apply it, then this one, and fail on a line that
+  drops or renames. After a release that changed the file, copy it there.
 - **Provenance is server-authored.** `by`, `mentions`, and sync fields are never
   read from a request body.
 - **Erasable TypeScript only** (`erasableSyntaxOnly`): no parameter properties,

@@ -1,7 +1,8 @@
 -- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
 -- its log, then those it reads from, and its files. Apply this file before the first
--- deploy, and again when a board release says the tables changed. Every statement
--- creates only what is missing and leaves existing data alone, so it's safe to re-run.
+-- deploy, and again when a board release says the tables changed, or pass
+-- postgres({ autoMigrate: true }) to have the board apply it. Every statement creates
+-- only what is missing and leaves existing data alone, so it's safe to re-run.
 -- The breakpoint after each statement splits it for migration tools that send one
 -- statement per query; to every other tool it's only a comment.
 
@@ -390,3 +391,5 @@ create table if not exists board_files (
   content_type text not null,
   data bytea not null
 );
+--> statement-breakpoint
+insert into board_meta (key, value) values ('postgres_schema', '72af31e9bc7ef025') on conflict (key) do update set value = excluded.value;

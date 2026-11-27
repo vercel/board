@@ -25,9 +25,10 @@ psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
 - **One database is one board.** Every instance that points at it serves the
   same board, so it runs on serverless functions as well as on one server.
   `name` and `team` are ignored.
-- **It creates no tables.** [`schema.sql`](#the-tables) does, and a database
-  without them fails the board's first call with 500 `no_store`, which names
-  the file.
+- **It creates no tables unless you ask.** [`schema.sql`](#the-tables) does,
+  and a database without them fails the board's first call with 500
+  `no_store`, which names the file. `autoMigrate: true` has the board apply
+  it: see [Migrating on its own](#migrating-on-its-own).
 - **Attachments live in the database,** each at most 4 MB, in `board_files`.
 - **It passes the whole [conformance](../04-reference/05-conformance.md) kit,**
   schedules, tasks, and attachments included, so `vb` and `vercel board` work
@@ -44,6 +45,7 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 | `connectionString` | The database. Default `DATABASE_URL`, or else `POSTGRES_URL` |
 | `pool` | A `pg` Pool you made, instead: for a password from a callback, say. The board leaves it open |
 | `max` | Connections the pool it makes may open. Default 10 |
+| `autoMigrate` | Apply `schema.sql` on the first call when the database doesn't have this release's. Default false: see [Migrating on its own](#migrating-on-its-own) |
 | `scheduler` | What runs its timers: `vercelQueues()`, see [On Vercel Queues](#on-vercel-queues). Default: timers in this process |
 
 `close()` stops its timers and ends the pool it made, as a test does at its
@@ -103,3 +105,30 @@ existing data alone, so it's safe to apply again, and a breakpoint comment
 after each one splits it for migration tools that send one statement per
 query: copy it into your migrations as it is. Apply it again when a release's
 changelog says the tables changed.
+
+## Migrating on its own
+
+With `autoMigrate: true`, the board applies `schema.sql` itself: on a new
+database, and after an upgrade whose file changed. Then a Deploy needs no step
+of yours:
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from '@vercel/board'
+import { postgres } from '@vercel/board/backend-postgres'
+
+export const team = board({ backend: postgres({ autoMigrate: true }) })
+export const GET = team.fetch, POST = team.fetch
+```
+
+- **The file records its version,** in `board_meta`, as its last statement.
+  Each instance's first call reads it, and applies the file only when it isn't
+  this release's, so a database that's up to date costs one read.
+- **Instances that start together apply it once:** the one that applies it
+  holds a Postgres advisory lock, and the others wait for it, then find it
+  done.
+- **The file only adds, from one release to the next:** tables, columns with
+  a default or none, and indexes. A deployment still on the last release keeps
+  working while the next one rolls out, and a rollback to it does too.
+- **Its role needs to create tables** in the database, on top of reading and
+  writing them. Without `autoMigrate`, it needs only the latter.
+

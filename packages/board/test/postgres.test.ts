@@ -5,7 +5,8 @@ import { http } from '../src/backend-http/index.ts'
 import { oidcTokens } from '../src/access/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { postgres, type Scheduler } from '../src/backend-postgres/index.ts'
-import { postgresSchemaSql } from '../src/store/postgres-db.ts'
+import { postgresSchema, SCHEMA_VERSION_KEY } from '../src/store/postgres-db.ts'
+import { POSTGRES_SCHEMA } from '../src/store/postgres-schema.generated.ts'
 import { vercelQueues } from '../src/backend-postgres/scheduler-vercel.ts'
 import { fakeQueue } from './queue.ts'
 import { bearer, board, BOARD_URL, personToken } from './harness.ts'
@@ -29,10 +30,40 @@ async function tables(pool: PgPool) {
 describe("postgres()'s schema.sql", () => {
   it("is the bundled A2 release's schema.sql, then board's tables: run scripts/postgres-schema.ts after changing either", () => {
     const a2 = readFileSync(join(import.meta.dirname, '..', 'node_modules', 'experimental-a2', 'sql', 'postgres', 'schema.sql'), 'utf8')
-    expect(SCHEMA).toBe(postgresSchemaSql(a2))
+    expect(SCHEMA).toBe(postgresSchema(a2).sql)
+    expect(POSTGRES_SCHEMA).toEqual(postgresSchema(a2))
     expect(SCHEMA).toContain(a2.trimEnd())
     expect(SCHEMA).toContain('create table if not exists board_messages')
   })
+})
+
+/** The schema the last release shipped: what a database that upgrades to this one has. */
+const RELEASED = readFileSync(join(import.meta.dirname, 'postgres-schema-released.sql'), 'utf8')
+
+describe("postgres()'s schema.sql over releases", () => {
+  it('only adds to the last release\'s: a drop or rename goes over two releases, so a deployment still on the last one keeps working', () => {
+    const released = new Set(RELEASED.split('\n').map((line) => line.trim()))
+    const added = SCHEMA.split('\n').map((line) => line.trim()).filter((line) => !released.has(line))
+    expect(added.filter((line) => /\b(drop\s+(table|column)|rename)\b/i.test(line))).toEqual([])
+  })
+
+  it("keeps a board's threads when autoMigrate applies it over the last release's", async () => {
+    const pool = await freshPool()
+    await pool.query(RELEASED)
+    const before = postgres({ pool })
+    const root = await on(before).post('dev', 'before the upgrade')
+    await before.close()
+
+    const after = postgres({ pool, autoMigrate: true })
+    const team = on(after)
+    try {
+      await team.reply(root.id, 'after the upgrade')
+      expect((await team.thread(root.id)).replies.map((m) => m.text)).toEqual(['after the upgrade'])
+      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: POSTGRES_SCHEMA.version }])
+    } finally {
+      await after.close()
+    }
+  }, 20_000)
 })
 
 describe(`postgres(), on ${POSTGRES}`, () => {
@@ -114,6 +145,35 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     await applied.close()
     expect((await pool.query('select 1 as one')).rows).toEqual([{ one: 1 }])
   })
+
+  it('with autoMigrate, applies schema.sql to a database without it, once for instances that start together', async () => {
+    const pool = await freshPool()
+    const [one, two] = [postgres({ pool, autoMigrate: true }), postgres({ pool, autoMigrate: true })]
+    try {
+      const [a, b] = await Promise.all([on(one).post('dev', 'one'), on(two).post('dev', 'two')])
+      expect([a.text, b.text]).toEqual(['one', 'two'])
+      expect(await tables(pool)).toBeGreaterThan(0)
+      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: POSTGRES_SCHEMA.version }])
+    } finally {
+      await Promise.all([one.close(), two.close()])
+    }
+  }, 20_000)
+
+  it('with autoMigrate, applies schema.sql again when the database has another release\'s, and keeps its data', async () => {
+    const pool = await freshPoolWithTables()
+    const first = postgres({ pool })
+    const root = await on(first).post('dev', 'kept')
+    await first.close()
+    await pool.query("update board_meta set value = 'older' where key = $1", [SCHEMA_VERSION_KEY])
+
+    const migrating = postgres({ pool, autoMigrate: true })
+    try {
+      expect((await on(migrating).thread(root.id)).message.text).toBe('kept')
+      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: POSTGRES_SCHEMA.version }])
+    } finally {
+      await migrating.close()
+    }
+  }, 20_000)
 
   it("sends what's scheduled through the scheduler it's given, delivered to its scheduler route", async () => {
     const queue = fakeQueue()

@@ -7,7 +7,8 @@ import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
 import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
-import { checkSchema, type PgPool } from '../store/postgres-db.ts'
+import { checkSchema, migrateSchema, type PgPool } from '../store/postgres-db.ts'
+import { POSTGRES_SCHEMA } from '../store/postgres-schema.generated.ts'
 import { postgresBlob, postgresStore } from '../store/postgres.ts'
 
 export type PostgresOptions = {
@@ -26,6 +27,12 @@ export type PostgresOptions = {
    * backend's `scheduler` mounted in a route of its own. Default: timers in this process.
    */
   scheduler?: Scheduler
+  /**
+   * Apply the package's `sql/postgres/schema.sql` on the first call when the database doesn't have
+   * this release's: on a new database, and after an upgrade that changed it. Default false: apply
+   * it yourself, before the deploy.
+   */
+  autoMigrate?: boolean
 }
 
 /** A board on Postgres. `close()` stops its timers and ends the pool it made. */
@@ -68,7 +75,8 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
       const pool = poolOf()
       try {
         // A database without the tables says which file to apply, before the first query that needs them.
-        await checkSchema(pool)
+        if (options.autoMigrate) await migrateSchema(pool, POSTGRES_SCHEMA)
+        else await checkSchema(pool)
       } catch (error) {
         throw new HttpError(500, 'no_store', `postgres: ${unreachable(error)}`)
       }
