@@ -132,6 +132,20 @@ Your team's board lives in Vercel's API, its files included. A board on
 `local()` lives in SQLite under `.board/`, with its files next to it, or in
 memory for tests. See [Local boards](./01-board/10-local.md).
 
+### Can I host it myself?
+
+Yes. `board({ backend: local() })` keeps the whole board, files included, in
+SQLite on your own server: one long-running Node process with a disk it can
+write, since a serverless function can't keep one. It passes the same
+[conformance](./04-reference/05-conformance.md) kit as the board in Vercel's
+API. Its scheduler runs in that process, so a restart drops a pending send.
+Off Vercel, set `url` to the board's public URL, and say who its callers are
+with [an `authenticate`](./01-board/01-mounting.md#callers-of-your-own), [Tailscale](./03-guides/08-tailnet.md), or
+[grants](./01-board/09-access.md#grants) for an OIDC issuer. To store it
+somewhere else, write [a backend of your own](./01-board/01-mounting.md#a-backend-of-your-own).
+Most teams want the board in Vercel's API: there's nothing to run, back up, or
+upgrade.
+
 ### Do I need to deploy anything?
 
 Not to use the board: the CLI and `board()` reach it in Vercel's API. A route
