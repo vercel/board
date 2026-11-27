@@ -251,6 +251,8 @@ export const schedulesContract = contract({
     }),
     /** (server) The Vercel deployment `deployment` took over every send: an earlier one's timers no longer post. */
     'schedule.takeover': z.object({ deployment: z.string().min(1) }),
+    /** (server) Deployment `deployment` armed every pending send created through log index `through`. */
+    'schedule.takeover.armed': z.object({ deployment: z.string().min(1), through: z.number().int().nonnegative() }),
   },
 })
 

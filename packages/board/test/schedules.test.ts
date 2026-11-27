@@ -424,6 +424,47 @@ describe('scheduled messages', () => {
     expect(queue.timers).toHaveLength(2)
   })
 
+  it('are armed once per deployment, and after that only those created since, however many instances start', async () => {
+    const store = memory()
+    let arms = 0
+    const queue = fakeQueue()
+    const counted: typeof queue.scheduler = {
+      ...queue.scheduler,
+      schedule: async (task) => {
+        if (task.kind === 'append' && task.events.some((e) => e.type === 'schedule.due')) arms++
+        return queue.scheduler.schedule(task)
+      },
+    }
+    const deploy = (id: string, scheduler = queue.scheduler) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const deployed = testBoard({ store, scheduler })
+      vi.unstubAllEnvs()
+      return fresh(deployed.fetch, 'u_julian', {})
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const before = deploy('dpl_before')
+    for (const text of ['one', 'two', 'three']) await before('POST', '/schedules', { channel: 'dev', text, in: '1h' })
+    const armedEvents = async () => (await store.log.read(`board-schedules\u001f${SCHEDULES_SESSION}`)).filter((e) => e.type === 'schedule.takeover.armed' && (e.payload as { deployment: string }).deployment === 'dpl_after')
+
+    await deploy('dpl_after', counted)('GET', '/me')
+    await vi.waitFor(async () => expect(await armedEvents()).toHaveLength(1))
+    await vi.waitFor(() => expect(arms).toBe(3))
+    for (let i = 0; i < 4; i++) await deploy('dpl_after', counted)('GET', '/me')
+    await settle()
+    expect(arms).toBe(3)
+    expect(await armedEvents()).toHaveLength(1)
+
+    // One created on the earlier deployment after the takeover: its timer went there, so the next instance arms it alone.
+    await before('POST', '/schedules', { channel: 'dev', text: 'late', in: '1h' })
+    await settle()
+    const late = arms
+    await deploy('dpl_after', counted)('GET', '/me')
+    await vi.waitFor(async () => expect(await armedEvents()).toHaveLength(2))
+    await vi.waitFor(() => expect(arms).toBe(late + 1))
+    await settle()
+    expect(arms).toBe(late + 1)
+  })
+
   it('send one created on the newest deployment when an earlier one catches up on it first', async () => {
     const store = memory()
     const deploy = (id: string, drains = true) => {

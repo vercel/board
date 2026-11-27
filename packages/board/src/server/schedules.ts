@@ -57,8 +57,14 @@ export type Schedule = {
   canceled: { by: Author; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
 }
 
-/** `takeover`: the Vercel deployment that sends, the last to take over, and its event's index; null before any has. */
-export type SchedulesState = { byId: Record<string, Schedule>; takeover: { deployment: string; index: number } | null }
+/**
+ * `takeover`: the Vercel deployment that sends, the last to take over, its event's index, and the log
+ * index through which it has armed every pending send (`armed`, null until it has); null before any has.
+ */
+export type SchedulesState = {
+  byId: Record<string, Schedule>
+  takeover: { deployment: string; index: number; armed?: number | null } | null
+}
 
 /**
  * Who a schedule sends as: its creator, shown as its principal names it. One made before handles were
@@ -116,7 +122,11 @@ export function foldSchedules(state: SchedulesState, event: ScheduleEvent): Sche
       return state
     }
     case 'schedule.takeover':
-      state.takeover = { deployment: event.payload.deployment, index: event.index }
+      state.takeover = { deployment: event.payload.deployment, index: event.index, armed: null }
+      return state
+    case 'schedule.takeover.armed':
+      if (state.takeover?.deployment === event.payload.deployment && event.payload.through > (state.takeover.armed ?? -1))
+        state.takeover.armed = event.payload.through
       return state
     default:
       return state
@@ -327,15 +337,16 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   const scheduled = options.scheduler !== undefined
 
   /**
-   * Makes this deployment the one that sends, unless it already is, and arms every pending
-   * schedule's next send here, since the timers an earlier deployment armed only reach it. Each
-   * instance arms them again, under the same names, so one created on an earlier deployment
-   * after the takeover, or missed by a takeover that failed partway, still gets a timer here.
+   * Makes this deployment the one that sends, unless it already is, and arms each pending schedule's
+   * next send here, since the timers an earlier deployment armed only reach it. It records how far
+   * through the log it armed, so the next instance arms only what was created since: one created on
+   * an earlier deployment after the takeover, whose timer went there, or one a takeover that failed
+   * partway missed. Under the same names, arming one again adds nothing.
    */
   async function takeOver(): Promise<void> {
     if (deployment === null) return
-    const read = await session.state(schedulesReducer)
-    let { state } = read
+    const read = await session.state(schedulesReducer, { through: 'latest' })
+    let { state, index } = read
     if (state.takeover?.deployment !== deployment) {
       await session.append({
         type: 'schedule.takeover',
@@ -343,11 +354,19 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         // Instances starting together take over once.
         id: await idempotentId('board-schedule-takeover', deployment, String(read.index)),
       })
-      state = (await session.state(schedulesReducer)).state
+      ;({ state, index } = await session.state(schedulesReducer, { through: 'latest' }))
     }
     const since = state.takeover!.index
-    for (const schedule of Object.values(state.byId))
-      if (schedule.next !== null) await arm(`takeover-${since}`, schedule.id, schedule.sent, schedule.next)
+    const armed = state.takeover!.armed ?? -1
+    const unarmed = Object.values(state.byId).filter((schedule) => schedule.id > armed && schedule.next !== null)
+    // Nothing new since the last instance armed them: a read, and no timers or writes.
+    if (unarmed.length === 0 && state.takeover!.armed != null) return
+    for (const schedule of unarmed) await arm(`takeover-${since}`, schedule.id, schedule.sent, schedule.next!)
+    await session.append({
+      type: 'schedule.takeover.armed',
+      payload: { deployment, through: index },
+      id: await idempotentId('board-schedule-armed', deployment, String(index)),
+    })
   }
 
   /**
