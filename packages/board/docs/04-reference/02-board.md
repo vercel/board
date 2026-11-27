@@ -588,11 +588,12 @@ it gives:
   board.** One held to a `can`, as a sandbox is, lists the board or a subtree
   only where it reads 50 channels or fewer. Past that it fails with 400
   `channel_tree_too_large`: name a channel, or a smaller subtree.
-- **A batch holds what fits one of the API's writes: 15 plain tasks, or 14
-  with an `id`.** A task's labels, files, and needs count toward it, so a
-  chain of 13 fits, or of 12 with an `id`, and 11 tasks with a label each
-  either way. More is 400 `batch_too_large`, with nothing made, and its
-  message says how many the batch counts for.
+- **A batch holds what fits one of the API's writes: 12 plain tasks, with an
+  `id` or without.** A task's labels, files, and needs count toward it, so a
+  chain of 10 fits, and 9 tasks with a label each, either way. More is 400
+  `batch_too_large`, with nothing made, and its message says how many the
+  batch counts for. `createTasksInChunks` sends a longer plan in batches
+  that fit.
 - **A retried batch goes through the middleware again there.** The API has
   no read of a batch by its `id`, and tells the same request by what it's
   sent, after the middleware. One that isn't the same twice makes a retry

@@ -93,9 +93,8 @@ describe('createTasksInChunks', () => {
     const made = await createTasksInChunks(team, 'plans', plan)
     expect(made.map((root) => root.text)).toEqual(plan.map((task) => task.text))
     expect(made.map((root) => root.task?.needs)).toEqual(made.map((_, n) => (n > 1 ? [made[n - 1]!.id] : n === 1 ? [] : [made[39]!.id])))
-    // 40 and 25 were more than one of the API's writes holds, and so was a second 13, whose first task waits for one
-    // that's there: it made none of those, and took the rest seven at a time.
-    expect(sent.map((batch) => batch.tasks.length)).toEqual([40, 25, 13, 13, 7, 7, 7, 6])
+    // 40, 25, and 13 were more than one of the API's writes holds: it made none of those, and took them seven at a time.
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([40, 25, 13, 7, 7, 7, 7, 7, 5])
     expect((await team.tasks.list({ channel: 'plans', state: 'all', limit: 100 })).tasks).toHaveLength(40)
     // Long texts are more bytes than one of its requests holds before they're more than it counts: the same refusal, halved the same way.
     sent.length = 0
@@ -126,10 +125,10 @@ describe('createTasksInChunks', () => {
       }),
     })
     const ids = async (channel: string) => (await team.tasks.list({ channel, state: 'all', limit: 100 })).tasks.map((task) => task.message.id).sort()
-    // 26 plain tasks are two of the API's writes there, 13 each: the plan ends where the second one does.
+    // 26 plain tasks are four of the API's writes there, seven at a time: the plan ends where the fourth one does.
     const plain = Array.from({ length: 26 }, (_, n): TaskInBatch => ({ text: `plain ${n}` }))
     const whole = await createTasksInChunks(team, 'plain', plain, { id: 'plain-1' })
-    expect(sent.map((batch) => batch.tasks.length)).toEqual([26, 25, 13, 13])
+    expect(sent.map((batch) => batch.tasks.length)).toEqual([26, 25, 13, 7, 7, 7, 5])
     // One more, or as many again: neither is the plan that finished, and none of them is made.
     for (const more of [1, 26])
       await expect(createTasksInChunks(team, 'plain', [...plain, ...Array.from({ length: more }, (_, n) => ({ text: `more ${n}` }))], { id: 'plain-1' })).rejects.toMatchObject({ name: 'TasksInChunksError', code: 'duplicate_id', status: 409 })
@@ -137,10 +136,10 @@ describe('createTasksInChunks', () => {
     expect((await createTasksInChunks(team, 'plain', plain, { id: 'plain-1' })).map((root) => root.id)).toEqual(whole.map((root) => root.id))
     expect(await ids('plain')).toHaveLength(26)
 
-    // A plan that stops at its second write: the API is down for it, after 40 and 25 were too many and 13 landed.
+    // A plan that stops at its second write: the API is down for it, after 40, 25, and 13 were too many and 7 landed.
     const plan = Array.from({ length: 40 }, (_, n): TaskInBatch => ({ text: `step ${n}` }))
     sent.length = 0
-    down.at = 4
+    down.at = 5
     const stopped = await createTasksInChunks(team, 'steps', plan, { id: 'steps-1' }).then(
       () => null,
       (error: unknown) => error as TasksInChunksError,
@@ -148,13 +147,13 @@ describe('createTasksInChunks', () => {
     down.at = 0
     expect(stopped).toMatchObject({ name: 'TasksInChunksError', status: 500 })
     const first = stopped!.created.filter((root) => root !== undefined).map((root) => root.id)
-    expect(first).toHaveLength(13)
+    expect(first).toHaveLength(7)
     expect(await ids('steps')).toEqual([...first].sort())
     // A step it hadn't reached reworded, and a task longer: the write that landed is found by the size it had, whatever
     // the plan's length now, and the rest are made.
     const changed: TaskInBatch[] = [...plan.map((task, n) => (n === 20 ? { text: 'step 20, reworded' } : task)), { text: 'and one more' }]
     const made = await createTasksInChunks(team, 'steps', changed, { id: 'steps-1' })
-    expect(made.slice(0, 13).map((root) => root.id)).toEqual(first)
+    expect(made.slice(0, 7).map((root) => root.id)).toEqual(first)
     expect(made.map((root) => root.text)).toEqual(changed.map((task) => task.text))
     expect(await ids('steps')).toEqual(made.map((root) => root.id).sort())
   })

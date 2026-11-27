@@ -355,15 +355,19 @@ describe("vercel()'s tasks", () => {
     // A key is its caller's: someone else's batch under the same id is their own.
     const ada = handleOn(api, 'user:u_ada')
     expect((await ada.tasks.createMany('work', plan, { id: 'release-42' })).map((root) => root.id)).not.toEqual(first.map((root) => root.id))
-    // A key takes one of the items a write holds: 14 plain tasks fit with one and 15 without, and a chain of 12 and of 13.
+    // A key takes one of the items a write holds: 12 tasks, one with a label, fill a write without one and are one more with it.
+    // 12 plain tasks and a chain of 10 fit either way.
     const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
     const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
-    await expect(julian.tasks.createMany('plans', plain(15), { id: 'fifteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
-    await expect(julian.tasks.createMany('plans', chain(13), { id: 'thirteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
-    expect(await julian.tasks.createMany('plans', plain(14), { id: 'fourteen' })).toHaveLength(14)
-    expect(await julian.tasks.createMany('plans', chain(12), { id: 'twelve' })).toHaveLength(12)
-    expect(await julian.tasks.createMany('plans', plain(15))).toHaveLength(15)
-    expect(await julian.tasks.createMany('plans', chain(13))).toHaveLength(13)
+    const oneLabeled = [...plain(11), { text: 'labeled', labels: { step: 'fix' } }]
+    await expect(julian.tasks.createMany('plans', oneLabeled, { id: 'labeled' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
+    expect(await julian.tasks.createMany('plans', oneLabeled)).toHaveLength(12)
+    await expect(julian.tasks.createMany('plans', plain(13), { id: 'thirteen' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
+    await expect(julian.tasks.createMany('plans', chain(11), { id: 'eleven' })).rejects.toMatchObject({ status: 400, code: 'batch_too_large' })
+    expect(await julian.tasks.createMany('plans', plain(12), { id: 'twelve' })).toHaveLength(12)
+    expect(await julian.tasks.createMany('plans', chain(10), { id: 'ten' })).toHaveLength(10)
+    expect(await julian.tasks.createMany('plans', plain(12))).toHaveLength(12)
+    expect(await julian.tasks.createMany('plans', chain(10))).toHaveLength(10)
   })
 
   it("screens a retried batch again, where the API has no read of a batch by its key: the API tells the repeat by what the middleware made of it", async () => {
@@ -470,7 +474,7 @@ describe("vercel()'s tasks", () => {
     const asked = julian.sent.filter((request) => request.path === '/tasks/batch').length
     await refused([{ text: 'waits for a reply', needs: [reply.id] }], 400, 'invalid_needs')
     expect(julian.sent.filter((request) => request.path === '/tasks/batch')).toHaveLength(asked)
-    // What one of the API's writes holds, counted from the batch alone: 15 plain tasks, and fewer with labels, files, or needs.
+    // What one of the API's writes holds, counted from the batch alone: 12 plain tasks, and fewer with labels, files, or needs.
     const { task: there } = await julian.tasks.create('work', { text: 'a task that was there' })
     const plain = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}` }))
     const chain = (count: number) => Array.from({ length: count }, (_, n) => ({ key: `step-${n}`, text: `step ${n}`, ...(n > 0 ? { needs: [{ key: `step-${n - 1}` }] } : {}) }))
@@ -478,11 +482,11 @@ describe("vercel()'s tasks", () => {
     const waiting = (count: number) => Array.from({ length: count }, (_, n) => ({ text: `step ${n}`, needs: [there.id] }))
     const file = await julian.upload({ data: new TextEncoder().encode('the plan'), name: 'plan.txt', type: 'text/plain' })
     const over = {
-      '16 plain tasks': plain(16),
-      'a chain of 14': chain(14),
-      '12 with a label each': labeled(12),
-      '15, one with a file': [...plain(14), { text: 'with a file', attachments: [file.id] }],
-      '11 that wait for one that was there, one with a label': [...waiting(10), { text: 'and a label', needs: [there.id], labels: { step: 'fix' } }],
+      '13 plain tasks': plain(13),
+      'a chain of 11': chain(11),
+      '10 with a label each': labeled(10),
+      '13, one with a file': [...plain(12), { text: 'with a file', attachments: [file.id] }],
+      '9 that wait for one that was there, one with a label': [...waiting(8), { text: 'and a label', needs: [there.id], labels: { step: 'fix' } }],
     }
     for (const [what, tasks] of Object.entries(over))
       await expect(julian.tasks.createMany('plans', tasks), what).rejects.toMatchObject({ status: 400, code: 'batch_too_large', message: expect.stringMatching(/\d+ items/) })
@@ -490,12 +494,12 @@ describe("vercel()'s tasks", () => {
     expect((await julian.tasks.list({ channel: 'plans', state: 'all' })).tasks).toEqual([])
     expect((await julian.channels()).channels.map((channel) => channel.path)).not.toContain('plans')
     const fits = {
-      '15 plain tasks': plain(15),
-      'a chain of 13': chain(13),
-      '11 with a label each': labeled(11),
-      '11 that wait for one that was there': waiting(11),
+      '12 plain tasks': plain(12),
+      'a chain of 10': chain(10),
+      '9 with a label each': labeled(9),
+      '9 that wait for one that was there': waiting(9),
       // A task that waits for one of the batch too takes nothing for being readied with it.
-      '10 that wait for it and for one of the batch': [{ key: 'a', text: 'a' }, ...Array.from({ length: 10 }, (_, n) => ({ text: `step ${n}`, needs: [there.id, { key: 'a' }] }))],
+      '8 that wait for it and for one of the batch': [{ key: 'a', text: 'a' }, ...Array.from({ length: 8 }, (_, n) => ({ text: `step ${n}`, needs: [there.id, { key: 'a' }] }))],
     }
     for (const [what, tasks] of Object.entries(fits)) expect(await julian.tasks.createMany('plans', tasks), what).toHaveLength(tasks.length)
     // A task's file rides on its root, as a post's does.
@@ -558,7 +562,7 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ tasks: [{ text: 'one', attachments: [file.id] }, { text: 'two', attachments: [file.id] }, { text: 'x', needs: [{ key: 'nobody' }] }] })).toEqual([400, 'invalid_attachments'])
     expect(await ask({ tasks: [...plain(16), { text: 'x', needs: [{ key: 'nobody' }] }] })).toEqual([400, 'invalid_needs'])
     const wrong = `revert this\n\n${block('git-commit@1', { sha: 'a'.repeat(40) })}`
-    expect(await ask({ tasks: [...plain(15), { text: wrong }] })).toEqual([400, 'batch_too_large', 106, 100])
+    expect(await ask({ tasks: [...plain(15), { text: wrong }] })).toEqual([400, 'batch_too_large', 122, 100])
     expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [`thr_${crypto.randomUUID()}`] }] })).toEqual([400, 'invalid_block'])
     // A caller narrowed to channels hears of a task it can't read there before its blocks are looked at.
     expect(await ask({ tasks: [{ text: wrong }, { text: 'x', needs: [thread] }] }, 'plans=read,post')).toEqual([400, 'invalid_needs'])
@@ -586,7 +590,7 @@ describe("vercel()'s tasks", () => {
     expect(await ask({ channel: 'filed', tasks: [{ text: 'with a file', attachments: ['att_nowhere'] }] })).toEqual([404, 'attachment_not_found'])
     expect((await julian.channels()).channels.map((channel) => channel.path)).toContain('filed')
     expect((await julian.tasks.list({ channel: 'filed', state: 'all' })).tasks).toEqual([])
-    expect(await ask({ tasks: plain(15) })).toEqual([200, null])
+    expect(await ask({ tasks: plain(12) })).toEqual([200, null])
   })
 
   it("gives a caller that may post but not read its batch back as what it asked for, when a retry answers each task's ID alone", async () => {

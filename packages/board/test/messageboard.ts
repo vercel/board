@@ -1019,13 +1019,13 @@ function fakeBoard(shared: Shared, boardId: string) {
 
   /**
    * The items a batch's transaction would hold, from its body alone: the board check and the receipt, one for the
-   * caller's key when it has one, a feed head for each task up to the channel's shards, six for each task, and one for
-   * each label (and one more for a task with any), each attachment, each need, each different task that was there, and
-   * each task whose needs are all such.
+   * caller's key when it has one, three for each task up to the channel's shards (its shard's channel head, the board's
+   * head, and its place in the board's feed), six for each task, and one for each label (and one more for a task with
+   * any), each attachment, each need, each different task that was there, and each task whose needs are all such.
    */
   function batchItems(tasks: { labels?: Record<string, string>; attachments?: string[]; needs?: (string | { key: string })[] }[], keyed: boolean): number {
     const there = new Set(tasks.flatMap((task) => (task.needs ?? []).filter((need) => typeof need === 'string')))
-    let items = 2 + (keyed ? 1 : 0) + Math.min(tasks.length, FEED_SHARDS) + there.size
+    let items = 2 + (keyed ? 1 : 0) + 3 * Math.min(tasks.length, FEED_SHARDS) + there.size
     for (const task of tasks) {
       const labels = Object.keys(task.labels ?? {}).length
       const needs = task.needs ?? []
