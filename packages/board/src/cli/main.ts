@@ -2591,6 +2591,7 @@ async function tasks(args: string[]): Promise<number> {
     const [target, body, extra] = rest
     if (!target) throw usage("Missing a channel to start a task in, or a thread's ID to make one of.", { reason: 'missing_arguments' })
     if (extra !== undefined) throw usage(`tasks create takes a channel and quoted text: ${extra} is one too many.`)
+    if (flags.file !== undefined && flags.attach?.length) throw usage("Can't use --attach with --file: a plan's tasks take their files as attachments, by ID.", { next: [planHelp()] })
     if (flags.file !== undefined) return createPlan(target, body, flags.file)
     const lease = seconds('lease')
     if (lease !== undefined && !claimFlag()) throw usage('--lease is how long a claim holds the task: pass --claim too.')
@@ -2605,7 +2606,7 @@ async function tasks(args: string[]): Promise<number> {
     let made: Awaited<ReturnType<Board['tasks']['create']>>
     if (isMessageRef(target)) {
       // A thread that's there becomes a task as it is: what it says and wears are its author's.
-      const own = body !== undefined ? 'text' : (['label', 'no-sync', 'idempotency-key'] as const).find((name) => flags[name] !== undefined && flags[name] !== false)
+      const own = body !== undefined ? 'text' : (['label', 'attach', 'no-sync', 'idempotency-key'] as const).find((name) => flags[name] !== undefined && flags[name] !== false)
       if (own !== undefined)
         throw usage(`${ref(target)} becomes a task as it is: ${own === 'text' ? 'text' : `--${own}`} is for a new thread.`, {
           next: [{ instruction: 'Make it a task as it is', argv: [...cli(), 'tasks', 'create', messageId(target)] }],
@@ -2615,8 +2616,10 @@ async function tasks(args: string[]): Promise<number> {
       // A task's root is a message: how long its text is says what a backend's refusal of it means, as for a post.
       const said = await text(body, { missing: "Missing the task's text: pass it, or - to read it from stdin. --file takes a plan of several." })
       sentLength = said.length
+      const files = await attachments(board)
       made = await board.tasks.create(target, {
         text: said,
+        ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),

@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { MessageView } from '../src/api/routes.ts'
 import { serve } from './http.ts'
 import { personToken } from './harness.ts'
-import { url, useBoard, vb } from './cli-harness.ts'
+import { tmp, url, useBoard, vb } from './cli-harness.ts'
 import { asProfile, bo, claimOn, create, deployment, failure, ok, start, task, until } from './cli-tasks-harness.ts'
 
 useBoard()
@@ -119,6 +121,21 @@ describe('vb tasks', () => {
       next: [{ command: 'vb tasks --state all' }],
     })
   }, 60_000)
+
+  it('attaches files to a new task, as a post does, and refuses them on a thread that is there or a plan', async () => {
+    const dir = await tmp('board-task-files-')
+    const job = join(dir, 'job.json')
+    await writeFile(job, '{"build":"web"}')
+    const made = JSON.parse(await ok(['tasks', 'create', 'builds', 'build it', '--attach', job, '--json'])) as { task: MessageView }
+    expect(made.task.attachments).toMatchObject([{ name: 'job.json', size: 15 }])
+    const saved = join(dir, 'copy.json')
+    await ok(['download', made.task.attachments![0]!.id, saved])
+    expect(await readFile(saved, 'utf8')).toBe('{"build":"web"}')
+
+    const there = (await ok(['post', 'builds', 'build docs'])).trim()
+    expect(await vb(['tasks', 'create', there, '--attach', job])).toMatchObject({ code: 2, stderr: expect.stringMatching(new RegExp(`^error: #${there} becomes a task as it is: --attach is for a new thread\\.\n`)) })
+    expect(await vb(['tasks', 'create', 'builds', '--file', job, '--attach', job])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --attach with --file/) })
+  }, 30_000)
 
   it("says who a new task's text mentions, and warns for a handle that mentions no one", async () => {
     // A Vercel login's handle and name are its user ID, and it's known once it has written.
