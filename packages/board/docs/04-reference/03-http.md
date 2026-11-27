@@ -114,7 +114,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/attachments` | Upload one file. Answers 201 `{ attachment: { id, name, type, size } }`. See [Attachments](#attachments) |
 | GET | `/attachments/:id` | The file |
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule, mentions? }`. See [Schedules](#schedules) |
-| GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
+| GET | `/schedules` | `{ schedules }`. Query: `id` (one schedule's own), `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator (as a profile, only what that profile scheduled), or `manage` in its channel. Answers `{ schedule, canceled }` |
 | POST | `/tasks` | `{ channel, text, labels?, noSync?, attachments?, id?, needs?, for?, claim?, lease? }` starts a thread as a task, or `{ re, needs?, for?, claim?, lease? }` makes the thread `re` roots one. Answers 201 `{ task, claim? }`, where `task` is its root. See [Tasks](#tasks) |
 | POST | `/tasks/batch` | `{ channel, tasks, id? }`: starts a thread for each of 1 to 100 tasks, in one write. A task is `{ key?, text, labels?, noSync?, attachments?, needs?, for? }`. Answers 201 `{ tasks }`, their roots in order |

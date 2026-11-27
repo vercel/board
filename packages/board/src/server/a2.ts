@@ -104,10 +104,14 @@ const afterAt = (value: string | undefined): number | undefined => (value === un
  * `s`, and `ss12` from an older CLI that adds one to what this board hands out, name it too.
  */
 function scheduleAt(value: string): number {
-  const bare = value.replace(/^s{1,2}/, '')
-  const index = indexOf(bare)
-  if (index === null || index === 0) throw notFound(`schedule not found: s${bare}`, 'schedule_not_found')
+  const index = scheduleIndex(value)
+  if (index === null) throw notFound(`schedule not found: s${value.replace(/^s{1,2}/, '')}`, 'schedule_not_found')
   return index
+}
+/** What `scheduleAt` reads, null for a value that names no schedule. */
+function scheduleIndex(value: string): number | null {
+  const index = indexOf(value.replace(/^s{1,2}/, ''))
+  return index === null || index === 0 ? null : index
 }
 
 /** A signal that never aborts, for what the board does by itself. */
@@ -623,7 +627,11 @@ function build(options: A2Options, binding: BoardBinding) {
       const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, { principal, actor })
       // `me` is the caller, as it is on Vercel's board.
       const by = query.by === 'me' ? actor.id : query.by
-      return { schedules: (await schedules.list({ ...query, ...(by !== undefined ? { by } : {}), ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
+      const { id, ...rest } = query
+      // `S12` names `s12`, as the CLI has always matched it.
+      const at = id === undefined ? undefined : scheduleIndex(id.toLowerCase())
+      if (at === null) return { schedules: [] }
+      return { schedules: (await schedules.list({ ...rest, ...(by !== undefined ? { by } : {}), ...(root !== undefined ? { root } : {}), ...(at !== undefined ? { at } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
     },
     async cancelSchedule(caller, { id }) {
       const identity = await identityOf(caller)

@@ -2244,6 +2244,39 @@ describe('vercel()', () => {
     expect(api.requests.filter(listing)).toHaveLength(2)
   })
 
+  it('reads one schedule by its ID, whatever its state, in one request and not the list', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    for (let n = 0; n < 9; n++) await pong.schedule('ops', { text: `ops ${n}`, in: '1h' })
+    const done = await pong.schedule('ops', { text: 'once', in: '1m' })
+    api.send(done.id)
+    api.requests.length = 0
+    expect((await pong.schedules({ id: done.id, all: true })).map((s) => [s.id, s.state, s.channel])).toEqual([[done.id, 'done', 'ops']])
+    expect(api.requests.filter((request) => request.startsWith('GET /boards/brd_test/schedules'))).toEqual([`GET /boards/brd_test/schedules/${done.id}`])
+    // Without `all`, a finished one is left out, as the list leaves it out; and the API's IDs are lowercase, as the CLI has always matched them.
+    expect(await pong.schedules({ id: done.id })).toEqual([])
+    expect((await pong.schedules({ id: done.id.toUpperCase(), all: true })).map((s) => s.id)).toEqual([done.id])
+    expect(await pong.schedules({ id: 'sch_missing', all: true })).toEqual([])
+    // One in a channel the caller can't read is as missing.
+    const secret = await pong.schedule('secret', { text: 'hidden', in: '1h' })
+    const fixer = pong.as('fixer', { can: { ops: ['read'] } })
+    expect((await fixer.schedules({ id: done.id, all: true })).map((s) => s.id)).toEqual([done.id])
+    expect(await fixer.schedules({ id: secret.id, all: true })).toEqual([])
+  })
+
+  it('finds one schedule in the list on an API from before it read one by its ID, and asks for it by ID no more', async () => {
+    const api = fakeMessageboard({ scheduleById: false })
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const made: string[] = []
+    for (let n = 0; n < 3; n++) made.push((await pong.schedule('ops', { text: `ops ${n}`, in: '1h' })).id)
+    api.requests.length = 0
+    expect((await pong.schedules({ id: made[1]!, all: true })).map((s) => s.text)).toEqual(['ops 1'])
+    expect((await pong.schedules({ id: made[2]! })).map((s) => s.text)).toEqual(['ops 2'])
+    expect(await pong.schedules({ id: 'sch_missing', all: true })).toEqual([])
+    const byId = api.requests.filter((request) => /^GET \/boards\/brd_test\/schedules\/./.test(request))
+    expect(byId).toEqual([`GET /boards/brd_test/schedules/${made[1]}`])
+  })
+
   it('cancels a schedule once, as the API answers it, and shows who did', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')

@@ -97,6 +97,7 @@ const reminder = await team.schedule({ re: '812' }, { text: '@ada friendly ping:
 const digest = await team.schedule('standup', { text: "what's everyone on today?", every: '1d', at: new Date('2026-10-09T12:00:00Z') })
 
 await team.schedules({ re: '812' })      // pending, oldest first; { all: true } for the rest
+await team.schedules({ id: reminder.id, all: true })  // that one alone, whatever its state
 await team.cancelSchedule(reminder.id)   // { schedule, canceled }
 ```
 

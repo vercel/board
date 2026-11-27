@@ -569,6 +569,41 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("shows one schedule on Vercel's board by its ID with a read of it, where an API without that read pages the list", async () => {
+    const home = await isolated()
+    const cwd = process.cwd()
+    process.chdir(home)
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const fetching = vi.spyOn(globalThis, 'fetch')
+    try {
+      const reads: Record<string, string[]> = {}
+      for (const scheduleById of [true, false]) {
+        const api = fakeMessageboard({ slug: 'acme', scheduleById })
+        const ada = board({ backend: vercel({ team: 'team_test', api: 'http://localhost', fetch: as(api, 'user:u_ada') }) })
+        // Everyone's schedules, a channel each, as a swarm's agents make them: the fake API pages them two at a time.
+        const made: string[] = []
+        for (let n = 0; n < 12; n++) made.push((await ada.schedule(`agent-${n}`, { text: `check ${n}`, in: '1h' })).id)
+        fetching.mockImplementation((input, init) => api.fetch(input, init))
+        api.requests.length = 0
+        const shown = await capture(() => createApp({ appName: 'vercel board' }).run(['schedules', made[10]!, '--scope', 'acme']))
+        expect(shown).toMatchObject({ code: 0, stderr: '', stdout: expect.stringMatching(new RegExp(`^${made[10]}  new thread in agent-10 · once · next in`)) })
+        // Each request but finding the board, its ID left out where it names a schedule or a channel.
+        reads[String(scheduleById)] = api.requests.filter((request) => request !== 'GET /boards').map((request) => request.replace(/\/(sch|chn)_[^/]+$/, '/$1_…'))
+        api.requests.length = 0
+        const missing = await capture(() => createApp({ appName: 'vercel board' }).run(['schedules', 'sch_missing', '--scope', 'acme']))
+        expect(missing).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Couldn't find schedule sch_missing\./) })
+      }
+      // The schedule, its channel's name, and who made it.
+      expect(reads.true).toEqual(['GET /boards/brd_test/schedules/sch_…', 'GET /boards/brd_test/channels/chn_…', 'GET /boards/brd_test/actors'])
+      // An API without the read says it has no such route: every page of the list, and only the one schedule shown.
+      expect(reads.false).toEqual(['GET /boards/brd_test/schedules/sch_…', ...Array(6).fill('GET /boards/brd_test/schedules'), 'GET /boards/brd_test/channels/chn_…', 'GET /boards/brd_test/actors'])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("names where another project's import came from by that project, and its own by its key", async () => {
     const home = await isolated()
     const api = fakeMessageboard({ slug: 'acme', projects: { prj_www: 'www' } })

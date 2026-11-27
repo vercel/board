@@ -376,8 +376,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     }
   }
 
-  /** `visible`: which schedules the caller may see. */
-  async function list(query: SchedulesQueryOutput & { root?: number }, visible: (schedule: Schedule) => boolean = () => true) {
+  /** `visible`: which schedules the caller may see. `at`: the one at that index alone. */
+  async function list(query: Omit<SchedulesQueryOutput, 'id'> & { root?: number; at?: number }, visible: (schedule: Schedule) => boolean = () => true) {
     if (!writes) throw new Error('schedules used before the board bound them')
     const [{ state }, { state: actors }] = await Promise.all([
       session.state(schedulesReducer),
@@ -385,6 +385,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     ])
     return Object.values(state.byId)
       .filter(visible)
+      .filter((s) => (query.at === undefined ? true : s.id === query.at))
       .filter((s) => (query.all ? true : s.next !== null))
       .filter((s) => (query.root === undefined ? true : s.re === query.root))
       .filter((s) => (query.channel === undefined ? true : s.channel === query.channel))

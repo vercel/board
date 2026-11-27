@@ -301,6 +301,7 @@ const SANDBOX_ROUTES: readonly SandboxRoute[] = [
   { method: 'GET', path: '/attachments/:id' },
   { method: 'POST', path: '/attachments/:id/complete' },
   { method: 'GET', path: '/schedules' },
+  { method: 'GET', path: '/schedules/:id' },
   { method: 'POST', path: '/schedules' },
   { method: 'POST', path: '/schedules/:id/cancel' },
   { method: 'GET', path: '/sync/linked' },
@@ -1255,6 +1256,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const replies = read.filter((message) => message.sequence > 1).sort((a, b) => a.sequence - b.sequence)
     const root = read.find((message) => message.sequence === 1) ?? (await messageById(who, idAt(threadId, 1), signal)).message
     return [root, ...(range.limit === undefined ? replies : range.after === undefined ? replies.slice(-range.limit) : replies.slice(0, range.limit))]
+  }
+
+  /** Whether the API reads one schedule by its ID (`GET /schedules/:id`): until it answers that it has no such route, it's asked. */
+  let schedulesById = true
+  /**
+   * The schedule with `id`, whatever its state, or null for one the API doesn't have or won't show the caller (404
+   * `schedule_not_found`). Undefined when the API can't say, and the schedule is found in the list, as before: one
+   * from before the route answers 404 for the route itself (`not_found`), and it's never asked again; any other
+   * 400 or 403 lists them this once. The API's IDs are lowercase, and the CLI has always matched one in any case.
+   */
+  async function scheduleById(who: Who, id: string, signal?: AbortSignal): Promise<ApiSchedule | null | undefined> {
+    if (!schedulesById) return undefined
+    try {
+      const path = await onBoard(who, `/schedules/${encodeURIComponent(id.toLowerCase())}`)
+      return (await api<{ schedule: ApiSchedule }>(who, 'GET', path, signal ? { signal } : {})).schedule
+    } catch (error) {
+      if (error instanceof HttpError && error.code === 'schedule_not_found') return null
+      if (error instanceof HttpError && error.status === 404) schedulesById = false
+      else if (!(error instanceof HttpError && (error.status === 400 || error.status === 403))) throw error
+      return undefined
+    }
   }
 
   /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
@@ -3524,6 +3546,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async schedules(caller, query, signal) {
       const who = whoOf(caller)
+      // A schedule named by its ID alone is read by it, not found in the list.
+      if (query.id !== undefined && query.re === undefined && query.channel === undefined && query.by === undefined) {
+        const one = await scheduleById(who, query.id, signal)
+        if (one !== undefined) return { schedules: one && (query.all || one.state === 'pending') ? [await scheduleView(who, one)] : [] }
+      }
       const filter: Record<string, string | undefined> = { state: query.all ? undefined : 'pending' }
       if (query.re !== undefined) {
         const found = await messageIn(who, query.re, signal).catch((error: unknown) => {
@@ -3551,7 +3578,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
               return found
             })
       if (!listed) return { schedules: [] }
-      const views = await Promise.all(listed.filter((schedule) => created(schedule.createdBy)).map((schedule) => scheduleView(who, schedule)))
+      const id = query.id?.toLowerCase()
+      const views = await Promise.all(listed.filter((schedule) => (id === undefined || schedule.id === id) && created(schedule.createdBy)).map((schedule) => scheduleView(who, schedule)))
       return { schedules: views }
     },
     async cancelSchedule(caller, { id }, signal) {

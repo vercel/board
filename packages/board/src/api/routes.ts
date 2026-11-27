@@ -234,6 +234,8 @@ export const ScheduleBody = z
   })
 
 export const SchedulesQuery = z.object({
+  /** A schedule's own ID: that schedule alone, when the rest of the query lets it in. */
+  id: id.optional(),
   /** Any message in a thread: the schedules that reply in it. */
   re: id.optional(),
   channel: z.string().optional(),

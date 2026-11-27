@@ -46,6 +46,7 @@ describe('cli schedules', () => {
       expect((await vb(['schedules', '--all'], as)).stdout).toMatch(/· done · 1 sent · by u_julian[\s\S]*· canceled · by u_julian/)
       // Its own ID shows the one schedule, canceled as it is: how to see that a cancel went through.
       expect(await vb(['schedules', id], as)).toMatchObject({ code: 0, stdout: expect.stringMatching(new RegExp(`^${id}  #${root} · every 30m[^\\n]* · canceled · by u_julian\\n`)) })
+      expect((await vb(['schedules', id.toUpperCase()], as)).stdout).toMatch(new RegExp(`^${id}  #${root} · every 30m`))
       expect(await vb(['schedules', 's99999'], as)).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Couldn't find schedule s99999\.\n/) })
       // Vercel's board names a schedule sch_…: that is one too, and no message's ID (a number, or msg_…) is.
       expect(['s12', 'S12', 'sch_01HZX3'].every(isScheduleId)).toBe(true)

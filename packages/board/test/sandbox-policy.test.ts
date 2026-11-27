@@ -195,6 +195,10 @@ describe("sandboxPolicy() on Vercel's board", () => {
     expect((await agent.actors()).map((actor) => actor.id)).toContain('vercel:project:prj_pong:production+fixer')
     const later = await agent.schedule({ re: root.id }, { text: 'check back', in: '1h' })
     expect((await agent.schedules()).map((one) => one.id)).toEqual([later.id])
+    // One by its ID is read by it through the policy, not found in the list.
+    api.requests.length = 0
+    expect((await agent.schedules({ id: later.id })).map((one) => one.id)).toEqual([later.id])
+    expect(api.requests.filter((r) => r.includes('/schedules'))).toEqual([`GET /boards/brd_test/schedules/${later.id}`])
     expect((await agent.cancelSchedule(later.id)).canceled).toBe(true)
     await agent.delete(reply.id)
     // What a project's credential may do to the board itself, or under it past what vb calls, isn't the sandbox's.

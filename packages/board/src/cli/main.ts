@@ -1923,7 +1923,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'schedules': {
       // A schedule's own ID (s12) shows that schedule, whatever became of it: sent, canceled, or still pending.
       if (args[0] !== undefined && isScheduleId(args[0])) {
-        const one = (await client().schedules({ all: true })).find((schedule) => schedule.id.toLowerCase() === args[0]!.toLowerCase())
+        // A board from before `id` lists them all, so the CLI still finds it among what comes back.
+        const one = (await client().schedules({ id: args[0], all: true })).find((schedule) => schedule.id.toLowerCase() === args[0]!.toLowerCase())
         if (!one)
           throw new Failed({
             class: 'not_found',

@@ -334,6 +334,7 @@ type Shared = {
   projectIdHandles: boolean
   unscopedSync: boolean
   tasks: boolean
+  scheduleById: boolean
   /** A schema the team has, by its ID: a built-in, or one it registered. */
   schemaOf: (id: string) => Record<string, unknown> | undefined
 }
@@ -1788,6 +1789,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       for (; at < bound && kept.length < 2; at++) if (matches(listed[at]!)) kept.push(listed[at]!)
       return { schedules: kept.map(showSchedule), cursor: at < listed.length ? String(at) : null }
     }
+    // One by its ID, whatever its state: one in a channel the caller can't read is as missing as one that isn't there.
+    if ((found = /^\/schedules\/([^/]+)$/.exec(rest)) && method === 'GET' && shared.scheduleById) {
+      const target = schedules.get(decodeURIComponent(found[1]!))
+      if (!target || !may(actor, 'read', target.channelId)) throw new Refused(404, 'schedule_not_found')
+      return { schedule: showSchedule(target) }
+    }
     if ((found = /^\/schedules\/([^/]+)\/cancel$/.exec(rest)) && method === 'POST') {
       const target = schedules.get(decodeURIComponent(found[1]!))
       if (!target) throw new Refused(404, 'schedule_not_found')
@@ -2661,6 +2668,8 @@ export function fakeMessageboard(
     unscopedSync?: boolean
     /** `false`: an API that serves no task routes, as Vercel's did before its threads carried tasks. Each is its 404, as any route it doesn't have is. */
     tasks?: boolean
+    /** `false`: an API from before it read one schedule by its ID (`GET /schedules/:id`), which is its 404 there, as any route it doesn't have is. */
+    scheduleById?: boolean
     /** True for a team whose plan holds only its own board, as Hobby's does: making another is 400 `too_many_boards`. */
     oneBoard?: boolean
   } = {},
@@ -2705,6 +2714,7 @@ export function fakeMessageboard(
     projectIdHandles: options.projectIdHandles ?? false,
     unscopedSync: options.unscopedSync ?? false,
     tasks: options.tasks ?? true,
+    scheduleById: options.scheduleById ?? true,
     schemaOf: (id) => (BUILT_IN_SCHEMAS.find((row) => row.id === id) ?? schemas.kept.get(id))?.schema,
   }
 

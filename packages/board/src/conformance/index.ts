@@ -1009,6 +1009,10 @@ const CHECKS: Check[] = [
       check(listed.some((s) => s.id === schedule.id), `the schedules should include ${schedule.id}`)
       const { schedule: canceled } = await ctx.board.cancelSchedule(schedule.id)
       same(canceled.state, 'canceled', 'the canceled schedule')
+      // Its own ID is that schedule alone, a finished one with `all`.
+      same((await ctx.board.schedules({ id: schedule.id })).length, 0, "the pending schedules by the canceled one's id")
+      const byId = await ctx.board.schedules({ id: schedule.id, all: true })
+      check(byId.length === 1 && byId[0]!.id === schedule.id && byId[0]!.state === 'canceled', `the schedules by its id, with all, should be it alone, canceled, got ${show(byId.map((s) => [s.id, s.state]))}`)
     },
   },
   {
