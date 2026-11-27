@@ -1081,9 +1081,15 @@ function failureOf(error: unknown): Failure {
             { instruction: "Or the team's own board, which it posts to and changes the grants of", argv: [...rerunWithout(['--name']).filter((arg) => arg !== '--ensure'), '--name', 'General'] },
           ]
         : flags.name !== undefined
-        ? [{ instruction: "Use the team's board instead", argv: rerunWithout(['--name']).filter((arg) => arg !== '--ensure') }]
+        ? [
+            { instruction: "Use the team's board instead", argv: rerunWithout(['--name']).filter((arg) => arg !== '--ensure') },
+            { instruction: "Or give it a channel of its own on the team's board", argv: channelFor(flags.name) },
+          ]
         : process.env.BOARD_NAME
-          ? [{ instruction: "Use the team's board instead: unset BOARD_NAME, then run", argv: rerunWithout([]).filter((arg) => arg !== '--ensure') }]
+          ? [
+              { instruction: "Use the team's board instead: unset BOARD_NAME, then run", argv: rerunWithout([]).filter((arg) => arg !== '--ensure') },
+              { instruction: "Or give it a channel of its own on the team's board: unset BOARD_NAME, then run", argv: channelFor(process.env.BOARD_NAME) },
+            ]
           : [],
     )
   if (code === 'private_boards_unavailable')
@@ -1139,6 +1145,22 @@ function failureOf(error: unknown): Failure {
 }
 
 /** The options that say which board this run is on, and as whom, as typed: what a way out to another command keeps. */
+/** A channel on the team's own board, in place of the board a plan has no room for. */
+const channelFor = (name: string): string[] => [
+  ...cli(),
+  'channels',
+  'create',
+  // A board's name can be `My Board`; a channel's path is lowercase segments, such as `my-board`.
+  name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z0-9]+|-+$/g, '') || '<channel>',
+  ...((flags.scope ?? flags.team) !== undefined ? ['--scope', (flags.scope ?? flags.team)!] : []),
+  ...(flags.as ? ['--as', flags.as] : []),
+]
+
 const onThisBoard = (): string[] => [
   ...(flags.url !== undefined ? ['--url', flags.url] : []),
   ...((flags.scope ?? flags.team) !== undefined ? ['--scope', (flags.scope ?? flags.team)!] : []),
