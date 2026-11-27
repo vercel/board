@@ -633,11 +633,14 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (!channel || !mayRead(actor, channel.id)) throw new Refused(404, 'channel_not_found')
     return channel
   }
-  /** `include=channel` on a message or a thread: its channel with it, on an API that takes the parameter, to a caller who may read it. */
-  const withChannel = (url: URL, actor: Actor, channelId: string) => {
+  /**
+   * `include=channel` on a message, a thread, or a thread's messages: its channel with it, on an API that takes the
+   * parameter, to a caller who may read it. `always`: on a route that takes it whichever API this is.
+   */
+  const withChannel = (url: URL, actor: Actor, channelId: string, always = false) => {
     const include = url.searchParams.get('include')
     if (include === null) return {}
-    if (!shared.channelNames) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `include`.')
+    if (!always && !shared.channelNames) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `include`.')
     if (include !== 'channel') throw new Refused(400, 'invalid_request')
     if (!mayRead(actor, channelId)) throw new Refused(404, 'channel_not_found')
     return { channel: channelAt(channelId) }
@@ -2355,7 +2358,8 @@ function fakeBoard(shared: Shared, boardId: string) {
         const listed = thread.messages.filter((m) => m.sequence > after)
         if (url.searchParams.get('order') === 'desc') listed.reverse()
         const { items, cursor } = page(listed, url.searchParams.get('cursor'), size)
-        return { messages: items.map(show), cursor }
+        // Every page answers the thread's channel with `include=channel`, whichever API this is: Vercel's takes it here, and board's client asks every read of a thread for it.
+        return { messages: items.map(show), cursor, ...withChannel(url, actor, thread.channelId, true) }
       }
       // A reply answers its thread's channel with `include=channel`, as a read of a message does, to a caller who reads it and has more than IDs back.
       const include = url.searchParams.get('include')

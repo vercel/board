@@ -168,7 +168,7 @@ describe("vercel(): a thread's replies in a range", () => {
   const threadReads = (sent: string[]) => sent.filter((path) => /^GET \/threads\/[^/]+\/messages$/.test(path)).length
 
   it.each([
-    ['an API that reads a range', { threadRanges: true }, 1],
+    ['an API that reads a range', { threadRanges: true, inlineActors: true }, 1],
     ['an API from before ranges, where the whole thread is read and cut', {}, 4],
   ])('answers the root and the replies after a message, the newest, or the first after it, on %s', async (_api, options, pages) => {
     const api = fakeMessageboard(options)
@@ -182,6 +182,42 @@ describe("vercel(): a thread's replies in a range", () => {
     // Each read of the range is one page where the API cuts it, and every page of the thread where it doesn't.
     expect(threadReads(sent) / 4).toBeLessThanOrEqual(pages)
     if (pages === 1) expect(threadReads(sent)).toBe(4)
+  })
+
+  it('reads a range without reading the message first: the range, and the root apart when the range leaves it out', async () => {
+    const api = fakeMessageboard({ threadRanges: true, inlineActors: true })
+    const ids = await thread(api, 3)
+    const asked = async (read: (team: ReturnType<typeof counted>['team']) => Promise<unknown>) => {
+      // A process that has read nothing, as each `vb` run is.
+      const { team, sent } = counted(api)
+      await read(team)
+      return sent.filter((path) => path !== 'GET /boards')
+    }
+    const messages = `GET /threads/${ids[0]!.replace(/^msg_(.*)_1$/, 'thr_$1')}/messages`
+
+    // The newest replies of a thread that short have its root among them.
+    expect(await asked((team) => team.thread(ids[2]!, { limit: 5 }))).toEqual([messages])
+    expect(await asked((team) => team.thread(ids[2]!, { limit: 1 }))).toEqual([messages, `GET /messages/${ids[0]}`])
+    expect(await asked((team) => team.thread(ids[2]!, { after: ids[1]! }))).toEqual([messages, `GET /messages/${ids[0]}`])
+  })
+
+  it.each([
+    ['an API that reads a range', { threadRanges: true }],
+    ['an API from before ranges', {}],
+  ])("answers message_not_found for an ID past the thread's end or of no thread, however it's read, on %s", async (_api, options) => {
+    const api = fakeMessageboard(options)
+    const ids = await thread(api, 5)
+    const { team } = counted(api)
+    const past = ids[0]!.replace(/_1$/, '_9')
+    const nowhere = 'msg_00000000-0000-4000-8000-000000000000_2'
+    const refused = (id: string) => ({ status: 404, code: 'message_not_found', message: `message not found: ${id}` })
+
+    // Whole, its newest replies, the replies after a message to its end, and a range from a message that stops short of it.
+    for (const read of [{}, { limit: 2 }, { after: ids[1]! }, { after: ids[1]!, limit: 2 }]) await expect(team.thread(past, read), JSON.stringify(read)).rejects.toMatchObject(refused(past))
+    for (const read of [{}, { limit: 2 }, { after: nowhere }]) await expect(team.thread(nowhere, read), JSON.stringify(read)).rejects.toMatchObject(refused(nowhere))
+    // The thread's last message is there, in a range that stops short of it and in one that starts from it.
+    expect(texts(await team.thread(ids[5]!, { after: ids[1]!, limit: 2 }))).toEqual(['root', 'reply 2', 'reply 3'])
+    expect(texts(await team.thread(ids[5]!, { after: ids[5]! }))).toEqual(['root'])
   })
 
   it('answers a short thread whole when asked for more replies than it has', async () => {

@@ -1210,16 +1210,28 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** A message's labels: a deleted message keeps none, though the API still holds them. */
   const labelsOf = (message: ApiMessage): Labels => (message.deletedAt === undefined ? { ...message.labels } : {})
 
-  const threadMessages = async (who: Who, threadId: string, signal?: AbortSignal) => {
+  /** A page of a thread's messages, with its channel when the read asks for it. */
+  type ThreadPage = { messages: ApiMessage[]; cursor: string | null; channel?: ApiChannel }
+  /** What a read of a thread found: its messages, its channel when the read asked for it, and `end`, its last message's sequence, 0 for a thread with none. */
+  type ThreadRead = { messages: ApiMessage[]; channel: ApiChannel | undefined; end: number }
+  /**
+   * A thread's messages, all of them, and with `include` its channel: the API answers it with a page of them
+   * (`include=channel`), so naming it costs no request of its own. The first page is asked for it, and it's kept
+   * as any channel an answer names. An API that doesn't take the parameter here refuses the read, and nothing
+   * is read in its place.
+   */
+  const threadMessages = async (who: Who, threadId: string, signal?: AbortSignal, include?: 'channel'): Promise<ThreadRead> => {
     const path = await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`)
     const messages: ApiMessage[] = []
+    let channel: ApiChannel | undefined
     let cursor: string | undefined
     do {
-      const page = await reading<{ messages: ApiMessage[]; cursor: string | null }>(who, path, { query: { cursor }, ...(signal ? { signal } : {}) })
+      const page = await reading<ThreadPage>(who, path, { query: { cursor, include: channel ? undefined : include }, ...(signal ? { signal } : {}) })
       messages.push(...page.messages)
+      if (page.channel) learn(who, (channel = page.channel))
       cursor = page.cursor ?? undefined
     } while (cursor)
-    return messages
+    return { messages, channel, end: messages.at(-1)?.sequence ?? 0 }
   }
 
   /** Whether the API reads a thread's messages in a range (`after`, `limit`, `order`): until it refuses one, it's asked. */
@@ -1228,33 +1240,44 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * A thread's root, and its replies in a range: after the message at `after`, the first `limit` of them, or with no
    * `after`, the newest. The API reads the range itself, a page of 100 at most, and the root apart when the range
    * leaves it out; one from before ranges answers 400 for the parameter, and the whole thread is read and cut here.
+   * With `include`, the thread's channel too, from the first page it reads. `end` is the last message it read
+   * when the root is among them, and otherwise what the root's own read says: it answers its thread, which counts
+   * its messages.
    */
-  async function threadRange(who: Who, threadId: string, range: { after?: number; limit?: number }, signal?: AbortSignal): Promise<ApiMessage[]> {
-    const cut = ([root, ...replies]: ApiMessage[]) => {
+  async function threadRange(who: Who, threadId: string, range: { after?: number; limit?: number }, signal?: AbortSignal, include?: 'channel'): Promise<ThreadRead> {
+    const cut = ({ messages: [root, ...replies], channel, end }: ThreadRead): ThreadRead => {
       const rest = range.after === undefined ? replies : replies.filter((reply) => reply.sequence > range.after!)
-      return root ? [root, ...(range.limit === undefined ? rest : range.after === undefined ? rest.slice(-range.limit) : rest.slice(0, range.limit))] : []
+      return { messages: root ? [root, ...(range.limit === undefined ? rest : range.after === undefined ? rest.slice(-range.limit) : rest.slice(0, range.limit))] : [], channel, end }
     }
-    if (!threadRanges) return cut(await threadMessages(who, threadId, signal))
+    if (!threadRanges) return cut(await threadMessages(who, threadId, signal, include))
     const path = await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`)
     // One more than asked for when it reads the newest: the root is among them when the thread is that short.
     const wanted = range.limit === undefined ? Infinity : range.after === undefined ? range.limit + 1 : range.limit
     const order = range.after === undefined ? { order: 'desc' } : { after: String(range.after) }
     const read: ApiMessage[] = []
+    let channel: ApiChannel | undefined
     try {
       let cursor: string | undefined
       do {
-        const page = await reading<{ messages: ApiMessage[]; cursor: string | null }>(who, path, { query: { ...order, limit: String(Math.min(PAGE_MAX, wanted - read.length)), cursor }, ...(signal ? { signal } : {}) })
+        const page = await reading<ThreadPage>(who, path, { query: { ...order, limit: String(Math.min(PAGE_MAX, wanted - read.length)), cursor, include: channel ? undefined : include }, ...(signal ? { signal } : {}) })
         read.push(...page.messages)
+        if (page.channel) learn(who, (channel = page.channel))
         cursor = page.cursor ?? undefined
       } while (cursor && read.length < wanted)
     } catch (error) {
       if (!['after', 'limit', 'order'].some((name) => unknownParameter(error, name))) throw error
       threadRanges = false
-      return cut(await threadMessages(who, threadId, signal))
+      return cut(await threadMessages(who, threadId, signal, include))
     }
     const replies = read.filter((message) => message.sequence > 1).sort((a, b) => a.sequence - b.sequence)
-    const root = read.find((message) => message.sequence === 1) ?? (await messageById(who, idAt(threadId, 1), signal)).message
-    return [root, ...(range.limit === undefined ? replies : range.after === undefined ? replies.slice(-range.limit) : replies.slice(0, range.limit))]
+    const among = read.find((message) => message.sequence === 1)
+    const apart = among ? null : await messageById(who, idAt(threadId, 1), signal)
+    return {
+      messages: [among ?? apart!.message, ...(range.limit === undefined ? replies : range.after === undefined ? replies.slice(-range.limit) : replies.slice(0, range.limit))],
+      channel,
+      // With the root among them, the thread is read to its end.
+      end: apart ? apart.thread.messageCount : (replies.at(-1)?.sequence ?? 1),
+    }
   }
 
   /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
@@ -2114,7 +2137,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const { thread, channel } = found
     if (filters.channel !== undefined && !inPattern(channel.name, filters.channel)) return none
     const feeds = await heads(who, [channel])
-    const all = await threadMessages(who, thread.id, signal)
+    const { messages: all } = await threadMessages(who, thread.id, signal)
     const labeled = labeledBy(thread, all.find((message) => message.sequence === 1))
     let newest = 0
     const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
@@ -3311,12 +3334,26 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async message(caller, { id, after, limit }, signal) {
       const who = whoOf(caller)
-      const { thread, channel } = await messageIn(who, id, signal)
+      const missing = () => notFound(`message not found: ${id}`, 'message_not_found')
+      // The message's ID says its thread, and the thread's messages answer their channel: no message is read first.
+      const at = locate(id)
+      if (!at) throw missing()
       const from = after === undefined ? undefined : locate(after)
-      if (after !== undefined && from?.threadId !== thread.id) throw new HttpError(400, 'invalid_request', `after: ${after} isn't a message of this thread`)
-      const [root, ...replies] =
-        from !== undefined || limit !== undefined ? await threadRange(who, thread.id, { ...(from ? { after: from.sequence } : {}), ...(limit !== undefined ? { limit } : {}) }, signal) : await threadMessages(who, thread.id, signal)
-      if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
+      if (after !== undefined && from?.threadId !== at.threadId) throw new HttpError(400, 'invalid_request', `after: ${after} isn't a message of this thread`)
+      const read = await (
+        from !== undefined || limit !== undefined
+          ? threadRange(who, at.threadId, { ...(from ? { after: from.sequence } : {}), ...(limit !== undefined ? { limit } : {}) }, signal, 'channel')
+          : threadMessages(who, at.threadId, signal, 'channel')
+      ).catch((error: unknown) => {
+        // No thread by the ID's, or one with no first message yet.
+        if (error instanceof HttpError && (error.code === 'thread_not_found' || error.code === 'message_not_found')) throw missing()
+        throw error
+      })
+      const [root, ...replies] = read.messages
+      // A thread that ends before the ID's sequence has no such message either.
+      if (!root || at.sequence > read.end) throw missing()
+      const { channel } = read
+      if (!channel) throw new HttpError(502, 'remote_error', "Vercel's API answered a thread's messages without their channel")
       // The root and its replies are named together: one after the other, they'd ask for their authors apart.
       const [message, ...shown] = await Promise.all([root, ...replies].map((each) => view(who, each, channel.name)))
       return {
