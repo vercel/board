@@ -311,6 +311,7 @@ type Shared = {
   inlineTaskMessages: boolean
   channelNames: boolean
   inlineActors: boolean
+  postContext: boolean
   threadsLimit: boolean
   /** How many reads of a channel's feed it took: one it refused for a parameter isn't one. */
   feedReads: number
@@ -642,6 +643,18 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (!mayRead(actor, channelId)) throw new Refused(404, 'channel_not_found')
     return { channel: channelAt(channelId) }
   }
+
+  /** Whether a post asks for its channel (`include=channel`), on an API that takes it on posts: checked before it writes. */
+  const postIncludes = (url: URL) => {
+    const include = url.searchParams.get('include')
+    if (include === null) return false
+    if (!shared.postContext) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `include`.')
+    if (include !== 'channel') throw new Refused(400, 'invalid_request')
+    return true
+  }
+  /** A post's answer with its thread's channel, to a caller who may read the post there. */
+  const postChannel = <T extends { thread: { id: string; channelId?: string }; message: object }>(answer: T, actor: Actor): T =>
+    'text' in answer.message && answer.thread.channelId !== undefined && mayRead(actor, answer.thread.channelId) ? { ...answer, channel: channelAt(answer.thread.channelId) } : answer
 
   /** A caller narrowed with `x-board-can` does only what it gives at the channel's closest pattern: the channel, then its parents (`dev/`), then `*`. */
   function tokenMay(actor: Actor, permission: string, channelId: string) {
@@ -2112,6 +2125,8 @@ function fakeBoard(shared: Shared, boardId: string) {
 
   /** The reads that answer the actors they name with `with=actors`: threads, messages, and a channel's changes. */
   const NAMING = /^\/(threads|messages|changes|messages\/[^/]+|threads\/[^/]+\/messages)$/
+  /** The writes that do with `postContext`: a post and a reply. */
+  const POSTING = /^\/threads(\/[^/]+\/messages)?$/
   /** Everyone a read's answer names: who started each thread and wrote its messages, and who each change is by. */
   const namedIn = (read: { threads?: any[]; thread?: any; messages?: any[]; message?: any; events?: any[] }): Actor[] => [
     ...(read.threads ?? (read.thread ? [read.thread] : [])).flatMap((t) => [t.createdBy, ...[t.lastMessage, t.rootMessage, t.latestMessage].flatMap((m) => (m ? [m.createdBy] : []))]),
@@ -2124,11 +2139,16 @@ function fakeBoard(shared: Shared, boardId: string) {
 
     if (url.searchParams.has('with')) {
       // An API from before `with=actors` takes no `with`, as no route that names nobody does, and no other parameter it doesn't know.
-      if (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest)) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `with`.')
+      const writes = method === 'POST' && shared.postContext && POSTING.test(rest)
+      if (version !== 1 || !(writes || (shared.inlineActors && method === 'GET' && NAMING.test(rest)))) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `with`.')
       if (url.searchParams.get('with') !== 'actors') throw new Refused(400, 'invalid_request')
+      // A write takes what listing the actors does, before it writes anything.
+      if (writes && actor.narrowed && !shared.namesNarrowed) throw new Refused(403, 'forbidden', "You can't read this board.")
       const plain = new URL(url)
       plain.searchParams.delete('with')
       const read = (await route(method, rest, plain, body, actor, signal, version)) as Record<string, unknown>
+      // A post's IDs alone, to a caller that may not read it, name no one.
+      if (writes && !('text' in (read.message as object))) return read
       // Each one once, as the actors route answers them by ID: one it has no view of is left out.
       return { ...read, actors: [...new Set(namedIn(read).map(({ id }) => id))].flatMap((id) => actors.get(id) ?? []) }
     }
@@ -2227,12 +2247,14 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/threads') {
       // A post is a post: what starts a thread as a task is the task routes' to take.
       if (body.task !== undefined) throw new Refused(400, 'invalid_request', 'A post takes no task.')
-      const again = repeat(actor, body.clientId)
-      if (again) return again
-      return once(actor, body.operationId, () => {
-        const { thread, message } = startThread(actor, body, () => null, () => {})
-        return { thread: showThread(thread), message: show(message) }
-      })
+      const channel = postIncludes(url)
+      const answer =
+        repeat(actor, body.clientId) ??
+        once(actor, body.operationId, () => {
+          const { thread, message } = startThread(actor, body, () => null, () => {})
+          return { thread: showThread(thread), message: show(message) }
+        })
+      return channel ? postChannel(answer, actor) : answer
     }
     if ((found = /^\/messages\/([^/]+)$/.exec(rest)) && method === 'GET') {
       const id = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/.exec(decodeURIComponent(found[1]!))
@@ -2351,12 +2373,14 @@ function fakeBoard(shared: Shared, boardId: string) {
         const { items, cursor } = page(listed, url.searchParams.get('cursor'), size)
         return { messages: items.map(show), cursor }
       }
+      const channel = postIncludes(url)
       const again = repeat(actor, body.clientId)
-      if (again) return again
+      if (again) return channel ? postChannel(again, actor) : again
       // A reply's labels commit with it, and take `label` where it's posted.
       if (Object.keys(body.labels ?? {}).length) tokenMay(actor, 'label', thread.channelId)
       if (Object.keys(body.labels ?? {}).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
-      return once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number; noSync?: boolean })) }))
+      const answer = once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number; noSync?: boolean })) }))
+      return channel ? postChannel(answer, actor) : answer
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)
@@ -2615,6 +2639,12 @@ export function fakeMessageboard(
     channelNames?: boolean
     /** True for an API that answers a read's actors with it (`with=actors`), as `GET /actors?id=` names them. Vercel's doesn't yet: `with` is 400 there. */
     inlineActors?: boolean
+    /**
+     * True for an API that answers a post with its channel and actors (`include=channel` and `with=actors` on `POST /threads`
+     * and `POST /threads/:id/messages`), as `GET /messages/:id` does. Without it each is 400 there, as any parameter it
+     * doesn't know is.
+     */
+    postContext?: boolean
     /** True for an API that pages its channel list by `limit` and lists it by a name's `prefix`. Vercel's doesn't yet: each is 400 there, and it lists every channel. */
     channelPages?: boolean
     /** True for an API that reads a thread's messages in a range (`after`, `limit`, `order`). Vercel's doesn't yet: each is 400 there. */
@@ -2689,6 +2719,7 @@ export function fakeMessageboard(
     inlineTaskMessages: options.inlineTaskMessages ?? false,
     channelNames: options.channelNames ?? false,
     inlineActors: options.inlineActors ?? false,
+    postContext: options.postContext ?? false,
     boardFeed: options.boardFeed ?? false,
     feedLast: options.feedLast ?? false,
     feedStretch: options.feedStretch ?? 48,

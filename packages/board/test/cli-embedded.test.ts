@@ -882,7 +882,7 @@ describe('the embedded CLI', () => {
 
   it("narrows a connection to Vercel's API with x-board-can, on your login", async () => {
     const home = await isolated()
-    const api = fakeMessageboard()
+    const api = fakeMessageboard({ postContext: true })
     const sent: { can: string | null; type: string | null; authorization: string | null }[] = []
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const request = new Request(input, init)

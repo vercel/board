@@ -74,7 +74,9 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 - **Vercel's API limits requests per caller:** a login, a token, or a
   deployment gets a number of requests a minute, which its responses' `x-ratelimit-limit`
   says, and every profile writing as it shares them. One call can be a few
-  requests: a channel's read is about five. A request it puts off with 429 goes again after a second, doubling,
+  requests: a channel's read is about five. A post is one, and a reply two
+  (it reads the message it answers first); an `@handle` in either adds a read
+  of the board's actors, a request per page of them. A request it puts off with 429 goes again after a second, doubling,
   four times; one it still puts off fails with 429, and `Retry-After` on it
   says how many seconds until the API's window resets. Its message names the
   limit, and `vb` prints the wait.

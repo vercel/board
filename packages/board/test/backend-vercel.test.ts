@@ -999,6 +999,111 @@ describe('vercel()', () => {
     expect(api.requests.filter((r) => /\/channels(\/[^/]+)?$/.test(r))).toEqual([])
   })
 
+  describe("a post's channel and actors in its own answer", () => {
+    /** A handle as a process that has read nothing, as each `vb` run is, and what it sends: each request's route and query, and a write's operation ID. */
+    const freshOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb', refuse?: (url: URL, init?: RequestInit) => Response | null) => {
+      const sent: { route: string; query: string[]; operationId?: string; status: number }[] = []
+      const fetching = as(api, principal)
+      const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input instanceof Request ? input.url : input))
+        const response = refuse?.(url, init) ?? (await fetching(input, init))
+        const route = `${init?.method ?? 'GET'} ${url.pathname.replace(/^\/v1\/messageboard(\/boards\/[^/]+)?/, '').replace(/(msg|thr)_[^/]+/, ':id')}`
+        const query = [...url.searchParams].filter(([name]) => name !== 'teamId').map(([name, value]) => `${name}=${value}`)
+        const operationId = typeof init?.body === 'string' ? (JSON.parse(init.body) as { operationId?: string }).operationId : undefined
+        sent.push({ route, query, ...(operationId ? { operationId } : {}), status: response.status })
+        return response
+      }) as typeof globalThis.fetch
+      return { team: board({ backend: vercel({ team: 'team_test', board: 'brd_test', api: API, fetch, files: api.files }) }), sent }
+    }
+    /** A board where Ada started a thread in dev, and a post and a reply, plain and mentioning her, each from a process of its own. */
+    const writes = async (options: Parameters<typeof fakeMessageboard>[0], refuse?: (url: URL, init?: RequestInit) => Response | null) => {
+      const api = fakeMessageboard(options)
+      const root = await handleOn(api, 'user:u_ada').post('dev', { text: 'first' })
+      const out: Record<string, { answer: unknown; sent: { route: string; query: string[]; operationId?: string; status: number }[] }> = {}
+      const runs = {
+        post: (team: ReturnType<typeof handleOn>) => team.post('dev', { text: 'hello' }),
+        'post mentioning': (team: ReturnType<typeof handleOn>) => team.post('dev', { text: 'hey @ada' }),
+        // With a key, whose retry may have landed in another channel: the answer names the one it did.
+        'post with a key': (team: ReturnType<typeof handleOn>) => team.post('dev', { text: 'keyed', id: 'key-1' }),
+        reply: (team: ReturnType<typeof handleOn>) => team.reply(root.id, { text: 'me!' }),
+        'reply mentioning': (team: ReturnType<typeof handleOn>) => team.reply(root.id, { text: 'thanks @ada' }),
+      }
+      for (const [name, run] of Object.entries(runs)) {
+        const { team, sent } = freshOn(api, 'user:u_jb', refuse)
+        const { id, channel, text, author, re, mentions } = (await run(team)) as Awaited<ReturnType<typeof run>> & { mentions?: unknown }
+        out[name] = { answer: { id: id.startsWith('msg_'), channel, text, author: author?.handle, re: re === root.id, mentions }, sent }
+      }
+      // Each landed once, whatever the API refused on the way.
+      const threads = (await handleOn(api).threads({ channel: 'dev' })).threads.map((t) => [t.message.text, t.replies]).sort()
+      expect(threads).toEqual([['first', 2], ['hello', 0], ['hey @[vercel:user:u_ada]', 0], ['keyed', 0]])
+      const routes = (name: string) => out[name]!.sent.map(({ route, query }) => [route, ...query.filter((q) => /^(include|with)=/.test(q))].join(' '))
+      return { api, root, out, routes }
+    }
+
+    it('posts and replies with their channel and authors in the answer, and reads neither after', async () => {
+      const { out, routes } = await writes({ channelNames: true, inlineActors: true, postContext: true })
+      expect(routes('post')).toEqual(['POST /threads include=channel with=actors'])
+      // Mentions are settled from the actors list before the write: what it costs is the list's pages.
+      expect(routes('post mentioning')).toEqual(['GET /actors', 'POST /threads include=channel with=actors'])
+      expect(routes('post with a key')).toEqual(['POST /threads include=channel with=actors'])
+      // A reply reads the message it answers first, with its channel: the write asks for its actors alone.
+      expect(routes('reply')).toEqual(['GET /messages/:id include=channel with=actors', 'POST /threads/:id/messages with=actors'])
+      expect(routes('reply mentioning')).toEqual(['GET /actors', 'GET /messages/:id include=channel with=actors', 'POST /threads/:id/messages with=actors'])
+      // Shown as an API without them shows it, after the reads it needs.
+      const today = await writes({ channelNames: true, inlineActors: true })
+      for (const name of Object.keys(out)) expect([name, out[name]!.answer]).toEqual([name, today.out[name]!.answer])
+      expect(out.post!.answer).toEqual({ id: true, channel: 'dev', text: 'hello', author: 'julian', re: false, mentions: undefined })
+      expect(out['reply mentioning']!.answer).toMatchObject({ channel: 'dev', text: 'thanks @[vercel:user:u_ada]', author: 'julian', re: true, mentions: [{ written: '@ada', actor: { id: 'vercel:user:u_ada' } }] })
+    })
+
+    it("posts once on an API that doesn't take them, refused each once, with the same operation ID", async () => {
+      const { out, routes } = await writes({ channelNames: true, inlineActors: true })
+      const statuses = (name: string) => out[name]!.sent.filter(({ route }) => route.startsWith('POST')).map(({ status }) => status)
+      // Each parameter it refuses is refused once, and the post goes again without it: then the API's answer is read for the author.
+      expect(routes('post')).toEqual(['POST /threads include=channel with=actors', 'POST /threads include=channel', 'POST /threads', 'GET /actors'])
+      expect(statuses('post')).toEqual([400, 400, 200])
+      expect(routes('reply')).toEqual(['GET /messages/:id include=channel with=actors', 'POST /threads/:id/messages with=actors', 'POST /threads/:id/messages', 'GET /actors'])
+      for (const name of Object.keys(out)) {
+        const ids = new Set(out[name]!.sent.flatMap(({ operationId }) => (operationId ? [operationId] : [])))
+        expect([name, ids.size]).toEqual([name, 1])
+      }
+    })
+
+    it('posts once for a caller refused the actors, sending again without either', async () => {
+      const api = fakeMessageboard({ channelNames: true, inlineActors: true, postContext: true, namesNarrowed: false })
+      const { team, sent } = freshOn(api)
+      const agent = team.as(null, { can: { 'dev/': ['read', 'post'], dev: ['read', 'post'] } })
+      const posted = await agent.post('dev', { text: 'hi' })
+      expect(posted).toMatchObject({ channel: 'dev', text: 'hi' })
+      const writes = sent.filter(({ route }) => route === 'POST /threads')
+      expect(writes.map(({ query, status }) => [query.filter((q) => /^(include|with)=/.test(q)), status])).toEqual([
+        [['include=channel', 'with=actors'], 403],
+        [[], 200],
+      ])
+      expect(new Set(writes.map(({ operationId }) => operationId)).size).toBe(1)
+      expect((await handleOn(api).threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([posted.id])
+    })
+
+    it('keeps them, and its operation ID, when it sends a post again after a 503', async () => {
+      const api = fakeMessageboard({ channelNames: true, inlineActors: true, postContext: true })
+      let failing = true
+      const { team, sent } = freshOn(api, 'user:u_jb', (url, init) => {
+        if (!failing || init?.method !== 'POST' || !url.pathname.endsWith('/threads')) return null
+        failing = false
+        return Response.json({ error: { code: 'board_busy', message: 'retry shortly' } }, { status: 503, headers: { 'retry-after': '1' } })
+      })
+      const posted = await team.post('dev', { text: 'once' })
+      const writes = sent.filter(({ route }) => route === 'POST /threads')
+      expect(writes.map(({ query, status }) => [query.filter((q) => /^(include|with)=/.test(q)), status])).toEqual([
+        [['include=channel', 'with=actors'], 503],
+        [['include=channel', 'with=actors'], 200],
+      ])
+      expect(new Set(writes.map(({ operationId }) => operationId)).size).toBe(1)
+      expect(sent.filter(({ route }) => route === 'GET /actors')).toEqual([])
+      expect((await handleOn(api).threads({ channel: 'dev' })).threads.map((t) => t.message.id)).toEqual([posted.id])
+    })
+  })
+
   it("pages a channel's threads back with the API's own cursor, each of its pages in one read", async () => {
     const api = fakeMessageboard({ inlineThreadMessages: true, inlineActors: true })
     const { team, sent } = recording(api)
@@ -3409,7 +3514,7 @@ describe("callers on Vercel's API", () => {
   })
 
   it('starts a thread in one call to the API, in a channel new or not, for a reader and a post-only caller alike', async () => {
-    const api = fakeMessageboard()
+    const api = fakeMessageboard({ postContext: true })
     const ci = postOnly(api)
     const jb = handleOn(api)
     const before = api.requests.length
@@ -3444,7 +3549,8 @@ describe("callers on Vercel's API", () => {
 describe('a request the API puts off', () => {
   /** Julian on a board whose API answers `refuse(request)`'s response instead of its own, when it gives one. */
   const throttled = (refuse: (url: URL, init: RequestInit | undefined, answer: () => Promise<Response>) => Promise<Response | null> | Response | null) => {
-    const api = fakeMessageboard()
+    // An API that answers a post with its channel and actors, as Vercel's does: a post is one request it can put off.
+    const api = fakeMessageboard({ postContext: true })
     const inner = as(api, 'user:u_jb')
     const sent: { method: string; path: string; at: number }[] = []
     const fetch: typeof globalThis.fetch = async (input, init) => {

@@ -1416,7 +1416,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     } finally {
       answered()
     }
-    if (!read.actors) return read
+    keepActors(who, read)
+    return read
+  }
+  /** The actors an answer came with, kept as if each had been asked for by ID: one the API left out as one it doesn't have. */
+  function keepActors(who: Who, read: Named): void {
+    if (!read.actors) return
     const views = new Map(read.actors.map((view) => [view.id, view] as const))
     const { asked } = namesOf(who)
     const at = Date.now()
@@ -1426,7 +1431,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // Someone the API left out this time keeps a name read a moment ago.
       if (view || !asked.has(id) || at - asked.get(id)!.at > NAMES_FRESH_MS) asked.set(id, { at, view: Promise.resolve(view) })
     }
-    return read
   }
   /**
    * An actor as the API names them, asked for by ID with everyone else named in the same turn: the
@@ -2091,6 +2095,45 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       )
     posted.set(channelId, name)
     return name
+  }
+
+  /** A post as the API answers a caller that may read it: with its channel and its actors when asked. */
+  type Answered = { thread: ApiThread; message: ApiMessage; channel?: ApiChannel; actors?: ApiActorView[] }
+  const answered = (made: Answered | Posted): made is Answered => 'text' in made.message
+  /** Whether the API answers a post with its channel (`include=channel`), and with the actors it names (`with=actors`): until it refuses one, it's asked. */
+  let postsWithChannel = true
+  let postsWithActors = true
+  /**
+   * A post or a reply, `body`, and with it what showing it takes: the actors it names, kept as a read's are, and with
+   * `channel` its thread's channel, so neither is read after. An API from before them takes no parameter it doesn't
+   * know and answers 400 naming it: the write goes again without that one, and it's never asked again. One that
+   * refuses the caller them (403, as for a caller that may not list actors) writes nothing: it goes again without
+   * either, this once. Each goes with the same body, its operation ID too, so a post lands once whatever was refused.
+   */
+  async function posting(who: Who, path: string, body: { operationId: string } & Record<string, unknown>, signal: AbortSignal | undefined, channel: boolean): Promise<Answered | Posted> {
+    for (let plain = false; ; ) {
+      const query = plain
+        ? {}
+        : {
+            ...(channel && postsWithChannel && messagesWithChannel ? { include: 'channel' } : {}),
+            ...(postsWithActors && namesById && actorsWithReads !== false ? { with: 'actors' } : {}),
+          }
+      const asking = Object.keys(query).length > 0
+      try {
+        const made = await api<Answered | Posted>(who, 'POST', path, { body, ...(asking ? { query } : {}), ...(signal ? { signal } : {}) })
+        if (answered(made)) {
+          keepActors(who, made)
+          if (made.channel) learn(who, made.channel)
+        }
+        return made
+      } catch (error) {
+        if (!asking) throw error
+        if ('include' in query && unknownParameter(error, 'include')) postsWithChannel = false
+        else if ('with' in query && unknownParameter(error, 'with')) postsWithActors = false
+        else if (error instanceof HttpError && error.status === 403) plain = true
+        else throw error
+      }
+    }
   }
 
   /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
@@ -3363,17 +3406,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
       const clientId = input.id !== undefined ? await clientIdOf(input.id) : undefined
-      let made: { thread: ApiThread; message: ApiMessage } | Posted
+      let made: Answered | Posted
       let channelName: string
       if (input.channel !== undefined) {
         // By name: the API checks `post` there and makes the channel on its first post, so a caller
         // that may post but not read, which can't list or make channels, can still start a thread.
         channelName = input.channel
-        made = await api(who, 'POST', await onBoard(who, '/threads'), {
-          body: { operationId: operationId(), channel: input.channel, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}) },
+        made = await posting(
+          who,
+          await onBoard(who, '/threads'),
+          { operationId: operationId(), channel: input.channel, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
-        })
+          true,
+        )
       } else {
+        // Read first, though its ID says its thread and place: one that isn't there is `message not found` before
+        // anything is written, and the reply's channel is its own. So the reply asks for its actors alone.
         const { thread, message: to, channel } = await messageIn(who, input.re!, signal)
         channelName = channel.name
         // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
@@ -3384,18 +3432,24 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           if (landed?.thread.id === thread.id) return { message: await view(who, landed.message, channel.name) }
           throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
         }
-        const reply = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
-          body: { operationId: operationId(), text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
+        const reply = await posting(
+          who,
+          await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`),
+          { operationId: operationId(), text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
-        }).catch((error: unknown) => {
+          false,
+        ).catch((error: unknown) => {
           // The API names messages by their sequence in the thread, which a board's IDs don't show.
           if (error instanceof HttpError && error.code === 'newer_message') throw new HttpError(409, 'newer_message', `a message came after ${input.after}`)
           throw error
         })
         made = reply
       }
-      channelName = await landedIn(who, made.thread.channelId, channelName, clientId)
-      return { message: await view(who, 'text' in made.message ? made.message : await sent(who, made.message, input), channelName) }
+      // The channel it landed in, as the answer names it where it does: a retried post ID's may not be the one it named.
+      const landed = answered(made) ? made.channel : undefined
+      if (landed) posted.set(landed.id, (channelName = landed.name))
+      else channelName = await landedIn(who, made.thread.channelId, channelName, clientId)
+      return { message: await view(who, answered(made) ? made.message : await sent(who, made.message, input), channelName) }
     },
     async posted(caller, { id }, signal) {
       const who = whoOf(caller)
