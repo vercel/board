@@ -42,7 +42,7 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 
 | Option | What it does |
 | --- | --- |
-| `connectionString` | The database. Default `DATABASE_URL`, or else `POSTGRES_URL`. Without either, `pg`'s own `PG*` variables when `PGHOST` is set, with the deployment's OIDC token as the password unless `PGPASSWORD` is |
+| `connectionString` | The database. Default `DATABASE_URL`, or else `POSTGRES_URL` |
 | `pool` | A `pg` Pool you made, instead: for a password from a callback, say. The board leaves it open |
 | `max` | Connections the pool it makes may open. Default 10 |
 | `autoMigrate` | Apply `schema.sql` on the first call when the database doesn't have this release's. Default false: see [Migrating on its own](#migrating-on-its-own) |
