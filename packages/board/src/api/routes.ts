@@ -584,6 +584,24 @@ export const RegisterBody = z.union([
 /** A registration as a board on `http()` sends it: `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`. */
 export type RegisterInput = z.input<typeof RegisterBody>
 
+/**
+ * Only the watchers it names: a tail sets one, and `null` removes it. The caller's other watchers
+ * and its sync entries stay. `path` and `branch` say where it's woken, as `RegisterBody`'s do.
+ */
+export const PatchWatchersBody = z.object({
+  watch: z.record(z.string().max(100), z.object({ tail: z.string().max(1000) }).nullable()),
+  path: z
+    .string()
+    .max(300)
+    .regex(/^\/[^?#]*$/, 'a path starts with / and has no query or fragment')
+    .transform((path) => path.replace(/(.)\/+$/, '$1'))
+    .nullable()
+    .optional(),
+  branch: z.string().min(1).max(255).nullable().optional(),
+}).strict()
+/** A patch of the caller's watchers: `{ watch, path?, branch? }`, `null` removing a watcher. */
+export type PatchWatchersInput = z.input<typeof PatchWatchersBody>
+
 /** A pull of the caller's matches: at most `limit`, waiting up to `wait` seconds for one. */
 export const MatchesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -1322,6 +1340,8 @@ export const routes = {
   watchers: { method: 'GET', path: '/watchers' },
   /** Registers the caller's watchers, replacing its last registration. On a board on `http()`, registers its own, with no body or token. */
   register: { method: 'POST', path: '/watchers', body: RegisterBody },
+  /** Sets and removes only the watchers it names, keeping the caller's others and its sync entries. */
+  patchWatchers: { method: 'PATCH', path: '/watchers', body: PatchWatchersBody },
   /** The caller's matches it can run now, each leased to it until it acks. */
   matches: { method: 'GET', path: '/watchers/matches', query: MatchesQuery },
   ack: { method: 'POST', path: '/watchers/matches/:id/ack', body: AckBody },

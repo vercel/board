@@ -218,6 +218,21 @@ const alreadyReceived = (error: unknown) => {
   if (!duplicate(error)) throw error
 }
 
+/** Each watcher's ID and tail, checked as a board checks its own, and how many one registration holds. */
+function checkWatchers(watch: Record<string, { tail: string }>): void {
+  if (Object.keys(watch).length > REGISTERED_WATCHERS_MAX)
+    throw badRequest(`a registration holds at most ${REGISTERED_WATCHERS_MAX} watchers`, 'too_many_watchers')
+  for (const [id, spec] of Object.entries(watch)) {
+    const name = RemoteWatcherId.safeParse(id)
+    if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
+    try {
+      compileWatcher(id, spec)
+    } catch (error) {
+      throw badRequest((error as Error).message, 'bad_watcher')
+    }
+  }
+}
+
 /** Everything behind a board on the engine, built once board() binds it. Nothing in it connects until it's used. */
 function build(options: A2Options, binding: BoardBinding) {
   const blob = options.blob ?? null
@@ -775,18 +790,21 @@ function build(options: A2Options, binding: BoardBinding) {
       // A key names one sync's platform locations: this board's own sync's keys are its own.
       const taken = body.sync?.find((entry) => binding.sync.some((own) => own.key === entry.key))
       if (taken) throw new HttpError(409, 'sync_key_taken', `this board's own sync has sync entry ${taken.key}: give yours another key`)
-      if (Object.keys(body.watch).length > REGISTERED_WATCHERS_MAX)
-        throw badRequest(`a registration holds at most ${REGISTERED_WATCHERS_MAX} watchers`, 'too_many_watchers')
-      for (const [id, spec] of Object.entries(body.watch)) {
-        const name = RemoteWatcherId.safeParse(id)
-        if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
-        try {
-          compileWatcher(id, spec)
-        } catch (error) {
-          throw badRequest((error as Error).message, 'bad_watcher')
-        }
-      }
+      checkWatchers(body.watch)
       return registry.register(storedPrincipal(principal), { url: null, watch: body.watch, sync: body.sync ?? [] })
+    },
+    async patchWatchers(caller, body) {
+      if (body.path) throw new HttpError(501, 'no_wake_by_path', "this board wakes nothing: register no path, and pull your matches")
+      const { principal } = (await identityOf(caller))
+      ownWatchers(principal)
+      if (!principal.access.anywhere('read'))
+        throw forbidden("this token can't read anywhere, so a watcher it registers would see nothing")
+      const set = Object.fromEntries(Object.entries(body.watch).flatMap(([id, spec]) => (spec === null ? [] : [[id, spec] as const])))
+      const current = (await registry.state()).byOwner[principal.id]
+      const watch = { ...current?.watch, ...set }
+      for (const [id, spec] of Object.entries(body.watch)) if (spec === null) delete watch[id]
+      checkWatchers(watch)
+      return registry.register(storedPrincipal(principal), { url: null, watch, sync: current?.sync ?? [] })
     },
     async matches(caller, query, signal) {
       const { principal } = (await identityOf(caller))

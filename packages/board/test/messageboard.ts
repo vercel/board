@@ -1656,6 +1656,22 @@ function fakeBoard(shared: Shared, boardId: string) {
       registrations.set(owner, made)
       return shared.boardWideKeys ? view(made) : { ...view(made), elsewhere: elsewhere.sort((a, b) => a.key.localeCompare(b.key)) }
     }
+    if (method === 'PATCH' && rest === '/watchers') {
+      const body = parsed as { path?: string; branch?: string; watch: Record<string, Registration['watch'][string] | null>; tag?: string }
+      // Only the watchers it names, as api-messageboard merges them: its others and its sync keys stay, and it takes no sync.
+      if ('sync' in parsed || 'url' in parsed) throw new Refused(400, 'invalid_request')
+      if (actor.principal.type !== 'project') throw new Refused(403, 'watchers_need_project', 'Only a deployment can register watchers.')
+      const current = registrations.get(owner)
+      const watch = { ...current?.watch }
+      for (const [id, spec] of Object.entries(body.watch)) {
+        if (spec === null) delete watch[id]
+        else watch[id] = spec
+      }
+      const where = body.path !== undefined ? { path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : {}
+      const made: Registration = { owner, ...where, watch, sync: current?.sync ?? [], hash: body.tag ?? randomUUID().replaceAll('-', '') }
+      registrations.set(owner, made)
+      return view(made)
+    }
     if (!registrations.has(owner)) throw new Refused(404, 'no_registration')
     if (method === 'GET' && rest === '/watchers/matches') {
       const until = Date.now() + Number(url.searchParams.get('wait') ?? 0) * 1000

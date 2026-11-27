@@ -2147,6 +2147,23 @@ describe('vercel()', () => {
       await expect(team.register({ url: null, watch: { w: { tail } } })).rejects.toMatchObject({ status: 400, code: 'bad_watcher' })
   })
 
+  it("patches only the watchers it names in the API, keeping the rest and its sync entries", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api, 'project:prj_pong:production')
+    await team.register({ url: null, watch: { open: { tail: 'dev/' }, mine: { tail: 'general --by me' } }, sync: [{ key: 'slack', platform: 'slack' }] })
+    const patched = await team.patchWatchers({ watch: { open: null, fresh: { tail: 'general --label status=open' } } })
+    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({
+      watch: {
+        mine: { filter: { channelIds: ['general'], authors: ['vercel:project:prj_pong:production'] } },
+        fresh: { filter: { channelIds: ['general'], labels: [{ key: 'status', values: ['open'] }] } },
+      },
+      sync: [{ key: 'slack', platform: 'slack' }],
+    })
+    expect(Object.keys(patched.watch).sort()).toEqual(['fresh', 'mine'])
+    expect(patched.sync.map((entry) => entry.key)).toEqual(['slack'])
+    await expect(team.patchWatchers({ watch: { w: { tail: 'general --mentions @ada' } } })).rejects.toMatchObject({ status: 400, code: 'bad_watcher' })
+  })
+
   it("leaves how many watchers a registration holds to the API", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api, 'project:prj_pong:production')

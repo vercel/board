@@ -55,6 +55,7 @@ import type {
   PostBody,
   ReactBody,
   RegisterBody,
+  PatchWatchersBody,
   RegistrationView,
   ScheduleBody,
   SchedulesQuery,
@@ -181,6 +182,8 @@ export type Protocol = {
   uploadFinish: { input: Id; output: { attachment: Attachment } }
   watchers: { input: Nothing; output: { watchers: RegistrationView[] } }
   register: { input: Input<typeof RegisterBody>; output: RegistrationView }
+  /** Sets the watchers it names and removes those it names with `null`: the caller's others and its sync entries stay. */
+  patchWatchers: { input: Input<typeof PatchWatchersBody>; output: RegistrationView }
   matches: { input: Input<typeof MatchesQuery>; output: { matches: MatchView[] } }
   ack: { input: Id & Input<typeof AckBody>; output: { ok: true } }
   /** Long-polls with `wait`. board() serves SSE from it, so a backend has one way to read events. */

@@ -3088,7 +3088,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
-        throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
+        throw notSupported(method === 'register' || method === 'patchWatchers' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
       },
     ]),
   ) as unknown as ProtocolMethods
@@ -3995,6 +3995,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (typeof body.url === 'string')
         throw new HttpError(400, 'invalid_request', "Vercel's API wakes a deployment only by its path.", { hint: 'Register a path, or no url to pull its matches.', origin: 'handle' })
       return registerAs(whoOf(caller), typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : {}, body.watch, body.sync ?? [], false)
+    },
+    async patchWatchers(caller, body) {
+      const who = whoOf(caller)
+      const where = typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : {}
+      const watch = Object.fromEntries(
+        await Promise.all(
+          Object.entries(body.watch).map(async ([id, spec]) => [id, spec === null ? null : await filterOf(who, id, { tail: spec.tail }, false)] as const),
+        ),
+      )
+      const made = await watchersApi<ApiRegistration>(who, 'PATCH', await onBoard(who, '/watchers'), { body: { ...where, watch } })
+      return {
+        owner: made.owner,
+        ...whereOf(made),
+        watch: Object.fromEntries(await Promise.all(Object.entries(made.watch).map(async ([id, spec]) => [id, { tail: await tailOf(who, spec) }] as const))),
+        sync: syncOf(made),
+        hash: made.hash,
+      }
     },
     async matches(caller, query, signal) {
       return { matches: await pullAs(whoOf(caller), query, signal) }
