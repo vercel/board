@@ -21,6 +21,7 @@ import { indexOf, ref, scheduleRef, viaOfRecord } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 import { storedPrincipal } from './registry.ts'
 import { ownedActor } from './actors.ts'
+import { inProcess } from '../scheduler/local.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -333,7 +334,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
    * after the takeover, or missed by a takeover that failed partway, still gets a timer here.
    */
   async function takeOver(): Promise<void> {
-    if (deployment === null) return
+    if (deployment === null) return inProcess(options.scheduler) ? rearm() : undefined
     const read = await session.state(schedulesReducer)
     let { state } = read
     if (state.takeover?.deployment !== deployment) {
@@ -348,6 +349,19 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     const since = state.takeover!.index
     for (const schedule of Object.values(state.byId))
       if (schedule.next !== null) await arm(`takeover-${since}`, schedule.id, schedule.sent, schedule.next)
+  }
+
+  /**
+   * A scheduler in this process (`vb serve`'s) drops its timers on a restart: arm every
+   * pending schedule's next send again, under a name of this start's own, since a name an earlier
+   * start used may already have sent its timer's event. A send already made stays made: `due`
+   * skips a timer for a send that isn't next.
+   */
+  const started = Date.now()
+  async function rearm(): Promise<void> {
+    const { state } = await session.state(schedulesReducer)
+    for (const schedule of Object.values(state.byId))
+      if (schedule.next !== null) await arm(`restart-${started}`, schedule.id, schedule.sent, schedule.next)
   }
 
   /**

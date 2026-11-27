@@ -115,6 +115,32 @@ describe('local()', () => {
     }
   })
 
+  it('sends a schedule after a restart, though the timer its creation armed went with the process', async () => {
+    const dir = await scratch()
+    const first = local({ dir })
+    const before = board({ backend: first })
+    const root = (await before.post('dev', 'deploy')).id
+    await before.schedule({ re: root }, { text: 'did it land?', in: '1s' })
+    await first.close()
+
+    // Restarted twice, past its time: it sends once.
+    for (let start = 0; start < 2; start++) {
+      const again = local({ dir })
+      const team = board({ backend: again })
+      try {
+        await vi.waitFor(
+          async () => {
+            expect((await team.thread(root)).replies.map((m) => m.text)).toEqual(['did it land?'])
+            expect(await team.schedules()).toEqual([])
+          },
+          { timeout: 4000 },
+        )
+      } finally {
+        await again.close()
+      }
+    }
+  })
+
   it("keeps one board per name whatever its team: there's one team here", async () => {
     const dir = await scratch()
     const acme = local({ dir })

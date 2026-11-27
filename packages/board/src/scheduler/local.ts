@@ -18,6 +18,12 @@ const MAX_DELAY = 2 ** 31 - 1
 /** The local scheduler, which `stop()` stops: its timers cleared, nothing pending. */
 export type LocalScheduler = A2Scheduler & { stop(): void }
 
+/** The local schedulers made in this process, whose timers a restart drops. */
+const local = new WeakSet<A2Scheduler>()
+
+/** Whether `scheduler`'s timers live in this process, so whoever opens the log next arms them again. */
+export const inProcess = (scheduler: A2Scheduler | undefined): boolean => scheduler !== undefined && local.has(scheduler)
+
 export function localScheduler(): LocalScheduler {
   let servers: readonly DrainableServer[] = []
   // The same task asked for twice runs once, as a queue's deduplication would.
@@ -33,7 +39,7 @@ export function localScheduler(): LocalScheduler {
     else await deliverSchedulerClear(server, task)
   }
 
-  return {
+  const scheduler: LocalScheduler = {
     async schedule(task) {
       // Once stopped, what's asked for stays in the log: whoever opens it next catches up.
       if (stopped) return
@@ -68,4 +74,6 @@ export function localScheduler(): LocalScheduler {
       return async () => new Response(null, { status: 204 })
     },
   }
+  local.add(scheduler)
+  return scheduler
 }
