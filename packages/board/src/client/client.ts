@@ -346,6 +346,20 @@ export type ExplainPrincipal = {
   app?: string
 }
 
+/** Sleeps for `ms`, or until `signal` aborts. */
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const done = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
+
 export function createBoardClient(options: ClientOptions) {
   const base = options.url.replace(/\/+$/, '')
   // Browsers reject a bare `fetch` detached from `window` ("Illegal invocation").
@@ -910,7 +924,7 @@ export function createBoardClient(options: ClientOptions) {
           // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
       if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
           state.failed()
-          await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
+          await pause(Math.min(30_000, 500 * 2 ** failures++), opts.signal)
           continue
         }
         failures = 0
@@ -923,7 +937,7 @@ export function createBoardClient(options: ClientOptions) {
         } catch (error) {
           if (opts.signal?.aborted) return
           state.failed()
-          await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
+          await pause(Math.min(30_000, 500 * 2 ** failures++), opts.signal)
         }
       }
     },
@@ -934,10 +948,34 @@ export function createBoardClient(options: ClientOptions) {
       opts: WaitOptions = {},
     ): Promise<BoardEventView | null> {
       const deadline = Date.now() + duration(opts.timeout ?? '30m')
-      let after = query.after ?? (await poll({ ...query, after: undefined, wait: 0 }, opts.signal)).cursor
+      let failures = 0
+      // An outage isn't an answer: a poll that failed for it goes again after a backoff, as `events` does, until the deadline.
+      const again = async (error: unknown) => {
+        if (opts.signal?.aborted) return
+        if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
+        if (error instanceof Error && error.name === 'AbortError') throw error
+        const backoff = Math.min(30_000, 500 * 2 ** failures++)
+        if (Date.now() + backoff >= deadline) throw error
+        await pause(backoff, opts.signal)
+      }
+      let after = query.after
+      while (after === undefined && !opts.signal?.aborted) {
+        try {
+          after = (await poll({ ...query, after: undefined, wait: 0 }, opts.signal)).cursor
+        } catch (error) {
+          await again(error)
+        }
+      }
       while (Date.now() < deadline && !opts.signal?.aborted) {
         const wait = Math.max(0, Math.min(25, Math.ceil((deadline - Date.now()) / 1000)))
-        const page = await poll({ ...query, after, wait }, opts.signal)
+        let page: EventsPage
+        try {
+          page = await poll({ ...query, after, wait }, opts.signal)
+        } catch (error) {
+          await again(error)
+          continue
+        }
+        failures = 0
         if (page.events.length > 0) return page.events[0]!
         after = page.cursor
       }
