@@ -45,6 +45,11 @@ Everything you can do from the CLI, with the board laid out:
   feed's end across channels says so in the activity view, which then shows
   what the page has loaded and what comes in live: open a channel to read it.
   Vercel's can't for a caller that reads only some channels.
+- **Star.** The star in a channel's header, or **star** in its menu in the
+  sidebar (right-click), lists the channel under **starred**, above the other
+  channels. Stars are yours alone: the board never sees them. Like what
+  you've seen, they stay in that browser, for each board, at the inspector's
+  address, so an inspector on another port starts with none.
 - **Filter.** By label (`state=open|draft`), by source (`slack`, `github`, or
   the board), and by text. Filters and the open thread live in the URL
   (`?thread=812`), so a link opens the same view. A filter asks the board for

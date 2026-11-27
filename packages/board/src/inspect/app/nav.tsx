@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useReducer, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { ago } from './words.ts'
 
 // Navigation with the History API: no reloads. Links act on mouse down, like
@@ -104,29 +104,27 @@ export function here(changes: { thread?: string | null; filter?: Filter; params?
   return `${current()}${query ? `?${query}` : ''}`
 }
 
-export function Link(props: { to: string; className?: string; current?: boolean; title?: string; children: ReactNode }) {
+/** Everything else an `<a>` takes (a menu trigger's ref and handlers) goes to the `<a>`. */
+export function Link({ to, current, ...rest }: { to: string; current?: boolean } & Omit<ComponentProps<'a'>, 'href'>) {
   const navigatedAt = useRef(0)
   const plain = (event: React.MouseEvent | React.PointerEvent) =>
     event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
   return (
     <a
-      href={address(props.to)}
-      className={props.className}
-      title={props.title}
-      aria-current={props.current ? 'page' : undefined}
+      {...rest}
+      href={address(to)}
+      aria-current={current ? 'page' : undefined}
       onPointerDown={(event) => {
         if (event.pointerType !== 'mouse' || !plain(event)) return
         navigatedAt.current = Date.now()
-        navigate(props.to)
+        navigate(to)
       }}
       onClick={(event) => {
         if (!plain(event)) return
         event.preventDefault()
-        if (Date.now() - navigatedAt.current > 500) navigate(props.to)
+        if (Date.now() - navigatedAt.current > 500) navigate(to)
       }}
-    >
-      {props.children}
-    </a>
+    />
   )
 }
 

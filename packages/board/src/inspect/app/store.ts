@@ -84,6 +84,9 @@ export type State = {
   watchers: Listed<RegistrationView>
 }
 
+/** Which board this page shows, for what the browser keeps per board. */
+export const boardKey = (state: State) => state.discovery?.url ?? location.host
+
 export const initialState: State = {
   me: null,
   discovery: null,
