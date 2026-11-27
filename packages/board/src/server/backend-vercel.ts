@@ -1416,17 +1416,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     } finally {
       answered()
     }
-    if (!read.actors) return read
-    const views = new Map(read.actors.map((view) => [view.id, view] as const))
+    return keepActors(who, read)
+  }
+  /** Keeps the actors an answer came with (`with=actors`), as if each one it names had been asked for by ID, one the API left out as one it doesn't have. */
+  function keepActors<T extends Named>(who: Who, answer: T): T {
+    if (!answer.actors) return answer
+    const views = new Map(answer.actors.map((view) => [view.id, view] as const))
     const { asked } = namesOf(who)
     const at = Date.now()
     if (asked.size >= 10_000) asked.clear()
-    for (const { id } of namedIn(read)) {
+    for (const { id } of namedIn(answer)) {
       const view = views.get(id)
       // Someone the API left out this time keeps a name read a moment ago.
       if (view || !asked.has(id) || at - asked.get(id)!.at > NAMES_FRESH_MS) asked.set(id, { at, view: Promise.resolve(view) })
     }
-    return read
+    return answer
   }
   /**
    * An actor as the API names them, asked for by ID with everyone else named in the same turn: the
@@ -3374,24 +3378,33 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           signal,
         })
       } else {
-        const { thread, message: to, channel } = await messageIn(who, input.re!, signal)
-        channelName = channel.name
+        // The message's ID says its thread and where it is in it, so nothing is read before the post.
+        const to = locate(input.re!)
+        if (!to) throw notFound(`message not found: ${input.re}`, 'message_not_found')
         // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
         const after = input.after === undefined ? undefined : locate(input.after)
-        if (after !== undefined && after?.threadId !== thread.id) {
+        if (after !== undefined && after?.threadId !== to.threadId) {
           // A retry of one that landed gets it back, as the API gives it, whatever its `after` says now.
           const landed = clientId ? await api<{ thread: ApiThread; message: ApiMessage }>(who, 'GET', await onBoard(who, `/posts/${encodeURIComponent(clientId)}`), { signal }).catch(() => null) : null
-          if (landed?.thread.id === thread.id) return { message: await view(who, landed.message, channel.name) }
+          if (landed?.thread.id === to.threadId) return { message: await view(who, landed.message, (await channelById(who, landed.thread.channelId)).name) }
           throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
         }
-        const reply = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
+        // The API answers the post with its thread's channel and the actors it names, when asked: what a read of the message was for.
+        const reply = await api<({ thread: ApiThread; message: ApiMessage } | Posted) & { channel?: ApiChannel; actors?: ApiActorView[] }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(to.threadId)}/messages`), {
+          query: { include: 'channel', ...(namesById ? { with: 'actors' } : {}) },
           body: { operationId: operationId(), text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
         }).catch((error: unknown) => {
           // The API names messages by their sequence in the thread, which a board's IDs don't show.
           if (error instanceof HttpError && error.code === 'newer_message') throw new HttpError(409, 'newer_message', `a message came after ${input.after}`)
+          // No thread by the ID's, or one that ends before its sequence: the ID is no message's.
+          if (error instanceof HttpError && (error.code === 'thread_not_found' || error.code === 'invalid_reply')) throw notFound(`message not found: ${input.re}`, 'message_not_found')
           throw error
         })
+        if ('text' in reply.message) keepActors(who, reply as { thread: ApiThread; message: ApiMessage; actors?: ApiActorView[] })
+        if (reply.channel) learn(who, reply.channel)
+        // An answer without the channel is a retry's, in a channel the caller no longer reads, or IDs alone: it's read as it was before, by its ID or with the message.
+        channelName = (reply.channel ?? (reply.thread.channelId !== undefined ? await channelById(who, reply.thread.channelId) : (await messageIn(who, input.re!, signal)).channel)).name
         made = reply
       }
       channelName = await landedIn(who, made.thread.channelId, channelName, clientId)
