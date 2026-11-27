@@ -8,7 +8,7 @@ import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
 import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
-import { appliedVersion, checkSchema, migrateSchema, type PgPool } from '../store/postgres-db.ts'
+import { appliedVersion, checkSchema, migrateSchema, SCHEMA_FILE, TablesNotConfiguredError, type PgPool } from '../store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../store/postgres-schema.generated.ts'
 import { postgresBlob, postgresStore } from '../store/postgres.ts'
 
@@ -43,11 +43,13 @@ export type PostgresBackend = Backend & {
   /** The scheduler's callback, for `vercelQueues()`: `export { scheduler as POST }` from a route its topic triggers. */
   scheduler(request: Request): Promise<Response>
   /**
-   * The version of `schema.sql` the database has (`applied`, null when it has none) and this
-   * release's (`current`), for a page that says whether to migrate. Doesn't open the board.
+   * The version of `schema.sql` the database records (`applied`, null when it has none) and this
+   * release's (`current`), for a page that says whether to migrate: a version only goes up, so
+   * `applied < current` is behind, and `applied > current` is a later release's, which this one
+   * reads and writes as it is. Doesn't open the board.
    */
-  tables(): Promise<{ applied: string | null; current: string }>
-  /** Applies this release's `schema.sql` unless the database has it, as `autoMigrate` does, under the same lock. */
+  tables(): Promise<{ applied: number | null; current: number }>
+  /** Applies this release's `schema.sql` when the database is behind it, as `autoMigrate` does, under the same lock. */
   migrate(): Promise<void>
   /** Stops its timers, and ends the pool if it made it. What's still to send stays in the database. */
   close(): Promise<void>
@@ -100,7 +102,7 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
       try {
         // A database without the tables says which file to apply, before the first query that needs them.
         if (options.autoMigrate) await migrateSchema(pool, POSTGRES_SCHEMA)
-        else await checkSchema(pool)
+        else await checkSchema(pool, POSTGRES_SCHEMA.version)
       } catch (error) {
         throw new HttpError(500, 'no_store', `postgres: ${unreachable(error)}`)
       }
@@ -129,7 +131,19 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
   }
 
   const methods = Object.fromEntries(
-    METHODS.map((name) => [name, async (caller: Caller, input: never, signal: AbortSignal) => ((await open()).backend[name] as (...args: unknown[]) => unknown)(caller, input, signal)]),
+    METHODS.map((name) => [
+      name,
+      async (caller: Caller, input: never, signal: AbortSignal) => {
+        try {
+          return await ((await open()).backend[name] as (...args: unknown[]) => unknown)(caller, input, signal)
+        } catch (error) {
+          // A table or column the log's store found missing: the file to apply is board's, not the engine's.
+          if ((error as { code?: unknown } | null)?.code === 'STORE_NOT_CONFIGURED' && !(error instanceof TablesNotConfiguredError))
+            throw new HttpError(500, 'no_store', `postgres: board's tables in this database are missing or from an earlier release: apply ${SCHEMA_FILE}`)
+          throw error
+        }
+      },
+    ]),
   ) as unknown as ProtocolMethods
 
   return {

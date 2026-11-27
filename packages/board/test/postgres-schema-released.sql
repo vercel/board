@@ -392,4 +392,4 @@ create table if not exists board_files (
   data bytea not null
 );
 --> statement-breakpoint
-insert into board_meta (key, value) values ('postgres_schema', '72af31e9bc7ef025') on conflict (key) do update set value = excluded.value;
+insert into board_meta (key, value) values ('postgres_schema', '1') on conflict (key) do update set value = greatest(board_meta.value::integer, excluded.value::integer)::text;

@@ -51,15 +51,16 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 `close()` stops its timers and ends the pool it made, as a test does at its
 end.
 
-`tables()` says which `schema.sql` the database has, `applied` (null when it
-has none), and this release's, `current`, without opening the board.
-`migrate()` applies this release's unless the database has it, as
+`tables()` says which version of `schema.sql` the database has, `applied`
+(null when it has none), and this release's, `current`, without opening the
+board: `applied < current` is behind, and `applied > current` is a later
+release's. `migrate()` applies this release's when the database is behind, as
 `autoMigrate` does. Together they make a setup page's step: show what's
 missing, and a button that migrates.
 
 ```ts
 const { applied, current } = await backend.tables()
-if (applied !== current) await backend.migrate()
+if (applied === null || applied < current) await backend.migrate()
 ```
 
 ## Timers
@@ -131,9 +132,14 @@ export const team = board({ backend: postgres({ autoMigrate: true }) })
 export const GET = team.fetch, POST = team.fetch
 ```
 
-- **The file records its version,** in `board_meta`, as its last statement.
-  Each instance's first call reads it, and applies the file only when it isn't
-  this release's, so a database that's up to date costs one read.
+- **The file records its version,** a number in `board_meta` that goes up
+  with each release whose tables changed. Each instance's first call reads it,
+  and applies the file only when the database is behind, so one that's up to
+  date costs one read. A database on a later release's tables is left alone,
+  since they only add to these, and applying an earlier release's file never
+  moves the number back.
+- **Without `autoMigrate`, a database that's behind fails the first call,**
+  with 500 `no_store`, which says which file to apply.
 - **Instances that start together apply it once:** the one that applies it
   holds a Postgres advisory lock, and the others wait for it, then find it
   done.

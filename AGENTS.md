@@ -337,7 +337,9 @@ Neither reaches a handle on Vercel's board, its types included (`test/browser.te
   and indexes, and a drop or rename goes over two releases. A2's part is ours
   too, since it's bundled. `test/postgres-schema-released.sql` is the last
   release's file: the tests apply it, then this one, and fail on a line that
-  drops or renames. After a release that changed the file, copy it there.
+  drops or renames. `scripts/postgres-schema.ts` numbers the file one past
+  it when the statements differ. After a release that changed the file, copy
+  it there.
 - **Provenance is server-authored.** `by`, `mentions`, and sync fields are never
   read from a request body.
 - **Erasable TypeScript only** (`erasableSyntaxOnly`): no parameter properties,

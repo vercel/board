@@ -6,7 +6,7 @@ import { oidcTokens } from '../src/access/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { postgres, type Scheduler } from '../src/backend-postgres/index.ts'
 import { poolConfig } from '../src/server/postgres.ts'
-import { postgresSchema, SCHEMA_VERSION_KEY } from '../src/store/postgres-db.ts'
+import { parseSchema, schemaBody, SCHEMA_VERSION_KEY, stampedSchema } from '../src/store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../src/store/postgres-schema.generated.ts'
 import { vercelQueues } from '../src/backend-postgres/scheduler-vercel.ts'
 import { fakeQueue } from './queue.ts'
@@ -31,8 +31,8 @@ async function tables(pool: PgPool) {
 describe("postgres()'s schema.sql", () => {
   it("is the bundled A2 release's schema.sql, then board's tables: run scripts/postgres-schema.ts after changing either", () => {
     const a2 = readFileSync(join(import.meta.dirname, '..', 'node_modules', 'experimental-a2', 'sql', 'postgres', 'schema.sql'), 'utf8')
-    expect(SCHEMA).toBe(postgresSchema(a2).sql)
-    expect(POSTGRES_SCHEMA).toEqual(postgresSchema(a2))
+    expect(SCHEMA).toBe(stampedSchema(schemaBody(a2), POSTGRES_SCHEMA.version).sql)
+    expect(POSTGRES_SCHEMA).toEqual(stampedSchema(schemaBody(a2), POSTGRES_SCHEMA.version))
     expect(SCHEMA).toContain(a2.trimEnd())
     expect(SCHEMA).toContain('create table if not exists board_messages')
   })
@@ -48,6 +48,12 @@ describe("postgres()'s schema.sql over releases", () => {
     expect(added.filter((line) => /\b(drop\s+(table|column)|rename)\b/i.test(line))).toEqual([])
   })
 
+  it("is the last release's version when its statements match, and one more when they don't", () => {
+    const released = parseSchema(RELEASED)
+    const current = parseSchema(SCHEMA)
+    expect(current.version).toBe(current.body === released.body ? released.version : released.version + 1)
+  })
+
   it("keeps a board's threads when autoMigrate applies it over the last release's", async () => {
     const pool = await freshPool()
     await pool.query(RELEASED)
@@ -60,7 +66,7 @@ describe("postgres()'s schema.sql over releases", () => {
     try {
       await team.reply(root.id, 'after the upgrade')
       expect((await team.thread(root.id)).replies.map((m) => m.text)).toEqual(['after the upgrade'])
-      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: POSTGRES_SCHEMA.version }])
+      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: String(POSTGRES_SCHEMA.version) }])
     } finally {
       await after.close()
     }
@@ -154,7 +160,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
       const [a, b] = await Promise.all([on(one).post('dev', 'one'), on(two).post('dev', 'two')])
       expect([a.text, b.text]).toEqual(['one', 'two'])
       expect(await tables(pool)).toBeGreaterThan(0)
-      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: POSTGRES_SCHEMA.version }])
+      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: String(POSTGRES_SCHEMA.version) }])
     } finally {
       await Promise.all([one.close(), two.close()])
     }
@@ -165,16 +171,44 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     const first = postgres({ pool })
     const root = await on(first).post('dev', 'kept')
     await first.close()
-    await pool.query("update board_meta set value = 'older' where key = $1", [SCHEMA_VERSION_KEY])
+    await pool.query("update board_meta set value = '0' where key = $1", [SCHEMA_VERSION_KEY])
 
     const migrating = postgres({ pool, autoMigrate: true })
     try {
       expect((await on(migrating).thread(root.id)).message.text).toBe('kept')
-      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: POSTGRES_SCHEMA.version }])
+      expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: String(POSTGRES_SCHEMA.version) }])
     } finally {
       await migrating.close()
     }
   }, 20_000)
+
+  it("leaves a later release's tables alone, and an earlier release's file never moves the version back", async () => {
+    const pool = await freshPoolWithTables()
+    const later = String(POSTGRES_SCHEMA.version + 1)
+    await pool.query('update board_meta set value = $2 where key = $1', [SCHEMA_VERSION_KEY, later])
+    await pool.query(SCHEMA)
+    const version = async () => (await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows
+    expect(await version()).toEqual([{ value: later }])
+    const backend = postgres({ pool, autoMigrate: true })
+    try {
+      expect(await backend.tables()).toEqual({ applied: POSTGRES_SCHEMA.version + 1, current: POSTGRES_SCHEMA.version })
+      expect((await on(backend).post('dev', 'on a later schema')).text).toBe('on a later schema')
+      expect(await version()).toEqual([{ value: later }])
+    } finally {
+      await backend.close()
+    }
+  }, 20_000)
+
+  it("without autoMigrate, refuses an earlier release's tables up front, naming board's file", async () => {
+    const pool = await freshPoolWithTables()
+    await pool.query("update board_meta set value = '0' where key = $1", [SCHEMA_VERSION_KEY])
+    const backend = postgres({ pool })
+    try {
+      await expect(on(backend).post('dev', 'hello')).rejects.toThrow(`postgres: board's tables in this database are from an earlier release (version 0, this one needs ${POSTGRES_SCHEMA.version}): apply node_modules/@vercel/board/sql/postgres/schema.sql`)
+    } finally {
+      await backend.close()
+    }
+  })
 
   it('says which schema a database has, and migrates it when asked, without opening the board', async () => {
     const pool = await freshPool()
