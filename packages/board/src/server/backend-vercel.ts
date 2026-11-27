@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
+import { CHANNELS_LIMIT_DEFAULT, CHANNELS_LIMIT_MAX, LEASE_DEFAULT_S, RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type FollowView, type GrantView, type InboxEntry, type InboxItemView, type MessageView, type RegistrationView, type ScheduleView, type SchemaView, type TaskClaim, type TaskView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, refusalCode, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, MESSAGE_TEXT_MAX, RemoteWatcherId, TASK_LABEL, type Attachment, type Author, type Labels, type TaskState } from '../contract/schemas.ts'
@@ -15,7 +15,7 @@ import { uploadName } from './file-names.ts'
 import { badRequest, duplicateId, HttpError, json, notFound } from './errors.ts'
 import { carried } from './carried.ts'
 import { deployedOnVercel, registrant, wakePath, type WakeAt } from './registrant.ts'
-import { INBOX_METHODS, METHODS } from './routing.ts'
+import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { tailWatchers } from './tails.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
@@ -513,6 +513,8 @@ function operationId(): string {
 }
 
 const iso = (ms: number) => new Date(ms).toISOString()
+/** How long Vercel's API holds a read of an inbox's events, in seconds. */
+const INBOX_WAIT_SECONDS = 25
 
 /** A claim's token as the API takes one: 43 base64url characters. */
 const CLAIM_TOKEN = /^[a-zA-Z0-9_-]{43}$/
@@ -2043,6 +2045,59 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     )
   }
 
+  /** An inbox's item as Vercel's API answers it: its thread with its first and newest messages, or the one message it is. */
+  type ApiInboxItem = {
+    threadId: string
+    messageId?: string
+    reader: string
+    reasons: InboxItemView['reasons']
+    unread: number
+    snoozedUntil?: number
+    at: number
+    thread: ApiThread
+    message?: ApiMessage
+  }
+  type ApiInboxEvent = { type: 'inbox.item'; cursor: string; item: ApiInboxItem } | { type: 'inbox.removed'; cursor: string; threadId: string; messageId?: string; reader: string }
+  type ApiFollow = { channel?: string; threadId?: string; by: FollowView['by']; at: number }
+
+  /** Inbox items as board's views, their threads' channels and every author on the page asked for together. */
+  async function inboxViews(who: Who, items: ApiInboxItem[], signal: AbortSignal): Promise<InboxItemView[]> {
+    const read = await Promise.all(
+      items.map(async (item) => ({ item, channel: await channelById(who, item.thread.channelId), ends: await endsOf(who, item.thread, signal) })),
+    )
+    naming(
+      who,
+      read.flatMap(({ item, ends: [root, last] }) => [root.createdBy, ...(last ? [last.createdBy] : []), ...(item.message ? [item.message.createdBy] : [])]),
+    )
+    return Promise.all(
+      read.map(async ({ item, channel, ends: [root, newest] }) => {
+        const first = await view(who, root, channel.name)
+        // A message added by itself is its item's last; a thread's is its newest, or its first with no replies.
+        const last = item.message ? await view(who, item.message, channel.name) : newest ? await view(who, newest, channel.name) : first
+        return {
+          thread: idAt(item.threadId, 1),
+          message: item.messageId ?? null,
+          reader: item.reader,
+          first,
+          last,
+          unread: item.unread,
+          reasons: item.reasons,
+          snoozed: item.snoozedUntil === undefined ? null : iso(item.snoozedUntil),
+          at: iso(item.at),
+        }
+      }),
+    )
+  }
+
+  /** The message an inbox route names, in the API's path: any other ID names no message. */
+  const readerInboxPath = async (who: Who, id: string, under: 'items' | 'follows/threads', verb = '') => {
+    if (!locate(id)) throw notFound(`message not found: ${id}`, 'message_not_found')
+    return onBoard(who, `/me/inbox/${under}/${encodeURIComponent(id)}${verb}`)
+  }
+
+  const followView = ({ channel, threadId, by, at }: ApiFollow): FollowView =>
+    channel !== undefined ? { channel, by, at: iso(at) } : { thread: idAt(threadId!, 1), by, at: iso(at) }
+
   let me: Promise<ApiMe> | null = null
   /** Who these credentials are, asked once. */
   const self = (who: Who) =>
@@ -3088,7 +3143,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
-        throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : INBOX_METHODS.includes(method) ? 'inboxes' : method)
+        throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
       },
     ]),
   ) as unknown as ProtocolMethods
@@ -3130,6 +3185,92 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         // The API finds a project's deployment for a path, and wakes it through its Deployment Protection.
         wake_by_path: true,
       } satisfies Discovery
+    },
+    async inboxItems(caller, query, signal) {
+      const who = whoOf(caller)
+      const flags = (['unread', 'read', 'snoozed', 'under'] as const).filter((name) => query[name])
+      const page = await api<{ items: ApiInboxItem[]; cursor: string; older: string | null }>(who, 'GET', await onBoard(who, '/me/inbox'), {
+        query: {
+          ...Object.fromEntries(flags.map((name) => [name, 'true'])),
+          // Each label once more, `key` or `key=a|b`, as the API takes them.
+          ...(query.label?.length ? { label: query.label.map(([key, values]) => (values === null ? key : `${key}=${values.join('|')}`)) } : {}),
+          ...(query.before !== undefined ? { before: query.before } : {}),
+          ...(query.limit !== undefined ? { limit: String(query.limit) } : {}),
+        },
+        signal,
+      })
+      return { items: await inboxViews(who, page.items, signal), cursor: page.cursor, older: page.older }
+    },
+    async inboxEvents(caller, { after, wait, under }, signal) {
+      const who = whoOf(caller)
+      const until = Date.now() + (wait ?? 0) * 1000
+      let from = after
+      // The API holds a read for a part of the wait at a time: it's asked again from where each one stopped.
+      for (;;) {
+        const left = Math.ceil((until - Date.now()) / 1000)
+        const read = await api<{ events: ApiInboxEvent[]; cursor: string }>(who, 'GET', await onBoard(who, '/me/inbox/events'), {
+          query: { ...(from !== undefined ? { after: from } : {}), ...(under ? { under: 'true' } : {}), ...(left > 0 ? { wait: String(Math.min(left, INBOX_WAIT_SECONDS)) } : {}) },
+          signal,
+        })
+        if (read.events.length > 0 || left <= 0 || signal.aborted) {
+          const views = await inboxViews(
+            who,
+            read.events.flatMap((event) => (event.type === 'inbox.item' ? [event.item] : [])),
+            signal,
+          )
+          let next = 0
+          return {
+            events: read.events.map((event) =>
+              event.type === 'inbox.item'
+                ? { type: 'inbox.item', cursor: event.cursor, item: views[next++]! }
+                : { type: 'inbox.removed', cursor: event.cursor, thread: idAt(event.threadId, 1), message: event.messageId ?? null, reader: event.reader },
+            ),
+            cursor: read.cursor,
+          }
+        }
+        from = read.cursor
+      }
+    },
+    async addInboxItem(caller, { id, message }, signal) {
+      const who = whoOf(caller)
+      const { item } = await api<{ item: ApiInboxItem }>(who, 'POST', await readerInboxPath(who, id, 'items'), { body: message ? { alone: true } : {}, signal })
+      return { item: (await inboxViews(who, [item], signal))[0]! }
+    },
+    async removeInboxItem(caller, { id }, signal) {
+      const who = whoOf(caller)
+      return api<{ removed: boolean }>(who, 'POST', await readerInboxPath(who, id, 'items', '/remove'), { signal })
+    },
+    async markInboxItem(caller, { id, unread }, signal) {
+      const who = whoOf(caller)
+      const { item } = await api<{ item: ApiInboxItem }>(who, 'POST', await readerInboxPath(who, id, 'items', '/read'), { body: unread ? { unread: true } : {}, signal })
+      return { item: (await inboxViews(who, [item], signal))[0]! }
+    },
+    async snoozeInboxItem(caller, { id, until }, signal) {
+      const who = whoOf(caller)
+      const { item } = await api<{ item: ApiInboxItem }>(who, 'POST', await readerInboxPath(who, id, 'items', '/snooze'), { body: { until: until === null ? null : Date.parse(until) }, signal })
+      return { item: (await inboxViews(who, [item], signal))[0]! }
+    },
+    async follow(caller, body, signal) {
+      const who = whoOf(caller)
+      const { follow } =
+        'channel' in body
+          ? await api<{ follow: ApiFollow }>(who, 'POST', await onBoard(who, '/me/inbox/follows/channels'), { body: { channel: body.channel }, signal })
+          : await api<{ follow: ApiFollow }>(who, 'POST', await readerInboxPath(who, body.thread, 'follows/threads'), { signal })
+      return { follow: followView(follow) }
+    },
+    async unfollow(caller, body, signal) {
+      const who = whoOf(caller)
+      return 'channel' in body
+        ? api<{ unfollowed: boolean }>(who, 'POST', await onBoard(who, '/me/inbox/follows/channels/remove'), { body: { channel: body.channel }, signal })
+        : api<{ unfollowed: boolean }>(who, 'POST', await readerInboxPath(who, body.thread, 'follows/threads', '/remove'), { signal })
+    },
+    async follows(caller, { before, limit }, signal) {
+      const who = whoOf(caller)
+      const page = await api<{ follows: ApiFollow[]; cursor: string | null }>(who, 'GET', await onBoard(who, '/me/inbox/follows'), {
+        query: { ...(before !== undefined ? { cursor: before } : {}), ...(limit !== undefined ? { limit: String(limit) } : {}) },
+        signal,
+      })
+      return { follows: page.follows.map(followView), older: page.cursor }
     },
     async me(caller) {
       const who = whoOf(caller)

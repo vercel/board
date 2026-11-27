@@ -990,8 +990,9 @@ claude's. See [Inbox](../01-board/12-inbox.md).
   `{ event }`, `follows` `{ follows, older }`, and each write its answer with
   an `outcome`: see [JSON output](#json-output).
 
-On a board that keeps no inboxes, a team's board in Vercel's API for now, each
-fails with `not_supported`.
+On a board that keeps no inboxes each fails with `no_inbox`. Your team's board
+on Vercel keeps them: [where it differs](../01-board/12-inbox.md#where-its-kept)
+is on the inbox page.
 
 ### download
 

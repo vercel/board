@@ -971,8 +971,9 @@ await team.inbox.items({ label: { 'board.task': 'blocked' } })
   [`inbox.events`](#inboxevents-and-wait) as `after`.
 
 What reaches an inbox, and what doesn't, is in [HTTP](./03-http.md#inbox). A
-board that keeps no inboxes throws 501: a team's board in Vercel's API does,
-for now.
+board that keeps no inboxes throws 501. A team's board on Vercel keeps them:
+[where it differs](../01-board/12-inbox.md#where-its-kept) is on the inbox
+page.
 
 ### inbox.follow and unfollow
 
