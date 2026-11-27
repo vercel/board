@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { http } from '../src/backend-http/index.ts'
 import { oidcTokens } from '../src/access/index.ts'
 import { conformance } from '../src/conformance/index.ts'
@@ -9,10 +9,17 @@ import { parseSchema, schemaBody, SCHEMA_VERSION_KEY, stampedSchema } from '../s
 import { POSTGRES_SCHEMA } from '../src/store/postgres-schema.generated.ts'
 import { vercelQueues } from '../src/backend-postgres/scheduler-vercel.ts'
 import { fakeQueue } from './queue.ts'
+import { memoryBlob } from '../src/server/blob.ts'
+import { signingBlob } from './signing-blob.ts'
 import { bearer, board, BOARD_URL, personToken } from './harness.ts'
 import { testAuth, testLocal } from './tokens.ts'
 import { freshPool, freshPoolWithTables, POSTGRES, SCHEMA, TEST_DATABASE_URL } from './postgres-harness.ts'
 import type { PgPool } from '../src/store/postgres-db.ts'
+
+const closers: (() => Promise<void>)[] = []
+afterAll(async () => {
+  await Promise.all(closers.map((close) => close()))
+})
 
 /** A board on `backend`, whose tokens come from the local test issuer, as `localBoard()`'s do. */
 const on = (backend: ReturnType<typeof postgres>) => board({ backend, authenticate: oidcTokens({ ...testAuth, local: testLocal }), url: BOARD_URL })
@@ -224,6 +231,42 @@ describe(`postgres(), on ${POSTGRES}`, () => {
       await backend.close()
     }
   }, 20_000)
+
+  it('with blob, keeps new files there, and still serves the ones the database kept before', async () => {
+    const pool = await freshPoolWithTables()
+    const before = postgres({ pool })
+    const old = await on(before).upload({ data: new TextEncoder().encode('kept in postgres'), name: 'old.txt' })
+    await before.close()
+
+    const store = memoryBlob()
+    const withBlob = postgres({ pool, blob: store })
+    const team = on(withBlob)
+    try {
+      const fresh = await team.upload({ data: new TextEncoder().encode('kept in the store'), name: 'new.txt' })
+      expect(await (await team.download(old.id)).text()).toBe('kept in postgres')
+      expect(await (await team.download(fresh.id)).text()).toBe('kept in the store')
+      const keys = (await pool.query('select key from board_files')).rows.map((row) => String(row.key))
+      expect(keys.some((key) => key.includes(old.id))).toBe(true)
+      expect(keys.some((key) => key.includes(fresh.id))).toBe(false)
+      expect(await store.get(`board/attachments/${fresh.id}`)).not.toBeNull()
+    } finally {
+      await withBlob.close()
+    }
+  }, 20_000)
+
+  it('takes a file over 4 MB with a blob store that signs uploads, and refuses it without one', async () => {
+    const big = { data: new Uint8Array(5 * 1024 * 1024).fill(7), name: 'big.bin' }
+    const onDatabase = postgres({ pool: await freshPoolWithTables() })
+    const plain = on(onDatabase)
+    const signing = postgres({ pool: await freshPoolWithTables(), blob: await signingBlob(closers) })
+    const signed = on(signing)
+    try {
+      await expect(over(plain.fetch, () => personToken()).upload(big)).rejects.toMatchObject({ code: 'no_direct_uploads' })
+      expect((await over(signed.fetch, () => personToken()).upload(big)).size).toBe(big.data.byteLength)
+    } finally {
+      await Promise.all([onDatabase.close(), signing.close()])
+    }
+  }, 30_000)
 
   it("sends what's scheduled through the scheduler it's given, delivered to its scheduler route", async () => {
     const queue = fakeQueue()

@@ -29,7 +29,8 @@ psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
   and a database without them fails the board's first call with 500
   `no_store`, which names the file. `autoMigrate: true` has the board apply
   it: see [Migrating on its own](#migrating-on-its-own).
-- **Attachments live in the database,** each at most 4 MB, in `board_files`.
+- **Attachments live in the database,** each at most 4 MB, in `board_files`,
+  unless you pass a [blob store](#files-in-a-blob-store).
 - **It passes the whole [conformance](../04-reference/05-conformance.md) kit,**
   schedules, tasks, and attachments included, so `vb` and `vercel board` work
   against it with `--url` or `BOARD_URL`.
@@ -45,6 +46,7 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 | `connectionString` | The database. Default `DATABASE_URL`, or else `POSTGRES_URL` |
 | `pool` | A `pg` Pool you made, instead: for a password from a callback, say. The board leaves it open |
 | `max` | Connections the pool it makes may open. Default 10 |
+| `blob` | Where new attachments go: `vercelBlob()`, or any store. Default: the database, up to 4 MB each. See [Files in a blob store](#files-in-a-blob-store) |
 | `autoMigrate` | Apply `schema.sql` on the first call when the database doesn't have this release's. Default false: see [Migrating on its own](#migrating-on-its-own) |
 | `scheduler` | What runs its timers: `vercelQueues()`, see [On Vercel Queues](#on-vercel-queues). Default: timers in this process |
 
@@ -148,4 +150,31 @@ export const GET = team.fetch, POST = team.fetch
   working while the next one rolls out, and a rollback to it does too.
 - **Its role needs to create tables** in the database, on top of reading and
   writing them. Without `autoMigrate`, it needs only the latter.
+
+## Files in a blob store
+
+`blob` keeps new attachments in a store instead of the database.
+`vercelBlob()` is a private [Vercel Blob](https://vercel.com/docs/vercel-blob)
+store (`npm i @vercel/blob`), and it signs uploads, so files go straight to it,
+up to 100 MB each:
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from '@vercel/board'
+import { postgres } from '@vercel/board/backend-postgres'
+import { vercelBlob } from '@vercel/board/backend-postgres/blob-vercel'
+
+export const team = board({ backend: postgres({ blob: vercelBlob() }) })
+export const GET = team.fetch, POST = team.fetch
+```
+
+Connect a Blob store to the project: the SDK finds it through
+`BLOB_READ_WRITE_TOKEN`, or the project's OIDC token and `BLOB_STORE_ID`.
+`prefix` keeps one board's files under a path of their own in a shared store.
+
+- **You can set it at any time.** Files the database kept before stay
+  readable: the board looks in `board_files` first, then the store.
+- **Taking it away again leaves what's in the store unreachable,** so keep it
+  once it's set.
+- **Any object with `put` and `get` works,** and with `uploadUrl` and `head`
+  too, it takes files over 4 MB. `BlobStore` is its type.
 

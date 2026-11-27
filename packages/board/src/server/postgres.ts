@@ -3,6 +3,7 @@
 import pg from 'pg'
 import { a2 } from './a2.ts'
 import type { Backend, BoardBinding, Caller, ProtocolMethods, Trust } from './backend.ts'
+import type { BlobStore } from './blob.ts'
 import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
@@ -33,6 +34,13 @@ export type PostgresOptions = {
    * it yourself, before the deploy.
    */
   autoMigrate?: boolean
+  /**
+   * Where new attachments' bytes go: `vercelBlob()` from `@vercel/board/backend-postgres/blob-vercel`,
+   * or any `BlobStore`. Default: the database, in `board_files`, up to 4 MB each. A store that signs
+   * uploads (`uploadUrl` and `head`) takes files up to 100 MB. Files the database already keeps stay
+   * readable, so it can be set at any time; taking it away again leaves what's in it unreachable.
+   */
+  blob?: BlobStore
 }
 
 /** A board on Postgres. `close()` stops its timers and ends the pool it made. */
@@ -52,6 +60,20 @@ export type PostgresBackend = Backend & {
   close(): Promise<void>
 }
 
+
+/**
+ * Files in `store`, reading what `database` kept before it was set. The database is asked first: a key
+ * is written once and never moves, a miss there costs a primary-key lookup, and a store's CDN may keep
+ * a miss.
+ */
+function readThrough(database: BlobStore, store: BlobStore): BlobStore {
+  return {
+    put: (key, data, contentType) => store.put(key, data, contentType),
+    get: async (key) => (await database.get(key)) ?? store.get(key),
+    ...(store.uploadUrl ? { uploadUrl: store.uploadUrl.bind(store) } : {}),
+    ...(store.head ? { head: store.head.bind(store) } : {}),
+  }
+}
 
 /** Why the database couldn't be reached or used, in a few words. */
 const unreachable = (error: unknown) => String((error as { message?: unknown }).message ?? error).split('\n')[0]!
@@ -95,7 +117,7 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
       // Timers in this process, unless it's given a scheduler: what came due while no instance ran, the
       // next one on Vercel catches up on.
       const own = options.scheduler ? null : localScheduler()
-      const backend = a2({ store, scheduler: own ?? engineScheduler(options.scheduler!), blob: postgresBlob(pool) })
+      const backend = a2({ store, scheduler: own ?? engineScheduler(options.scheduler!), blob: options.blob ? readThrough(postgresBlob(pool), options.blob) : postgresBlob(pool) })
       backend.bind(bound)
       return {
         backend,

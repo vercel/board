@@ -40,6 +40,7 @@ export default defineConfig([
       // `@vercel/board/backend-postgres`: a board on Postgres, Node only, with `pg` installed.
       'backend-postgres': 'src/backend-postgres/index.ts',
       'backend-postgres/scheduler-vercel': 'src/backend-postgres/scheduler-vercel.ts',
+      'backend-postgres/blob-vercel': 'src/backend-postgres/blob-vercel.ts',
       sync: 'src/sync/index.ts',
       'sync-chat-sdk': 'src/sync/chat-sdk.ts',
       'sync-slack': 'src/sync/slack.ts',

@@ -64,6 +64,10 @@
       "types": "./dist/backend-postgres.d.mts",
       "default": "./dist/backend-postgres.mjs"
     },
+    "./backend-postgres/blob-vercel": {
+      "types": "./dist/backend-postgres/blob-vercel.d.mts",
+      "default": "./dist/backend-postgres/blob-vercel.mjs"
+    },
     "./backend-postgres/scheduler-vercel": {
       "types": "./dist/backend-postgres/scheduler-vercel.d.mts",
       "default": "./dist/backend-postgres/scheduler-vercel.mjs"
@@ -106,6 +110,7 @@
     "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/linear": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
+    "@vercel/blob": "^2.8.0",
     "@vercel/connect": "^2.3.4",
     "@vercel/queue": "*",
     "chat": "^4.41.1",
@@ -124,6 +129,7 @@
     "@types/pg": "8.15.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vercel/blob": "^2.9.0",
     "@vercel/connect": "^2.3.4",
     "ai": "^7.0.130",
     "ajv": "8.17.1",
@@ -154,6 +160,9 @@
       "optional": true
     },
     "@chat-adapter/slack": {
+      "optional": true
+    },
+    "@vercel/blob": {
       "optional": true
     },
     "@vercel/connect": {
