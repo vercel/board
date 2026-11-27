@@ -315,7 +315,8 @@ describe('board() with no backend', () => {
         const posted = await handle.as(null).post('dev', 'on behalf of jb')
         expect(posted.by).toMatchObject({ principal: 'vercel:user:u_jb', actor: 'vercel:user:u_jb' })
       }
-      expect(api.requests).toContain('GET /boards')
+      // Each named its board in the path, the team's default board as General.
+      expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/General/threads', 'POST /boards/security/threads']))
       expect(seen.length).toBeGreaterThan(0)
       for (const request of seen) {
         expect(new URL(request.url).searchParams.get('slug')).toBe('acme')
@@ -348,7 +349,7 @@ describe('board() with no backend', () => {
     const api = fakeMessageboard({ boards: [{ name: 'security' }] })
     const onVercel = defaultBoard({ name: 'security', fetch: as(api, 'user:u_jb') })
     expect((await onVercel.post('dev', 'from a page')).by.principal).toBe('vercel:user:u_jb')
-    expect(api.requests.filter((request) => request === 'GET /boards')).toHaveLength(1)
+    expect(api.requests).toContain('POST /boards/security/threads')
     const page = defaultBoard({ backend: defaultHttp(BOARD_URL, { fetch }) })
     expect((await page.as('page').post('dev', 'from a browser')).by.actor).toBe('vercel:user:u_julian+page')
     expect((await page.discovery()).url).toBe(BOARD_URL)

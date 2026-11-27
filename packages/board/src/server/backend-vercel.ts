@@ -233,7 +233,7 @@ export type VercelOptions = {
   team?: string
   /**
    * The board's ID, which wins over `board({ name })`. By default the board that name names, or
-   * the team's default board, which `GET /boards` names.
+   * the team's default board: each request names it in its path, so none asks for its ID first.
    */
   board?: string
   /** Vercel's API, `https://api.vercel.com` by default. */
@@ -764,12 +764,33 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** The last answer to a read of channels or actors with its `ETag`, by its URL and who asked: sent back, a 304 says it holds. The newest few. */
   const tagged = new Map<string, { etag: string; text: string }>()
 
+  type Init = { query?: Record<string, string | readonly string[] | undefined>; body?: unknown; signal?: AbortSignal; version?: 2 }
+
+  /**
+   * A request to the API, as `who`. A path that names the board by its name (`onBoard`) asked nothing
+   * first, so where the API knows no such board the caller can enter (404 `board_not_found`), the
+   * board is found or made as `boardId` does it, once, and the request goes again by its ID, as
+   * every one after it does.
+   */
+  async function api<T>(who: Who, method: string, path: string, init: Init = {}): Promise<T> {
+    const named = path.startsWith('/boards/') ? namedBoard() : null
+    if (named === null || !(path === named || path.startsWith(`${named}/`) || path.startsWith(`${named}?`))) return request<T>(who, method, path, init)
+    if (board === null) {
+      try {
+        return await request<T>(who, method, path, init)
+      } catch (error) {
+        if (!(error instanceof HttpError && error.status === 404 && error.code === 'board_not_found')) throw error
+      }
+    }
+    return request<T>(who, method, `/boards/${encodeURIComponent(await boardId(who))}${path.slice(named.length)}`, init)
+  }
+
   /**
    * One request to the API, as `who`. Its errors are the API's own, with its status and code. One the
    * API puts off (429, or a 503), or that its gateway lost (502, 504), waits and goes again as it was,
    * so a write keeps its operation ID and lands once.
    */
-  async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | readonly string[] | undefined>; body?: unknown; signal?: AbortSignal; version?: 2 } = {}): Promise<T> {
+  async function request<T>(who: Who, method: string, path: string, init: Init = {}): Promise<T> {
     // Everything is at version 1 of the API but its task routes, which are version 2.
     const url = new URL(`${origin}/v${init.version ?? 1}/messageboard${path}`)
     const id = await teamId()
@@ -879,6 +900,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
+  /** A board's name as the API keeps one, which counts its characters once it's trimmed and NFC-normalized. */
+  const boardNameOf = (given: string): string => {
+    const name = given.trim().normalize('NFC')
+    if (!/^[^/]{1,64}$/.test(name))
+      throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(given)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
+    return name
+  }
+
   /**
    * The board named `name` in the team: the one the API lists for it. Where it lists none, the
    * caller makes it (a project's is granted to that project, in its environment), unless it says
@@ -886,13 +915,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * team's boards, the ones you can't see included.
    */
   async function boardNamed(who: Who, given: string): Promise<string> {
-    // The API counts a name's characters once it trims and NFC-normalizes it.
-    const name = given.trim().normalize('NFC')
-    if (!/^[^/]{1,64}$/.test(name))
-      throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(given)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
+    const name = boardNameOf(given)
     // One answer holds the board with the name, whatever its case. Names are unique from now on; of
     // the few older boards that share one, the API lists the oldest first, and that's the one.
-    const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
+    const { boards } = await request<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
     if (boards[0]) return boards[0].id
     const me = await self(who)
     const { principal } = me.actor
@@ -902,7 +928,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         origin: 'handle',
       })
     try {
-      const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
+      const { board: made } = await request<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
       return made.id
     } catch (error) {
       if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(name, principal, me.teamId)
@@ -944,26 +970,42 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * The board's ID: the one given, the one `board({ name })` names, or the team's, which the API
    * names only to those it lets in. A team with none gets one the first time a person uses it, as
    * the API asks of its clients; a project can't make it, and needs a person to grant it the board
-   * anyway. Each is asked for once.
+   * anyway. Each is asked for once, and only where a path can't name the board by its name: the API
+   * knew none by it, or the ID itself is wanted, as a URL to the board is.
    */
   const boardId = (who: Who) =>
     (board ??= options.board
       ? Promise.resolve(options.board)
       : boardName()
         ? boardNamed(who, boardName()!)
-        : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
+        : request<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
             const me = await self(who)
             const { principal } = me.actor
             // A deployment or a workflow the API names no board to isn't let in, and makes none.
             if (principal.type === 'project' || principal.type === 'github' || principal.type === 'oidc') throw notLetIn(null, principal, me.teamId)
-            const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
+            const { board: made } = await request<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
             return made.id
           })).catch((error: unknown) => {
       board = null
       throw error
     })
-  const onBoard = async (who: Who, path = '') => `/boards/${encodeURIComponent(await boardId(who))}${path}`
+  /** The team's default board's name in a path, whatever the board is named. */
+  const DEFAULT_BOARD = 'General'
+  /**
+   * `/boards/<name>`, as a path names a board that was given no ID: the API takes a board's name
+   * where it takes its ID, and the default board's for the team's. Null for a board named by its ID,
+   * and for one named `.` or `..`, which a URL reads as a step in its path: that one is asked for its ID.
+   */
+  const namedBoard = (): string | null => {
+    if (options.board) return null
+    const name = boardNameOf(boardName() ?? DEFAULT_BOARD)
+    return name === '.' || name === '..' ? null : `/boards/${encodeURIComponent(name)}`
+  }
+  /** A path on the board: by its ID where that's known, and else by its name, so nothing is asked for it first. */
+  const onBoard = async (who: Who, path = '') => `${(board === null ? namedBoard() : null) ?? (await boardById(who))}${path}`
+  /** `/boards/<id>`, for what must hold when the board's name changes hands: a URL someone keeps. */
+  const boardById = async (who: Who) => `/boards/${encodeURIComponent(await boardId(who))}`
 
   // Channels are named on the board and addressed by ID in the API.
   let channels: Promise<ApiChannel[]> | null = null
@@ -3099,7 +3141,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who: Who = { profile: null }
       const team = await teamId()
       const path = await onBoard(who)
-      type Read = { board: { name?: string } }
+      type Read = { board: { id?: string; name?: string } }
       // A board named by its ID is read, so `whoami` names only one there is and you can reach.
       const reached = options.board ? await api<Read>(who, 'GET', path) : null
       // Its name is said to a caller who may read the board. A handle narrowed with a `can` that reads
@@ -3120,8 +3162,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       return {
         version: VERSION,
-        // With its team, so the URL alone finds it again: `--url` and `BOARD_URL` take it.
-        url: `${origin}/v1/messageboard${await onBoard(who)}?teamId=${encodeURIComponent(id)}`,
+        // With its team, so the URL alone finds it again: `--url` and `BOARD_URL` take it. By the board's
+        // ID, which its read just gave; one nobody read is asked for it.
+        url: `${origin}/v1/messageboard${typeof found?.board.id === 'string' ? `/boards/${encodeURIComponent(found.board.id)}` : await boardById(who)}?teamId=${encodeURIComponent(id)}`,
         audience: origin,
         team_id: id,
         project_id: null,
@@ -4036,7 +4079,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = { profile: null }
       const team = await teamId()
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
-      const board = await onBoard(who)
+      // By its ID: the sandbox's policy holds these paths for as long as it runs.
+      const board = await boardById(who)
       const url = `${origin}/v1/messageboard${board}?teamId=${encodeURIComponent(id)}`
       const credential = environment ? await environment.sandbox(url, token) : token === undefined ? withoutToken(url) : { authorization: `Bearer ${token}` }
       return {
