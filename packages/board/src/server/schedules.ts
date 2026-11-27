@@ -357,11 +357,15 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       ;({ state, index } = await session.state(schedulesReducer, { through: 'latest' }))
     }
     const since = state.takeover!.index
-    const armed = state.takeover!.armed ?? -1
+    // Timers in this process die with it, so each instance arms every pending send; only a durable
+    // scheduler's timers outlive the instance that armed them, which is what the watermark records.
+    const durable = !(options.scheduler as { inProcess?: boolean } | undefined)?.inProcess
+    const armed = durable ? (state.takeover!.armed ?? -1) : -1
     const unarmed = Object.values(state.byId).filter((schedule) => schedule.id > armed && schedule.next !== null)
     // Nothing new since the last instance armed them: a read, and no timers or writes.
-    if (unarmed.length === 0 && state.takeover!.armed != null) return
+    if (durable && unarmed.length === 0 && state.takeover!.armed != null) return
     for (const schedule of unarmed) await arm(`takeover-${since}`, schedule.id, schedule.sent, schedule.next!)
+    if (!durable) return
     await session.append({
       type: 'schedule.takeover.armed',
       payload: { deployment, through: index },

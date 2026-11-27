@@ -16,7 +16,7 @@ const MAX_DELAY = 2 ** 31 - 1
  * long-running servers, never serverless functions, which stop between requests.
  */
 /** The local scheduler, which `stop()` stops: its timers cleared, nothing pending. */
-export type LocalScheduler = A2Scheduler & { stop(): void }
+export type LocalScheduler = A2Scheduler & { stop(): void; readonly inProcess: true }
 
 export function localScheduler(): LocalScheduler {
   let servers: readonly DrainableServer[] = []
@@ -34,6 +34,8 @@ export function localScheduler(): LocalScheduler {
   }
 
   return {
+    // Its timers die with the process: whoever starts next arms every pending one again.
+    inProcess: true,
     async schedule(task) {
       // Once stopped, what's asked for stays in the log: whoever opens it next catches up.
       if (stopped) return

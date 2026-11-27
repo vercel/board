@@ -145,6 +145,33 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     }
   }, 20_000)
 
+  it('on Vercel with timers in the process, every new instance arms what is pending, since the last one took its timers with it', async () => {
+    vi.stubEnv('VERCEL_DEPLOYMENT_ID', 'dpl_postgres_restarts')
+    const pool = await freshPoolWithTables()
+    try {
+      const first = postgres({ pool })
+      const one = on(first)
+      const root = (await one.post('dev', 'deploy')).id
+      await one.schedule({ re: root }, { text: 'did it land?', in: '2s' })
+      await first.close()
+      // An instance that starts, arms it, and stops before it's due.
+      const second = postgres({ pool })
+      await on(second).thread(root)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      await second.close()
+
+      const third = postgres({ pool })
+      const three = on(third)
+      try {
+        await vi.waitFor(async () => expect((await three.thread(root)).replies.map((m) => m.text)).toEqual(['did it land?']), { timeout: 10_000 })
+      } finally {
+        await third.close()
+      }
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  }, 20_000)
+
   it('says which file to apply to a database without its tables, and leaves a pool of yours open', async () => {
     const pool = await freshPool()
     const bare = postgres({ pool })
