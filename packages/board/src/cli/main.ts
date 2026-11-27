@@ -1593,7 +1593,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const link = target !== undefined && /^https?:\/\//i.test(target)
       if (target && (link || isMessageRef(target))) {
         // A thread is read whole: what finds threads doesn't narrow one, and it's said before anything is read.
-        const across = (['by', 'text', 'mentions', 'source', 're', 'before'] as const).find((name) => flags[name] !== undefined)
+        const across = (['by', 'text', 'mentions', 'source', 're', 'before', 'limit'] as const).find((name) => flags[name] !== undefined)
         if (across !== undefined) throw usage(`Can't use --${across} on one thread. It's read whole: --after and --label narrow its replies.`)
         // A board reads the replies after a message itself, so a long thread isn't read whole for its last few.
         const after = !link && flags.after !== undefined ? flags.after.replace(/^#/, '') : undefined

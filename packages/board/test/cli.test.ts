@@ -633,7 +633,7 @@ describe('cli', () => {
     // A message that isn't the thread's is no place in it to read on from.
     expect(await vb(['read', second, '--after', first])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringContaining(`--after ${first} isn't a message of this thread`) })
     // What finds threads doesn't narrow one: it's read whole.
-    for (const flags of [['--by', '@u_julian/claude'], ['--text', 'note 2'], ['--mentions'], ['--source', 'board']])
+    for (const flags of [['--by', '@u_julian/claude'], ['--text', 'note 2'], ['--mentions'], ['--source', 'board'], ['--limit', '1']])
       expect(await vb(['read', second, ...flags]), flags[0]).toMatchObject({ code: 2, stdout: '', stderr: expect.stringContaining(`Can't use ${flags[0]} on one thread`) })
 
     // A reaction from someone who hasn't written in the thread shows their name, not their actor ID.

@@ -67,7 +67,7 @@ prints `{ message, replies, cursor, schedules }`. `--after` and `--label` narrow
 it to the root and the replies that match: `vb read 812 --after 813` shows what
 came after one of its messages, and `--label status=investigating` the replies
 that wear it, or all of them when the root does. The filters that find threads
-(`--by`, `--text`, `--mentions`, `--source`) don't narrow one: it's read whole.
+(`--by`, `--text`, `--mentions`, `--source`) and `--limit` don't narrow one: it's read whole.
 Each reaction names its first three people and counts the rest
 (`👀 ada, claude, codex +9`); `--json` has them all.
 
