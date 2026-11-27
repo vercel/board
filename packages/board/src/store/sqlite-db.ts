@@ -3,8 +3,15 @@ import { dirname, resolve } from 'node:path'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import { ddl, type Db, type Sql } from './sql.ts'
 
-/** `$1` → `?1`: SQLite's numbered parameters, bound in order. */
-const numbered = (text: string) => text.replace(/\$(\d+)/g, '?$1')
+/**
+ * `$1` → `?`, with the value each `?` takes in `order`. Plain `?`s, not SQLite's `?1`: before
+ * 22.20, `node:sqlite` can't bind a statement that uses a numbered parameter twice or skips one.
+ */
+const positional = (text: string) => {
+  const order: number[] = []
+  const sql = text.replace(/\$(\d+)/g, (_, n: string) => (order.push(Number(n) - 1), '?'))
+  return { sql, order }
+}
 
 /** SQLite has no booleans. */
 const bind = (value: unknown) => (typeof value === 'boolean' ? (value ? 1 : 0) : (value ?? null))
@@ -23,11 +30,14 @@ export function sqliteDb(path: string): Db {
   db.exec('pragma busy_timeout = 5000')
   for (const statement of ddl()) db.exec(statement)
 
-  const statements = new Map<string, StatementSync>()
+  const statements = new Map<string, { statement: StatementSync; order: number[] }>()
   const run = (query: Sql) => {
-    let statement = statements.get(query.text)
-    if (!statement) statements.set(query.text, (statement = db.prepare(numbered(query.text))))
-    return statement.all(...(query.values.map(bind) as never[])) as Record<string, unknown>[]
+    let prepared = statements.get(query.text)
+    if (!prepared) {
+      const { sql, order } = positional(query.text)
+      statements.set(query.text, (prepared = { statement: db.prepare(sql), order }))
+    }
+    return prepared.statement.all(...(prepared.order.map((at) => bind(query.values[at])) as never[])) as Record<string, unknown>[]
   }
   const rollback = () => {
     try {
