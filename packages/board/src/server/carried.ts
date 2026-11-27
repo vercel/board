@@ -6,7 +6,7 @@ import { own } from '../contract/own.ts'
  * longer carries. A label change keeps the values the message still has. An event whose whole point is gone is null,
  * to be left out: a reaction since removed, a delivery's failure since made good, a receipt on a message since
  * deleted, and a task's failure or hold since cleared, each with its reason. A task's result, and the reason it was
- * canceled, are there for good once they are.
+ * canceled, are there for good once they are, until its root is deleted: then they're gone with its text.
  */
 export function carried(event: BoardEventView): BoardEventView | null {
   const message = event.message as MessageView | undefined
@@ -22,6 +22,10 @@ export function carried(event: BoardEventView): BoardEventView | null {
       return message.deleted ? null : event
     case 'message.sync_failed':
       return own(message.undelivered, payload.target as string) === payload.error ? event : null
+    case 'task.completed':
+      return message.deleted ? ({ ...event, payload: { ...payload, result: message.task?.result ?? null } } as BoardEventView) : event
+    case 'task.canceled':
+      return message.deleted ? ({ ...event, payload: { ...payload, reason: message.task?.reason ?? null } } as BoardEventView) : event
     case 'task.failed':
       return message.task?.reason === payload.reason ? event : null
     case 'task.blocked':

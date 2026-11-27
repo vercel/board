@@ -1515,11 +1515,26 @@ describe("a task's root", () => {
 
     // One that completed stays completed: its deletion is only a deletion.
     const done = await task(ada, 'ship it')
-    await ada('POST', `/tasks/${done.id}/complete`, await claim(ada, done.id))
+    await ada('POST', `/tasks/${done.id}/complete`, { ...(await claim(ada, done.id)), result: 'the key is sk-123' })
+    expect((await read(ada, done.id)).task).toMatchObject({ result: 'the key is sk-123' })
     const then = (await ada('GET', '/events')).body.cursor
     await ada('POST', `/messages/${done.id}/delete`, {})
     expect(types(await events(ada, then))).toEqual(['message.deleted'])
-    expect((await read(ada, done.id)).task).toMatchObject({ state: 'completed' })
+    expect((await read(ada, done.id)).task).toMatchObject({ state: 'completed', result: null })
+
+    // A reason someone wrote goes with the text too: a failed task is canceled as deleted, a canceled one keeps no reason.
+    const failed = await task(ada, 'deploy')
+    await ada('POST', `/tasks/${failed.id}/fail`, { ...(await claim(ada, failed.id)), reason: 'leaked the key in the log' })
+    const canceled = await task(ada, 'rotate')
+    await ada('POST', `/tasks/${canceled.id}/cancel`, { reason: 'the key is sk-123' })
+    for (const id of [failed.id, canceled.id]) expect((await ada('POST', `/messages/${id}/delete`, {})).status).toBe(200)
+    expect((await read(ada, failed.id)).task).toMatchObject({ state: 'canceled', result: null, reason: 'deleted' })
+    expect((await read(ada, canceled.id)).task).toMatchObject({ state: 'canceled', result: null, reason: null })
+    // Nor do the events that set them, read from the feed's end.
+    const ended = (await ada('GET', '/events?all=true&last=50')).body.events as BoardEventView[]
+    const said = JSON.stringify(ended.filter((event) => event.type === 'task.completed' || event.type === 'task.canceled'))
+    expect(said).toContain('task.completed')
+    expect(said).not.toContain('sk-123')
   })
 })
 

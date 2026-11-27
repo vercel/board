@@ -152,6 +152,11 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       message.labels = {}
       message.attachments = []
       message.links = []
+      // A task's result and a reason someone gave are text too. A cancel the deletion made says only that.
+      if (message.task) {
+        message.task.result = null
+        if (message.task.reason !== 'deleted') message.task.reason = null
+      }
       return message
     }
     case 'reaction.added': {

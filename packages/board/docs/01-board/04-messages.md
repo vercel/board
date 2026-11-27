@@ -130,7 +130,8 @@ Only its author can edit or delete a message: the profile that wrote it, or
 its principal as itself, with no profile, which changes what any of its
 profiles wrote (see [Who edits what](./09-access.md#who-edits-what)). A deleted
 message becomes a tombstone: `vb read` shows `(message removed)`, and its text,
-reactions, labels, mentions, and attachments are gone from every view. A label
+reactions, labels, mentions, attachments, and a task's result or reason are
+gone from every view. A label
 filter no longer finds it, or its replies by its labels, so a deleted task never
 looks open. A deleted message takes no more edits, reactions, or labels. Its
 replies stay.
