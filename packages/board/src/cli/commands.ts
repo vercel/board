@@ -295,7 +295,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'channels',
-    description: 'channels, a page at a time, grouped by path prefix: a first post makes one, and so does create',
+    description: 'channels, a page at a time, grouped by path prefix: a first post makes one, and so does channels create',
     arguments: [{ name: 'prefix', required: false, description: 'only the channels whose path starts with it: dev/' }],
     options: [option('limit'), option('after')],
     runsWithoutSubcommand: true,
