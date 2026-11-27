@@ -8,6 +8,7 @@ import { importedHandle, userIdOf } from '../src/contract/profiles.ts'
 import { parseProfileHeader } from '../src/contract/profile-header.ts'
 import { compileAccess, parseCan } from '../src/server/access.ts'
 import { findBlocks } from '../src/contract/blocks.ts'
+import { mentionedActors } from '../src/contract/mentions.ts'
 import { checkValue } from '../src/contract/data-values.ts'
 
 type Principal =
@@ -704,7 +705,285 @@ function fakeBoard(shared: Shared, boardId: string) {
     thread.lastMessage = { id: message.id, sequence, createdAt, createdBy: actor }
     if (body.clientId) posts.set(`${principalId(actor.principal)}|${body.clientId}`, message.id)
     message.feedSequence = emit(thread.channelId, { type: 'message.posted', threadId: thread.id, message: sequence, messageId: message.id, revision: 1 }, actor)
+    arrived(thread, message)
     return message
+  }
+
+  // ── Readers' inboxes, as Vercel's API keeps them: a principal's own and its profiles' in one order. ──
+  type InboxItem = { actor: string; threadId: string; messageId?: string; reasons: string[]; read: number; unread: number[]; snoozedUntil?: number; at: number; order: number }
+  type InboxChange = { sequence: number; actor: string; threadId: string; messageId?: string; channelId: string; removed?: true }
+  type Toggle = { at: number; on: boolean; posted?: true }
+  const INBOX_REASONS = ['mention', 'thread', 'channel', 'added']
+  const readers = new Map<string, { sequence: number; items: Map<string, InboxItem>; changes: InboxChange[] }>()
+  /** Who follows each thread: every time they posted their way in, asked, or left, at the thread's sequence then. */
+  const threadFollows = new Map<string, Map<string, { toggles: Toggle[]; listedAt?: number }>>()
+  /** Who follows each channel by a name, `www/` for a subtree, and since when. */
+  const channelFollows = new Map<string, Map<string, number>>()
+  const principalOfId = (actorId: string) => actorId.split('+')[0]!
+  const readerOf = (actorId: string) => {
+    const principal = principalOfId(actorId)
+    if (!readers.has(principal)) readers.set(principal, { sequence: 0, items: new Map(), changes: [] })
+    return readers.get(principal)!
+  }
+  const itemKey = (ref: { actor: string; threadId: string; messageId?: string }) => `${ref.actor}|${ref.threadId}|${ref.messageId ?? ''}`
+  /** Every change takes its principal's next sequence, which is what a cursor counts. */
+  function inboxChanged(item: InboxItem, removed = false): number {
+    const reader = readerOf(item.actor)
+    reader.sequence++
+    reader.changes.push({ sequence: reader.sequence, actor: item.actor, threadId: item.threadId, ...(item.messageId ? { messageId: item.messageId } : {}), channelId: threads.get(item.threadId)?.channelId ?? '', ...(removed ? { removed: true as const } : {}) })
+    return reader.sequence
+  }
+  const followsThread = (toggles: Toggle[], sequence = Number.POSITIVE_INFINITY) => {
+    const last = toggles.findLast((toggle) => toggle.at < sequence)
+    return !last?.on ? undefined : last.posted ? ('posted' as const) : ('asked' as const)
+  }
+  /** The reader an ID names, as the grants match one: a person, a deployment, or an app. A workload's grants match claims only its token carries. */
+  const readerNamed = (actorId: string): Who | null => {
+    const [issuer, kind, ...rest] = principalOfId(actorId).split(':')
+    if (issuer !== 'vercel' || rest.some((part) => !part)) return null
+    if (kind === 'user' && rest.length === 1) return { kind: 'user', userId: rest[0]! }
+    if (kind === 'app' && rest.length === 1) return { kind: 'app', clientId: rest[0]! }
+    if (kind === 'project' && rest.length === 2) return { kind: 'project', projectId: rest[0]!, environment: rest[1]! }
+    return null
+  }
+  /** Whether the board's grants let the reader an ID names read a channel now. */
+  function grantsLetRead(actorId: string, channelName: string): boolean {
+    const who = readerNamed(actorId)
+    if (!who) return false
+    const can = access.within(who, { '*': ['read'] })
+    const parts = channelName.split('/')
+    const pattern = [channelName, ...parts.map((_, i) => `${parts.slice(0, parts.length - i).join('/')}/`), '*'].find((candidate) => Object.hasOwn(can, candidate))
+    return pattern !== undefined && can[pattern]!.includes('read')
+  }
+  /** What `subscriber-messageboard-changes` asks for each posted message: its author follows the thread, and it reaches who it mentions and who follows its thread or its channel. */
+  function arrived(thread: Thread, message: Message) {
+    const author = message.createdBy.id
+    const hasInbox = (actorId: string) => !actorId.slice(principalOfId(actorId).length + 1).includes(':')
+    if (hasInbox(author) && message.createdBy.principal.type !== 'external') {
+      const mine = threadFollows.get(thread.id) ?? new Map<string, { toggles: Toggle[]; listedAt?: number }>()
+      threadFollows.set(thread.id, mine)
+      const follow = mine.get(author) ?? { toggles: [] }
+      mine.set(author, follow)
+      if (!followsThread(follow.toggles, message.sequence + 1)) {
+        follow.toggles.push({ at: message.sequence, on: true, posted: true })
+        follow.listedAt ??= now()
+      }
+      const own = readerOf(author).items.get(itemKey({ actor: author, threadId: thread.id }))
+      if (own && own.read < message.sequence) {
+        own.read = message.sequence
+        own.unread = own.unread.filter((sequence) => sequence > message.sequence)
+        inboxChanged(own)
+      }
+    }
+    const channel = channels.find((c) => c.id === thread.channelId)?.name ?? ''
+    const reach = new Map<string, Set<string>>()
+    const reaches = (actorId: string, reason: string) => {
+      if (actorId === author || !hasInbox(actorId)) return
+      if (message.noSync && !actorId.includes('+')) return
+      reach.set(actorId, (reach.get(actorId) ?? new Set()).add(reason))
+    }
+    // A mention reaches an actor the board has met, or a principal by its own ID.
+    for (const mentioned of mentionedActors(message.text)) if (actors.has(mentioned) || !mentioned.includes('+')) reaches(mentioned, 'mention')
+    for (const [actorId, { toggles }] of threadFollows.get(thread.id) ?? []) if (followsThread(toggles, message.sequence)) reaches(actorId, 'thread')
+    const parts = channel.split('/')
+    for (const name of [channel, ...parts.map((_, i) => `${parts.slice(0, i + 1).join('/')}/`)])
+      for (const [actorId, since] of channelFollows.get(name) ?? []) if (since < message.createdAt) reaches(actorId, 'channel')
+    for (const [actorId, reasons] of reach) {
+      if (!grantsLetRead(actorId, channel)) continue
+      const reader = readerOf(actorId)
+      const key = itemKey({ actor: actorId, threadId: thread.id })
+      const item = reader.items.get(key) ?? { actor: actorId, threadId: thread.id, reasons: [], read: message.sequence - 1, unread: [], at: message.createdAt, order: 0 }
+      reader.items.set(key, item)
+      item.reasons = INBOX_REASONS.filter((reason) => item.reasons.includes(reason) || reasons.has(reason))
+      if (message.sequence > item.read && !item.unread.includes(message.sequence)) item.unread = [...item.unread, message.sequence].sort((a, b) => a - b).slice(-1000)
+      delete item.snoozedUntil
+      item.at = message.createdAt
+      item.order = inboxChanged(item)
+    }
+  }
+
+  /** `/me/inbox…`: the caller's inbox, what changed in it, and what they follow. */
+  async function inboxRoute(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor, signal?: AbortSignal): Promise<unknown> {
+    const me = actor.id
+    const reader = readerOf(me)
+    const flag = (name: string) => url.searchParams.get(name) === 'true'
+    const mine = (actorId: string) => actorId === me || (flag('under') && !me.includes('+'))
+    const readable = (threadId: string) => {
+      const thread = threads.get(threadId)
+      return thread !== undefined && may(actor, 'read', thread.channelId)
+    }
+    const view = (item: InboxItem) => {
+      const thread = threads.get(item.threadId)!
+      const message = item.messageId ? messageNamed(item.messageId) : undefined
+      return {
+        threadId: item.threadId,
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        reader: item.actor,
+        reasons: item.reasons,
+        unread: item.unread.length,
+        ...(item.snoozedUntil !== undefined && item.snoozedUntil > now() ? { snoozedUntil: item.snoozedUntil } : {}),
+        at: item.at,
+        thread: { ...showThread(thread), rootMessage: show(thread.messages[0]!), ...(thread.messageCount > 1 ? { latestMessage: show(thread.messages.at(-1)!) } : {}) },
+        ...(message ? { message: show(message) } : {}),
+      }
+    }
+    const position = (cursor: string | null) => {
+      if (cursor === null) return undefined
+      if (!/^(0|[1-9][0-9]{0,15})$/.test(cursor)) throw new Refused(400, 'invalid_cursor')
+      return Number(cursor)
+    }
+    /** The message a route's path names, to a caller who may read it: to anyone else it isn't there. */
+    const named = (id: string) => {
+      const message = messageNamed(decodeURIComponent(id))
+      if (!message || !readable(message.threadId)) throw new Refused(404, 'message_not_found')
+      return message
+    }
+    /** The item a message names: its own, when it was added by itself, and its thread's otherwise. */
+    const itemOf = (message: Message) => reader.items.get(itemKey({ actor: me, threadId: message.threadId, messageId: message.id })) ?? reader.items.get(itemKey({ actor: me, threadId: message.threadId }))
+    const notInInbox = (message: Message) => new Refused(404, 'not_in_inbox', `${message.id} isn't in your inbox.`)
+
+    if (method === 'GET' && rest === '/me/inbox') {
+      if (flag('unread') && flag('read')) throw bad('`unread` and `read` contradict each other: pass one.')
+      const limit = Number(url.searchParams.get('limit') ?? 50)
+      const before = position(url.searchParams.get('before'))
+      const labels = url.searchParams.getAll('label')
+      const listed = [...reader.items.values()]
+        .filter((item) => mine(item.actor) && readable(item.threadId) && (before === undefined || item.order < before))
+        .filter((item) => (item.snoozedUntil !== undefined && item.snoozedUntil > now()) === flag('snoozed'))
+        .filter((item) => (!flag('unread') || item.unread.length > 0) && (!flag('read') || item.unread.length === 0))
+        .filter((item) => !item.messageId || messageNamed(item.messageId)?.deletedAt === undefined)
+        .filter((item) =>
+          labels.every((label) => {
+            const at = label.indexOf('=')
+            const value = rootLabels(threads.get(item.threadId)!)[at === -1 ? label : label.slice(0, at)]
+            return value !== undefined && (at === -1 || label.slice(at + 1).split('|').includes(value))
+          }),
+        )
+        .sort((a, b) => b.order - a.order)
+      const shown = listed.slice(0, limit)
+      return { items: shown.map(view), cursor: String(reader.sequence), older: listed.length > limit ? String(shown.at(-1)!.order) : null }
+    }
+    if (method === 'GET' && rest === '/me/inbox/events') {
+      const after = position(url.searchParams.get('after')) ?? reader.sequence
+      const until = Date.now() + Number(url.searchParams.get('wait') ?? 0) * 1000
+      const since = () => reader.changes.filter((change) => change.sequence > after)
+      while (since().length === 0 && Date.now() < until && !signal?.aborted) await new Promise((resolve) => setTimeout(resolve, 10))
+      // The last change to each item says what it is now.
+      const latest = new Map<string, InboxChange>()
+      for (const change of since()) {
+        if (!mine(change.actor)) continue
+        latest.delete(itemKey(change))
+        latest.set(itemKey(change), change)
+      }
+      const events = [...latest.values()].flatMap((change): unknown[] => {
+        const cursor = String(change.sequence)
+        if (change.removed) return may(actor, 'read', change.channelId) ? [{ type: 'inbox.removed', cursor, threadId: change.threadId, ...(change.messageId ? { messageId: change.messageId } : {}), reader: change.actor }] : []
+        const item = readerOf(change.actor).items.get(itemKey(change))
+        return item && readable(item.threadId) ? [{ type: 'inbox.item', cursor, item: view(item) }] : []
+      })
+      return { events, cursor: String(since().at(-1)?.sequence ?? after) }
+    }
+    if (method === 'GET' && rest === '/me/inbox/follows') {
+      const limit = Number(url.searchParams.get('limit') ?? 50)
+      const from = Number(url.searchParams.get('cursor') ?? 0)
+      const all = [
+        ...[...channelFollows].flatMap(([channel, by]) => (by.has(me) ? [{ channel, by: 'asked' as const, at: by.get(me)! }] : [])).sort((a, b) => (a.channel < b.channel ? -1 : 1)),
+        ...[...threadFollows]
+          .flatMap(([threadId, by]) => {
+            const follow = by.get(me)
+            const how = follow && followsThread(follow.toggles)
+            return how && readable(threadId) ? [{ threadId, by: how, at: follow.listedAt ?? 0 }] : []
+          })
+          .sort((a, b) => b.at - a.at),
+      ]
+      return { follows: all.slice(from, from + limit), cursor: all.length > from + limit ? String(from + limit) : null }
+    }
+    let found: RegExpExecArray | null
+    if (method === 'POST' && (found = /^\/me\/inbox\/items\/([^/]+)(\/remove|\/read|\/snooze)?$/.exec(rest))) {
+      const message = named(found[1]!)
+      const thread = threads.get(message.threadId)!
+      if (found[2] === undefined) {
+        // A thread by its first message; a reply is itself, and so is a first message with `alone`.
+        const itself = body.alone === true || message.sequence > 1
+        if (itself && message.deletedAt !== undefined) throw new Refused(404, 'message_not_found')
+        const ref = { actor: me, threadId: thread.id, ...(itself ? { messageId: message.id } : {}) }
+        const existing = reader.items.get(itemKey(ref))
+        if (existing) {
+          if (!existing.reasons.includes('added')) {
+            existing.reasons = INBOX_REASONS.filter((reason) => existing.reasons.includes(reason) || reason === 'added')
+            inboxChanged(existing)
+          }
+          return { item: view(existing) }
+        }
+        const last = itself ? message.sequence : thread.messageCount
+        const item: InboxItem = { ...ref, reasons: ['added'], read: last - 1, unread: [last], at: now(), order: 0 }
+        reader.items.set(itemKey(ref), item)
+        item.order = inboxChanged(item)
+        return { item: view(item) }
+      }
+      const item = itemOf(message)
+      if (found[2] === '/remove') {
+        if (!item) return { removed: false }
+        reader.items.delete(itemKey(item))
+        inboxChanged(item, true)
+        return { removed: true }
+      }
+      if (!item) throw notInInbox(message)
+      if (found[2] === '/read') {
+        if (body.unread === true) {
+          // What others wrote from there on, never the reader's own or a deleted one, and a kept one only for an agent.
+          const since = item.messageId ? [] : thread.messages.filter((m) => m.sequence >= message.sequence && m.createdBy.id !== me && m.deletedAt === undefined && (me.includes('+') || !m.noSync)).map((m) => m.sequence)
+          item.read = message.sequence - 1
+          item.unread = since.length > 0 ? since.slice(-1000) : [message.sequence]
+        } else {
+          const through = !item.messageId && message.sequence === 1 ? thread.messageCount : message.sequence
+          if (through > item.read) {
+            item.read = through
+            item.unread = item.unread.filter((sequence) => sequence > through)
+          }
+        }
+        inboxChanged(item)
+        return { item: view(item) }
+      }
+      if (body.until !== null && !(typeof body.until === 'number' && body.until > now())) throw bad('A snooze ends later than now.')
+      if (body.until === null) delete item.snoozedUntil
+      else item.snoozedUntil = body.until
+      inboxChanged(item)
+      return { item: view(item) }
+    }
+    if (method === 'POST' && (found = /^\/me\/inbox\/follows\/channels(\/remove)?$/.exec(rest))) {
+      const channel = body.channel
+      if (typeof channel !== 'string' || !/^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*\/?$/.test(channel)) throw new Refused(400, 'invalid_channel')
+      const by = channelFollows.get(channel) ?? new Map<string, number>()
+      channelFollows.set(channel, by)
+      if (found[1]) return { unfollowed: by.delete(me) }
+      if (!by.has(me)) {
+        if ([...channelFollows.values()].filter((followers) => followers.has(me)).length >= 200) throw new Refused(400, 'too_many_follows')
+        by.set(me, now())
+      }
+      return { follow: { channel, by: 'asked', at: by.get(me)! } }
+    }
+    if (method === 'POST' && (found = /^\/me\/inbox\/follows\/threads\/([^/]+)(\/remove)?$/.exec(rest))) {
+      const thread = threads.get(named(found[1]!).threadId)!
+      const by = threadFollows.get(thread.id) ?? new Map<string, { toggles: Toggle[]; listedAt?: number }>()
+      threadFollows.set(thread.id, by)
+      const follow = by.get(me) ?? { toggles: [] }
+      by.set(me, follow)
+      const how = followsThread(follow.toggles)
+      const at = Math.max(thread.messageCount, follow.toggles.at(-1)?.at ?? 0)
+      if (found[2]) {
+        if (!how) return { unfollowed: false }
+        follow.toggles.push({ at, on: false })
+        delete follow.listedAt
+        return { unfollowed: true }
+      }
+      if (!how) {
+        follow.toggles.push({ at, on: true })
+        follow.listedAt = now()
+      }
+      return { follow: { threadId: thread.id, by: how ?? 'asked', at: follow.listedAt ?? now() } }
+    }
+    throw new Refused(404, 'not_found')
   }
 
   const makeChannel = (name: unknown) => {
@@ -2166,6 +2445,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       tokenMayIn(actor, 'read', typeof body.name === 'string' ? body.name : '')
       return { channel: makeChannel(body.name) }
     }
+    if (version === 1 && (rest === '/me/inbox' || rest.startsWith('/me/inbox/'))) return inboxRoute(method, rest, url, body, actor, signal)
     const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
     if (granted !== undefined) return granted
     // Version 2 has the task routes and nothing else; version 1 has everything else and none of them.
@@ -2746,14 +3026,15 @@ export function fakeMessageboard(
     requests.push(`${method} ${version === 2 ? '/v2' : ''}${path}`)
     // Version 2 is a board's task routes alone.
     if (version === 2 && !/^\/boards\/[^/]+\/tasks(\/|$)/.test(path)) throw new Refused(404, 'not_found', `${method} /v2${path}`)
-    // Completing an upload takes no body.
-    const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
+    // Completing an upload takes no body, and neither does taking an item out of an inbox, or following or leaving a thread.
+    const bodiless = /\/attachments\/[^/]+\/complete$|\/me\/inbox\/(items\/[^/]+\/remove|follows\/threads\/[^/]+(\/remove)?)$/.test(path)
+    const body = method === 'GET' || bodiless ? {} : ((await request.json()) as Record<string, any>)
     // A batch's request, as JSON, before anything of it is read: long texts are over it before they're over the count.
     if (method === 'POST' && /\/tasks\/batch$/.test(path) && new TextEncoder().encode(JSON.stringify(body)).byteLength > BATCH_BODY_BYTES)
       throw new Refused(413, 'entity_too_large', `A request's body is ${BATCH_BODY_BYTES.toLocaleString('en-US')} bytes at most.`)
-    // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
-    // Sync's routes take none either, but imports.
-    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path)) {
+    // Registering and acking watchers, completing uploads, and a reader's own inbox take no operation ID: each is
+    // idempotent as it is. Sync's routes take none either, but imports.
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)|\/me\/inbox(\/|$)/.test(path)) {
       if (typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
       // Every write's operation ID is a UUIDv7, and its time is read: with no receipt to answer it, a write is refused
       // unless that time is within the last 7 days and at most 5 minutes ahead. A hash laid out as one is almost never.

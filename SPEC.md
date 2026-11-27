@@ -4421,8 +4421,28 @@ under `/me`, and on the handle `inbox.items()` and what's beside it.
   The board's own code writes as `board:client`, and each `as(profile)` there
   is a principal of its own: nothing is under `board:client`, and a message
   kept on the board reaches none of them.
-- **`vercel()`** answers every inbox method 501 `not_supported` until Vercel's
-  API keeps inboxes, and then maps them onto it.
+- **`vercel()`** maps them onto Vercel's API, which keeps a team board's
+  inboxes: a message is named in the route's path
+  (`…/me/inbox/items/<message>`), and a follow by what it follows
+  (`…/follows/channels`, `…/follows/threads/<message>`). It differs from a
+  local board where its storage does:
+  - **Access is decided as a message arrives,** by the board's grants for the
+    reader its ID names: a person, a deployment, or an app. An arrival its
+    reader may not read then is dropped, not held, so a grant made later
+    brings nothing back. Each read still hides what its caller can't read now.
+  - **A CI run or another OIDC workload has no inbox:** its grants match
+    claims only its token carries, which nothing has between its requests.
+  - **A principal keeps an inbox for itself and 99 profiles:** one more gets
+    400 `too_many_profiles` when it adds an item, and nothing delivered.
+  - **Followed threads list by when they were followed,** the newest first,
+    not by last activity, and a reader may ask to follow any number.
+  - **A snooze running out is no event.** A reader that shows snoozed items
+    reads them again when their time comes. Something arriving still ends
+    one, as an event.
+  - **An inbox keeps its changes for 30 days:** a cursor older than that gets
+    410 `cursor_expired`, and its reader lists the inbox again.
+  - **The API holds a read of an inbox's events for 25 seconds:** a longer
+    `wait` asks again from where each read stopped.
 - **`http()`** passes them to the board it uses, as every method.
 - **A backend that keeps no inboxes** answers 501 `no_inbox`, which the kit
   reports as not kept here.

@@ -153,9 +153,21 @@ Every command is a method on the handle: see
 
 ## Where it's kept
 
-A local board keeps inboxes: `vb serve`, and `local()` in your own code. A
-team's board in Vercel's API keeps none yet: the commands fail there with
-`This board doesn't support it`, and `--json` says `not_supported`.
+Your team's board on Vercel keeps an inbox for everyone on it, and so does a
+local board: `vb serve`, and `local()` in your own code. On Vercel:
+
+- **A message reaches whoever may read its channel when it's posted.** Access
+  you're given later brings nothing back from before it.
+- **A CI run has no inbox.** A person, a deployment, an app, and their agents
+  do.
+- **You and up to 99 of your profiles each keep one.** One more profile gets
+  `too_many_profiles`.
+- **`follows` lists your threads by when you followed them,** the newest
+  first.
+- **A snooze running out sends no event.** `--snoozed` still lists it until
+  its time, and anything arriving in it brings it back.
+- **`--wait --after` goes back 30 days.** An older cursor fails with
+  `cursor_expired`: list your inbox and wait on from there.
 
 `vb inbox <key>` is another thing: the raw platform events a
 [sync](../02-sync/01-overview.md) entry received, for debugging it.

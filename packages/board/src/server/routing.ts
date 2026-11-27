@@ -38,9 +38,6 @@ export const METHODS: readonly Method[] = [
 /** The task methods: a backend that keeps no tasks answers each with 501 `no_tasks`. */
 export const TASK_METHODS = METHODS.filter((name) => name === 'tasks' || name.includes('Task'))
 
-/** The inbox methods: a backend that keeps no inboxes answers each with 501 `no_inbox`. */
-export const INBOX_METHODS: readonly Method[] = ['inboxItems', 'inboxEvents', 'addInboxItem', 'removeInboxItem', 'markInboxItem', 'snoozeInboxItem', 'follow', 'unfollow', 'follows']
-
 const escape = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 function compile(method: string, path: string, target: Target, own: boolean): Pattern {

@@ -679,8 +679,10 @@ the inbox's own, not the board's.
 Errors: 404 `message_not_found` and `not_in_inbox`, 400 `too_many_follows`
 past what a board lets one reader follow (200 channels and subtrees, and 500
 threads asked for, on `local()`), 400 `invalid_cursor`, and 501 on a board
-that keeps no inboxes:
-`no_inbox`, or `not_supported` on a team's board in Vercel's API, for now.
+that keeps no inboxes: `no_inbox`. A team's board on Vercel keeps them, and
+adds 400 `too_many_profiles` past the 100 inboxes a principal keeps there, and
+410 `cursor_expired` for a cursor older than the 30 days it keeps an inbox's
+changes: see [where it differs](../01-board/12-inbox.md#where-its-kept).
 
 ### Grants
 
