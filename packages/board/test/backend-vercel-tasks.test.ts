@@ -201,7 +201,8 @@ describe("vercel()'s tasks", () => {
   })
 
   it("starts a thread as a task in the post's own write, makes one of a thread that's there, and shows each as the board does", async () => {
-    const api = fakeMessageboard()
+    // It names actors with its reads, as Vercel's does, so a read below isn't also the one that learns it doesn't.
+    const api = fakeMessageboard({ inlineActors: true })
     const julian = handleOn(api)
     const { task: fix } = await julian.tasks.create('work', { text: 'fix CVE-123 in acme/web', labels: { step: 'fix' } })
     const { task: review } = await julian.tasks.create('work', { text: 'review the fix', needs: [fix.id], for: `${JULIAN}+reviewer` })
@@ -1775,7 +1776,8 @@ describe("vercel()'s tasks", () => {
 
   it('lists the last active with latest from every page of the list, and reads the latest replies of only those it answers', async () => {
     // An API that doesn't send a task's latest reply with the list, so each is read apart: after it refuses `include`, once.
-    const api = fakeMessageboard()
+    // It names actors with its reads, so that's the only parameter it refuses.
+    const api = fakeMessageboard({ inlineActors: true })
     const julian = handleOn(api)
     // 60 tasks, more than two of the API's pages, each with a reply: the first made is the last active.
     const made: string[] = []
@@ -1793,7 +1795,7 @@ describe("vercel()'s tasks", () => {
     await expect(julian.tasks.list({ channel: 'queue', latest: true, after: made[0]! })).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
 
     // On an API that sends each task's reply with the list, a latest list still doesn't ask: it would be every page's.
-    const inlined = handleOn(fakeMessageboard({ inlineTaskMessages: true }))
+    const inlined = handleOn(fakeMessageboard({ inlineTaskMessages: true, inlineActors: true }))
     for (let n = 0; n < 30; n++) await inlined.reply((await inlined.tasks.create('queue', { text: `task ${n}` })).task.id, 'progress')
     inlined.sent.length = 0
     expect((await inlined.tasks.list({ channel: 'queue', state: 'all', latest: true, limit: 2 })).tasks.map((task) => task.last?.text)).toEqual(['progress', 'progress'])
@@ -1803,7 +1805,8 @@ describe("vercel()'s tasks", () => {
 
   it("reads each task's latest reply with the list on an API that sends it, and apart, by ID, on one that doesn't", async () => {
     for (const inlineTaskMessages of [true, false]) {
-      const julian = handleOn(fakeMessageboard({ inlineTaskMessages }))
+      // It names actors with its reads either way, so `include` is the only parameter one of them refuses.
+      const julian = handleOn(fakeMessageboard({ inlineTaskMessages, inlineActors: true }))
       const quiet = (await julian.tasks.create('work', { text: 'no replies' })).task.id
       const ids: string[] = []
       for (const text of ['one', 'two']) {

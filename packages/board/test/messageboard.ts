@@ -2112,6 +2112,8 @@ function fakeBoard(shared: Shared, boardId: string) {
 
   /** The reads that answer the actors they name with `with=actors`: threads, messages, and a channel's changes. */
   const NAMING = /^\/(threads|messages|changes|messages\/[^/]+|threads\/[^/]+\/messages)$/
+  /** A thread's messages: a post there is a reply. */
+  const REPLY = /^\/threads\/[^/]+\/messages$/
   /** Everyone a read's answer names: who started each thread and wrote its messages, and who each change is by. */
   const namedIn = (read: { threads?: any[]; thread?: any; messages?: any[]; message?: any; events?: any[] }): Actor[] => [
     ...(read.threads ?? (read.thread ? [read.thread] : [])).flatMap((t) => [t.createdBy, ...[t.lastMessage, t.rootMessage, t.latestMessage].flatMap((m) => (m ? [m.createdBy] : []))]),
@@ -2123,12 +2125,16 @@ function fakeBoard(shared: Shared, boardId: string) {
     let found: RegExpExecArray | null
 
     if (url.searchParams.has('with')) {
-      // An API from before `with=actors` takes no `with`, as no route that names nobody does, and no other parameter it doesn't know.
-      if (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest)) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `with`.')
+      // A reply answers the actors it names whichever API this is: Vercel's takes `with` on a post, and board's client asks every reply for them.
+      const reply = method === 'POST' && version === 1 && REPLY.test(rest)
+      // An API from before `with=actors` takes no `with` on a read, as no route that names nobody does, and no other parameter it doesn't know.
+      if (!reply && (!shared.inlineActors || method !== 'GET' || version !== 1 || !NAMING.test(rest))) throw new Refused(400, 'invalid_request', 'Invalid request: should NOT have additional property `with`.')
       if (url.searchParams.get('with') !== 'actors') throw new Refused(400, 'invalid_request')
       const plain = new URL(url)
       plain.searchParams.delete('with')
       const read = (await route(method, rest, plain, body, actor, signal, version)) as Record<string, unknown>
+      // An answer of IDs alone names nobody.
+      if (reply && !('text' in (read.message as object))) return read
       // Each one once, as the actors route answers them by ID: one it has no view of is left out.
       return { ...read, actors: [...new Set(namedIn(read).map(({ id }) => id))].flatMap((id) => actors.get(id) ?? []) }
     }
@@ -2351,12 +2357,16 @@ function fakeBoard(shared: Shared, boardId: string) {
         const { items, cursor } = page(listed, url.searchParams.get('cursor'), size)
         return { messages: items.map(show), cursor }
       }
+      // A reply answers its thread's channel with `include=channel`, as a read of a message does, to a caller who reads it and has more than IDs back.
+      const include = url.searchParams.get('include')
+      if (include !== null && include !== 'channel') throw new Refused(400, 'invalid_request')
+      const inChannel = include === 'channel' && mayRead(actor, thread.channelId) ? { channel: channelAt(thread.channelId) } : {}
       const again = repeat(actor, body.clientId)
-      if (again) return again
+      if (again) return { ...again, ...inChannel }
       // A reply's labels commit with it, and take `label` where it's posted.
       if (Object.keys(body.labels ?? {}).length) tokenMay(actor, 'label', thread.channelId)
       if (Object.keys(body.labels ?? {}).some((key) => key.startsWith('board.'))) throw new Refused(400, 'reserved_label', "Labels under board. are the board's own.")
-      return once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number; noSync?: boolean })) }))
+      return { ...once(actor, body.operationId, () => ({ thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number; noSync?: boolean })) })), ...inChannel }
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)

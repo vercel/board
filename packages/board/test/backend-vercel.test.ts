@@ -536,7 +536,8 @@ describe('vercel()', () => {
 
   it("shows a channel's threads from the thread list alone where the API lists them with their messages, and reads each by ID where it doesn't, asking it once", async () => {
     const shown = async (inlineThreadMessages: boolean) => {
-      const api = fakeMessageboard({ inlineThreadMessages })
+      // It names actors with its reads either way, so the first list isn't also the read that learns it doesn't.
+      const api = fakeMessageboard({ inlineThreadMessages, inlineActors: true })
       const team = handleOn(api)
       const roots = []
       for (let i = 0; i < 20; i++) roots.push(await team.post('busy', { text: `thread ${i}` }))
@@ -759,14 +760,18 @@ describe('vercel()', () => {
     const team = handleOn(api)
     for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
     const root = await team.post('questions', { text: 'anyone?' })
-    // A process that has listed nothing, as each `vb` run is: a reply, then the thread.
+    // A process that has listed nothing, as each `vb` run is: the thread, twice.
     const fresh = handleOn(api)
     api.requests.length = 0
-    expect(await fresh.reply(root.id, { text: 'me!' })).toMatchObject({ channel: 'questions', re: root.id })
+    expect((await fresh.thread(root.id)).message.channel).toBe('questions')
     expect((await fresh.thread(root.id)).message.channel).toBe('questions')
     // One request for the one channel, asked once: the list is a page of the API's at a time, however many the board has.
     expect(api.requests.filter((r) => /^GET .*\/channels$/.test(r))).toEqual([])
     expect(api.requests.filter((r) => /^GET .*\/channels\/[^/]+$/.test(r))).toHaveLength(1)
+    // A reply's channel comes with the post, so another process's reply asks for none.
+    api.requests.length = 0
+    expect(await handleOn(api).reply(root.id, { text: 'me!' })).toMatchObject({ channel: 'questions', re: root.id })
+    expect(api.requests.filter((r) => /^GET .*\/channels(\/[^/]+)?$/.test(r))).toEqual([])
     // Where the API won't show a channel by its ID, it's looked for in the list, as before, and still named.
     const fetching = as(api, 'user:u_jb')
     const refused = (async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -777,6 +782,31 @@ describe('vercel()', () => {
     api.requests.length = 0
     expect((await older.thread(root.id)).message.channel).toBe('questions')
     expect(api.requests.filter((r) => /^GET .*\/channels$/.test(r))).toHaveLength(1)
+  })
+
+  it('replies in one request: the post answers its channel and who wrote it, so no message is read first', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const root = await team.post('dev', { text: 'deploy failed' })
+    const first = await team.reply(root.id, { text: 'looking' })
+    // A process that has read nothing, as each `vb` run is.
+    const fresh = handleOn(api, 'user:u_val')
+    api.requests.length = 0
+    const reply = await fresh.reply(first.id, { text: 'fixed', labels: { area: 'ci' }, after: first.id })
+    expect(reply).toMatchObject({ channel: 'dev', re: root.id, replyTo: first.id, text: 'fixed', labels: { area: 'ci' }, author: { id: 'vercel:user:u_val', handle: 'u_val' } })
+    // Beside finding the team's board, the post is all it asks: no message, channel, or actor is read for it.
+    expect(api.requests.filter((request) => request !== 'GET /boards')).toEqual([`POST /boards/brd_test/threads/${root.thread}/messages`])
+    expect((await team.thread(root.id)).replies.map((message) => message.text)).toEqual(['looking', 'fixed'])
+  })
+
+  it("refuses a reply to a message that isn't there as message_not_found, and posts nothing", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const root = await team.post('dev', { text: 'deploy failed' })
+    // No thread by its ID, a thread that ends before it, and no ID at all.
+    for (const id of ['msg_00000000-0000-4000-8000-000000000000_1', root.id.replace(/_1$/, '_9'), 'nope'])
+      await expect(team.reply(id, { text: 'hello?' }), id).rejects.toMatchObject({ status: 404, code: 'message_not_found', message: `message not found: ${id}` })
+    expect((await team.thread(root.id)).replies).toEqual([])
   })
 
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
