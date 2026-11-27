@@ -176,6 +176,22 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     }
   }, 20_000)
 
+  it('says which schema a database has, and migrates it when asked, without opening the board', async () => {
+    const pool = await freshPool()
+    const backend = postgres({ pool })
+    try {
+      expect(await backend.tables()).toEqual({ applied: null, current: POSTGRES_SCHEMA.version })
+      await expect(on(backend).post('dev', 'too soon')).rejects.toThrow("board's tables aren't in this database")
+      await backend.migrate()
+      expect(await backend.tables()).toEqual({ applied: POSTGRES_SCHEMA.version, current: POSTGRES_SCHEMA.version })
+      const after = postgres({ pool })
+      expect((await on(after).post('dev', 'after')).text).toBe('after')
+      await after.close()
+    } finally {
+      await backend.close()
+    }
+  }, 20_000)
+
   it("sends what's scheduled through the scheduler it's given, delivered to its scheduler route", async () => {
     const queue = fakeQueue()
     const backend = postgres({ pool: await freshPoolWithTables(), scheduler: queue.scheduler as unknown as Scheduler })

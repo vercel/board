@@ -8,7 +8,7 @@ import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
 import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
-import { checkSchema, migrateSchema, type PgPool } from '../store/postgres-db.ts'
+import { appliedVersion, checkSchema, migrateSchema, type PgPool } from '../store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../store/postgres-schema.generated.ts'
 import { postgresBlob, postgresStore } from '../store/postgres.ts'
 
@@ -42,6 +42,13 @@ export type PostgresOptions = {
 export type PostgresBackend = Backend & {
   /** The scheduler's callback, for `vercelQueues()`: `export { scheduler as POST }` from a route its topic triggers. */
   scheduler(request: Request): Promise<Response>
+  /**
+   * The version of `schema.sql` the database has (`applied`, null when it has none) and this
+   * release's (`current`), for a page that says whether to migrate. Doesn't open the board.
+   */
+  tables(): Promise<{ applied: string | null; current: string }>
+  /** Applies this release's `schema.sql` unless the database has it, as `autoMigrate` does, under the same lock. */
+  migrate(): Promise<void>
   /** Stops its timers, and ends the pool if it made it. What's still to send stays in the database. */
   close(): Promise<void>
 }
@@ -74,6 +81,7 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
 
   function poolOf(): PgPool {
     if (options.pool) return options.pool
+    if (made) return made as unknown as PgPool
     const config = poolConfig(options, process.env)
     if (!config) throw new HttpError(500, 'no_store', 'postgres: no database: pass connectionString, or set DATABASE_URL or PGHOST')
     made = new pg.Pool(config)
@@ -137,6 +145,8 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
       binding = given
     },
     scheduler: async (request: Request) => (await open()).backend.scheduler(request),
+    tables: async () => ({ applied: await appliedVersion(poolOf()), current: POSTGRES_SCHEMA.version }),
+    migrate: () => migrateSchema(poolOf(), POSTGRES_SCHEMA),
     async close() {
       const opened = opening
       opening = null

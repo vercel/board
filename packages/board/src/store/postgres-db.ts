@@ -108,7 +108,7 @@ ${[...ddl('postgres'), FILES_DDL].join(`;${BREAKPOINT}`)};
 }
 
 /** The version of `schema.sql` the database last had applied, or null when it has none. */
-async function appliedVersion(client: PgQueryable): Promise<string | null> {
+export async function appliedVersion(client: PgQueryable): Promise<string | null> {
   try {
     const { rows } = await client.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])
     return rows.length > 0 ? String(rows[0]!.value) : null

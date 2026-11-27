@@ -51,6 +51,17 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 `close()` stops its timers and ends the pool it made, as a test does at its
 end.
 
+`tables()` says which `schema.sql` the database has, `applied` (null when it
+has none), and this release's, `current`, without opening the board.
+`migrate()` applies this release's unless the database has it, as
+`autoMigrate` does. Together they make a setup page's step: show what's
+missing, and a button that migrates.
+
+```ts
+const { applied, current } = await backend.tables()
+if (applied !== current) await backend.migrate()
+```
+
 ## Timers
 
 Scheduled messages, leases running out, and watchers' and sync's retries run
