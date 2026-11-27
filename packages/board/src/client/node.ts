@@ -5,10 +5,13 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { decodeJwt } from 'jose'
-import { exchangeVercelOidcToken, getVercelOidcToken, getVercelToken } from '@vercel/oidc'
+import { decodeJwt } from './decode-jwt.ts'
 import type { Discovery } from '../api/routes.ts'
 import { BoardError, type ProfileOption, type Resolvable } from './client.ts'
+
+// @vercel/oidc (and the @vercel/cli-* and execa it loads) only matters on a Vercel credential path: load it there.
+// Named so it can't be shadowed by a local `oidc`, as sandboxHeaders has.
+const oidcModule = () => import('@vercel/oidc')
 
 export const configDir = () =>
   join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'board')
@@ -201,7 +204,7 @@ export const appLogin = () => passed !== null || handed !== null
  * it was passed, its `login`, or `VERCEL_AUTH_TOKEN`), or else what `vercel login` saved.
  */
 export const vercelLogin = () =>
-  passed !== null ? Promise.resolve(passed) : handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
+  passed !== null ? Promise.resolve(passed) : handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : oidcModule().then((oidc) => oidc.getVercelToken())
 
 /**
  * A handed login's token, which its tokens for boards are cached by: null for `vercel login`'s own. One
@@ -218,7 +221,7 @@ async function handedToken(): Promise<string | null> {
 }
 
 /** The login to call Vercel's API with: a handed one, or `vercel login`'s, or none it can read (the keychain's). */
-const apiLogin = async (handed: string | null) => handed ?? (await getVercelToken().catch(() => null))
+const apiLogin = async (handed: string | null) => handed ?? (await (await oidcModule()).getVercelToken().catch(() => null))
 
 /**
  * A person's token: their Vercel CLI login mints a development token for the
@@ -256,7 +259,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
     development = await tokenFromVercelCli(project)
   }
 
-  const token = await exchangeVercelOidcToken({ token: development, audience })
+  const token = await (await oidcModule()).exchangeVercelOidcToken({ token: development, audience })
   const fresh: Cached = { token, expiresAt: expiry(token) }
   await writeCache(audience, login, fresh).catch(() => {})
   return fresh
@@ -505,7 +508,7 @@ class Moved extends Error {
  */
 async function hostedToken(url: string): Promise<string> {
   try {
-    return await getVercelOidcToken({ audience: url })
+    return await (await oidcModule()).getVercelOidcToken({ audience: url })
   } catch (cause) {
     throw Object.assign(
       new BoardError('no_token', `This deployment can't get a Vercel OIDC token for ${url}.`, 0, {
@@ -531,7 +534,7 @@ const ownHost = (host: string) =>
 export async function sandboxHeaders(url: string, audience: string | null, token?: string): Promise<Record<string, string>> {
   const oidc = async () => {
     try {
-      return await getVercelOidcToken(audience === null ? undefined : { audience })
+      return await (await oidcModule()).getVercelOidcToken(audience === null ? undefined : { audience })
     } catch (cause) {
       throw Object.assign(
         new BoardError('no_token', `There's no Vercel OIDC token here to hand a sandbox for ${url}.`, 0, {

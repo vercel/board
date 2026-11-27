@@ -3,12 +3,14 @@
 // Actions job's OIDC token, or your `vercel login`. Never `VERCEL_TOKEN`, a name people set for other reasons, and nothing in the environment replaces a
 // deployment's own token: only the login of an app that runs board's CLI goes ahead of it, since the app says who its commands run as.
 import { readFile } from 'node:fs/promises'
-import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
-import { decodeJwt } from 'jose'
+import { decodeJwt } from '../client/decode-jwt.ts'
 import { BoardError } from '../client/client.ts'
 import { appLogin, asYou, environmentProfile, expiry, githubActionsToken, inGithubActions, loginHanded, PASSED, passedToken, sandboxHeaders, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
+
+// @vercel/oidc (and the @vercel/cli-* and execa it loads) only matters on a Vercel credential path: load it there.
+const oidcModule = () => import('@vercel/oidc')
 
 /**
  * Whether this deployment's own token is what goes: on Vercel, or with its OIDC token pulled
@@ -68,7 +70,7 @@ function githubToken(): Promise<string> {
  * token, or your `vercel login`.
  */
 async function token(): Promise<string> {
-  if (asDeployment()) return getVercelOidcToken()
+  if (asDeployment()) return (await oidcModule()).getVercelOidcToken()
   const set = boardToken()
   if (set) return set
   // With no login to send, that's what it says, as `http()`'s does, not that the API didn't answer.
@@ -114,7 +116,7 @@ async function team(): Promise<string | null> {
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
   if (asDeployment()) {
     try {
-      const owner = decodeJwt(await getVercelOidcToken()).owner_id
+      const owner = decodeJwt(await (await oidcModule()).getVercelOidcToken()).owner_id
       if (typeof owner === 'string') return owner
     } catch {}
   }

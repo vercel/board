@@ -1,3 +1,4 @@
+import { chmodSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { build, defineConfig, type InlineConfig, type Rolldown } from 'tsdown'
 
@@ -42,7 +43,6 @@ export default defineConfig([
       'sync-slack': 'src/sync/slack.ts',
       'sync-github': 'src/sync/github.ts',
       'sync-linear': 'src/sync/linear.ts',
-      cli: 'src/cli/bin.ts',
       // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `inspect`
       // or `serve`.
       'cli-embedded': 'src/cli/embedded.ts',
@@ -68,7 +68,47 @@ export default defineConfig([
     plugins: [inspectorPage()],
     clean: true,
   },
+  {
+    // The `vb` CLI: alwaysBundle inlines zod, jose, and the rest, so starting a command resolves a
+    // handful of files instead of ~390 modules. Code splitting stays on: what a command only reaches
+    // through `import()` becomes a chunk of its own, unparsed until that command needs it, so the
+    // entry V8 reads at every start is far smaller. Minifying shrinks the bytes that remain.
+    entry: { 'cli-main': 'src/cli/bin.ts' },
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    minify: true,
+    dts: false,
+    // @vercel/oidc is reached only through a dynamic import on a Vercel credential path: leave it in
+    // node_modules (it is a declared dependency), so its whole subtree is not in the startup graph.
+    deps: { alwaysBundle: [/.*/], onlyBundle: false, neverBundle: [/^@vercel\/oidc(\/|$)/] },
+    plugins: [cliShim()],
+    // It adds dist/cli.mjs to the build above rather than replacing it.
+    clean: false,
+  },
 ])
+
+/**
+ * `dist/cli.mjs` — what the `board` and `vb` bins point at — is a small shim that asks Node for its
+ * compile cache and only then loads `cli-main.mjs`, the CLI's eager bundle (and any chunk that
+ * command imports). Node compiles those once and keeps V8's bytecode in the cache, so every `vb`
+ * after the first skips parsing and compiling them. It has to be a separate file: the cache covers
+ * only modules loaded after `enableCompileCache()`, which a file can't do for itself.
+ */
+function cliShim(): Rolldown.Plugin {
+  const shim = `#!/usr/bin/env node
+import { enableCompileCache } from 'node:module'
+try { enableCompileCache() } catch {}
+await import('./cli-main.mjs')
+`
+  return {
+    name: 'board:cli-shim',
+    writeBundle() {
+      writeFileSync(here('dist/cli.mjs'), shim)
+      chmodSync(here('dist/cli.mjs'), 0o755)
+    },
+  }
+}
 
 /**
  * `inspect`'s page is built with the rest, into `dist/inspect/app.js`, which the standalone CLI
