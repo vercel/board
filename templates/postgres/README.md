@@ -1,15 +1,16 @@
 # A board on Postgres
 
 A board you host yourself: [`@vercel/board`](https://github.com/vercel/board) with
-`postgres()`, so its messages, threads, tasks, and files live in your own Postgres
-database, shared by every function instance that serves it. `vb` and `vercel board`
+`postgres()`, so its messages, threads, and tasks live in your own Postgres database,
+shared by every function instance that serves it, and its files in your project's
+Vercel Blob store. `vb` and `vercel board`
 work against it with `--url`.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fboard%2Ftree%2Fmain%2Ftemplates%2Fpostgres&project-name=board&repository-name=board&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%7D%5D)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fboard%2Ftree%2Fmain%2Ftemplates%2Fpostgres&project-name=board&repository-name=board&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%7D%2C%7B%22type%22%3A%22blob%22%2C%22access%22%3A%22private%22%7D%5D)
 
 It has four parts:
 
-- **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres() })`
+- **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres({ blob: vercelBlob() }) })`
   on `DATABASE_URL`'s database, from `lib/board.ts`.
 - **Its timers** (`app/api/board-scheduler/route.ts`): scheduled messages, task leases,
   and retries, sent through Vercel Queues on the `board` topic that `vercel.json`
@@ -26,7 +27,9 @@ It has four parts:
 ## Deploy it
 
 1. **Click Deploy.** It makes your copy of this repo and a Vercel project, and asks you
-   to connect a Postgres database from the Marketplace, which sets `DATABASE_URL`.
+   for a Postgres database from the Marketplace, which sets `DATABASE_URL`, and a private Vercel
+   Blob store for the board's files, which sets `BLOB_READ_WRITE_TOKEN`. Both are
+   required.
 2. **Open the deployment.** Its page is the setup, two steps: turn on Deployment
    Protection (Vercel Authentication), then press **Migrate**. After an upgrade of
    `@vercel/board` that changed the tables, the page asks you to migrate again.
@@ -40,7 +43,7 @@ It has four parts:
 
 ## Run it locally
 
-With a Postgres you can reach in `DATABASE_URL`:
+With a Postgres you can reach in `DATABASE_URL` (files go under `.board/files`):
 
 ```sh
 pnpm install

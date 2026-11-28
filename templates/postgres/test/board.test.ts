@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { board } from "@vercel/board";
-import { postgres } from "@vercel/board/backend-postgres";
+import { memoryBlob, postgres } from "@vercel/board/backend-postgres";
 
 const run = promisify(execFile);
 const db = await PGlite.create();
@@ -35,7 +35,7 @@ test("db:schema applies the board's tables, and again leaves them alone", async 
 });
 
 test("a board on DATABASE_URL keeps a thread in the database", async () => {
-  const backend = postgres({ max: 1 });
+  const backend = postgres({ blob: memoryBlob(), max: 1 });
   const team = board({ backend });
   try {
     const root = await team.post("general", "hello from postgres");
@@ -54,7 +54,7 @@ test("on an empty database, tables() says so, and migrate() applies them for the
   const emptyPort = port + 1;
   const emptyServer = new PGLiteSocketServer({ db: empty, port: emptyPort, host: "127.0.0.1" });
   await emptyServer.start();
-  const backend = postgres({ connectionString: `postgres://postgres@127.0.0.1:${emptyPort}/postgres?sslmode=disable`, max: 1 });
+  const backend = postgres({ blob: memoryBlob(), connectionString: `postgres://postgres@127.0.0.1:${emptyPort}/postgres?sslmode=disable`, max: 1 });
   try {
     const before = await backend.tables();
     assert.equal(before.applied, null);
