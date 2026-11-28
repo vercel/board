@@ -1,5 +1,5 @@
 import type { BoardEventView } from '../api/routes.ts'
-import { BoardError, createBoardClient, eventsState, feedBackoff, refusedFeed, type BoardClient, type EventsOptions, type NewTaskOptions, type ProfileOption, type TaskOptions } from '../client/client.ts'
+import { BoardError, createBoardClient, eventsState, feedBackoff, pause, refusedFeed, type BoardClient, type EventsOptions, type NewTaskOptions, type ProfileOption, type TaskOptions } from '../client/client.ts'
 import { derivedId } from '../client/ids.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { SYNC, type Backend, type BoardBinding, type Caller, type SelfCaller, type Subscription, type SyncEntry } from './backend.ts'
@@ -490,7 +490,7 @@ async function* events(
       if (refusedFeed(error)) throw error
       answered = false
       state.failed()
-      await new Promise((resolve) => setTimeout(resolve, feedBackoff(error, failures++)))
+      await pause(feedBackoff(error, failures++), opts.signal)
       continue
     }
     failures = 0

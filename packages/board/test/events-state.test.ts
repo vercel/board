@@ -100,6 +100,16 @@ describe('events, told whether it is connected', () => {
     await feed.stop()
   }, 10_000)
 
+  it('stops at once when aborted while waiting out a long Retry-After', async () => {
+    const limited = () => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': '3600' } })
+    const { fetch } = remote([limited])
+    const team = board({ backend: http(URL_, { fetch }) })
+    const feed = follow((opts) => team.events({ all: true, after: '1' }, opts))
+    await vi.waitFor(() => expect(feed.states).toEqual(['retrying']))
+    const stopped = await Promise.race([feed.stop().then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 1000))])
+    expect(stopped).toBe(true)
+  })
+
   it('keeps a client on the stream going after a 429', async () => {
     const limited = () => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': '1' } })
     const stream = () => new Response(`id: 2\nevent: board\ndata: ${JSON.stringify(event)}\n\n`, { headers: { 'content-type': 'text/event-stream' } })

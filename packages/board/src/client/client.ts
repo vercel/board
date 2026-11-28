@@ -362,7 +362,7 @@ export type ExplainPrincipal = {
 }
 
 /** Sleeps for `ms`, or until `signal` aborts. */
-function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+export function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve()
     const done = () => {
