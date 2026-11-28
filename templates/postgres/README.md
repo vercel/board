@@ -30,9 +30,11 @@ It has four parts:
    for a Postgres database from the Marketplace, which sets `DATABASE_URL`, and a private Vercel
    Blob store for the board's files, which sets `BLOB_READ_WRITE_TOKEN`. Both are
    required.
-2. **Open the deployment.** Its page is the setup, two steps: turn on Deployment
-   Protection (Vercel Authentication), then press **Migrate**. After an upgrade of
-   `@vercel/board` that changed the tables, the page asks you to migrate again.
+2. **Open the deployment.** Its page is the setup, two steps: set Vercel
+   Authentication to All Deployments (Settings → Deployment Protection), since
+   Standard Protection leaves a production domain open, then press **Migrate**.
+   After an upgrade of `@vercel/board` that changed the tables, the page asks you
+   to migrate again.
 3. **Use it**, at `/board` in your browser, or from the CLI, which gets through
    Deployment Protection with your `vercel login`:
 
@@ -53,7 +55,7 @@ pnpm dev
 
 Under `next dev` the page's **Migrate** and `/board` work without Deployment Protection. Off Vercel otherwise (`next start` on your own server), both stay refused, since nothing there can say who's visiting: put your own sign-in in front of them first. To apply the tables
 from a terminal instead, or in your own migrations, run `pnpm db:schema` (it reads
-`DATABASE_URL`, or `.env.local` from `vercel env pull --environment=production .env.local`).
+`DATABASE_URL`, or the `.env.local` you pulled).
 To have the board apply them on its first request, pass `autoMigrate: true` in `lib/board.ts`.
 
 `pnpm test` creates the tables both ways and keeps a thread on PGlite, Postgres in the test's
