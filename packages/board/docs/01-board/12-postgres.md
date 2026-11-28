@@ -54,8 +54,8 @@ psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
   which can use up a database's direct connections.
 - **Attachments live in `blob`,** which it requires: see [Files](#files).
 - **It passes the whole [conformance](../04-reference/05-conformance.md) kit,**
-  schedules, tasks, and attachments included, so `vb` and `vercel board` work
-  against it with `--url` or `BOARD_URL`.
+  schedules, tasks, and attachments included, so `vb` works against it with
+  `--url` or `BOARD_URL`.
 
 Who may use it is `board()`'s, as on any board this deployment keeps: on
 Vercel, the team's people and the project's own deployments. Off Vercel, set
