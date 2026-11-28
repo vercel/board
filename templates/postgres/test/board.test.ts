@@ -7,9 +7,18 @@ import { promisify } from "node:util";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { board } from "@vercel/board";
-import { memoryBlob, postgres } from "@vercel/board/backend-postgres";
+import { postgres, type BlobStore } from "@vercel/board/backend-postgres";
 
 const run = promisify(execFile);
+
+/** Files in memory: the test's own blob store. */
+function memoryBlob(): BlobStore {
+  const files = new Map<string, { data: Uint8Array; contentType: string }>();
+  return {
+    put: async (key, data, contentType) => void files.set(key, { data, contentType }),
+    get: async (key) => files.get(key) ?? null,
+  };
+}
 const db = await PGlite.create();
 const port = 20_000 + Math.floor(Math.random() * 20_000);
 // PGlite has one connection, so the board's pool below opens one too.

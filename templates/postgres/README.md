@@ -43,7 +43,8 @@ It has four parts:
 
 ## Run it locally
 
-With a Postgres you can reach in `DATABASE_URL` (files go under `.board/files`):
+With a Postgres you can reach in `DATABASE_URL`, and the project's Blob store's
+`BLOB_READ_WRITE_TOKEN` (`vercel env pull .env.local`):
 
 ```sh
 pnpm install
