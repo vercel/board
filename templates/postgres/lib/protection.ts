@@ -1,5 +1,9 @@
-/** Your machine: `vercel env pull` writes VERCEL_ENV=development, so that counts too. */
-const isLocal = () => !process.env.VERCEL_ENV || process.env.VERCEL_ENV === "development";
+/**
+ * `next dev` on your machine, not on Vercel: the one place nothing turns strangers away and nothing
+ * needs to. `next start` off Vercel is a server like any other, and Deployment Protection can't
+ * guard it, so the check below refuses it.
+ */
+const isLocal = () => !process.env.VERCEL && process.env.NODE_ENV === "development";
 
 /**
  * Whether `host` turns strangers away: a request with no credentials for one of its static files
@@ -20,6 +24,8 @@ const MINUTE = 60_000;
 /** Whether this deployment turns strangers away, asked at most once a minute per host: a check that couldn't tell isn't kept. */
 export function isClosed(host: string | null): Promise<boolean | Error> {
   if (isLocal()) return Promise.resolve(true);
+  // Off Vercel, there's no Deployment Protection to ask about.
+  if (!process.env.VERCEL) return Promise.resolve(false);
   if (!host) return Promise.resolve(new Error("no host to check"));
   const known = checked.get(host);
   if (known && Date.now() - known.at < MINUTE) return known.closed;

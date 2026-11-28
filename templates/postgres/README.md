@@ -51,7 +51,7 @@ pnpm install
 pnpm dev
 ```
 
-Locally the page's **Migrate** works without Deployment Protection. To apply the tables
+Under `next dev` the page's **Migrate** and `/board` work without Deployment Protection. Off Vercel otherwise (`next start` on your own server), both stay refused, since nothing there can say who's visiting: put your own sign-in in front of them first. To apply the tables
 from a terminal instead, or in your own migrations, run `pnpm db:schema` (it reads
 `DATABASE_URL`, or `.env.local` from `vercel env pull --environment=production .env.local`).
 To have the board apply them on its first request, pass `autoMigrate: true` in `lib/board.ts`.
