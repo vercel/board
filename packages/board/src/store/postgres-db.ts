@@ -14,19 +14,48 @@ export class TablesNotConfiguredError extends Error {
   readonly code = 'STORE_NOT_CONFIGURED'
 }
 
+/** Where the package ships the schema, as an app that installs it finds it. */
+export const SCHEMA_FILE = 'node_modules/@vercel/board/sql/postgres/schema.sql'
+
+/**
+ * What a role other than the one that applied `schema.sql` needs: the file keeps `a2_batch`, which
+ * every write to the log calls, to the role that applied it.
+ */
+export const ROLE_NEEDS = `this database role can't use board's tables: grant it select, insert, update, and delete on them and execute on function a2_batch(text[], jsonb), or apply ${SCHEMA_FILE} as this role`
+
 /** Missing tables or columns (42P01, 42703) say to apply the schema; missing grants (42501), what to grant. */
 function explain(error: unknown): unknown {
   const code = (error as { code?: unknown } | null)?.code
   if (code === '42P01' || code === '42703')
     return new TablesNotConfiguredError(`board's tables aren't in this database, or are from an older release: apply ${SCHEMA_FILE}`, { cause: error })
-  if (code === '42501')
-    return new TablesNotConfiguredError("this database role can't use board's tables: grant it select, insert, update, and delete on them", { cause: error })
+  if (code === '42501') return new TablesNotConfiguredError(ROLE_NEEDS, { cause: error })
   return error
+}
+
+/**
+ * A connection out of `pool`, heard for as long as it's held. The server can end it under a
+ * transaction (a restart, a failover, a pooler recycling it), and a client nobody listens to reports
+ * that as an uncaught exception, which ends the process: the pool hears its idle clients only. The
+ * query it cut off fails on its own.
+ */
+export async function checkout(pool: PgPool): Promise<PgQueryable & { release(): void }> {
+  const client = await pool.connect()
+  // A `pg` client is an emitter; a pool of yours over another driver may hand out one that isn't.
+  const emitter = client as { on?(event: 'error', listener: () => void): unknown; off?(event: 'error', listener: () => void): unknown }
+  const heard = () => {}
+  emitter.on?.('error', heard)
+  return {
+    query: (text, values) => client.query(text, values),
+    release() {
+      emitter.off?.('error', heard)
+      client.release()
+    },
+  }
 }
 
 /** Runs `body` on one connection in a transaction, which commits when it returns true and rolls back otherwise. */
 async function transaction(pool: PgPool, begin: string, body: (client: PgQueryable) => Promise<boolean>): Promise<boolean> {
-  const client = await pool.connect()
+  const client = await checkout(pool)
   try {
     await client.query(begin)
     const keep = await body(client)
@@ -77,9 +106,6 @@ const FILES_DDL = `create table if not exists board_files (
   content_type text not null,
   data bytea not null
 )`
-
-/** Where the package ships the schema, as an app that installs it finds it. */
-export const SCHEMA_FILE = 'node_modules/@vercel/board/sql/postgres/schema.sql'
 
 /** `board_meta`'s key for the version of `schema.sql` last applied to the database. */
 export const SCHEMA_VERSION_KEY = 'postgres_schema'

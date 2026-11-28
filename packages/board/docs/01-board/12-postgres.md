@@ -18,7 +18,7 @@ Install `pg` beside it (`npm i pg`). On Vercel, connect a Postgres database to
 the project, from the Marketplace: it sets `DATABASE_URL`. Then apply the
 board's tables, before the first deploy:
 
-```sh
+```bash
 psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
 ```
 
@@ -126,6 +126,20 @@ after each one splits it for migration tools that send one statement per
 query: copy it into your migrations as it is. Apply it again when a release's
 changelog says the tables changed.
 
+Apply it as the role the board connects with. A board that connects as another
+role needs to read and write the tables, and to call `a2_batch`, which every
+write goes through and the file keeps to the role that applied it:
+
+```bash
+# board_app: the role the board connects with
+psql "$DATABASE_URL" \
+  -c 'grant select, insert, update, delete on all tables in schema public to board_app' \
+  -c 'grant execute on function a2_batch(text[], jsonb) to board_app'
+```
+
+Without the second, every write fails with 500 `no_store`, which says what to
+grant.
+
 ## Migrating on its own
 
 With `autoMigrate: true`, the board applies `schema.sql` itself: on a new
@@ -154,8 +168,9 @@ export const GET = team.fetch, POST = team.fetch
 - **The file only adds, from one release to the next:** tables, columns with
   a default or none, and indexes. A deployment still on the last release keeps
   working while the next one rolls out, and a rollback to it does too.
-- **Its role needs to create tables** in the database, on top of reading and
-  writing them. Without `autoMigrate`, it needs only the latter.
+- **Its role needs to create tables** in the database. It's the role that
+  applied them, so it needs no other grant: see [The tables](#the-tables) for
+  what a role that didn't needs.
 
 ## Files in a blob store
 

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -318,6 +319,108 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     expect(() => postgres({ scheduler: vercelQueues({ topic: 'board' }) })).not.toThrow()
     expect(() => vercelQueues({ topic: 'board scheduler' })).toThrow('vercelQueues() topic must match [A-Za-z0-9_-]+')
   })
+
+  it('outlives a connection the server ends while the board holds it, and answers the next call', async () => {
+    const inner = await freshPoolWithTables()
+    // The next connection the board takes ends under its first statement after `begin`, as a restart or
+    // a failover ends one: a `pg` client says so with an 'error' event, and the statement fails.
+    let ending = false
+    const pool: PgPool = {
+      query: (text, values) => inner.query(text, values),
+      end: () => inner.end(),
+      async connect() {
+        const client = await inner.connect()
+        const emitter = new EventEmitter()
+        return Object.assign(emitter, {
+          async query(text: string, values?: unknown[]) {
+            if (!ending || /^begin/i.test(text)) return client.query(text, values)
+            ending = false
+            const gone = new Error('Connection terminated unexpectedly')
+            await new Promise<void>((resolve) =>
+              setImmediate(() => {
+                resolve()
+                emitter.emit('error', gone)
+              }),
+            )
+            throw gone
+          },
+          release: () => client.release(),
+        })
+      },
+    }
+    const uncaught: unknown[] = []
+    const heard = (error: unknown) => uncaught.push(error)
+    process.on('uncaughtException', heard)
+    const backend = postgres({ pool })
+    const team = on(backend)
+    try {
+      const root = await team.post('dev', 'before')
+      // A list holds a connection for its snapshot, and fails with it.
+      ending = true
+      await expect(team.threads({ channel: 'dev' })).rejects.toThrow()
+      // A write holds one for its transaction: whether it lands or fails, the connection ended under it.
+      ending = true
+      await team.reply(root.id, 'cut off').catch(() => {})
+      expect(ending).toBe(false)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(uncaught).toEqual([])
+      expect((await team.reply(root.id, 'after')).text).toBe('after')
+      expect((await team.thread(root.id)).replies.map((m) => m.text)).toContain('after')
+    } finally {
+      process.off('uncaughtException', heard)
+      await backend.close()
+    }
+  }, 20_000)
+
+  // On a server every connection would need the role; PGlite's one connection takes it once.
+  it.skipIf(!!TEST_DATABASE_URL)("tells a role that didn't apply schema.sql what to grant it, not to apply the file again", async () => {
+    const pool = await freshPoolWithTables()
+    await pool.query('create role board_app')
+    await pool.query('grant select, insert, update, delete on all tables in schema public to board_app')
+    await pool.query('set role board_app')
+    const limited = postgres({ pool })
+    await expect(on(limited).post('dev', 'hello')).rejects.toThrow(/this database role can't use board's tables: grant it select, insert, update, and delete on them and execute on function a2_batch\(text\[\], jsonb\)/)
+    await limited.close()
+
+    await pool.query('reset role')
+    await pool.query('grant execute on function a2_batch(text[], jsonb) to board_app')
+    await pool.query('set role board_app')
+    const granted = postgres({ pool })
+    try {
+      expect((await on(granted).post('dev', 'hello')).text).toBe('hello')
+    } finally {
+      await granted.close()
+      await pool.query('reset role')
+    }
+  }, 20_000)
+
+  it.skipIf(!TEST_DATABASE_URL)("migrates a database the board can't open yet, while calls to it keep failing", async () => {
+    const empty = await freshPool()
+    const { rows } = await empty.query('select current_database() as name')
+    const url = new URL(TEST_DATABASE_URL!)
+    url.pathname = `/${String(rows[0]!.name)}`
+    const backend = postgres({ connectionString: url.toString() })
+    const team = on(backend)
+    try {
+      // Callers keep asking a board whose tables aren't there, as a live board's do after an upgrade
+      // that changed them: each is refused, and none of them may take the page's connection with it.
+      let asking = true
+      const callers = Array.from({ length: 4 }, async () => {
+        while (asking) await team.post('dev', 'too soon').catch(() => {})
+      })
+      try {
+        for (let i = 0; i < 30; i++) expect(await backend.tables()).toEqual({ applied: null, current: POSTGRES_SCHEMA.version })
+        await backend.migrate()
+        expect(await backend.tables()).toEqual({ applied: POSTGRES_SCHEMA.version, current: POSTGRES_SCHEMA.version })
+      } finally {
+        asking = false
+        await Promise.all(callers)
+      }
+      expect((await team.post('dev', 'after')).text).toBe('after')
+    } finally {
+      await backend.close()
+    }
+  }, 30_000)
 
   it.skipIf(!TEST_DATABASE_URL)('makes a pool from its connection string, and ends it when it closes', async () => {
     const pool = await freshPoolWithTables()

@@ -8,7 +8,7 @@ import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
 import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
-import { appliedVersion, checkSchema, migrateSchema, SCHEMA_FILE, TablesNotConfiguredError, type PgPool } from '../store/postgres-db.ts'
+import { appliedVersion, checkSchema, migrateSchema, ROLE_NEEDS, SCHEMA_FILE, TablesNotConfiguredError, type PgPool } from '../store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../store/postgres-schema.generated.ts'
 import { postgresBlob, postgresStore } from '../store/postgres.ts'
 
@@ -75,6 +75,27 @@ function readThrough(database: BlobStore, store: BlobStore): BlobStore {
   }
 }
 
+/** The Postgres error code among `error`'s causes: the log's store wraps what the driver threw. */
+function sqlState(error: unknown): string | null {
+  for (let current = error, depth = 0; depth < 5 && typeof current === 'object' && current !== null; depth++) {
+    const { code, cause } = current as { code?: unknown; cause?: unknown }
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code
+    current = cause
+  }
+  return null
+}
+
+/**
+ * What the log's store says of a database it can't use, in board's words: the file to apply is
+ * board's, since the engine's own isn't installed, and a role that may not use the tables needs
+ * grants, not the file again. Anything else is `error` as it came.
+ */
+function inBoardsWords(error: unknown): unknown {
+  if ((error as { code?: unknown } | null)?.code !== 'STORE_NOT_CONFIGURED' || error instanceof TablesNotConfiguredError) return error
+  if (sqlState(error) === '42501') return new HttpError(500, 'no_store', `postgres: ${ROLE_NEEDS}`)
+  return new HttpError(500, 'no_store', `postgres: board's tables in this database are missing or from an earlier release: apply ${SCHEMA_FILE}`)
+}
+
 /** Why the database couldn't be reached or used, in a few words. */
 const unreachable = (error: unknown) => String((error as { message?: unknown }).message ?? error).split('\n')[0]!
 
@@ -128,29 +149,25 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
         },
       }
     })()
-    opening.catch(async () => {
+    // The pool stays when the board can't open: tables() and migrate() are using it, to say what the
+    // database lacks and to apply it, and close() ends it.
+    opening.catch(() => {
       opening = null
-      const failed = made
-      made = null
-      await failed?.end().catch(() => {})
     })
     return opening
   }
 
+  /** The board, asked `ask`: what the log's store says of a database it can't use comes back in board's words. */
+  const asked = async <T>(ask: (board: ReturnType<typeof a2>) => T | Promise<T>): Promise<T> => {
+    try {
+      return await ask((await open()).backend)
+    } catch (error) {
+      throw inBoardsWords(error)
+    }
+  }
+
   const methods = Object.fromEntries(
-    METHODS.map((name) => [
-      name,
-      async (caller: Caller, input: never, signal: AbortSignal) => {
-        try {
-          return await ((await open()).backend[name] as (...args: unknown[]) => unknown)(caller, input, signal)
-        } catch (error) {
-          // A table or column the log's store found missing: the file to apply is board's, not the engine's.
-          if ((error as { code?: unknown } | null)?.code === 'STORE_NOT_CONFIGURED' && !(error instanceof TablesNotConfiguredError))
-            throw new HttpError(500, 'no_store', `postgres: board's tables in this database are missing or from an earlier release: apply ${SCHEMA_FILE}`)
-          throw error
-        }
-      },
-    ]),
+    METHODS.map((name) => [name, (caller: Caller, input: never, signal: AbortSignal) => asked((board) => (board[name] as (...args: unknown[]) => unknown)(caller, input, signal))]),
   ) as unknown as ProtocolMethods
 
   return {
@@ -159,13 +176,13 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
     // The board lives here: board() lets its people and own deployments in by default.
     keeps: true,
     trust: {
-      grants: async () => (await open()).backend.trust.grants(),
+      grants: () => asked((board) => board.trust.grants()),
     } satisfies Trust,
     bind(given: BoardBinding) {
       if (binding) throw new Error('postgres: this backend already serves a board: create one postgres() per board()')
       binding = given
     },
-    scheduler: async (request: Request) => (await open()).backend.scheduler(request),
+    scheduler: (request: Request) => asked((board) => board.scheduler(request)),
     tables: async () => ({ applied: await appliedVersion(poolOf()), current: POSTGRES_SCHEMA.version }),
     migrate: () => migrateSchema(poolOf(), POSTGRES_SCHEMA),
     async close() {
