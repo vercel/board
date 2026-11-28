@@ -36,7 +36,7 @@ export type PostgresOptions = {
   autoMigrate?: boolean
   /**
    * Where attachments' bytes live: `vercelBlob()` from `@vercel/board/backend-postgres/blob-vercel`,
-   * `fsBlob(dir)` or `memoryBlob()` for development and tests, or any `BlobStore`. A store that signs
+   * or any `BlobStore`. A store that signs
    * uploads (`uploadUrl` and `head`) takes files up to 100 MB; one that doesn't, up to 4 MB.
    */
   blob: BlobStore

@@ -2,4 +2,4 @@
 // by every instance that serves it, and its files in a blob store. Node only, with `pg` installed.
 export { postgres, type PostgresBackend, type PostgresOptions } from '../server/postgres.ts'
 export type { Scheduler } from '../scheduler/vercel.ts'
-export { fsBlob, memoryBlob, type BlobStore } from '../server/blob.ts'
+export type { BlobStore } from '../server/blob.ts'

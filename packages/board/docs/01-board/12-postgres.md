@@ -70,7 +70,7 @@ Vercel, the team's people and the project's own deployments. Off Vercel, set
 | `connectionString` | The database. Default `DATABASE_URL`, or else `POSTGRES_URL` |
 | `pool` | A `pg` Pool you made, instead: for a password from a callback, say. The board leaves it open |
 | `max` | Connections the pool it makes may open. Default 10 |
-| `blob` | Required. Where attachments live: `vercelBlob()`, `fsBlob(dir)`, `memoryBlob()`, or any store. See [Files](#files) |
+| `blob` | Required. Where attachments live: `vercelBlob()`, or any store. See [Files](#files) |
 | `autoMigrate` | Apply `schema.sql` on the first call when the database doesn't have this release's. Default false: see [Migrating on its own](#migrating-on-its-own) |
 | `scheduler` | What runs its timers: `vercelQueues()`, see [On Vercel Queues](#on-vercel-queues). Default: timers in this process |
 
@@ -205,14 +205,18 @@ Blob store to the project: the SDK finds it through `BLOB_READ_WRITE_TOKEN`, or
 the project's OIDC token and `BLOB_STORE_ID`. `prefix` keeps one board's files
 under a path of their own in a shared store.
 
-For development and tests, `fsBlob(dir)` keeps them on disk and `memoryBlob()`
-in memory, both from `@vercel/board/backend-postgres`:
+For development, pull a Blob store's token with `vercel env pull`. For tests,
+any object with `put` and `get` will do:
 
 ```ts
-import { fsBlob, memoryBlob, postgres } from '@vercel/board/backend-postgres'
+import { postgres, type BlobStore } from '@vercel/board/backend-postgres'
 
-const local = postgres({ blob: fsBlob('.board/files') })
-const test = postgres({ blob: memoryBlob() })
+const files = new Map<string, { data: Uint8Array; contentType: string }>()
+const blob: BlobStore = {
+  put: async (key, data, contentType) => void files.set(key, { data, contentType }),
+  get: async (key) => files.get(key) ?? null,
+}
+const backend = postgres({ blob })
 ```
 
 - **Any object with `put` and `get` is a store,** `BlobStore` its type. With
