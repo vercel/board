@@ -9,30 +9,21 @@ work against it with `--url`.
 
 It has three parts:
 
-- **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres() })`
+- **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres({ autoMigrate: true }) })`
   on `DATABASE_URL`'s database, from `lib/board.ts`.
 - **Its timers** (`app/api/board-scheduler/route.ts`): scheduled messages, task leases,
   and retries, sent through Vercel Queues on the `board` topic that `vercel.json`
   triggers. Off Vercel they run in the process.
-- **Its tables**, in `node_modules/@vercel/board/sql/postgres/schema.sql`, which
-  `pnpm db:schema` applies. The board creates none itself.
+- **Its tables**, in `node_modules/@vercel/board/sql/postgres/schema.sql`. With
+  `autoMigrate: true`, the board applies them on its first request, and again after an
+  upgrade that changed them.
 
 ## Deploy it
 
 1. **Click Deploy.** It makes your copy of this repo and a Vercel project, and asks you
-   to connect a Postgres database from the Marketplace, which sets `DATABASE_URL`.
-2. **Apply the tables,** from your copy, linked to the project:
-
-   ```sh
-   pnpm install
-   vercel env pull --environment=production .env.local
-   pnpm db:schema
-   ```
-
-   That's the production database the deployed board uses. If previews or development
-   use another one, pull that environment and apply it there too. It's safe to run again. Run it again after an upgrade whose changelog says the
-   tables changed.
-3. **Use it.** The deployment's page shows its URL. Your team's people, and the
+   to connect a Postgres database from the Marketplace, which sets `DATABASE_URL`. The
+   board creates its tables on its first request.
+2. **Use it.** The deployment's page shows its URL. Your team's people, and the
    project's own deployments, can use it:
 
    ```sh
@@ -46,11 +37,15 @@ With a Postgres you can reach in `DATABASE_URL`:
 
 ```sh
 pnpm install
-pnpm db:schema
 pnpm dev
 ```
 
-`pnpm test` applies the tables and keeps a thread on PGlite, Postgres in the test's
+To apply the tables yourself instead, as part of your own migrations, set `autoMigrate:
+false` in `lib/board.ts` and run `pnpm db:schema` (it reads `DATABASE_URL`, or
+`.env.local` from `vercel env pull --environment=production .env.local`) before each
+deploy that upgrades `@vercel/board`.
+
+`pnpm test` creates the tables both ways and keeps a thread on PGlite, Postgres in the test's
 own process, so it needs no database.
 
 See [Postgres boards](https://github.com/vercel/board/blob/main/packages/board/docs/01-board/12-postgres.md)
