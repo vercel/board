@@ -227,7 +227,7 @@ describe('a private channel, from the handle', () => {
         const locking = request.method === 'POST' && onGrants && (await request.clone().text()).includes('"everyone"')
         const own = (await team.grants()).find((grant) => Object.hasOwn(grant.can, `${path}/`) && grant.principals.some((principal) => principal.kind === 'user'))
         if (!added && own && (when === 'lock' ? locking : request.method === 'GET' && onGrants)) {
-          if ((await caller(team.fetch, await personToken('u_ada'))('PATCH', `/grants/${own.id}`, { add: [{ kind: 'user', userId: 'u_ada' }] })).status === 200) added = own.id
+          if ((await caller(team.fetch, await personToken('u_ada'))('POST', `/grants/${own.id}/update`, { add: [{ kind: 'user', userId: 'u_ada' }] })).status === 200) added = own.id
         }
         return team.fetch(request)
       }
@@ -286,6 +286,17 @@ describe('grants, from the handle', () => {
     })
     const updated = await julian.updateGrant(grant.id, { add: [{ kind: 'project', project: 'prj_api' }], remove: [{ kind: 'all-projects' }], can: { 'ci/': 'none' } })
     expect(updated.grant).toMatchObject({ principals: [{ projectId: 'prj_web' }, { projectId: 'prj_api', environments: ['production'] }], can: { 'ci/': [] } })
+  })
+
+  it('makes, changes, and revokes one on a board mounted with GET and POST alone, as a route file mounts it', async () => {
+    const team = testBoard()
+    // `export const GET = team.fetch, POST = team.fetch`: the framework answers any other method itself.
+    const mounted: Fetch = async (request) => (request.method === 'GET' || request.method === 'POST' ? team.fetch(request) : new Response(null, { status: 405 }))
+    const julian = handleAs(mounted, () => personToken())
+    const { grant } = await julian.createGrant({ principals: [{ kind: 'project', project: 'prj_web' }], can: { 'ci/': ['read'] } })
+    expect((await julian.updateGrant(grant.id, { can: { 'ci/': ['read', 'post'] } })).grant.can).toEqual({ 'ci/': ['read', 'post'] })
+    expect((await julian.grants()).find((found) => found.id === grant.id)?.can).toEqual({ 'ci/': ['read', 'post'] })
+    expect(await julian.revokeGrant(grant.id)).toMatchObject({ revoked: true })
   })
 })
 

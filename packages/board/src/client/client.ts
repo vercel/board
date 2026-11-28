@@ -745,7 +745,7 @@ export function createBoardClient(options: ClientOptions) {
     createGrants: (inputs: readonly GrantInput[], options: GrantWriteOptions = {}) => call<{ grants: GrantView[] }>('POST', '/grants/batch', { body: { grants: inputs.map(wireGrant), ...goAhead(options) } }),
     /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
     updateGrant: (id: string, { add, remove, can }: UpdateGrantInput, options: GrantWriteOptions = {}) =>
-      call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, {
+      call<{ grant: GrantView }>('POST', `/grants/${path(id)}/update`, {
         body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}), ...goAhead(options) },
       }),
     /**

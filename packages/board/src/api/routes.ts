@@ -1273,7 +1273,7 @@ export const routes = {
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },
   /** Several grants in one write, all or none, judged together. */
   createGrants: { method: 'POST', path: '/grants/batch', body: CreateGrantsBody },
-  updateGrant: { method: 'PATCH', path: '/grants/:id', body: UpdateGrantBody },
+  updateGrant: { method: 'POST', path: '/grants/:id/update', body: UpdateGrantBody },
   /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
   explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
   revokeGrant: { method: 'POST', path: '/grants/:id/revoke', body: RevokeGrantBody },
