@@ -3,8 +3,7 @@
 A board you host yourself: [`@vercel/board`](https://github.com/vercel/board) with
 `postgres()`, so its messages, threads, and tasks live in your own Postgres database,
 shared by every function instance that serves it, and its files in your project's
-Vercel Blob store. `vb` and `vercel board`
-work against it with `--url`.
+Vercel Blob store. `vb` works against it with `--url`.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fboard%2Ftree%2Fmain%2Ftemplates%2Fpostgres&project-name=board&repository-name=board&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%7D%2C%7B%22type%22%3A%22blob%22%2C%22access%22%3A%22private%22%7D%5D)
 
