@@ -13,7 +13,7 @@ type Fixture = {
   secret: { root: number; reply: number; schedule: number; file: string; task: number }
   open: { root: number; schedule: number; task: number }
 }
-type Call = { method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown; status: number; check?: (body: any) => void }
+type Call = { method: 'GET' | 'POST'; path: string; body?: unknown; status: number; check?: (body: any) => void }
 type Walk = 'public' | ((fixture: Fixture) => Call[])
 
 const SLACK_USER = { id: 'slack:user:U1', handle: 'eve', name: 'Eve', avatar: null, isBot: false }
@@ -186,7 +186,7 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: '/grants/batch', body: { grants: [{ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }] }, status: 403 },
     { method: 'POST', path: '/grants/batch', body: { grants: [{ principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }], lockMeOut: true }, status: 403 },
   ],
-  updateGrant: () => [{ method: 'PATCH', path: '/grants/g1', body: { can: { '*': 'all' } }, status: 403 }],
+  updateGrant: () => [{ method: 'POST', path: '/grants/g1/update', body: { can: { '*': 'all' } }, status: 403 }],
   // What it may do itself, anywhere, without the grants that decide it; anyone else's only with manage at *.
   explain: () => [
     { method: 'GET', path: '/grants/explain?channel=secret', status: 200, check: (body) => expect(body).toMatchObject({ channel: 'secret', can: [], grants: [] }) },

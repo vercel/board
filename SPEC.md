@@ -900,8 +900,8 @@ await team.revokeGrant(grant.id)
 - **A grant is `{ id, principals, can }`.** `can` is one map from channel
   pattern to `'all'` or permissions (`[]` for none) for every principal it
   names, kept as written. The same principals again are another grant, and a
-  grant changes by its ID: `PATCH /grants/:id { add?, remove?, can? }` adds
-  principals, removes them by who they are (a project whatever its
+  grant changes by its ID: `POST /grants/:id/update { add?, remove?, can? }`
+  adds principals, removes them by who they are (a project whatever its
   environments), and replaces `can`. Adding one it names already joins them,
   a project's environments together, so an add never narrows; removing and
   adding a project in one update does. Removing one it doesn't name is 400
@@ -1890,7 +1890,7 @@ status.
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants](#grants)) |
 | POST | `/grants` | `{ principals, can, lockMeOut? }`: a new grant. Needs what [Grants](#grants) says making one takes; 409 `grant_lockout` for one its caller couldn't take back, unless it says `lockMeOut`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
 | POST | `/grants/batch` | `{ grants, lockMeOut? }`: 1 to 16 grants in one write, all or none, judged together. Answers `{ grants }`, in the order given |
-| PATCH | `/grants/:id` | `{ add?, remove?, can?, lockMeOut? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
+| POST | `/grants/:id/update` | `{ add?, remove?, can?, lockMeOut? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, capped, can }` |
 | POST | `/grants/:id/revoke` | No body, or `{ lockMeOut }`. Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
 | GET | `/schemas` | Every schema, the built-ins first, then the board's own by name and version: `{ schemas: [{ id, name, version, description, schema, builtIn, by, at }] }`. Anyone the board lets in (see [Schemas](#schemas)). 501 `no_schemas` where the board keeps none |

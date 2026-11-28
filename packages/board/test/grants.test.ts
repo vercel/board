@@ -104,7 +104,7 @@ describe('grants', () => {
     const run = { kind: 'github', repository: 'acme/web' }
     const made = await bob('POST', '/grants', { principals: [run], can: { '*': 'all' } })
     expect(made.status).toBe(200)
-    expect((await bob('PATCH', `/grants/${made.body.grant.id}`, { can: { '*': ['read', 'post'] } })).status).toBe(200)
+    expect((await bob('POST', `/grants/${made.body.grant.id}/update`, { can: { '*': ['read', 'post'] } })).status).toBe(200)
     // The run it lets in gets nothing in security/: everyone's grant there is more specific than *.
     const me = (await (await as(workflowToken({ repository: 'acme/web', repository_id: '99' })))('GET', '/me')).body
     expect(me.can).toEqual({ '*': ['read', 'post'], 'security/': [] })
@@ -163,12 +163,12 @@ describe('grants', () => {
     const revoked = await scoped('POST', `/grants/${shut.body.grant.id}/revoke`, {})
     // It may list grants, so it's told where.
     expect([revoked.status, revoked.body.error.message]).toEqual([403, `this token can't revoke ${shut.body.grant.id}: it reaches secret/, where you can't manage grants`])
-    expect((await scoped('PATCH', `/grants/${shut.body.grant.id}`, { remove: [{ kind: 'project', project: 'prj_x' }] })).status).toBe(403)
+    expect((await scoped('POST', `/grants/${shut.body.grant.id}/update`, { remove: [{ kind: 'project', project: 'prj_x' }] })).status).toBe(403)
     // A member lifts a grant on * once a channel is closed to everyone, since the lock binds whoever it named too.
     await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
     const wide = await owner('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }, { kind: 'github', repository: 'acme/api' }], can: { '*': ['read'] } })
     const bob = await as(personToken('u_bob'))
-    expect((await bob('PATCH', `/grants/${wide.body.grant.id}`, { remove: [{ kind: 'github', repository: 'acme/api' }] })).status).toBe(200)
+    expect((await bob('POST', `/grants/${wide.body.grant.id}/update`, { remove: [{ kind: 'github', repository: 'acme/api' }] })).status).toBe(200)
     expect((await bob('POST', `/grants/${wide.body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
     // But not the lock itself, where he's shut out.
     const lock = (await owner('GET', '/grants')).body.grants.find((grant: { principals: { kind: string }[] }) => grant.principals[0]?.kind === 'everyone')
@@ -297,19 +297,19 @@ describe('grants', () => {
     // They may list the grants, so they're told where.
     expect(revoked.body.error.message).toContain('factory/')
     for (const change of [{ can: { 'factory/': ['read', 'post'] } }, { remove: [user('u_julian')] }]) {
-      const updated = await person('PATCH', '/grants/g5', change)
+      const updated = await person('POST', '/grants/g5/update', change)
       expect([JSON.stringify(change), updated.status, updated.body.error?.code]).toEqual([JSON.stringify(change), 409, 'grant_lockout'])
     }
     // Refused, it changed nothing.
     expect((await person('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === 'g5')).toMatchObject({ principals: [{ userId: 'u_julian' }, { userId: 'u_ada' }], can: { 'factory/': 'all' } })
     // Someone else out of it costs them nothing.
-    expect((await person('PATCH', '/grants/g5', { remove: [user('u_ada')] })).status).toBe(200)
+    expect((await person('POST', '/grants/g5/update', { remove: [user('u_ada')] })).status).toBe(200)
     // A caller that can't list the grants isn't told where a stored one reaches.
     const scoped = await narrowed(personToken(), 'factory/=all')
     const hidden = await scoped('POST', '/grants/g5/revoke', {})
     expect([hidden.status, hidden.body.error.code, JSON.stringify(hidden.body).includes('factory')]).toEqual([409, 'grant_lockout', false])
     // Told to, it's done, and then only the owner changes anything there.
-    expect((await person('PATCH', '/grants/g5', { remove: [user('u_julian')], add: [user('u_ada')], lockMeOut: true })).status).toBe(200)
+    expect((await person('POST', '/grants/g5/update', { remove: [user('u_julian')], add: [user('u_ada')], lockMeOut: true })).status).toBe(200)
     expect((await person('POST', '/grants/g4/revoke', { lockMeOut: true })).status).toBe(403)
     expect((await owner('POST', '/grants/g5/revoke', {})).body).toEqual({ revoked: true })
     // A revoke told to go ahead is done too, and leaves them out.
@@ -325,7 +325,7 @@ describe('grants', () => {
     await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { 'ci/': 'all' } })
     const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
     for (const [method, path, body] of [
-      ['PATCH', `/grants/${secret.body.grant.id}`, { can: { 'ci/': ['read'] } }],
+      ['POST', `/grants/${secret.body.grant.id}/update`, { can: { 'ci/': ['read'] } }],
       ['POST', `/grants/${secret.body.grant.id}/revoke`, {}],
     ] as const) {
       const refused = await ops(method, path, body)
@@ -339,16 +339,16 @@ describe('grants', () => {
     const poster = await narrowed(personToken(), '*=read,post')
     // Guesses at who it names, right or wrong, the last one or not, are all the same refusal.
     for (const remove of [[{ kind: 'user', userId: 'u_alice' }], [{ kind: 'user', userId: 'u_bob' }]])
-      expect([JSON.stringify(remove), (await poster('PATCH', `/grants/${body.grant.id}`, { remove })).status]).toEqual([JSON.stringify(remove), 403])
-    expect((await poster('PATCH', '/grants/g99', { remove: [{ kind: 'user', userId: 'u_bob' }] })).status).toBe(403)
-    expect((await owner('PATCH', '/grants/g99', { can: { '*': ['read'] } })).status).toBe(404)
+      expect([JSON.stringify(remove), (await poster('POST', `/grants/${body.grant.id}/update`, { remove })).status]).toEqual([JSON.stringify(remove), 403])
+    expect((await poster('POST', '/grants/g99/update', { remove: [{ kind: 'user', userId: 'u_bob' }] })).status).toBe(403)
+    expect((await owner('POST', '/grants/g99/update', { can: { '*': ['read'] } })).status).toBe(404)
   })
 
   it("answers a caller that can't list grants the same for a grant it can't reach as for one that isn't there, since grant IDs count up", async () => {
     const { owner, narrowed } = await setUp()
     const { body } = await owner('POST', '/grants', { principals: [user('u_alice')], can: { 'security/': 'all' } })
     const dev = await narrowed(personToken(), '*=read,post;dev/=all')
-    const probe = async () => [await dev('POST', `/grants/${body.grant.id}/revoke`, {}), await dev('PATCH', `/grants/${body.grant.id}`, { can: { 'dev/': ['read'] } })]
+    const probe = async () => [await dev('POST', `/grants/${body.grant.id}/revoke`, {}), await dev('POST', `/grants/${body.grant.id}/update`, { can: { 'dev/': ['read'] } })]
     const there = await probe()
     expect(there.map((answer) => [answer.status, answer.body.error.code])).toEqual([
       [403, 'forbidden'],
@@ -358,14 +358,14 @@ describe('grants', () => {
     expect(await probe()).toEqual(there)
     // Whoever may list them is told it's gone.
     expect((await owner('POST', `/grants/${body.grant.id}/revoke`, {})).body).toEqual({ revoked: false })
-    expect((await owner('PATCH', `/grants/${body.grant.id}`, { can: { 'dev/': ['read'] } })).body.error.code).toBe('grant_not_found')
+    expect((await owner('POST', `/grants/${body.grant.id}/update`, { can: { 'dev/': ['read'] } })).body.error.code).toBe('grant_not_found')
   })
 
   it('keeps both of two adds to one grant that land at once', async () => {
     const { person } = await setUp()
     const { body } = await person('POST', '/grants', { principals: [user('u_ada')], can: { 'dev/': ['read'] } })
     const id = body.grant.id
-    const answers = await Promise.all(['u_bob', 'u_carol', 'u_dan'].map((added) => person('PATCH', `/grants/${id}`, { add: [user(added)] })))
+    const answers = await Promise.all(['u_bob', 'u_carol', 'u_dan'].map((added) => person('POST', `/grants/${id}/update`, { add: [user(added)] })))
     expect(answers.map((answer) => answer.status)).toEqual([200, 200, 200])
     const kept = (await person('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === id)
     expect(kept.principals.map((principal: { userId: string }) => principal.userId).sort()).toEqual(['u_ada', 'u_bob', 'u_carol', 'u_dan'])
@@ -388,7 +388,7 @@ describe('grants', () => {
     const { person } = await setUp()
     const made = await person('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_front', environments: ['preview'] }], can: { 'dev/': ['post'] } })
     const id = made.body.grant.id
-    const added = await person('PATCH', `/grants/${id}`, {
+    const added = await person('POST', `/grants/${id}/update`, {
       add: [user('u_ada'), { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' }, { kind: 'all-projects', environments: ['preview'] }],
       can: { 'dev/': ['read', 'post'] },
     })
@@ -403,7 +403,7 @@ describe('grants', () => {
       can: { 'dev/': ['read', 'post'] },
     })
     // Adding a project it names already adds its environments to it.
-    const joined = await person('PATCH', `/grants/${id}`, { add: [{ kind: 'project', project: 'prj_front', environments: ['production'] }, { kind: 'all-projects', environments: ['development'] }] })
+    const joined = await person('POST', `/grants/${id}/update`, { add: [{ kind: 'project', project: 'prj_front', environments: ['production'] }, { kind: 'all-projects', environments: ['development'] }] })
     expect(joined.body.grant.principals).toMatchObject([
       { kind: 'project', projectId: 'prj_front', environments: ['production', 'preview'] },
       { kind: 'user' },
@@ -411,10 +411,10 @@ describe('grants', () => {
       { kind: 'all-projects', environments: ['preview', 'development'] },
     ])
     // A project, and every project, is removed by who it is, whatever its environments.
-    const removed = await person('PATCH', `/grants/${id}`, { remove: [{ kind: 'project', project: 'prj_front' }, { kind: 'github', repository: 'acme/web' }, { kind: 'all-projects' }] })
+    const removed = await person('POST', `/grants/${id}/update`, { remove: [{ kind: 'project', project: 'prj_front' }, { kind: 'github', repository: 'acme/web' }, { kind: 'all-projects' }] })
     expect(removed.body.grant.principals).toEqual([{ kind: 'user', userId: 'u_ada', email: null }])
     const refused = async (path: string, body: unknown) => {
-      const { status, body: answer } = await person('PATCH', path, body)
+      const { status, body: answer } = await person('POST', `${path}/update`, body)
       return [status, answer.error?.code]
     }
     expect(await refused(`/grants/${id}`, { remove: [{ kind: 'project', project: 'prj_front' }] })).toEqual([400, 'not_in_grant'])
@@ -504,8 +504,8 @@ describe('grants', () => {
     const run = { kind: 'github', repository: 'acme/web' } as const
     const log = createServer({ contract: accessContract, store: board.store.log }).session(ACCESS_SESSION)
     await log.append({ type: 'grant.created', payload: { principals: [older, run], can: { 'ci/': ['post'] }, by: 'local:user:julian' } })
-    expect((await person('PATCH', '/grants/g4', { add: [older] })).body.error.code).toBe('invalid_grant')
-    const removed = await person('PATCH', '/grants/g4', { remove: [older] })
+    expect((await person('POST', '/grants/g4/update', { add: [older] })).body.error.code).toBe('invalid_grant')
+    const removed = await person('POST', '/grants/g4/update', { remove: [older] })
     expect([removed.status, removed.body.grant.principals]).toEqual([200, [{ ...run, repositoryId: null }]])
   })
 
@@ -595,7 +595,7 @@ describe('grants', () => {
     expect(await refused({ kind: 'github', repository: 'acme' })).toEqual(invalid)
     // A key it doesn't know is refused, never dropped: without workflow, this would let in every run.
     expect(await refused({ kind: 'github', repository: 'acme/web', workflows: 'deploy.yml' })).toEqual([400, 'invalid_request'])
-    expect((await person('PATCH', '/grants/g2', { add: [everyone], cann: { '*': ['read'] } })).status).toBe(400)
+    expect((await person('POST', '/grants/g2/update', { add: [everyone], cann: { '*': ['read'] } })).status).toBe(400)
     // An issuer signs tokens for everyone it serves, and its keys are fetched from it, so never from the board's own network.
     expect(await refused({ kind: 'oidc', issuer: OIDC_ISS, claims: {} })).toEqual(invalid)
     expect(await refused({ kind: 'oidc', issuer: 'https://169.254.169.254', claims: { sub: 'x' } })).toEqual(invalid)
@@ -624,7 +624,7 @@ describe('grants', () => {
     const both = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS), gitlab(`${OIDC_ISS}/`)], can: { 'ci/': ['post'] } })
     expect([both.status, both.body.error.code]).toEqual([400, 'invalid_grant'])
     const one = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS)], can: { 'ci/': ['post'] } })
-    const added = await person('PATCH', `/grants/${one.body.grant.id}`, { add: [gitlab(`${OIDC_ISS}/`)] })
+    const added = await person('POST', `/grants/${one.body.grant.id}/update`, { add: [gitlab(`${OIDC_ISS}/`)] })
     expect([added.status, added.body.error.code]).toEqual([400, 'invalid_grant'])
   })
 
@@ -636,7 +636,7 @@ describe('grants', () => {
     expect((await ops('POST', '/grants', { principals: [gitlab], can: { 'ci/': ['post'] } })).status).toBe(403)
     const run = await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })
     expect(run.status).toBe(200)
-    expect((await ops('PATCH', `/grants/${run.body.grant.id}`, { add: [gitlab] })).status).toBe(403)
+    expect((await ops('POST', `/grants/${run.body.grant.id}/update`, { add: [gitlab] })).status).toBe(403)
   })
 
   it("trusts no stored grant's issuer that names another's principals or is on the board's own network, and nothing else breaks", async () => {

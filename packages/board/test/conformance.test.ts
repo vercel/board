@@ -741,7 +741,7 @@ describe('the conformance kit', () => {
     const patterns: string[] = []
     // Every grant write it sends, by itself or narrowed with x-board-can, refused or not.
     const recording = (fetch: Fetch): Fetch => async (request) => {
-      if (/\/grants(\/[^/]+)?$/.test(new URL(request.url).pathname) && ['POST', 'PATCH'].includes(request.method)) patterns.push(...Object.keys((await request.clone().json()).can ?? {}))
+      if (/\/grants(\/[^/]+\/update)?$/.test(new URL(request.url).pathname) && request.method === 'POST') patterns.push(...Object.keys((await request.clone().json()).can ?? {}))
       return fetch(request)
     }
     const report = await conformance(await clientOf(recording(board.fetch)), { withCan: withCan(recording(board.fetch)) })
