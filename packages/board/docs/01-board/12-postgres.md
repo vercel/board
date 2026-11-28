@@ -29,6 +29,9 @@ psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
   and a database without them fails the board's first call with 500
   `no_store`, which names the file. `autoMigrate: true` has the board apply
   it: see [Migrating on its own](#migrating-on-its-own).
+- **Use the provider's pooled connection URL.** Each instance opens a pool of
+  up to 10 connections (`max`), and serverless functions run many instances,
+  which can use up a database's direct connections.
 - **Attachments live in the database,** each at most 4 MB, in `board_files`,
   unless you pass a [blob store](#files-in-a-blob-store).
 - **It passes the whole [conformance](../04-reference/05-conformance.md) kit,**
