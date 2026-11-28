@@ -64,11 +64,11 @@ describe("postgres()'s schema.sql over releases", () => {
   it("keeps a board's threads when autoMigrate applies it over the last release's", async () => {
     const pool = await freshPool()
     await pool.query(RELEASED)
-    const before = postgres({ pool })
+    const before = postgres({ blob: memoryBlob(), pool })
     const root = await on(before).post('dev', 'before the upgrade')
     await before.close()
 
-    const after = postgres({ pool, autoMigrate: true })
+    const after = postgres({ blob: memoryBlob(), pool, autoMigrate: true })
     const team = on(after)
     try {
       await team.reply(root.id, 'after the upgrade')
@@ -82,7 +82,7 @@ describe("postgres()'s schema.sql over releases", () => {
 
 describe(`postgres(), on ${POSTGRES}`, () => {
   it('passes the whole conformance kit, schedules, tasks, and files included', async () => {
-    const backend = postgres({ pool: await freshPoolWithTables() })
+    const backend = postgres({ blob: memoryBlob(), pool: await freshPoolWithTables() })
     const team = on(backend)
     try {
       const withHeaders = (headers: Record<string, string>) =>
@@ -104,17 +104,18 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     }
   }, 120_000)
 
-  it('shares one board, files included, between instances and across restarts', async () => {
+  it('shares one board, files included, between instances on one database and store, and across restarts', async () => {
     const pool = await freshPoolWithTables()
-    // Two instances at once, as two serverless functions would be.
-    const [one, two] = [postgres({ pool }), postgres({ pool })]
+    const blob = memoryBlob()
+    // Two instances at once, as two serverless functions would be, on one database and one store.
+    const [one, two] = [postgres({ blob, pool }), postgres({ blob, pool })]
     const [first, second] = [on(one), on(two)]
     const [shot, posted] = await Promise.all([first.upload({ data: new TextEncoder().encode('pixels'), name: 'shot.txt' }), second.post('dev', 'from the second')])
     const reply = await first.reply(posted.id, { text: 'from the first', attachments: [shot] })
     expect((await second.thread(posted.id)).replies.map((m) => m.text)).toEqual(['from the first'])
     await Promise.all([one.close(), two.close()])
 
-    const again = postgres({ pool })
+    const again = postgres({ blob, pool })
     const restarted = on(again)
     try {
       expect((await restarted.channel('dev').messages()).messages.map((m) => m.text)).toEqual(['from the second', 'from the first'])
@@ -128,7 +129,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     // Each instance of a deployment arms its pending sends again on its first call.
     vi.stubEnv('VERCEL_DEPLOYMENT_ID', 'dpl_postgres_test')
     const pool = await freshPoolWithTables()
-    const before = postgres({ pool })
+    const before = postgres({ blob: memoryBlob(), pool })
     const first = on(before)
     const root = (await first.post('dev', 'deploy')).id
     await first.schedule({ re: root }, { text: 'did it land?', in: '1s' })
@@ -136,7 +137,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     // Past its time, with nothing running.
     await new Promise((resolve) => setTimeout(resolve, 1500))
 
-    const after = postgres({ pool })
+    const after = postgres({ blob: memoryBlob(), pool })
     const next = on(after)
     try {
       await vi.waitFor(async () => expect((await next.thread(root)).replies.map((m) => m.text)).toEqual(['did it land?']), { timeout: 10_000 })
@@ -150,18 +151,18 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     vi.stubEnv('VERCEL_DEPLOYMENT_ID', 'dpl_postgres_restarts')
     const pool = await freshPoolWithTables()
     try {
-      const first = postgres({ pool })
+      const first = postgres({ blob: memoryBlob(), pool })
       const one = on(first)
       const root = (await one.post('dev', 'deploy')).id
       await one.schedule({ re: root }, { text: 'did it land?', in: '2s' })
       await first.close()
       // An instance that starts, arms it, and stops before it's due.
-      const second = postgres({ pool })
+      const second = postgres({ blob: memoryBlob(), pool })
       await on(second).thread(root)
       await new Promise((resolve) => setTimeout(resolve, 200))
       await second.close()
 
-      const third = postgres({ pool })
+      const third = postgres({ blob: memoryBlob(), pool })
       const three = on(third)
       try {
         await vi.waitFor(async () => expect((await three.thread(root)).replies.map((m) => m.text)).toEqual(['did it land?']), { timeout: 10_000 })
@@ -175,13 +176,13 @@ describe(`postgres(), on ${POSTGRES}`, () => {
 
   it('says which file to apply to a database without its tables, and leaves a pool of yours open', async () => {
     const pool = await freshPool()
-    const bare = postgres({ pool })
+    const bare = postgres({ blob: memoryBlob(), pool })
     await expect(on(bare).post('dev', 'hello')).rejects.toThrow("postgres: board's tables aren't in this database: apply node_modules/@vercel/board/sql/postgres/schema.sql")
     await bare.close()
     expect(await tables(pool)).toBe(0)
 
     await pool.query(SCHEMA)
-    const applied = postgres({ pool })
+    const applied = postgres({ blob: memoryBlob(), pool })
     expect((await on(applied).post('dev', 'hello')).text).toBe('hello')
     await applied.close()
     expect((await pool.query('select 1 as one')).rows).toEqual([{ one: 1 }])
@@ -189,7 +190,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
 
   it('with autoMigrate, applies schema.sql to a database without it, once for instances that start together', async () => {
     const pool = await freshPool()
-    const [one, two] = [postgres({ pool, autoMigrate: true }), postgres({ pool, autoMigrate: true })]
+    const [one, two] = [postgres({ blob: memoryBlob(), pool, autoMigrate: true }), postgres({ blob: memoryBlob(), pool, autoMigrate: true })]
     try {
       const [a, b] = await Promise.all([on(one).post('dev', 'one'), on(two).post('dev', 'two')])
       expect([a.text, b.text]).toEqual(['one', 'two'])
@@ -202,12 +203,12 @@ describe(`postgres(), on ${POSTGRES}`, () => {
 
   it('with autoMigrate, applies schema.sql again when the database has another release\'s, and keeps its data', async () => {
     const pool = await freshPoolWithTables()
-    const first = postgres({ pool })
+    const first = postgres({ blob: memoryBlob(), pool })
     const root = await on(first).post('dev', 'kept')
     await first.close()
     await pool.query("update board_meta set value = '0' where key = $1", [SCHEMA_VERSION_KEY])
 
-    const migrating = postgres({ pool, autoMigrate: true })
+    const migrating = postgres({ blob: memoryBlob(), pool, autoMigrate: true })
     try {
       expect((await on(migrating).thread(root.id)).message.text).toBe('kept')
       expect((await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows).toEqual([{ value: String(POSTGRES_SCHEMA.version) }])
@@ -223,7 +224,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     await pool.query(SCHEMA)
     const version = async () => (await pool.query('select value from board_meta where key = $1', [SCHEMA_VERSION_KEY])).rows
     expect(await version()).toEqual([{ value: later }])
-    const backend = postgres({ pool, autoMigrate: true })
+    const backend = postgres({ blob: memoryBlob(), pool, autoMigrate: true })
     try {
       expect(await backend.tables()).toEqual({ applied: POSTGRES_SCHEMA.version + 1, current: POSTGRES_SCHEMA.version })
       expect((await on(backend).post('dev', 'on a later schema')).text).toBe('on a later schema')
@@ -236,7 +237,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
   it("without autoMigrate, refuses an earlier release's tables up front, naming board's file", async () => {
     const pool = await freshPoolWithTables()
     await pool.query("update board_meta set value = '0' where key = $1", [SCHEMA_VERSION_KEY])
-    const backend = postgres({ pool })
+    const backend = postgres({ blob: memoryBlob(), pool })
     try {
       await expect(on(backend).post('dev', 'hello')).rejects.toThrow(`postgres: board's tables in this database are from an earlier release (version 0, this one needs ${POSTGRES_SCHEMA.version}): apply node_modules/@vercel/board/sql/postgres/schema.sql`)
     } finally {
@@ -246,13 +247,13 @@ describe(`postgres(), on ${POSTGRES}`, () => {
 
   it('says which schema a database has, and migrates it when asked, without opening the board', async () => {
     const pool = await freshPool()
-    const backend = postgres({ pool })
+    const backend = postgres({ blob: memoryBlob(), pool })
     try {
       expect(await backend.tables()).toEqual({ applied: null, current: POSTGRES_SCHEMA.version })
       await expect(on(backend).post('dev', 'too soon')).rejects.toThrow("board's tables aren't in this database")
       await backend.migrate()
       expect(await backend.tables()).toEqual({ applied: POSTGRES_SCHEMA.version, current: POSTGRES_SCHEMA.version })
-      const after = postgres({ pool })
+      const after = postgres({ blob: memoryBlob(), pool })
       expect((await on(after).post('dev', 'after')).text).toBe('after')
       await after.close()
     } finally {
@@ -260,31 +261,24 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     }
   }, 20_000)
 
-  it('with blob, keeps new files there, and still serves the ones the database kept before', async () => {
+  it('keeps files in its blob store, not in the database', async () => {
     const pool = await freshPoolWithTables()
-    const before = postgres({ pool })
-    const old = await on(before).upload({ data: new TextEncoder().encode('kept in postgres'), name: 'old.txt' })
-    await before.close()
-
     const store = memoryBlob()
-    const withBlob = postgres({ pool, blob: store })
-    const team = on(withBlob)
+    const backend = postgres({ pool, blob: store })
+    const team = on(backend)
     try {
-      const fresh = await team.upload({ data: new TextEncoder().encode('kept in the store'), name: 'new.txt' })
-      expect(await (await team.download(old.id)).text()).toBe('kept in postgres')
-      expect(await (await team.download(fresh.id)).text()).toBe('kept in the store')
-      const keys = (await pool.query('select key from board_files')).rows.map((row) => String(row.key))
-      expect(keys.some((key) => key.includes(old.id))).toBe(true)
-      expect(keys.some((key) => key.includes(fresh.id))).toBe(false)
-      expect(await store.get(`board/attachments/${fresh.id}`)).not.toBeNull()
+      const file = await team.upload({ data: new TextEncoder().encode('kept in the store'), name: 'note.txt' })
+      expect(await (await team.download(file.id)).text()).toBe('kept in the store')
+      expect(await store.get(`board/attachments/${file.id}`)).not.toBeNull()
+      expect((await pool.query("select to_regclass('board_files') is null as none")).rows).toEqual([{ none: true }])
     } finally {
-      await withBlob.close()
+      await backend.close()
     }
   }, 20_000)
 
   it('takes a file over 4 MB with a blob store that signs uploads, and refuses it without one', async () => {
     const big = { data: new Uint8Array(5 * 1024 * 1024).fill(7), name: 'big.bin' }
-    const onDatabase = postgres({ pool: await freshPoolWithTables() })
+    const onDatabase = postgres({ blob: memoryBlob(), pool: await freshPoolWithTables() })
     const plain = on(onDatabase)
     const signing = postgres({ pool: await freshPoolWithTables(), blob: await signingBlob(closers) })
     const signed = on(signing)
@@ -298,7 +292,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
 
   it("sends what's scheduled through the scheduler it's given, delivered to its scheduler route", async () => {
     const queue = fakeQueue()
-    const backend = postgres({ pool: await freshPoolWithTables(), scheduler: queue.scheduler as unknown as Scheduler })
+    const backend = postgres({ blob: memoryBlob(), pool: await freshPoolWithTables(), scheduler: queue.scheduler as unknown as Scheduler })
     const team = on(backend)
     try {
       const root = (await team.post('dev', 'deploy')).id
@@ -316,7 +310,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
   }, 20_000)
 
   it("takes vercelQueues() on a topic the scheduler route's trigger can name", () => {
-    expect(() => postgres({ scheduler: vercelQueues({ topic: 'board' }) })).not.toThrow()
+    expect(() => postgres({ blob: memoryBlob(), scheduler: vercelQueues({ topic: 'board' }) })).not.toThrow()
     expect(() => vercelQueues({ topic: 'board scheduler' })).toThrow('vercelQueues() topic must match [A-Za-z0-9_-]+')
   })
 
@@ -427,13 +421,13 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     const { rows } = await pool.query('select current_database() as name')
     const url = new URL(TEST_DATABASE_URL!)
     url.pathname = `/${String(rows[0]!.name)}`
-    const backend = postgres({ connectionString: url.toString() })
+    const backend = postgres({ blob: memoryBlob(), connectionString: url.toString() })
     expect((await on(backend).post('dev', 'hello')).text).toBe('hello')
     await backend.close()
   })
 
   it('says it has no database when it has no connection string', async () => {
-    const backend = postgres({ connectionString: '' })
+    const backend = postgres({ blob: memoryBlob(), connectionString: '' })
     await expect(on(backend).post('dev', 'hello')).rejects.toThrow(/no database: pass connectionString, or set DATABASE_URL/)
     await backend.close()
   })

@@ -10,7 +10,7 @@ import { localScheduler } from '../scheduler/local.ts'
 import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
 import { appliedVersion, checkSchema, migrateSchema, ROLE_NEEDS, SCHEMA_FILE, TablesNotConfiguredError, type PgPool } from '../store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../store/postgres-schema.generated.ts'
-import { postgresBlob, postgresStore } from '../store/postgres.ts'
+import { postgresStore } from '../store/postgres.ts'
 
 export type PostgresOptions = {
   /**
@@ -35,12 +35,11 @@ export type PostgresOptions = {
    */
   autoMigrate?: boolean
   /**
-   * Where new attachments' bytes go: `vercelBlob()` from `@vercel/board/backend-postgres/blob-vercel`,
-   * or any `BlobStore`. Default: the database, in `board_files`, up to 4 MB each. A store that signs
-   * uploads (`uploadUrl` and `head`) takes files up to 100 MB. Files the database already keeps stay
-   * readable, so it can be set at any time; taking it away again leaves what's in it unreachable.
+   * Where attachments' bytes live: `vercelBlob()` from `@vercel/board/backend-postgres/blob-vercel`,
+   * `fsBlob(dir)` or `memoryBlob()` for development and tests, or any `BlobStore`. A store that signs
+   * uploads (`uploadUrl` and `head`) takes files up to 100 MB; one that doesn't, up to 4 MB.
    */
-  blob?: BlobStore
+  blob: BlobStore
 }
 
 /** A board on Postgres. `close()` stops its timers and ends the pool it made. */
@@ -61,19 +60,6 @@ export type PostgresBackend = Backend & {
 }
 
 
-/**
- * Files in `store`, reading what `database` kept before it was set. The database is asked first: a key
- * is written once and never moves, a miss there costs a primary-key lookup, and a store's CDN may keep
- * a miss.
- */
-function readThrough(database: BlobStore, store: BlobStore): BlobStore {
-  return {
-    put: (key, data, contentType) => store.put(key, data, contentType),
-    get: async (key) => (await database.get(key)) ?? store.get(key),
-    ...(store.uploadUrl ? { uploadUrl: store.uploadUrl.bind(store) } : {}),
-    ...(store.head ? { head: store.head.bind(store) } : {}),
-  }
-}
 
 /** The Postgres error code among `error`'s causes: the log's store wraps what the driver threw. */
 function sqlState(error: unknown): string | null {
@@ -100,11 +86,11 @@ function inBoardsWords(error: unknown): unknown {
 const unreachable = (error: unknown) => String((error as { message?: unknown }).message ?? error).split('\n')[0]!
 
 /**
- * A board on Postgres (`npm i pg`): its log, its tables, and its files in one database, which any
- * number of instances share. Apply `sql/postgres/schema.sql` from the package first. It keeps one
+ * A board on Postgres (`npm i pg`): its log and its tables in one database, which any number of
+ * instances share, and its files in `blob`. Apply `sql/postgres/schema.sql` from the package first. It keeps one
  * board, whatever `board({ name })` says.
  */
-export function postgres(options: PostgresOptions = {}): PostgresBackend {
+export function postgres(options: PostgresOptions): PostgresBackend {
   let binding: BoardBinding | null = null
   let made: pg.Pool | null = null
   let opening: Promise<{ backend: ReturnType<typeof a2>; close(): Promise<void> }> | null = null
@@ -138,7 +124,7 @@ export function postgres(options: PostgresOptions = {}): PostgresBackend {
       // Timers in this process, unless it's given a scheduler: what came due while no instance ran, the
       // next one on Vercel catches up on.
       const own = options.scheduler ? null : localScheduler()
-      const backend = a2({ store, scheduler: own ?? engineScheduler(options.scheduler!), blob: options.blob ? readThrough(postgresBlob(pool), options.blob) : postgresBlob(pool) })
+      const backend = a2({ store, scheduler: own ?? engineScheduler(options.scheduler!), blob: options.blob })
       backend.bind(bound)
       return {
         backend,

@@ -35,7 +35,7 @@ of its own, each with a name: see [A board by its name](#a-board-by-its-name).
 | --- | --- |
 | none | Your team's board in Vercel's API, the one `name` names. In Node with `BOARD_URL` set, the board at that URL instead: see [A handle on a board elsewhere](#a-handle-on-a-board-elsewhere) |
 | `local()` | Keeps the board in this process, in SQLite under `.board/` or in memory: for development, `vb serve`, tests, and working offline. See [Local boards](./10-local.md) |
-| `postgres()` | Keeps the board on Postgres, its files included, shared by every instance that serves it: a board you host, on Vercel or any Node server. See [Postgres boards](./12-postgres.md) |
+| `postgres({ blob })` | Keeps the board on Postgres, shared by every instance that serves it, and its files in a blob store: a board you host, on Vercel or any Node server. See [Postgres boards](./12-postgres.md) |
 | your own | Any object that answers the protocol: see [A backend of your own](#a-backend-of-your-own) |
 
 `board()` does the same on every backend. It routes and validates each

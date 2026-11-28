@@ -100,23 +100,17 @@ export function postgresDb(pool: PgPool): Db {
 
 const BREAKPOINT = '\n--> statement-breakpoint\n'
 
-/** Where a board keeps its files' bytes on Postgres: up to 4 MB each, so a column holds them. */
-const FILES_DDL = `create table if not exists board_files (
-  key text primary key,
-  content_type text not null,
-  data bytea not null
-)`
 
 /** `board_meta`'s key for the version of `schema.sql` last applied to the database. */
 export const SCHEMA_VERSION_KEY = 'postgres_schema'
 
 /**
  * `sql/postgres/schema.sql`'s statements: `a2`, the bundled A2 release's schema.sql, whose tables
- * keep the log, then board's tables and its files, so a database needs one file.
+ * keep the log, then board's tables, so a database needs one file.
  */
 export function schemaBody(a2: string): string {
   return `-- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
--- its log, then those it reads from, and its files. Apply this file before the first
+-- its log, then those it reads from. Its files live in the blob store you pass it. Apply this file before the first
 -- deploy, and again when a board release says the tables changed, or pass
 -- postgres({ autoMigrate: true }) to have the board apply it. Every statement creates
 -- only what is missing and leaves existing data alone, so it's safe to re-run.
@@ -124,7 +118,7 @@ export function schemaBody(a2: string): string {
 -- statement per query; to every other tool it's only a comment.
 
 ${a2.trimEnd()}${BREAKPOINT}
-${[...ddl('postgres'), FILES_DDL].join(`;${BREAKPOINT}`)};
+${ddl('postgres').join(`;${BREAKPOINT}`)};
 `
 }
 

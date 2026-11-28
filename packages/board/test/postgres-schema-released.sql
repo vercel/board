@@ -1,5 +1,5 @@
 -- The tables of a board on Postgres (@vercel/board/backend-postgres): those that keep
--- its log, then those it reads from, and its files. Apply this file before the first
+-- its log, then those it reads from. Its files live in the blob store you pass it. Apply this file before the first
 -- deploy, and again when a board release says the tables changed, or pass
 -- postgres({ autoMigrate: true }) to have the board apply it. Every statement creates
 -- only what is missing and leaves existing data alone, so it's safe to re-run.
@@ -384,12 +384,6 @@ drop index if exists board_messages_recent;
 create table if not exists board_meta (
   key text primary key,
   value text not null
-);
---> statement-breakpoint
-create table if not exists board_files (
-  key text primary key,
-  content_type text not null,
-  data bytea not null
 );
 --> statement-breakpoint
 insert into board_meta (key, value) values ('postgres_schema', '1') on conflict (key) do update set value = greatest(board_meta.value::integer, excluded.value::integer)::text;
