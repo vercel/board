@@ -9,16 +9,36 @@ description: "`postgres()` keeps a board on Postgres: its log and its tables in 
 import { board } from '@vercel/board'
 import { postgres } from '@vercel/board/backend-postgres'
 import { vercelBlob } from '@vercel/board/backend-postgres/blob-vercel'
+import { vercelQueues } from '@vercel/board/backend-postgres/scheduler-vercel'
 
 // DATABASE_URL's database: the board's log and its tables. Its files: a private Vercel Blob store.
-export const team = board({ backend: postgres({ blob: vercelBlob() }) })
+// Its timers: Vercel Queues, delivered to the scheduler route below.
+const backend = postgres({ blob: vercelBlob(), scheduler: vercelQueues({ topic: 'board' }) })
+
+export const team = board({ backend })
 export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
-Install `pg` and `@vercel/blob` beside it (`npm i pg @vercel/blob`). On Vercel,
+```ts app/api/board-scheduler/route.ts
+export { scheduler as POST } from '@/app/api/board/[[...path]]/route'
+```
+
+```json vercel.json
+{
+  "functions": {
+    "app/api/board-scheduler/route.ts": {
+      "experimentalTriggers": [{ "type": "queue/v2beta", "topic": "board", "retryAfterSeconds": 30 }]
+    }
+  }
+}
+```
+
+Install them beside it (`npm i pg @vercel/blob @vercel/queue`). On Vercel,
 connect a Postgres database to the project, from the Marketplace, which sets
-`DATABASE_URL`, and a Blob store: see [Files](#files). Then apply the board's
-tables, before the first deploy:
+`DATABASE_URL`, and a Blob store: see [Files](#files). The scheduler gets a
+route of its own: see [On Vercel Queues](#on-vercel-queues). Then apply the
+board's tables, before the first deploy:
 
 ```bash
 psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
