@@ -6,7 +6,7 @@ import { isClosed } from "@/lib/protection";
 // Every load checks the deployment and its database as they are now.
 export const dynamic = "force-dynamic";
 
-type Tables = { applied: string | null; current: string } | Error;
+type Tables = { applied: number | null; current: number } | Error;
 
 export default async function Page(): Promise<ReactNode> {
   const host = (await headers()).get("host") ?? "localhost:3000";
@@ -17,7 +17,8 @@ export default async function Page(): Promise<ReactNode> {
     backend.tables().catch((error: unknown): Tables => (error instanceof Error ? error : new Error(String(error)))),
   ]);
   const protectedNow = shut === true;
-  const ready = !(tables instanceof Error) && tables.applied === tables.current;
+  // A version only goes up: a database ahead of this deployment is a later release's, which this one uses as it is.
+  const ready = !(tables instanceof Error) && tables.applied !== null && tables.applied >= tables.current;
 
   return (
     <main>
@@ -41,7 +42,11 @@ export default async function Page(): Promise<ReactNode> {
       {tables instanceof Error ? (
         <p>Couldn&apos;t reach the database: {tables.message}. Connect a Postgres database to the project, which sets <code>DATABASE_URL</code>.</p>
       ) : ready ? (
-        <p>The database has this release&apos;s tables.</p>
+        <p>
+          {tables.applied === tables.current
+            ? "The database has this release's tables."
+            : "The database has a later release's tables, which this deployment uses as they are."}
+        </p>
       ) : (
         <>
           <p>{tables.applied === null ? "The database has none of the board's tables yet." : "The database has an older release's tables."}</p>
