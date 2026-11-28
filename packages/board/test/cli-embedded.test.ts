@@ -12,6 +12,7 @@ import { env, url, useBoard } from './cli-harness.ts'
 import { board } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
+import { VERSION } from '../src/version.ts'
 
 /** What `run` printed, and the exit code it answered. */
 async function capture(run: () => Promise<number>) {
@@ -873,6 +874,32 @@ describe('the embedded CLI', () => {
     try {
       expect(await capture(() => main(['probe', '--scope', 'test'], { name: 'board', commands: { probe } }))).toMatchObject({ code: 0, stdout: 'vercel:user:u_ada\n' })
       expect(new Set(sent)).toEqual(new Set(['Bearer w3Nc8sJd1hFy']))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("tells Vercel's API a request comes from board's CLI, and stops once the run ends", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard()
+    const agents = new Set<string | null>()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      agents.add(new Request(input, init).headers.get('user-agent'))
+      return api.fetch(input, init)
+    })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await capture(() => main(['post', 'dev', 'hi', '--scope', 'test'], { name: 'board', commands: local }))).toMatchObject({ code: 0 })
+      expect([...agents]).toEqual([`@vercel/board/${VERSION} node/${process.versions.node} cli`])
+      // board() in the same process, after the run: its requests aren't the CLI's.
+      agents.clear()
+      const after = board({ backend: vercel({ team: 'team_test', api: 'https://api.vercel.com', fetch: (input, init = {}) => as(api, 'user:u_jb')(input, init).finally(() => agents.add(new Headers(init.headers).get('user-agent'))), files: api.files }) })
+      await after.post('dev', { text: 'after' })
+      expect([...agents]).toEqual([`@vercel/board/${VERSION} node/${process.versions.node}`])
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)

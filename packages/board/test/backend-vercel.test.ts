@@ -13,6 +13,7 @@ import type { Caller } from '../src/server/backend.ts'
 import type { Middleware } from '../src/server/middleware.ts'
 import type { Watcher } from '../src/server/watcher.ts'
 import { slack } from '../src/sync/slack.ts'
+import { VERSION } from '../src/version.ts'
 import { github, repos } from '../src/sync/github.ts'
 import { channels, render } from '../src/sync/fn.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
@@ -182,6 +183,25 @@ describe('vercel()', () => {
     // It leaves the grants as it found them.
     expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
   }, 30_000)
+
+  it("tells Vercel's API which release and runtime sent each request, in its user agent", async () => {
+    const api = fakeMessageboard()
+    const agents = new Set<string | null>()
+    const handle = board({
+      backend: vercel({
+        team: 'team_test',
+        api: API,
+        fetch: (input, init = {}) => {
+          agents.add(new Headers(init.headers).get('user-agent'))
+          return as(api, 'user:u_jb')(input, init)
+        },
+        files: api.files,
+      }),
+    })
+    const posted = await handle.post('dev', { text: 'hi' })
+    await handle.thread(posted.id)
+    expect([...agents]).toEqual([`@vercel/board/${VERSION} node/${process.versions.node}`])
+  })
 
   it("refuses a label under board. before it reaches Vercel's API, as on any backend", async () => {
     const api = fakeMessageboard()

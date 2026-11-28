@@ -729,6 +729,31 @@ function labelsBefore(after: Labels, changed: ApiChange['labels'] = {}): Labels 
 }
 
 /** A platform location as board shows one, its optional parts null. */
+/** The runtime board runs on, as a user agent names it: `node/24.11.0`, `bun/1.3.2`, or null in a browser, which keeps its own. */
+function runtimeOf(): string | null {
+  const bun = (globalThis as { Bun?: { version?: string } }).Bun?.version
+  if (bun) return `bun/${bun}`
+  const node = (globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node
+  return node ? `node/${node}` : null
+}
+
+/** Which of board's surfaces sends requests to the API: `cli` while board's CLI runs one, null for board() and the SDK. */
+let surface: string | null = null
+
+/** Names, in the user agent of each request to Vercel's API, the surface sending it: the CLI hands `cli` for the run. */
+export function handSurface(name: string | null) {
+  surface = name
+}
+
+/**
+ * What a request to Vercel's API says sent it: `@vercel/board/0.55.0 node/24.11.0 cli`. The API tells
+ * releases apart by it, so a fix can be measured and an old one asked to upgrade. A browser sends its own.
+ */
+export function userAgent(): string | null {
+  const runtime = runtimeOf()
+  return runtime ? [`@vercel/board/${VERSION}`, runtime, surface].filter(Boolean).join(' ') : null
+}
+
 const originOf = (origin: ApiMessage['origin']): Origin | null =>
   origin ? { ...(origin.channel !== undefined ? { channel: origin.channel } : {}), thread: origin.thread, subthread: origin.subthread ?? null, message: origin.message, context: origin.context ?? null } : null
 
@@ -780,7 +805,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (typeof value === 'string') url.searchParams.set(name, value)
       else for (const one of value) url.searchParams.append(name, one)
     }
-    const headers: Record<string, string> = { 'content-type': 'application/json', ...apiProfileHeaders(who.profile), ...(who.can !== undefined ? { 'x-board-can': who.can } : {}) }
+    const agent = userAgent()
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...(agent ? { 'user-agent': agent } : {}), ...apiProfileHeaders(who.profile), ...(who.can !== undefined ? { 'x-board-can': who.can } : {}) }
     // The API tags what this caller gets, after its channel access filtered it: the credential is this backend's, so the rest of who asks is in its headers.
     const tag = method === 'GET' && TAGGED.test(path) ? JSON.stringify([url.href, headers]) : null
     const kept = tag === null ? undefined : tagged.get(tag)
