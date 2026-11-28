@@ -25,11 +25,12 @@ It has three parts:
 
    ```sh
    pnpm install
-   vercel env pull .env.local
+   vercel env pull --environment=production .env.local
    pnpm db:schema
    ```
 
-   It's safe to run again. Run it again after an upgrade whose changelog says the
+   That's the production database the deployed board uses. If previews or development
+   use another one, pull that environment and apply it there too. It's safe to run again. Run it again after an upgrade whose changelog says the
    tables changed.
 3. **Use it.** The deployment's page shows its URL. Your team's people, and the
    project's own deployments, can use it:
