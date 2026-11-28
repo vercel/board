@@ -1,5 +1,5 @@
 import type { BoardEventView } from '../api/routes.ts'
-import { BoardError, createBoardClient, eventsState, type BoardClient, type EventsOptions, type NewTaskOptions, type ProfileOption, type TaskOptions } from '../client/client.ts'
+import { BoardError, createBoardClient, eventsState, feedBackoff, pause, refusedFeed, type BoardClient, type EventsOptions, type NewTaskOptions, type ProfileOption, type TaskOptions } from '../client/client.ts'
 import { derivedId } from '../client/ids.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { SYNC, type Backend, type BoardBinding, type Caller, type SelfCaller, type Subscription, type SyncEntry } from './backend.ts'
@@ -487,11 +487,10 @@ async function* events(
       page = await client.poll((after === undefined && last !== undefined ? { ...rest, last } : { ...rest, ...(after !== undefined ? { after } : {}), wait: answered ? EVENTS_WAIT_S : 0 }) as Parameters<BoardClient['poll']>[0], opts.signal)
     } catch (error) {
       if (opts.signal?.aborted) return
-      // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
-      if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
+      if (refusedFeed(error)) throw error
       answered = false
       state.failed()
-      await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 500 * 2 ** failures++)))
+      await pause(feedBackoff(error, failures++), opts.signal)
       continue
     }
     failures = 0

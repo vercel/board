@@ -87,6 +87,47 @@ describe('events, told whether it is connected', () => {
     expect(feed.states).toEqual(['live'])
   })
 
+  it('goes again after a 429, as long as the board asked, where another 4xx would end it', async () => {
+    const limited = () => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': '1' } })
+    const { fetch, waits } = remote([limited])
+    const team = board({ backend: http(URL_, { fetch }) })
+    const feed = follow((opts) => team.events({ all: true, after: '1' }, opts))
+    await vi.waitFor(() => expect(feed.states).toEqual(['retrying']))
+    // Not the half-second backoff of an outage: the second it asked for.
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    expect(waits).toEqual(['0'])
+    await vi.waitFor(() => expect(feed.states).toEqual(['retrying', 'live']), { timeout: 5000 })
+    await feed.stop()
+  }, 10_000)
+
+  it('stops at once when aborted while waiting out a long Retry-After', async () => {
+    const limited = () => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': '3600' } })
+    const { fetch } = remote([limited])
+    const team = board({ backend: http(URL_, { fetch }) })
+    const feed = follow((opts) => team.events({ all: true, after: '1' }, opts))
+    await vi.waitFor(() => expect(feed.states).toEqual(['retrying']))
+    const stopped = await Promise.race([feed.stop().then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 1000))])
+    expect(stopped).toBe(true)
+  })
+
+  it('keeps a client on the stream going after a 429', async () => {
+    const limited = () => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': '1' } })
+    const stream = () => new Response(`id: 2\nevent: board\ndata: ${JSON.stringify(event)}\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+    const { fetch } = remote([limited, stream])
+    const client = createBoardClient({ url: URL_, fetch })
+    const feed = follow((opts) => client.events({ after: '1' }, opts))
+    await vi.waitFor(() => expect(feed.seen).toMatchObject([{ type: 'channel.created' }]), { timeout: 5000 })
+    await feed.stop()
+    expect(feed.states).toEqual(['retrying', 'live'])
+  }, 10_000)
+
+  it('waits on through a 429 for the event that comes after it', async () => {
+    const limited = () => Response.json({ error: { code: 'rate_limited', message: 'Too many requests' } }, { status: 429, headers: { 'retry-after': '1' } })
+    const { fetch } = remote([limited, () => Response.json({ events: [event], cursor: '2' })])
+    const client = createBoardClient({ url: URL_, fetch })
+    await expect(client.wait({ after: '1' }, { timeout: '10s' })).resolves.toMatchObject({ type: 'channel.created' })
+  }, 10_000)
+
   it('tells a client on the stream the same: retrying when it fails, live when the stream opens', async () => {
     const stream = () => new Response(`id: 2\nevent: board\ndata: ${JSON.stringify(event)}\n\n`, { headers: { 'content-type': 'text/event-stream' } })
     const { fetch } = remote([down, stream])
