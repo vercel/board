@@ -218,8 +218,13 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     if (response.ok) return response
     try {
       const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown; saml?: unknown } }
+      // A 429's Retry-After, in seconds, goes on to whoever waits on it: a feed backs off as long as the board asked.
+      const retryAfter = response.status === 429 ? /^\d{1,6}$/.exec(response.headers.get('retry-after') ?? '')?.[0] : undefined
       if (body.error?.message)
-        throw new HttpError(response.status, refusalCode(response.status, body.error) ?? 'error', body.error.message, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
+        throw new HttpError(response.status, refusalCode(response.status, body.error) ?? 'error', body.error.message, {
+          ...(typeof body.error.hint === 'string' ? { hint: body.error.hint } : {}),
+          ...(retryAfter !== undefined ? { retryAfter: Number(retryAfter) } : {}),
+        })
     } catch (error) {
       if (error instanceof HttpError) throw error
     }

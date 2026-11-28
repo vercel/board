@@ -253,6 +253,21 @@ export function eventsState(onState: EventsOptions['onState']) {
   return { answered: () => tell('live'), failed: () => tell('retrying') }
 }
 
+/**
+ * Whether a feed should stop on `error` rather than go again: what the board doesn't do (501) is said, as what the
+ * caller got wrong is. Too many requests (429) is neither: the limit refills, so it goes again after a wait.
+ */
+export function refusedFeed(error: unknown): error is BoardError {
+  return error instanceof BoardError && error.status !== 429 && (error.status === 501 || (error.status >= 400 && error.status < 500))
+}
+
+/** How long a feed waits after its `failures`th failure in a row: doubling up to 30 seconds, and never less than a 429 asked. */
+export function feedBackoff(error: unknown, failures: number): number {
+  const doubling = Math.min(30_000, 500 * 2 ** failures)
+  if (error instanceof BoardError && error.status === 429 && error.retryAfter !== undefined) return Math.max(doubling, error.retryAfter * 1000)
+  return doubling
+}
+
 export type WaitOptions = {
   /** `'30s'`, `'10m'`, `'1h'`, or milliseconds. Default `'30m'`. */
   timeout?: string | number
@@ -921,10 +936,9 @@ export function createBoardClient(options: ClientOptions) {
           })
         } catch (error) {
           if (opts.signal?.aborted) return
-          // A refusal isn't an outage: what the board doesn't do (501) is said, as what the caller got wrong is, and not retried.
-      if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
+          if (refusedFeed(error)) throw error
           state.failed()
-          await pause(Math.min(30_000, 500 * 2 ** failures++), opts.signal)
+          await pause(feedBackoff(error, failures++), opts.signal)
           continue
         }
         failures = 0
@@ -952,9 +966,9 @@ export function createBoardClient(options: ClientOptions) {
       // An outage isn't an answer: a poll that failed for it goes again after a backoff, as `events` does, until the deadline.
       const again = async (error: unknown) => {
         if (opts.signal?.aborted) return
-        if (error instanceof BoardError && (error.status === 501 || (error.status >= 400 && error.status < 500))) throw error
+        if (refusedFeed(error)) throw error
         if (error instanceof Error && error.name === 'AbortError') throw error
-        const backoff = Math.min(30_000, 500 * 2 ** failures++)
+        const backoff = feedBackoff(error, failures++)
         if (Date.now() + backoff >= deadline) throw error
         await pause(backoff, opts.signal)
       }
