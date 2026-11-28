@@ -33,8 +33,9 @@ export default async function Page(): Promise<ReactNode> {
       ) : (
         <p>
           {shut instanceof Error ? `Couldn't tell whether strangers can open this deployment (${shut.message}). ` : "Anyone can open this deployment. "}
-          Turn on Vercel Authentication in the project&apos;s Settings → Deployment Protection, then reload. The CLI
-          gets through it with your <code>vercel login</code>.
+          Set Vercel Authentication to All Deployments in the project&apos;s Settings → Deployment Protection, then
+          reload: Standard Protection leaves a production domain open. The CLI gets through it with your{" "}
+          <code>vercel login</code>.
         </p>
       )}
 
