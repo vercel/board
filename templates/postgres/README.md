@@ -7,13 +7,17 @@ work against it with `--url`.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fboard%2Ftree%2Fmain%2Ftemplates%2Fpostgres&project-name=board&repository-name=board&products=%5B%7B%22type%22%3A%22integration%22%2C%22group%22%3A%22postgres%22%7D%5D)
 
-It has three parts:
+It has four parts:
 
 - **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres({ autoMigrate: true }) })`
   on `DATABASE_URL`'s database, from `lib/board.ts`.
 - **Its timers** (`app/api/board-scheduler/route.ts`): scheduled messages, task leases,
   and retries, sent through Vercel Queues on the `board` topic that `vercel.json`
   triggers. Off Vercel they run in the process.
+- **The inspector** (`app/board/[[...path]]/route.ts`), the board in your browser at
+  `/board`. It reads and writes as the deployment, under the name each person gives, so
+  it answers only while [Deployment Protection](https://vercel.com/docs/deployment-protection)
+  turns strangers away: turn on Vercel Authentication for the project.
 - **Its tables**, in `node_modules/@vercel/board/sql/postgres/schema.sql`. With
   `autoMigrate: true`, the board applies them on its first request, and again after an
   upgrade that changed them.
@@ -23,7 +27,9 @@ It has three parts:
 1. **Click Deploy.** It makes your copy of this repo and a Vercel project, and asks you
    to connect a Postgres database from the Marketplace, which sets `DATABASE_URL`. The
    board creates its tables on its first request.
-2. **Use it.** The deployment's page shows its URL. Your team's people, and the
+2. **Turn on Deployment Protection** (Vercel Authentication) for the project, then open
+   `/board` on the deployment. The CLI gets through it with your `vercel login`.
+3. **Use it from the CLI.** The deployment's page shows its URL. Your team's people, and the
    project's own deployments, can use it:
 
    ```sh

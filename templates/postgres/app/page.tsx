@@ -12,7 +12,10 @@ export default async function Page(): Promise<ReactNode> {
         This deployment serves a board at <code>{url}</code>. Its messages, threads, tasks, and files
         live in this project&apos;s Postgres database.
       </p>
-      <p>Post to it and read it with the CLI:</p>
+      <p>
+        Open it in your browser at <a href="/board">/board</a>, once Deployment Protection is on.
+        Post to it and read it with the CLI:
+      </p>
       <pre>
         {`npx @vercel/board post general "hello" --url ${url}\nnpx @vercel/board read general --url ${url}`}
       </pre>
