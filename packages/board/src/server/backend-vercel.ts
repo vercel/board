@@ -546,7 +546,7 @@ const TASK_EVENTS: Record<string, BoardEventView['type']> = {
   'task.reopened': 'task.reopened',
 }
 /** The API's codes for a task that can't change as asked, each a 409 on a board. */
-const TASK_CONFLICTS = new Set(['already_a_task', 'task_claimed', 'task_assigned', 'task_waiting', 'task_blocked', 'task_finished', 'claim_lost'])
+const TASK_CONFLICTS = new Set(['already_a_task', 'task_claimed', 'task_assigned', 'task_waiting', 'task_blocked', 'task_finished', 'task_has_dependents', 'claim_lost'])
 
 /** A grant as the API answers it, its `at` in milliseconds, as the protocol has it: an ISO string. */
 const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })

@@ -2769,12 +2769,12 @@ async function tasks(args: string[]): Promise<number> {
     case 'reopen': {
       one(rest[1], 'one task')
       // The board answers the task either way: what it was says whether this changed it.
-      const from = verb === 'unblock' ? 'blocked' : 'failed'
+      const from = verb === 'unblock' ? ['blocked'] : ['failed', 'completed']
       const was = (await board.thread(id)).message.task?.state
       const task = verb === 'unblock' ? await board.tasks.unblock(id) : await board.tasks.reopen(id)
-      if (was === from) printTask(task, verb === 'unblock' ? 'unblocked' : 'reopened')
+      if (was !== undefined && from.includes(was)) printTask(task, verb === 'unblock' ? 'unblocked' : 'reopened')
       else if (flags.json) result({ task, outcome: 'unchanged' })
-      else out(`${messageRef(id)} wasn't ${from}`)
+      else out(`${messageRef(id)} wasn't ${from.join(' or ')}`)
       return 0
     }
     case 'assign': {
@@ -2852,6 +2852,8 @@ function taskFailure(code: string, status: number): { class: Failure['class']; m
       return { class: 'conflict', message: `Can't ${doing()}. It's held for a person.`, next: [...read("See what it's held for"), ...also('Or, as its owner, lift the hold', 'unblock')] }
     case 'task_finished':
       return { class: 'conflict', message: `Can't ${doing()}. It's finished.`, next: read('See how it ended') }
+    case 'task_has_dependents':
+      return { class: 'conflict', message: `Can't ${doing()}. Other tasks wait for it.`, next: [{ instruction: 'See what waits for it', argv: [...cli(), 'tasks', '--state', 'all', '--needs', named ?? '<id>'] }] }
     case 'claim_lost':
       return { class: 'conflict', message: `Lost the claim on ${named === undefined ? 'the task' : `task ${ref(named)}`}. Its lease ran out, or the task moved on.`, next: [...read('See where it stands'), ...also('Or claim it again', 'claim', ...asTyped())] }
     case 'task_not_owned':

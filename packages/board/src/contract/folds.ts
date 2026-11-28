@@ -316,10 +316,11 @@ function foldTask(task: Task, event: Exclude<TaskEvent, { type: 'task.created' }
       task.reason = event.payload.reason
       return true
     case 'task.reopened':
-      // A failed task was claimed, so every task it needs had completed: it's ready.
-      if (task.state !== 'failed') return false
+      // A failed or completed task was claimed, so every task it needs had completed: it's ready.
+      if (task.state !== 'failed' && task.state !== 'completed') return false
       task.state = 'ready'
       task.reason = null
+      task.result = null
       return true
   }
 }

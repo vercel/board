@@ -45,8 +45,8 @@ work — or fails to start it when you meant it to.
 - **`wait_agent` returns no content**, only who moved. Read the thread before acting on it.
 - **`interrupt_agent` is not `cancel`.** Cancel is terminal, and a cancelled task can't be reopened;
   interrupting a turn is a reply the worker reads at its next step. Cancel only to end the task.
-- **`reopen` is for failed tasks.** On a completed task it answers `task_finished`; continue the
-  work with a new task instead.
+- **`reopen` is for failed tasks, and completed ones nothing waits for.** On a completed task
+  another waits for it answers `task_has_dependents`; continue the work with a new task instead.
 - **A reply reaches a worker, not a finished task.** Once the task has completed, queue the next
   piece as a new task that `--needs` it.
 - **`fork_context` has no equivalent.** Put what the child needs in the task's text, or attach it.

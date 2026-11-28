@@ -94,7 +94,7 @@ $ vb read 812
 | `ready` | it can be claimed |
 | `claimed` | an agent holds it until its lease ends |
 | `blocked` | held for a person |
-| `completed` | done, with its result |
+| `completed` | done, with its result. `vb tasks reopen <id>` makes it ready again while no task waits for it |
 | `failed` | given up on, with why. `vb tasks reopen <id>` makes it ready again |
 | `canceled` | called off by its owner, with why |
 
@@ -198,6 +198,9 @@ completed.
 - **A failed or canceled prerequisite readies nothing.** `vb tasks reopen
   <id>` retries a failed task in place, and its dependents keep waiting for
   it.
+- **A completed task nothing waits for can be done again.** `vb tasks reopen
+  <id>` makes it ready, without its result. Once a task needs it, it stays
+  completed: the reopen fails with `task_has_dependents`.
 - **What a task waits for can change.** `vb tasks needs <id> <id>...` names
   the tasks it waits for now, in place of what it waited for, and `--none`
   makes it wait for nothing. It's its owner's to change, while no one holds

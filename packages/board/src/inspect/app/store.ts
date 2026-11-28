@@ -634,7 +634,7 @@ export function moves(state: State, root: TaskRoot, viewer: Viewer, now: number)
     elsewhere: !held && current === 'claimed' && task.claim?.actor === viewer.actor,
     hold: owns && (current === 'waiting' || current === 'ready'),
     unblock: owns && current === 'blocked',
-    reopen: owns && current === 'failed',
+    reopen: owns && (current === 'failed' || current === 'completed'),
     assign: owns && !finished,
     cancel: owns && current !== 'completed' && current !== 'canceled',
   }

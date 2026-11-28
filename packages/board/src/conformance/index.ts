@@ -1144,6 +1144,24 @@ const CHECKS: Check[] = [
   },
   {
     group: 'tasks',
+    name: 'reopens a completed task that nothing waits for, and refuses one that a task waits for',
+    run: async (ctx) => {
+      const { task: root } = await task(ctx, 'conformance: a task to do again')
+      await (await ctx.board.tasks.claim(root.id, { lease: 60 })).complete('conformance: done once')
+      const reopened = (await ctx.board.tasks.reopen(root.id)).task
+      same(reopened?.state, 'ready', 'a completed task nothing waits for, reopened')
+      same(reopened?.result, null, "a reopened task's result")
+      same((await ctx.board.tasks.claim(root.id, { lease: 60 })).task.task?.state, 'claimed', 'a reopened task, claimed again')
+      const { task: first } = await task(ctx, 'conformance: a prerequisite done for good')
+      await (await ctx.board.tasks.claim(first.id, { lease: 60 })).complete()
+      const { task: second } = await task(ctx, 'conformance: a task that waited for it', { needs: [first.id] })
+      await rejects(ctx.board.tasks.reopen(first.id), 409, 'task_has_dependents', 'reopening a completed task another waits for')
+      same(await taskState(ctx, first.id), 'completed', 'the prerequisite, once its reopen was refused')
+      same(await taskState(ctx, second.id), 'ready', 'what waits for it, once its reopen was refused')
+    },
+  },
+  {
+    group: 'tasks',
     name: 'holds a task until the tasks it needs complete, which a failed or canceled one never does',
     run: async (ctx) => {
       const { task: first } = await task(ctx, 'conformance: a prerequisite')

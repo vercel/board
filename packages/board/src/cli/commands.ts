@@ -676,7 +676,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
       },
       {
         name: 'reopen',
-        description: 'make a failed task ready again, as its owner',
+        description: 'make a failed task, or a completed one nothing waits for, ready again, as its owner',
         arguments: [task()],
         options: [],
         examples: [{ name: 'retry a failed task', value: 'tasks reopen 812' }],

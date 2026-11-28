@@ -55,6 +55,7 @@ const REFUSALS: Record<string, string> = {
   task_waiting: 'it still waits for the tasks it needs',
   task_blocked: "it's held for a person: unblock it first",
   task_finished: "it's finished already",
+  task_has_dependents: 'other tasks wait for it: only a completed task nothing waits for reopens',
   task_not_owned: "this is someone else's task: its owner changes it, or anyone with manage in its channel",
   already_a_task: 'this thread is a task already',
   not_a_task: "this thread isn't a task",

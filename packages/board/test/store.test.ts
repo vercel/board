@@ -319,7 +319,9 @@ describe('the inspector store', () => {
     expect(can(task(1, { state: 'waiting', needs: ['9'] }), owner)).toEqual(['hold', 'assign', 'cancel'])
     expect(can(task(1, { state: 'blocked', blocked: { kind: null, reason: 'why?' } }), owner)).toEqual(['unblock', 'assign', 'cancel'])
     expect(can(task(1, { state: 'failed', reason: 'exited 1' }), owner)).toEqual(['reopen', 'cancel'])
-    expect(can(task(1, { state: 'completed' }), owner)).toEqual([])
+    // A completed one reopens too, while nothing waits for it: the board says so when something does.
+    expect(can(task(1, { state: 'completed' }), owner)).toEqual(['reopen'])
+    expect(can(task(1, { state: 'completed' }), teammate)).toEqual([])
     expect(can(task(1, { state: 'canceled', reason: 'no' }), owner)).toEqual([])
   })
 

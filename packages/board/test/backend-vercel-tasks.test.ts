@@ -84,6 +84,7 @@ describe("vercel()'s tasks", () => {
       'gives a task to one of the claims that race for it, and takes its result': 'passed',
       'gives a claim the lease it asks for, up to 5 minutes, and says when it ends': 'passed',
       "fences what a claim does: once it's over, its writes are lost and change nothing": 'passed',
+      'reopens a completed task that nothing waits for, and refuses one that a task waits for': 'passed',
       'holds a task until the tasks it needs complete, which a failed or canceled one never does': 'passed',
       'refuses a prerequisite that was canceled, which can never complete, and takes one that failed': 'passed',
       'lists the tasks that wait for one in the channel a list names, or its subtree, and no other': 'passed',

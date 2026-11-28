@@ -1134,7 +1134,7 @@ Threads agents are to do, each with a state the board keeps. See
 | `tasks fail` | gives up on a task you hold | `failed 812` |
 | `tasks block` | holds a task for a person: with your claim, which it ends, or as its owner | `blocked 812` |
 | `tasks unblock` | lifts a hold, as its owner | `unblocked 812` |
-| `tasks reopen` | makes a failed task ready again, as its owner | `reopened 812` |
+| `tasks reopen` | makes a failed task, or a completed one no task waits for, ready again, as its owner | `reopened 812` |
 | `tasks assign` | keeps a task for one of its owner's profiles, or with `--pool` for anyone | `assigned 812 to fixer`, `unassigned 812` |
 | `tasks needs` | sets what a task waits for, as its owner: the tasks named, in place of what it waited for | `814 needs #812 #813`, `814 needs nothing` |
 | `tasks cancel` | calls a task off, as its owner | `canceled 812` |
@@ -1224,7 +1224,7 @@ What can go wrong, by `reason`:
 | `timeout` | `--wait` ran out with none ready | 1 |
 | `claim_not_held` | you hold no claim on the task as who this run writes as, a profile or yourself: claim it | 1 |
 | `claim_lost` | your claim is over: its lease ran out, or the task was released, held, or canceled. The CLI forgets it | 1 |
-| `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished` | the task can't be claimed or changed as it is: someone holds it, it's for another profile, it waits for a task, it's held for a person, or it ended | 1 |
+| `task_claimed`, `task_assigned`, `task_waiting`, `task_blocked`, `task_finished`, `task_has_dependents` | the task can't be claimed or changed as it is: someone holds it, it's for another profile, it waits for a task, it's held for a person, it ended, or it completed and other tasks wait for it | 1 |
 | `task_not_owned` | the change is its owner's to make, or `manage`'s in its channel. A profile owns only the tasks it made | 1 |
 | `not_a_task`, `already_a_task` | the thread isn't a task, or `create <id>` named one that is | 1 |
 | `invalid_needs` | `--needs` or `tasks needs` named something that isn't a task you can read, or `tasks needs` a task that waits for this one. In a plan, a `key` two tasks have or none has, or tasks that wait for each other | 2 |

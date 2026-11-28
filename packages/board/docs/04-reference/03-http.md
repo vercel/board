@@ -128,7 +128,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/tasks/:id/fail` | `{ epoch, token, reason }` |
 | POST | `/tasks/:id/block` | `{ reason, kind?, epoch?, token? }`: a claimed task needs its claim. `kind` is any name but `edited`, the board's own |
 | POST | `/tasks/:id/unblock` | No body. A task that isn't blocked stays as it is |
-| POST | `/tasks/:id/reopen` | No body. A failed task is ready again |
+| POST | `/tasks/:id/reopen` | No body. A failed task is ready again, and so is a completed one no task waits for, without its result |
 | POST | `/tasks/:id/assign` | `{ for }`: one of the owner's actors, or `null` for anyone who may claim it |
 | POST | `/tasks/:id/needs` | `{ needs }`: the IDs of the tasks it waits for now, in place of what it waited for |
 | POST | `/tasks/:id/cancel` | `{ reason }`: any task that hasn't completed or been canceled |
@@ -784,7 +784,7 @@ the thread key:
 | `task.blocked` | `id`, `kind`, `reason`, `by` | a task is held for a person. Kind `edited` is the board's: `by` edited the root, and isn't the task's owner |
 | `task.unblocked` | `id`, `by` | a hold is lifted |
 | `task.canceled` | `id`, `reason`, `by` | a task is canceled. Reason `deleted` when its root was |
-| `task.reopened` | `id`, `by` | a failed task is ready again |
+| `task.reopened` | `id`, `by` | a failed or completed task is ready again |
 
 - **`by`** is `{ actor, principal, profile }`: the actor ID
   (`vercel:user:u_abc123+claude`), the verified principal, and the profile.
@@ -905,6 +905,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 409 | `task_claimed` | a claim of a task someone holds, a claim that lost a race, or a hold or a change of needs without the claim on a task someone holds |
 | 409 | `task_assigned` | a claim of a task assigned to another actor |
 | 409 | `task_waiting`, `task_blocked`, `task_finished` | a claim, or another change, of a task in a state that doesn't take it |
+| 409 | `task_has_dependents` | reopening a completed task that some task waits for, in any state or channel |
 | 409 | `claim_lost` | a claim's write once the claim is over: released, settled, held, taken over, or past its lease |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |

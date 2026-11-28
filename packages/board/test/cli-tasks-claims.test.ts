@@ -99,7 +99,7 @@ describe("vb tasks, with the claim it keeps", () => {
     expect(await ok(['tasks', 'reopen', id])).toBe(`reopened ${id}\n`)
     expect(await state(id)).toBe('ready')
     // Reopening what isn't failed changes nothing, and says so.
-    expect(await ok(['tasks', 'reopen', id])).toBe(`${id} wasn't failed\n`)
+    expect(await ok(['tasks', 'reopen', id])).toBe(`${id} wasn't failed or completed\n`)
     expect(JSON.parse(await ok(['tasks', 'reopen', id, '--json']))).toMatchObject({ outcome: 'unchanged', task: { task: { state: 'ready' } } })
 
     await ok(['tasks', 'claim', id])

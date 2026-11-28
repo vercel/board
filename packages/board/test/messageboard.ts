@@ -1467,11 +1467,15 @@ function fakeBoard(shared: Shared, boardId: string) {
         }
       } else if (verb === 'reopen') {
         ownerOrManage(actor, thread)
-        // A completed or canceled task stays finished; an open one is answered as it is.
-        if (finishedFor(task)) throw finishedTask(task)
+        // A canceled task stays finished, and so does a completed one some task waits for; an open one is answered as it is.
+        if (task.state === 'canceled') throw finishedTask(task)
+        if (task.state === 'completed' && [...threads.values()].some((t) => t.task?.needs.includes(thread.id)))
+          throw new Refused(409, 'task_has_dependents', 'Other tasks wait for this task, so it stays completed.')
         lapse()
-        if (task.state === 'failed') {
-          Object.assign(task, { state: 'ready', reason: null })
+        if (task.state === 'failed' || task.state === 'completed') {
+          delete task.completed
+          delete task.marked
+          Object.assign(task, { state: 'ready', reason: null, result: null })
           taskEvent(thread, 'task.reopened', actor, from, op)
         }
       } else if (verb === 'assign') {
