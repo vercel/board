@@ -9,6 +9,7 @@ import { postgres, type Scheduler } from '../src/backend-postgres/index.ts'
 import { parseSchema, schemaBody, SCHEMA_VERSION_KEY, stampedSchema } from '../src/store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../src/store/postgres-schema.generated.ts'
 import { vercelQueues } from '../src/backend-postgres/scheduler-vercel.ts'
+import { boardScheduler } from '../src/scheduler/vercel.ts'
 import { fakeQueue } from './queue.ts'
 import { memoryBlob } from '../src/server/blob.ts'
 import { signingBlob } from './signing-blob.ts'
@@ -292,7 +293,8 @@ describe(`postgres(), on ${POSTGRES}`, () => {
 
   it("sends what's scheduled through the scheduler it's given, delivered to its scheduler route", async () => {
     const queue = fakeQueue()
-    const backend = postgres({ blob: memoryBlob(), pool: await freshPoolWithTables(), scheduler: queue.scheduler as unknown as Scheduler })
+    const scheduler = boardScheduler(queue.scheduler)
+    const backend = postgres({ blob: memoryBlob(), pool: await freshPoolWithTables(), scheduler })
     const team = on(backend)
     try {
       const root = (await team.post('dev', 'deploy')).id
@@ -301,13 +303,20 @@ describe(`postgres(), on ${POSTGRES}`, () => {
       await new Promise((resolve) => setTimeout(resolve, 1200))
       expect((await team.thread(root)).replies).toEqual([])
       await vi.waitFor(async () => {
-        await queue.fire(backend.scheduler)
+        await queue.fire(scheduler)
         expect((await team.thread(root)).replies.map((m) => m.text)).toEqual(['did it land?'])
       }, { timeout: 10_000 })
     } finally {
       await backend.close()
     }
   }, 20_000)
+
+  it('serves one board per scheduler, and its route says so when it serves none yet', async () => {
+    const scheduler = vercelQueues({ topic: 'board' })
+    expect((await scheduler(new Request('https://queue.test/', { method: 'POST' }))).status).toBe(500)
+    postgres({ blob: memoryBlob(), scheduler })
+    expect(() => postgres({ blob: memoryBlob(), scheduler })).toThrow('this scheduler already serves a board')
+  })
 
   it("takes vercelQueues() on a topic the scheduler route's trigger can name", () => {
     expect(() => postgres({ blob: memoryBlob(), scheduler: vercelQueues({ topic: 'board' }) })).not.toThrow()

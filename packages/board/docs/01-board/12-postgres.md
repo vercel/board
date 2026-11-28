@@ -12,12 +12,10 @@ import { vercelBlob } from '@vercel/board/backend-postgres/blob-vercel'
 import { vercelQueues } from '@vercel/board/backend-postgres/scheduler-vercel'
 
 // DATABASE_URL's database: the board's log and its tables. Its files: a private Vercel Blob store.
-// Its timers: Vercel Queues, delivered to the scheduler route below.
-const backend = postgres({ blob: vercelBlob(), scheduler: vercelQueues({ topic: 'board' }) })
-
-export const team = board({ backend })
+// Its timers: Vercel Queues, which call the scheduler route below.
+export const scheduler = vercelQueues({ topic: 'board' })
+export const team = board({ backend: postgres({ blob: vercelBlob(), scheduler }) })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 ```ts app/api/board-scheduler/route.ts
@@ -111,15 +109,14 @@ import { postgres } from '@vercel/board/backend-postgres'
 import { vercelBlob } from '@vercel/board/backend-postgres/blob-vercel'
 import { vercelQueues } from '@vercel/board/backend-postgres/scheduler-vercel'
 
-const backend = postgres({ blob: vercelBlob(), scheduler: vercelQueues({ topic: 'board' }) })
-
-export const team = board({ backend })
+export const scheduler = vercelQueues({ topic: 'board' })
+export const team = board({ backend: postgres({ blob: vercelBlob(), scheduler }) })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
-Mount the backend's `scheduler` as `POST` in a route of its own, which the
-topic triggers:
+Mount the scheduler as `POST` in a route of its own, which the topic
+triggers: it's the route the queue calls, and delivers to the board it's
+passed to.
 
 ```ts app/api/board-scheduler/route.ts
 export { scheduler as POST } from '@/app/api/board/[[...path]]/route'

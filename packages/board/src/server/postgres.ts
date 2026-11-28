@@ -7,7 +7,7 @@ import type { BlobStore } from './blob.ts'
 import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { localScheduler } from '../scheduler/local.ts'
-import { engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
+import { attachScheduler, engineScheduler, type Scheduler } from '../scheduler/vercel.ts'
 import { appliedVersion, checkSchema, migrateSchema, ROLE_NEEDS, SCHEMA_FILE, TablesNotConfiguredError, type PgPool } from '../store/postgres-db.ts'
 import { POSTGRES_SCHEMA } from '../store/postgres-schema.generated.ts'
 import { postgresStore } from '../store/postgres.ts'
@@ -24,8 +24,8 @@ export type PostgresOptions = {
   max?: number
   /**
    * What runs the board's timers: scheduled messages, leases running out, and watchers' and sync's
-   * retries. `vercelQueues()` from `@vercel/board/backend-postgres/scheduler-vercel`, with the
-   * backend's `scheduler` mounted in a route of its own. Default: timers in this process.
+   * retries. `vercelQueues()` from `@vercel/board/backend-postgres/scheduler-vercel`, mounted as
+   * `POST` in a route of its own. Default: timers in this process.
    */
   scheduler?: Scheduler
   /**
@@ -44,8 +44,6 @@ export type PostgresOptions = {
 
 /** A board on Postgres. `close()` stops its timers and ends the pool it made. */
 export type PostgresBackend = Backend & {
-  /** The scheduler's callback, for `vercelQueues()`: `export { scheduler as POST }` from a route its topic triggers. */
-  scheduler(request: Request): Promise<Response>
   /**
    * The version of `schema.sql` the database records (`applied`, null when it has none) and this
    * release's (`current`), for a page that says whether to migrate: a version only goes up, so
@@ -152,6 +150,9 @@ export function postgres(options: PostgresOptions): PostgresBackend {
     }
   }
 
+  // The scheduler's route delivers here, opening the board first.
+  if (options.scheduler) attachScheduler(options.scheduler, (request) => asked((board) => board.scheduler(request)))
+
   const methods = Object.fromEntries(
     METHODS.map((name) => [name, (caller: Caller, input: never, signal: AbortSignal) => asked((board) => (board[name] as (...args: unknown[]) => unknown)(caller, input, signal))]),
   ) as unknown as ProtocolMethods
@@ -168,7 +169,6 @@ export function postgres(options: PostgresOptions): PostgresBackend {
       if (binding) throw new Error('postgres: this backend already serves a board: create one postgres() per board()')
       binding = given
     },
-    scheduler: (request: Request) => asked((board) => board.scheduler(request)),
     tables: async () => ({ applied: await appliedVersion(poolOf()), current: POSTGRES_SCHEMA.version }),
     migrate: () => migrateSchema(poolOf(), POSTGRES_SCHEMA),
     async close() {
