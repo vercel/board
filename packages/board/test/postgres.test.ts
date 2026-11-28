@@ -134,6 +134,9 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     const first = on(before)
     const root = (await first.post('dev', 'deploy')).id
     await first.schedule({ re: root }, { text: 'did it land?', in: '1s' })
+    // Long enough for this instance to arm it: closed any sooner, the schedule is left unarmed, and
+    // the next instance arms it as a new one, whether or not it takes over.
+    await new Promise((resolve) => setTimeout(resolve, 500))
     await before.close()
     // Past its time, with nothing running.
     await new Promise((resolve) => setTimeout(resolve, 1500))
@@ -156,6 +159,8 @@ describe(`postgres(), on ${POSTGRES}`, () => {
       const one = on(first)
       const root = (await one.post('dev', 'deploy')).id
       await one.schedule({ re: root }, { text: 'did it land?', in: '2s' })
+      // Long enough for this instance to arm it, so what's left for the others is a timer that died.
+      await new Promise((resolve) => setTimeout(resolve, 500))
       await first.close()
       // An instance that starts, arms it, and stops before it's due.
       const second = postgres({ blob: memoryBlob(), pool })
