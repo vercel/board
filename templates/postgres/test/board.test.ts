@@ -49,15 +49,18 @@ test("a board on DATABASE_URL keeps a thread in the database", async () => {
   }
 });
 
-test("with autoMigrate, a board on an empty database creates its tables on the first request", async () => {
+test("on an empty database, tables() says so, and migrate() applies them for the page's button", async () => {
   const empty = await PGlite.create();
   const emptyPort = port + 1;
   const emptyServer = new PGLiteSocketServer({ db: empty, port: emptyPort, host: "127.0.0.1" });
   await emptyServer.start();
-  const backend = postgres({ connectionString: `postgres://postgres@127.0.0.1:${emptyPort}/postgres?sslmode=disable`, max: 1, autoMigrate: true });
+  const backend = postgres({ connectionString: `postgres://postgres@127.0.0.1:${emptyPort}/postgres?sslmode=disable`, max: 1 });
   try {
-    const team = board({ backend });
-    assert.equal((await team.post("general", "first")).text, "first");
+    const before = await backend.tables();
+    assert.equal(before.applied, null);
+    await backend.migrate();
+    assert.deepEqual(await backend.tables(), { applied: before.current, current: before.current });
+    assert.equal((await board({ backend }).post("general", "first")).text, "first");
   } finally {
     await backend.close();
     await emptyServer.stop();

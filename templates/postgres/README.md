@@ -9,7 +9,7 @@ work against it with `--url`.
 
 It has four parts:
 
-- **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres({ autoMigrate: true }) })`
+- **The board** (`app/api/board/[[...path]]/route.ts`), `board({ backend: postgres() })`
   on `DATABASE_URL`'s database, from `lib/board.ts`.
 - **Its timers** (`app/api/board-scheduler/route.ts`): scheduled messages, task leases,
   and retries, sent through Vercel Queues on the `board` topic that `vercel.json`
@@ -18,19 +18,20 @@ It has four parts:
   `/board`. It reads and writes as the deployment, under the name each person gives, so
   it answers only while [Deployment Protection](https://vercel.com/docs/deployment-protection)
   turns strangers away: turn on Vercel Authentication for the project.
-- **Its tables**, in `node_modules/@vercel/board/sql/postgres/schema.sql`. With
-  `autoMigrate: true`, the board applies them on its first request, and again after an
-  upgrade that changed them.
+- **A setup page** (`/`), checked against the deployment as it is now: Deployment
+  Protection, then the board's tables (`node_modules/@vercel/board/sql/postgres/schema.sql`),
+  with a **Migrate** button that applies them, on a new database and after an upgrade
+  that changed them. It works only while Deployment Protection is on.
 
 ## Deploy it
 
 1. **Click Deploy.** It makes your copy of this repo and a Vercel project, and asks you
-   to connect a Postgres database from the Marketplace, which sets `DATABASE_URL`. The
-   board creates its tables on its first request.
-2. **Turn on Deployment Protection** (Vercel Authentication) for the project, then open
-   `/board` on the deployment. The CLI gets through it with your `vercel login`.
-3. **Use it from the CLI.** The deployment's page shows its URL. Your team's people, and the
-   project's own deployments, can use it:
+   to connect a Postgres database from the Marketplace, which sets `DATABASE_URL`.
+2. **Open the deployment.** Its page is the setup, two steps: turn on Deployment
+   Protection (Vercel Authentication), then press **Migrate**. After an upgrade of
+   `@vercel/board` that changed the tables, the page asks you to migrate again.
+3. **Use it**, at `/board` in your browser, or from the CLI, which gets through
+   Deployment Protection with your `vercel login`:
 
    ```sh
    npx @vercel/board post general "hello" --url https://<your-deployment>/api/board
@@ -46,10 +47,10 @@ pnpm install
 pnpm dev
 ```
 
-To apply the tables yourself instead, as part of your own migrations, set `autoMigrate:
-false` in `lib/board.ts` and run `pnpm db:schema` (it reads `DATABASE_URL`, or
-`.env.local` from `vercel env pull --environment=production .env.local`) before each
-deploy that upgrades `@vercel/board`.
+Locally the page's **Migrate** works without Deployment Protection. To apply the tables
+from a terminal instead, or in your own migrations, run `pnpm db:schema` (it reads
+`DATABASE_URL`, or `.env.local` from `vercel env pull --environment=production .env.local`).
+To have the board apply them on its first request, pass `autoMigrate: true` in `lib/board.ts`.
 
 `pnpm test` creates the tables both ways and keeps a thread on PGlite, Postgres in the test's
 own process, so it needs no database.
