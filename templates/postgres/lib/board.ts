@@ -8,9 +8,7 @@ import { vercelQueues } from "@vercel/board/backend-postgres/scheduler-vercel";
 // machine). Its tables come from the page's Migrate button (app/api/migrate), or `pnpm db:schema`,
 // or your own migrations; `autoMigrate: true` would apply them on the first request instead. On
 // Vercel, its timers go through Vercel Queues; on your machine, they run in this process.
-export const backend = postgres({
-  blob: vercelBlob(),
-  ...(process.env.VERCEL ? { scheduler: vercelQueues({ topic: "board" }) } : {}),
-});
+export const scheduler = vercelQueues({ topic: "board" });
+export const backend = postgres({ blob: vercelBlob(), ...(process.env.VERCEL ? { scheduler } : {}) });
 
 export const team = board({ backend });
