@@ -3,6 +3,7 @@ import { reducer, type ContractEvent } from 'experimental-a2'
 import { createServer, type A2Scheduler, type A2Store } from 'experimental-a2/server'
 import type { RegistrationView } from '../api/routes.ts'
 import { REGISTRY_SESSION, registryContract, type RegistryEvents } from '../contract/contract.ts'
+import { canonical } from '../contract/data-schemas.ts'
 import type { Principal } from './auth.ts'
 
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
@@ -75,8 +76,8 @@ export function createRegistry(options: { store?: A2Store | undefined; scheduler
       const owner = principal.id
       const hash = watchersHash(input.watch, input.sync)
       const current = (await state()).byOwner[owner]
-      if (current && current.url === input.url && current.hash === hash && JSON.stringify(current.principal) === JSON.stringify(principal))
-        return viewOf(current)
+      // Compared whatever order their keys are in: a store may keep an object's keys in its own (Postgres's jsonb does).
+      if (current && current.url === input.url && current.hash === hash && canonical(current.principal) === canonical(principal)) return viewOf(current)
       await session.append({
         type: 'watchers.registered',
         payload: { owner, principal, url: input.url, watch: input.watch, ...(input.sync.length > 0 ? { sync: input.sync } : {}), hash },

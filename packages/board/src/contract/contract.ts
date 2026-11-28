@@ -36,7 +36,10 @@ export const inboxContract = contract({
     'external.received': z.object({
       sync: z.string().min(1),
       event: ExternalEvent,
-      raw: z.unknown(),
+      /** The platform's payload, from boards before `rawText`. */
+      raw: z.unknown().optional(),
+      /** The platform's payload as JSON text: its keys' order survives any store. */
+      rawText: z.string().optional(),
     }),
     /** An inbox got its first event: session `inboxes` lists them, so a sync key's inbox lists every channel's. */
     'inbox.opened': z.object({ channel: ExternalTarget }),
@@ -248,6 +251,8 @@ export const schedulesContract = contract({
     }),
     /** (server) The Vercel deployment `deployment` took over every send: an earlier one's timers no longer post. */
     'schedule.takeover': z.object({ deployment: z.string().min(1) }),
+    /** (server) Deployment `deployment` armed every pending send created through log index `through`. */
+    'schedule.takeover.armed': z.object({ deployment: z.string().min(1), through: z.number().int().nonnegative() }),
   },
 })
 
