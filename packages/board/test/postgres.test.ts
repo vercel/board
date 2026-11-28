@@ -345,7 +345,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     const uncaught: unknown[] = []
     const heard = (error: unknown) => uncaught.push(error)
     process.on('uncaughtException', heard)
-    const backend = postgres({ pool })
+    const backend = postgres({ blob: memoryBlob(), pool })
     const team = on(backend)
     try {
       const root = await team.post('dev', 'before')
@@ -372,14 +372,14 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     await pool.query('create role board_app')
     await pool.query('grant select, insert, update, delete on all tables in schema public to board_app')
     await pool.query('set role board_app')
-    const limited = postgres({ pool })
+    const limited = postgres({ blob: memoryBlob(), pool })
     await expect(on(limited).post('dev', 'hello')).rejects.toThrow(/this database role can't use board's tables: grant it select, insert, update, and delete on them and execute on function a2_batch\(text\[\], jsonb\)/)
     await limited.close()
 
     await pool.query('reset role')
     await pool.query('grant execute on function a2_batch(text[], jsonb) to board_app')
     await pool.query('set role board_app')
-    const granted = postgres({ pool })
+    const granted = postgres({ blob: memoryBlob(), pool })
     try {
       expect((await on(granted).post('dev', 'hello')).text).toBe('hello')
     } finally {
@@ -393,7 +393,7 @@ describe(`postgres(), on ${POSTGRES}`, () => {
     const { rows } = await empty.query('select current_database() as name')
     const url = new URL(TEST_DATABASE_URL!)
     url.pathname = `/${String(rows[0]!.name)}`
-    const backend = postgres({ connectionString: url.toString() })
+    const backend = postgres({ blob: memoryBlob(), connectionString: url.toString() })
     const team = on(backend)
     try {
       // Callers keep asking a board whose tables aren't there, as a live board's do after an upgrade
