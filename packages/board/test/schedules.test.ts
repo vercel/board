@@ -2,6 +2,7 @@ import { createServer } from 'experimental-a2/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SCHEDULES_SESSION, schedulesContract } from '../src/contract/contract.ts'
 import { memory } from '../src/store/memory.ts'
+import type { Middleware } from '../src/server/middleware.ts'
 import { caller, personToken, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -463,6 +464,63 @@ describe('scheduled messages', () => {
     await vi.waitFor(() => expect(arms).toBe(late + 1))
     await settle()
     expect(arms).toBe(late + 1)
+  })
+
+  it('keep repeating when a deployment takes over while the earlier one is making a send', async () => {
+    const store = memory()
+    const deploy = (id: string, middleware: Middleware[] = []) => {
+      vi.stubEnv('VERCEL_DEPLOYMENT_ID', id)
+      const queue = fakeQueue()
+      const deployed = testBoard({ store, scheduler: queue.scheduler, middleware })
+      vi.unstubAllEnvs()
+      return { queue, julian: fresh(deployed.fetch, 'u_julian', {}) }
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    // The earlier deployment's send waits in its middleware, so the takeover lands while it's being made.
+    let started!: () => void
+    let finish!: () => void
+    const sending = new Promise<void>((resolve) => (started = resolve))
+    const held = new Promise<void>((resolve) => (finish = resolve))
+    const before = deploy('dpl_before', [
+      async ({ source, next }) => {
+        if (source.kind === 'schedule') {
+          started()
+          await held
+        }
+        await next()
+      },
+    ])
+    await before.julian('POST', '/schedules', { channel: 'dev', text: 'standup', in: '1h', every: '1d' })
+
+    vi.setSystemTime(T0 + HOUR)
+    await before.queue.fire()
+    await sending
+    const after = deploy('dpl_after')
+    await after.julian('GET', '/me')
+    const armed = async () => (await store.log.read(`board-schedules\u001f${SCHEDULES_SESSION}`)).filter((e) => e.type === 'schedule.takeover.armed')
+    await vi.waitFor(async () => expect(await armed()).toHaveLength(1))
+    const standups = async () => (await after.julian('GET', '/messages?channel=dev')).body.messages.map((m: { text: string }) => m.text)
+    expect(await standups()).toEqual([])
+
+    // The earlier deployment's send lands, and it arms the next one where only it hears. The new
+    // deployment's own timer for the send finds it made.
+    finish()
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup']))
+    await settle()
+    await after.queue.fire()
+    await settle()
+    expect(await standups()).toEqual(['standup'])
+
+    // A day on, the new deployment sends the next: the earlier one's timer for it does nothing, and
+    // later instances arm only what was created since the takeover.
+    await deploy('dpl_after').julian('GET', '/me')
+    await settle()
+    vi.setSystemTime(T0 + HOUR + DAY)
+    await before.queue.fire()
+    await after.queue.fire()
+    await vi.waitFor(async () => expect(await standups()).toEqual(['standup', 'standup']))
+    await settle()
+    expect(await standups()).toEqual(['standup', 'standup'])
   })
 
   it('send one created on the newest deployment when an earlier one catches up on it first', async () => {

@@ -252,8 +252,10 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     // A later deployment armed this send itself when it took over, and decides it under the rules as they are now.
     // The one that sends runs any timer that reaches it, whoever armed it: a scheduler that delivers to one URL brings them all here.
     if (deployment !== null && state.takeover !== null && state.takeover.deployment !== deployment) return
-    // This send went out, and an attempt before this one stopped short of arming the next: arm it now.
-    if (schedule && ctx.attempt > 1 && schedule.sent === n + 1 && schedule.next !== null) return arm('next', id, n + 1, schedule.next)
+    // This send went out and the next isn't armed here: an attempt before this one stopped short of it,
+    // or an earlier deployment made the send while this one took over, and armed the next where only it
+    // hears. Arm it now: under its name, arming it again adds nothing.
+    if (schedule && schedule.sent === n + 1 && schedule.next !== null) return arm('next', id, n + 1, schedule.next)
     // Canceled, done, or a stale timer for a send already made.
     if (!schedule || schedule.next !== at || schedule.sent !== n) return
     if (Date.now() < at - EARLY_MS) return arm('hop', id, n, at)
