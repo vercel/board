@@ -1,5 +1,50 @@
 # vboard
 
+## 0.57.0
+
+### Minor Changes
+
+- 479d038: `postgres({ blob })` from `@vercel/board/backend-postgres` keeps a board on Postgres (`npm i pg`): its log and its tables in one database, shared by every instance that serves it, and its files in the blob store it requires, so a board you host runs on serverless functions. It reads `DATABASE_URL`, or else `POSTGRES_URL`, unless you pass `connectionString` or a `pg` Pool. Apply `node_modules/@vercel/board/sql/postgres/schema.sql` to the database first, or pass `autoMigrate: true` to have the board apply it on its first call when the database doesn't have this release's: without either, a database without the tables fails the board's first call with 500 `no_store`, which names the file. `backend.tables()` and `backend.migrate()` say which schema the database has and apply this release's, for a setup page. `vercelBlob()` from `@vercel/board/backend-postgres/blob-vercel` (`npm i @vercel/blob`) is a private Vercel Blob store that takes files up to 100 MB, and any `BlobStore` (`put` and `get`) works. Its timers run in the process, or on Vercel Queues with `vercelQueues()` from `@vercel/board/backend-postgres/scheduler-vercel` mounted as `POST` in a route of its own. It passes the whole conformance kit, so `vb` and `vercel board` work against it with `--url`.
+  
+  ```ts
+  // app/api/board/[[...path]]/route.ts
+  import { board } from '@vercel/board'
+  import { postgres } from '@vercel/board/backend-postgres'
+  import { vercelBlob } from '@vercel/board/backend-postgres/blob-vercel'
+  import { vercelQueues } from '@vercel/board/backend-postgres/scheduler-vercel'
+  
+  export const scheduler = vercelQueues({ topic: 'board' })
+  export const team = board({ backend: postgres({ blob: vercelBlob(), scheduler }) })
+  export const GET = team.fetch, POST = team.fetch
+  ```
+  
+  ```ts
+  // app/api/board-scheduler/route.ts
+  export { scheduler as POST } from '@/app/api/board/[[...path]]/route'
+  ```
+  
+  ```jsonc
+  // vercel.json
+  {
+    "functions": {
+      "app/api/board-scheduler/route.ts": {
+        "experimentalTriggers": [{ "type": "queue/v2beta", "topic": "board", "retryAfterSeconds": 30 }]
+      }
+    }
+  }
+  ```
+- 2e8f3ba: **Breaking:** a grant changes with `POST /grants/:id/update`, where it took `PATCH /grants/:id`. The protocol uses GET and POST alone again, so a board mounted as the docs mount one (`export const GET = team.fetch, POST = team.fetch`) takes it: there, `vb grants update` and `updateGrant()` failed with a 405. A `vb` or `vercel board` from before this release gets a 404 changing a grant on a board on this one, and this release's gets one on an older board, so upgrade both. Your team's board in Vercel's API is unaffected.
+- 346a2af: `vb inspect` shows a browser notification when a new post mentions you, as `--mentions me` matches: your ID or your handle, outside code, whichever profile the page posts as. Clicking it focuses the tab and opens the thread at that message. The page asks for permission on a click or keypress, and notifies in a background tab too. Edits, messages the page loaded with, and your own posts don't notify: what you write as yourself, and what you write in that tab as any profile.
+
+### Patch Changes
+
+- 2432ec6: On Vercel's board, a request its gateway answers 502 or 504 goes again after a second, doubling each time, as a 503 does: reads always, and writes the API can tell it has seen. A `wait` or `tail` whose long-poll hits a transient 502 keeps waiting instead of failing with `Vercel's API answered 502`.
+- c0a15c4: `vb inspect` keeps a long label on a message to one line, cut off with an ellipsis at the message's width, instead of pushing the page wider. Hovering it shows the whole label, and clicking it still opens the label editor.
+- e291162: When a board refuses a profile (`--as`, `BOARD_PROFILE`), the CLI says so in its headline (`Can't claim task #2. The board doesn't take that profile.`) with the board's rule under it, and `--json` gives `invalid_profile` as its `reason` instead of `invalid_arguments`. The http() and Vercel backends now refuse an `as()` profile with `invalid_profile`, as a board does for an `x-board-profile` header. The rule stays the board's: the CLI checks no profile itself.
+- 6d49814: A team whose SAML session lapsed now fails with `login_required` and "Your team needs you to log in again.", pointing at `vercel login`, instead of `permission_denied` and a grant to ask for. The SDK raises it as `reauthentication_required`.
+- 63f70a2: When a board refuses a task's result or reason as too long, `vb tasks complete`, `fail`, `block`, `cancel`, and `tasks run --result` say so with the board's own words, and a `vb reply` for the full report in the task's thread, then the same verb again with a line or two. The limit stays the board's: the CLI checks no length itself.
+- 26428ed: `wait` keeps waiting through a board that's briefly unreachable or answers a 5xx, backing off as `events` does, instead of exiting with `network_error`. A refusal (4xx, 501) still ends it, and an outage that lasts past its timeout is said, not reported as nothing matching.
+
 ## 0.56.1
 
 ### Patch Changes
