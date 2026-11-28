@@ -14,7 +14,7 @@ import { fakeQueue } from './queue.ts'
 import { memoryBlob } from '../src/server/blob.ts'
 import { signingBlob } from './signing-blob.ts'
 import { bearer, board, BOARD_URL, personToken } from './harness.ts'
-import { testAuth, testLocal } from './tokens.ts'
+import { caller, deploymentToken, testAuth, testLocal } from './tokens.ts'
 import { freshPool, freshPoolWithTables, POSTGRES, SCHEMA, TEST_DATABASE_URL } from './postgres-harness.ts'
 import type { PgPool } from '../src/store/postgres-db.ts'
 
@@ -424,6 +424,19 @@ describe(`postgres(), on ${POSTGRES}`, () => {
       await backend.close()
     }
   }, 30_000)
+
+  it('registers the same watchers once, however many instances register them', async () => {
+    const pool = await freshPoolWithTables()
+    for (let instance = 0; instance < 3; instance++) {
+      // A deployment registers its watchers on each instance's first use: the same ones again write nothing.
+      const backend = postgres({ pool, blob: memoryBlob() })
+      const v0 = caller(on(backend).fetch, await deploymentToken('v0', 'prj_v0', 'production'))
+      expect((await v0('POST', '/watchers', { watch: { fix: { tail: 'dev' } } })).status).toBe(200)
+      await backend.close()
+    }
+    const { rows } = await pool.query("select count(*)::int as registered from a2_events where event_type = 'watchers.registered'")
+    expect(rows).toEqual([{ registered: 1 }])
+  }, 20_000)
 
   it.skipIf(!TEST_DATABASE_URL)('makes a pool from its connection string, and ends it when it closes', async () => {
     const pool = await freshPoolWithTables()
